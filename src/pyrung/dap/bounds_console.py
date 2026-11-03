@@ -51,12 +51,11 @@ def emit_bounds_violations(adapter: Any) -> None:
 
     acc: dict[str, _AccEntry] = adapter._bounds_accumulator
     scan_id = runner.current_state.scan_id
-    tags_by_name = runner._known_tags_by_name
 
     parts: list[str] = []
     for tag_name, v in violations.items():
-        tag_def = tags_by_name.get(tag_name)
-        choices_map = tag_def.choices if tag_def else None
+        tag_def = runner._tag_known_or_reached(tag_name)
+        choices_map = tag_def.choices if tag_def is not None else None
         parts.append(_format_violation(v, choices_map))
 
         entry = acc.get(tag_name)
@@ -89,14 +88,13 @@ def _cmd_bounds(adapter: Any, expression: str) -> ConsoleResult:
         return ConsoleResult("No bounds violations recorded.")
 
     runner = adapter._runner
-    tags_by_name = runner._known_tags_by_name if runner else {}
 
     lines: list[str] = []
     for tag_name in sorted(acc):
         entry = acc[tag_name]
         v = entry.violation
-        tag_def = tags_by_name.get(tag_name)
-        choices_map = tag_def.choices if tag_def else None
+        tag_def = runner._tag_known_or_reached(tag_name) if runner else None
+        choices_map = tag_def.choices if tag_def is not None else None
         detail = _format_violation(v, choices_map).removeprefix("[bounds] ")
         lines.append(f"  {detail}  (scan {entry.scan_id}, {entry.count}x)")
 

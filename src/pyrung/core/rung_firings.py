@@ -14,13 +14,49 @@ replay only the selected kernel scans when they need that evidence.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 from pyrsistent import PMap, pmap
 
 K = TypeVar("K")
+
+# Scans a question may step again to get the records of a compiled run, about what the
+# run would have cost stepped.  Past this it is an error rather than a wait nobody asked for.
+SETTLE_SCAN_LIMIT = 250_000
+
+
+class UnrecordedScansError(ValueError):
+    """A question reaches more compiled scans than it may step again for their records."""
+
+    def __init__(self, first: int, last: int, scans: int) -> None:
+        super().__init__(
+            f"scans {first}..{last} include some that ran compiled and have no records yet, "
+            f"and getting them means stepping {scans} again from the nearest checkpoint, where "
+            f"a question may step at most {SETTLE_SCAN_LIMIT}. "
+            "What a question steps stays read, so ask first about a scan nearer the start of "
+            "that range for cause, or nearer its end for effect, then ask again; from Python, "
+            "cause() also takes since=, and jit=False records a run as it goes"
+        )
+        self.first = first
+        self.last = last
+        self.scans = scans
+
+
+class SearchQuestionRefused(BaseException):
+    """A how() asked a question that met :class:`UnrecordedScansError`.
+
+    The search reads causes under many ``except Exception`` that mean "no evidence", and scans
+    it cannot afford to read are not evidence that nothing happened in them.  So in a search
+    the refusal is a BaseException, whichever catch it passes, and ends the search with a
+    terminal saying so.
+    """
+
+    def __init__(self, refusal: UnrecordedScansError) -> None:
+        super().__init__(str(refusal))
+        self.refusal = refusal
+
 
 _VALUE_VARIETY_THRESHOLD = 100
 _TRACK_DISTINCT_AFTER = 8
@@ -77,6 +113,7 @@ class RungFiringTimelines(Generic[K]):
         "_writers_by_tag",
         "_distinct_values",
         "_unknown_keys",
+        "_partly_unknown",
     )
 
     def __init__(self) -> None:
@@ -89,6 +126,8 @@ class RungFiringTimelines(Generic[K]):
         # arithmetic columns pay nothing for cardinality bookkeeping.
         self._distinct_values: dict[tuple[K, str], list[Any]] = {}
         self._unknown_keys: set[tuple[K, str]] = set()
+        # Columns with a range a stretch could not speak for.  Later scans still say.
+        self._partly_unknown: set[tuple[K, str]] = set()
 
     def append(
         self,
@@ -113,22 +152,191 @@ class RungFiringTimelines(Generic[K]):
                 tags.add(tag_name)
             self._writers_by_tag.setdefault(tag_name, set()).add(rung_index)
             timeline = self._value_timelines.setdefault(key, [])
-            if key in self._unknown_keys:
+            if value is _UNKNOWN_VALUE:
+                self._partly_unknown.add(key)
+            if key in self._unknown_keys or value is _UNKNOWN_VALUE:
                 _append_unknown(timeline, scan_id)
-            else:
-                increased = _append_value(timeline, scan_id, value)
-                if increased and len(timeline) >= _TRACK_DISTINCT_AFTER:
-                    distinct = self._distinct_values.get(key)
-                    if distinct is None:
-                        distinct = _known_distinct_values(timeline)
-                        self._distinct_values[key] = distinct
-                    elif not any(_equal(value, prior) for prior in distinct):
-                        distinct.append(value)
-                    if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
-                        self._unknown_keys.add(key)
-                        self._distinct_values.pop(key, None)
+            elif _append_value(timeline, scan_id, value):
+                self._note_new_value(key, timeline, value)
             if tag_name in varied:
                 _append_scan_range(self._varied_ranges.setdefault(key, []), scan_id)
+
+    def append_repeated(
+        self,
+        rung_index: K,
+        first_scan_id: int,
+        count: int,
+        writes: Mapping[str, Any],
+        varied: frozenset[str] | set[str] = frozenset(),
+        deltas: Mapping[str, int] | None = None,
+        unknown: frozenset[str] | set[str] = frozenset(),
+    ) -> None:
+        """As if :meth:`append` ran for each of *count* scans from *first_scan_id*.
+
+        *writes* are the values on the first scan.  A tag in *deltas* moves by that much
+        each scan, and a tag in *unknown* reads as ``Unknown`` over the whole range.
+        """
+        moving = deltas or {}
+
+        def value_of(tag: str, offset: int) -> Any:
+            if tag in unknown:
+                return _UNKNOWN_VALUE
+            value = writes[tag]
+            return value + moving[tag] * offset if tag in moving else value
+
+        # Three real appends bring every column to a tail that can carry the rest.
+        head = min(count, 3)
+        for offset in range(head):
+            values = {tag: value_of(tag, offset) for tag in writes}
+            self.append(rung_index, first_scan_id + offset, values, varied)
+        if count <= head:
+            return
+        last = first_scan_id + count - 1
+        _extend_scan_range(self._fired_ranges[rung_index], last)
+        for tag in self._tags_by_rung.get(rung_index, ()):
+            key = (rung_index, tag)
+            timeline = self._value_timelines[key]
+            tail = timeline[-1]
+            if tag in writes:
+                final = _UNKNOWN_VALUE if key in self._unknown_keys else value_of(tag, count - 1)
+                if not _equal(_value_at(tail, last), final):
+                    # This tail cannot carry it: a value the arithmetic would not reach, a NaN,
+                    # or a column that went unknown on the last scan of the head.
+                    for offset in range(head, count):
+                        self._append_written(
+                            key, timeline, first_scan_id + offset, value_of(tag, offset)
+                        )
+                    continue
+            timeline[-1] = ValueRange(tail.start_scan_id, last, tail.payload)
+        for tag in varied:
+            _extend_scan_range(self._varied_ranges[(rung_index, tag)], last)
+
+    def run_count(self) -> int:
+        """The ranges held, which is what these timelines cost."""
+        return sum(map(len, self._fired_ranges.values())) + sum(
+            map(len, self._value_timelines.values())
+        )
+
+    def tags_of(self, rung_index: K) -> Iterable[str]:
+        """Every tag this rung has written."""
+        return self._tags_by_rung.get(rung_index, ())
+
+    def append_fired_run(self, rung_index: K, first_scan_id: int, last_scan_id: int) -> None:
+        """The firing half of :meth:`append`, for each scan of the range."""
+        self._tags_by_rung.setdefault(rung_index, set())
+        ranges = self._fired_ranges.setdefault(rung_index, [])
+        if ranges and ranges[-1].end_scan_id == first_scan_id - 1:
+            _extend_scan_range(ranges, last_scan_id)
+        else:
+            ranges.append(ScanRange(first_scan_id, last_scan_id))
+
+    def append_tag_run(
+        self,
+        rung_index: K,
+        tag: str,
+        first_scan_id: int,
+        last_scan_id: int,
+        value: Any,
+        delta: int | None = None,
+        varied: bool = False,
+    ) -> None:
+        """One tag's half of :meth:`append`, for each scan of the range.
+
+        *value* is what it reads on the first scan, ``_MISSING_WRITE`` if the rung does not write
+        it there, and it moves by *delta* each scan.  A rung's tags ask nothing of each other, so
+        they may go in in any order, and its firings with :meth:`append_fired_run`.
+        """
+        key = (rung_index, tag)
+        if value is _MISSING_WRITE and tag not in self._tags_by_rung.get(rung_index, ()):
+            return  # A tag has no column until the rung first writes it.
+        count = last_scan_id - first_scan_id + 1
+        head = min(count, 3)
+        if value is _MISSING_WRITE:
+            timeline = self._value_timelines[key]
+            for offset in range(head):
+                _append_value(timeline, first_scan_id + offset, _MISSING_WRITE)
+        else:
+            self._tags_by_rung.setdefault(rung_index, set()).add(tag)
+            self._writers_by_tag.setdefault(tag, set()).add(rung_index)
+            timeline = self._value_timelines.setdefault(key, [])
+            if value is _UNKNOWN_VALUE:
+                self._partly_unknown.add(key)
+            for offset in range(head):
+                self._append_written(
+                    key,
+                    timeline,
+                    first_scan_id + offset,
+                    value if delta is None else value + delta * offset,
+                )
+            if varied:
+                ranges = self._varied_ranges.setdefault(key, [])
+                for offset in range(head):
+                    _append_scan_range(ranges, first_scan_id + offset)
+        if count <= head:
+            return
+        if varied and value is not _MISSING_WRITE:
+            _extend_scan_range(self._varied_ranges[key], last_scan_id)
+        tail = timeline[-1]
+        if value is not _MISSING_WRITE:
+            if key in self._unknown_keys:
+                final = _UNKNOWN_VALUE
+            else:
+                final = value if delta is None else value + delta * (count - 1)
+            if not _equal(_value_at(tail, last_scan_id), final):
+                # This tail cannot carry it: a value the arithmetic would not reach, a NaN, or a
+                # column that went unknown on the last scan of the head.
+                for offset in range(head, count):
+                    self._append_written(
+                        key,
+                        timeline,
+                        first_scan_id + offset,
+                        value if delta is None else value + delta * offset,
+                    )
+                return
+        timeline[-1] = ValueRange(tail.start_scan_id, last_scan_id, tail.payload)
+
+    def _append_written(
+        self, key: tuple[K, str], timeline: list[ValueRange], scan_id: int, value: Any
+    ) -> None:
+        if key in self._unknown_keys or value is _UNKNOWN_VALUE:
+            _append_unknown(timeline, scan_id)
+        elif _append_value(timeline, scan_id, value):
+            self._note_new_value(key, timeline, value)
+
+    def _note_new_value(self, key: tuple[K, str], timeline: list[ValueRange], value: Any) -> None:
+        if len(timeline) < _TRACK_DISTINCT_AFTER:
+            return
+        distinct = self._distinct_values.get(key)
+        if distinct is None:
+            distinct = _known_distinct_values(timeline)
+            self._distinct_values[key] = distinct
+        elif not any(_equal(value, prior) for prior in distinct):
+            distinct.append(value)
+        if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
+            self._unknown_keys.add(key)
+            self._distinct_values.pop(key, None)
+
+    def replace_range(self, settled: RungFiringTimelines[K], first: int, last: int) -> None:
+        """Take scans *first*..*last* from *settled*, an index of them made later."""
+        _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
+        _replace_ranges(
+            self._value_timelines, settled._value_timelines, _trim_value_ranges, first, last
+        )
+        _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
+        self._unknown_keys |= settled._unknown_keys
+        self._partly_unknown |= settled._partly_unknown
+        # Worked out again from the columns if one fragments.
+        self._distinct_values.clear()
+        self._rebuild_indexes()
+
+    def fired_throughout(self, first_scan_id: int, last_scan_id: int) -> set[K]:
+        """The rungs that fired on every scan of the range."""
+        fired: set[K] = set()
+        for rung_index, ranges in self._fired_ranges.items():
+            range_ = _find_scan_range(ranges, first_scan_id)
+            if range_ is not None and range_.end_scan_id >= last_scan_id:
+                fired.add(rung_index)
+        return fired
 
     def at(self, scan_id: int) -> PMap:
         """Reconstruct ``rung -> {tag: final_attempt}`` for one scan."""
@@ -352,7 +560,8 @@ class RungFiringTimelines(Generic[K]):
 
     def value_is_known(self, rung_index: K, tag_name: str) -> bool:
         """Whether retained final values remain exact for this one column."""
-        return (rung_index, tag_name) not in self._unknown_keys
+        key = (rung_index, tag_name)
+        return key not in self._unknown_keys and key not in self._partly_unknown
 
     def reset(self) -> None:
         self._fired_ranges.clear()
@@ -362,6 +571,7 @@ class RungFiringTimelines(Generic[K]):
         self._writers_by_tag.clear()
         self._distinct_values.clear()
         self._unknown_keys.clear()
+        self._partly_unknown.clear()
 
     def trim_before(self, min_scan_id: int) -> None:
         if min_scan_id <= 0:
@@ -386,6 +596,7 @@ class RungFiringTimelines(Generic[K]):
                 self._value_timelines.pop(key)
                 self._distinct_values.pop(key, None)
                 self._unknown_keys.discard(key)
+                self._partly_unknown.discard(key)
         for key, ranges in list(self._varied_ranges.items()):
             kept = _trim_scan_ranges(ranges, min_scan_id, max_scan_id)
             if kept:
@@ -417,6 +628,7 @@ class RungFiringTimelines(Generic[K]):
             if key in frozen._value_timelines
         }
         frozen._unknown_keys = self._unknown_keys & frozen._value_timelines.keys()
+        frozen._partly_unknown = self._partly_unknown & frozen._value_timelines.keys()
         frozen._rebuild_indexes()
         return frozen
 
@@ -445,6 +657,32 @@ def _append_scan_range(ranges: list[ScanRange], scan_id: int) -> None:
         ranges[-1] = ScanRange(last.start_scan_id, scan_id)
     else:
         ranges.append(ScanRange(scan_id, scan_id))
+
+
+def _extend_scan_range(ranges: list[ScanRange], last_scan_id: int) -> None:
+    ranges[-1] = ScanRange(ranges[-1].start_scan_id, last_scan_id)
+
+
+def _coalesced(ranges: list[Any]) -> list[Any]:
+    """Join ranges that touch and say the same thing, as appending them would have."""
+    out = ranges[:1]
+    for range_ in ranges[1:]:
+        last = out[-1]
+        touching = last.end_scan_id == range_.start_scan_id - 1
+        if touching and isinstance(range_, ScanRange):
+            out[-1] = ScanRange(last.start_scan_id, range_.end_scan_id)
+        elif (
+            touching
+            and isinstance(range_, ValueRange)
+            and isinstance(last, ValueRange)
+            and isinstance(range_.payload, (Constant, Unknown))
+            and type(range_.payload) is type(last.payload)
+            and _equal(_value_at(last, last.end_scan_id), _value_at(range_, range_.start_scan_id))
+        ):
+            out[-1] = ValueRange(last.start_scan_id, range_.end_scan_id, last.payload)
+        else:
+            out.append(range_)
+    return out
 
 
 def _append_unknown(timeline: list[ValueRange], scan_id: int) -> None:
@@ -635,6 +873,18 @@ def _known_distinct_values(timeline: Sequence[ValueRange]) -> list[Any]:
             if not any(_equal(value, prior) for prior in distinct):
                 distinct.append(value)
     return distinct
+
+
+def _replace_ranges(mine: Any, theirs: Any, trim: Any, first: int, last: int) -> None:
+    """One table's scans *first*..*last* taken from *theirs*."""
+    for key in set(mine) | set(theirs):
+        ranges = mine.get(key, [])
+        middle = trim(theirs.get(key, []), first, last)
+        merged = [*trim(ranges, None, first - 1), *middle, *trim(ranges, last + 1, None)]
+        if merged:
+            mine[key] = _coalesced(merged)
+        else:
+            mine.pop(key, None)
 
 
 def _trim_scan_ranges(

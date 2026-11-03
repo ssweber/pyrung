@@ -1,9 +1,7 @@
-"""Tests for the limit-cycle classifier (pilot-authorized macro-skip)."""
+"""A coast under an oscillation, a read clock or a pilot hold, against stepping."""
 
 from __future__ import annotations
 
-import math
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -28,154 +26,9 @@ from pyrung import (
     time_event_drum,
 )
 from pyrung.core import rise, system
-from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
 from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
+from pyrung.core.coast_run import coast_until
 from pyrung.core.runner import PLC
-
-
-def _osc_ramp_snaps(n: int) -> list[dict[str, object]]:
-    """A period-2 oscillation + a +1/scan accumulator + a constant tag."""
-    return [{"osc": i % 2, "acc": i, "k": 5} for i in range(n)]
-
-
-class TestDetectCycle:
-    def test_period2_oscillation_with_monotone_acc(self) -> None:
-        cyc = detect_cycle(_osc_ramp_snaps(10), monotone_allowed=frozenset({"acc"}))
-        assert cyc is not None
-        assert cyc.period == 2
-        # +1/scan over a 2-scan period is +2/period; osc/k are boundary-stable.
-        assert cyc.monotone == {"acc": 2.0}
-        assert "osc" not in cyc.monotone
-        assert "k" not in cyc.monotone
-
-    def test_pure_plateau_is_period1_no_monotone(self) -> None:
-        snaps = [{"a": 1, "b": True} for _ in range(5)]
-        cyc = detect_cycle(snaps)
-        assert cyc == _Cycle(period=1, monotone={})
-
-    def test_pure_ramp_is_period1_monotone(self) -> None:
-        snaps = [{"acc": i} for i in range(5)]
-        cyc = detect_cycle(snaps)
-        assert cyc is not None
-        assert cyc.period == 1
-        assert cyc.monotone == {"acc": 1.0}
-
-    def test_multi_monotone_under_one_cycle(self) -> None:
-        # Two ramps at different rates, plus a period-3 cycle.
-        snaps = [{"cyc": i % 3, "fast": 2 * i, "slow": i} for i in range(12)]
-        cyc = detect_cycle(snaps, monotone_allowed=frozenset({"fast", "slow"}))
-        assert cyc is not None
-        assert cyc.period == 3
-        assert cyc.monotone == {"fast": 6.0, "slow": 3.0}
-
-    def test_modular_tag_not_certified_forces_true_period(self) -> None:
-        # `cyc` = i % 3 is locally linear over 3 samples.  With it NOT certified
-        # monotone, the detector must not extrapolate it as a ramp at P=1; it
-        # finds the true period 3 where cyc is boundary-stable.
-        snaps = [{"cyc": i % 3, "acc": i} for i in range(12)]
-        cyc = detect_cycle(snaps, monotone_allowed=frozenset({"acc"}))
-        assert cyc is not None
-        assert cyc.period == 3
-        assert cyc.monotone == {"acc": 3.0}
-        # Unsafe (None) mode would wrongly accept P=1 treating cyc as +1/scan.
-        loose = detect_cycle(snaps)
-        assert loose is not None and loose.period == 1 and "cyc" in loose.monotone
-
-    def test_chaotic_returns_none(self) -> None:
-        # A non-repeating, non-monotone bool sequence: no clean cycle.
-        bits = [0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0]
-        snaps = [{"x": b} for b in bits]
-        assert detect_cycle(snaps, max_period=6) is None
-
-    def test_too_short_returns_none(self) -> None:
-        assert detect_cycle(_osc_ramp_snaps(2)) is None  # need > 2*P snaps
-
-    def test_nonconstant_delta_rejected(self) -> None:
-        # Quadratic growth — delta is not constant, so no clean monotone cycle.
-        snaps = [{"q": i * i} for i in range(6)]
-        assert detect_cycle(snaps) is None
-
-    def test_certified_timer_quantum_canonicalizes_subtraction_noise(self) -> None:
-        # The newest anchor is one ULP high.  Exact subtraction produces
-        # unequal deltas even though both are the same one-quantum timer step.
-        snaps = [{"acc": 3.0}, {"acc": 4.0}, {"acc": math.nextafter(5.0, math.inf)}]
-        assert (
-            detect_cycle(
-                snaps,
-                monotone_allowed=frozenset({"acc"}),
-                max_period=1,
-            )
-            is None
-        )
-
-        cycle = detect_cycle(
-            snaps,
-            monotone_allowed=frozenset({"acc"}),
-            monotone_quanta={"acc": 1.0},
-            max_period=1,
-        )
-
-        assert cycle == _Cycle(period=1, monotone={"acc": 1.0})
-
-    def test_timer_quantum_does_not_admit_real_delta_mismatch(self) -> None:
-        snaps = [{"acc": 3.0}, {"acc": 4.0}, {"acc": 5.0001}]
-        assert (
-            detect_cycle(
-                snaps,
-                monotone_allowed=frozenset({"acc"}),
-                monotone_quanta={"acc": 1.0},
-                max_period=1,
-            )
-            is None
-        )
-
-    def test_timer_quantum_accounts_for_accumulated_fractional_carry_drift(self) -> None:
-        # Real minute-timer anchors from the tumbler, 100 scans apart.  Their
-        # difference includes 100 rounds through the hidden float carry.
-        snaps = [{"acc": 0.0} for _ in range(201)]
-        snaps[0] = {"acc": 0.20166666666666969}
-        snaps[100] = {"acc": 0.2183333333333373}
-        snaps[200] = {"acc": 0.2350000000000049}
-        cycle = detect_cycle(
-            snaps,
-            monotone_allowed=frozenset({"acc"}),
-            monotone_quanta={"acc": 0.010 / 60.0},
-            period_multiple_of=100,
-            max_period=100,
-        )
-
-        assert cycle is not None
-        assert cycle.period == 100
-        assert cycle.monotone["acc"] == pytest.approx(1.0 / 60.0)
-
-    def test_smallest_period_wins(self) -> None:
-        # A period-2 cycle would also "fit" period 4; detector must return 2.
-        snaps = [{"osc": i % 2, "acc": i} for i in range(12)]
-        cyc = detect_cycle(snaps)
-        assert cyc is not None
-        assert cyc.period == 2
-
-    def test_fixed_significant_surface_matches_prefiltered_snapshots(self) -> None:
-        noise = (0, 1, 1, 0, 1, 0, 0, 1, 1, 1)
-        full = [{"osc": i % 2, "acc": i, "ignored": noise[i]} for i in range(len(noise))]
-        filtered = [{"osc": snap["osc"], "acc": snap["acc"]} for snap in full]
-
-        expected = detect_cycle(
-            filtered,
-            monotone_allowed=frozenset({"acc"}),
-        )
-        retained = detect_cycle(
-            full,
-            monotone_allowed=frozenset({"acc"}),
-            significant_keys=frozenset({"osc", "acc"}),
-        )
-
-        assert retained == expected == _Cycle(period=2, monotone={"acc": 2.0})
-
-
-# ---------------------------------------------------------------------------
-# Bit-equal coast: cycle-fold landing == scan-by-scan landing
-# ---------------------------------------------------------------------------
 
 
 def _active_hold_soak(soak_ms: int = 5000, wd_ms: int = 200) -> Program:
@@ -204,84 +57,8 @@ def _active_hold_soak(soak_ms: int = 5000, wd_ms: int = 200) -> Program:
     return prog
 
 
-class TestCycleFoldBitEqual:
-    @staticmethod
-    def _assert_fallback_stats(
-        plc: PLC,
-        *,
-        fold_context_updates: dict[str, object],
-    ) -> None:
-        fold_ctx = plc._ensure_fold_context()
-        assert fold_ctx is not None
-        stats: dict[str, int] = {}
-
-        reached = cycle_fold_until(
-            plc,
-            lambda _state: False,
-            budget=4,
-            fold_ctx=replace(fold_ctx, **fold_context_updates),
-            stats=stats,
-        )
-
-        assert reached is False
-        assert stats["logical_scans"] == 4
-        assert stats["kernel_scans"] <= stats["logical_scans"]
-        assert stats["macro_folds"] >= 0
-
-    def test_scan_derived_fallback_exposes_runner_stats(self) -> None:
-        plc = PLC(_active_hold_soak())
-        self._assert_fallback_stats(
-            plc,
-            fold_context_updates={"scan_derived_names": frozenset({"scan_counter"})},
-        )
-
-    def test_clock_lcm_fallback_forwards_exact_visible_patches(self) -> None:
-        # A per-scan soak: a self-calc (a counter counts edges, not scans).
-        Soak = Dint("FallbackReceipt")
-        SoakDone = Bool("FallbackReceiptDone")
-        with Program() as program:
-            with Rung():
-                calc(Soak + 1, Soak)
-            with Rung(Soak >= 100):
-                out(SoakDone)
-
-        plc = PLC(program)
-        base_fold_ctx = plc._ensure_fold_context()
-        assert base_fold_ctx is not None
-        fold_ctx = replace(
-            base_fold_ctx,
-            clock_half_periods=(20.485,),
-        )
-        advances: list[tuple[str, object]] = []
-
-        reached = cycle_fold_until(
-            plc,
-            lambda state: state.tags.get(SoakDone.name) is True,
-            budget=5000,
-            fold_ctx=fold_ctx,
-            advances=advances,
-        )
-
-        assert reached is True
-        assert advances == [(Soak.name, 98)]
-
-    def test_off_grid_clock_fallback_exposes_runner_stats(self) -> None:
-        plc = PLC(_active_hold_soak())
-        self._assert_fallback_stats(
-            plc,
-            # dt=0.01, so this clock's 2.5-scan full period cannot align.
-            fold_context_updates={"clock_half_periods": (0.0125,)},
-        )
-
-    def test_pathological_clock_lcm_fallback_exposes_runner_stats(self) -> None:
-        plc = PLC(_active_hold_soak())
-        self._assert_fallback_stats(
-            plc,
-            # dt=0.01 gives a 4097-scan full period, beyond the cycle bound.
-            fold_context_updates={"clock_half_periods": (20.485,)},
-        )
-
-    def test_recorded_window_can_budget_logical_scans_with_active_holds(self) -> None:
+class TestBitEqual:
+    def test_budget_counts_logical_scans_with_active_holds(self) -> None:
         Held = Bool("LogicalBudgetHeld", external=True)
         Mirror = Bool("LogicalBudgetMirror")
         Soak = Timer.clone("LogicalBudgetSoak")
@@ -297,11 +74,10 @@ class TestCycleFoldBitEqual:
         start_scan = replay.state.scan_id
         stats: dict[str, int] = {}
 
-        reached = cycle_fold_until(
+        reached = coast_until(
             replay,
             lambda _state: False,
             budget=100,
-            kernel_budget=False,
             stats=stats,
         )
 
@@ -309,15 +85,8 @@ class TestCycleFoldBitEqual:
         assert replay.state.scan_id - start_scan == 100
         assert stats["logical_scans"] == 100
         assert stats["kernel_scans"] < 20
-        assert stats["ordinary_folds"] >= 1
-        assert (
-            stats["ordinary_folded_scans"] + stats["cycle_folded_scans"] + stats["residual_scans"]
-            == stats["logical_scans"]
-        )
-        assert stats["ordinary_folded_scans"] > 0
-        assert stats["cycle_folded_scans"] == 0
 
-    def test_ordinary_plateau_fold_is_layered_ahead_of_cycle_detection(self) -> None:
+    def test_a_plain_soak_lands_as_stepped(self) -> None:
         Soak = Timer.clone("LayeredSoak")
         Done = Bool("LayeredDone")
         with Program() as program:
@@ -326,10 +95,13 @@ class TestCycleFoldBitEqual:
             with Rung(Soak.Done):
                 out(Done)
 
+        ref = PLC(program)
+        ref.step()
+        ref.run_until(Done, max_cycles=10_000, jit=False)
         folded = PLC(program)
         folded.step()
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
+        reached = coast_until(
             folded,
             lambda state: state.tags.get(Done.name) is True,
             budget=10_000,
@@ -338,14 +110,11 @@ class TestCycleFoldBitEqual:
         )
 
         assert reached is True
-        assert stats["ordinary_folds"] >= 1
-        assert stats["cycle_folds"] == 0
-        assert stats["skipped_scans"] > 0
-        assert stats["ordinary_folded_scans"] == stats["skipped_scans"]
-        assert stats["cycle_folded_scans"] == 0
-        assert stats["residual_scans"] == stats["kernel_scans"]
+        assert stats["stretched_scans"] > 0
+        assert folded.state.scan_id == ref.state.scan_id
+        assert folded.state.tags == ref.state.tags
 
-    def test_layered_ordinary_fold_forwards_exact_visible_patches(self) -> None:
+    def test_a_self_calc_soak_lands_as_stepped(self) -> None:
         # A per-scan soak: a self-calc (a counter counts edges, not scans).
         Soak = Dint("LayeredReceipt")
         SoakDone = Bool("LayeredReceiptDone")
@@ -355,65 +124,57 @@ class TestCycleFoldBitEqual:
             with Rung(Soak >= 100):
                 out(SoakDone)
 
+        ref = PLC(program)
+        ref.run_until(SoakDone, max_cycles=5000, jit=False)
         plc = PLC(program)
-        advances: list[tuple[str, object]] = []
-        reached = cycle_fold_until(
+        reached = coast_until(
             plc,
             lambda state: state.tags.get(SoakDone.name) is True,
             budget=5000,
-            advances=advances,
         )
 
         assert reached is True
-        assert advances == [(Soak.name, 98)]
+        assert plc.state.scan_id == ref.state.scan_id
+        assert plc.state.tags == ref.state.tags
 
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
-        # Reference: pure scan-by-scan (fold=False), oscillation running.
+        # Reference: pure scan-by-scan (jit=False), oscillation running.
         ref = PLC(_active_hold_soak())
         ref.step()
-        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=20000, fold=False)
+        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=20000, jit=False)
         assert ref.state.tags.get("Done") is True
 
-        # Cycle-fold: same setup, folds the soak.
+        # In the loop, from the same setup.
         cf = PLC(_active_hold_soak())
         cf.step()
         stats: dict[str, int] = {}
-        advances: list[tuple[str, int | float]] = []
-        reached = cycle_fold_until(
+        reached = coast_until(
             cf,
             lambda s: s.tags.get("Done") is True,
             budget=20000,
             stats=stats,
-            advances=advances,
         )
 
         assert reached is True
         # Bit-equal final state: every tag, the scan id, and the timestamp.
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
-        assert cf.state.timestamp == pytest.approx(ref.state.timestamp)
-        # And it got there by folding, in a tiny fraction of the kernel scans.
-        assert stats["macro_folds"] >= 1
+        assert cf.state.timestamp == ref.state.timestamp
+        # And it got there in the loop, in a tiny fraction of the interpreted scans.
+        assert stats["stretches"] >= 1
         assert stats["kernel_scans"] < ref.state.scan_id // 10
         assert stats["logical_scans"] == cf.state.scan_id - 1
-        assert stats["skipped_scans"] == stats["logical_scans"] - stats["kernel_scans"]
-        assert stats["saved_kernel_scans"] == stats["skipped_scans"]
-        assert (
-            stats["ordinary_folded_scans"] + stats["cycle_folded_scans"] + stats["residual_scans"]
-            == stats["logical_scans"]
-        )
-        assert advances
-        assert any(tag == "Soak_Acc" and value > 0 for tag, value in advances)
+        assert stats["stretched_scans"] == stats["logical_scans"] - stats["kernel_scans"]
 
-    def test_watchdog_never_trips_under_fold(self) -> None:
-        # The whole point: folding must NOT let the kept-reset watchdog accumulate.
+    def test_watchdog_never_trips_in_the_loop(self) -> None:
+        # The loop must NOT let the kept-reset watchdog accumulate.
         cf = PLC(_active_hold_soak(soak_ms=5000, wd_ms=200))
         cf.step()
-        cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=20000)
+        coast_until(cf, lambda s: s.tags.get("Done") is True, budget=20000)
         # WD stayed reset throughout (acc never approached its 200 ms preset).
         assert cf.state.tags.get("WD") in (None, False)
 
-    def test_subtick_timer_progress_is_not_misread_as_a_sterile_cycle(self) -> None:
+    def test_subtick_timer_progress_lands_as_stepped(self) -> None:
         Osc = Bool("SubtickOsc")
         Soak = Timer.clone("SubtickSoak")
         Done = Bool("SubtickDone")
@@ -430,12 +191,12 @@ class TestCycleFoldBitEqual:
 
         ref = PLC(program, dt=0.010)
         ref.step()
-        ref.run_until(lambda s: s.tags.get(Done.name) is True, max_cycles=1_000, fold=False)
+        ref.run_until(lambda s: s.tags.get(Done.name) is True, max_cycles=1_000, jit=False)
 
         cf = PLC(program, dt=0.010)
         cf.step()
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
+        reached = coast_until(
             cf,
             lambda s: s.tags.get(Done.name) is True,
             budget=1_000,
@@ -446,10 +207,9 @@ class TestCycleFoldBitEqual:
         assert reached is True
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
-        assert stats.get("sterile_cycle", 0) == 0
-        assert stats["macro_folds"] >= 1
+        assert stats["stretches"] >= 1
 
-    def test_minute_timer_roundoff_still_folds_bit_equal(self) -> None:
+    def test_minute_timer_roundoff_is_bit_equal(self) -> None:
         Osc = Bool("MinuteOsc")
         Soak = Timer.clone("MinuteSoak")
         Done = Bool("MinuteDone")
@@ -466,12 +226,12 @@ class TestCycleFoldBitEqual:
 
         ref = PLC(program, dt=0.010)
         ref.step()
-        ref.run_until(Done, max_cycles=20_000, fold=False)
+        ref.run_until(Done, max_cycles=20_000, jit=False)
 
         folded = PLC(program, dt=0.010)
         folded.step()
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
+        reached = coast_until(
             folded,
             lambda state: state.tags.get(Done.name) is True,
             budget=20_000,
@@ -482,7 +242,7 @@ class TestCycleFoldBitEqual:
         assert reached is True
         assert folded.state.tags == ref.state.tags
         assert folded.state.scan_id == ref.state.scan_id
-        assert stats["macro_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert stats["kernel_scans"] < 500
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
@@ -520,10 +280,10 @@ class TestCycleFoldBitEqual:
 
         ref = PLC(program, dt=0.007)
         ref.step()
-        ref.run_until(done, max_cycles=300, fold=False)
+        ref.run_until(done, max_cycles=300, jit=False)
         folded = PLC(program, dt=0.007)
         folded.step()
-        cycle_fold_until(folded, done, budget=300, kernel_budget=False)
+        coast_until(folded, done, budget=300)
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags[Acc.name] == ref.state.tags[Acc.name]
         assert folded.state.tags[Long.Acc.name] == ref.state.tags[Long.Acc.name]
@@ -553,13 +313,13 @@ class TestCycleFoldBitEqual:
             with Rung(~Osc):
                 out(Osc)
 
-        def run(*, fold: bool) -> tuple[PLC, dict[str, int]]:
+        def run(*, jit: bool) -> tuple[PLC, dict[str, int]]:
             plc = PLC(program, dt=0.010)
             plc.patch({Auto.name: True})
             plc.step()
             stats: dict[str, int] = {}
-            if fold:
-                cycle_fold_until(
+            if jit:
+                coast_until(
                     plc,
                     lambda state: state.tags.get(Done.name) is True,
                     budget=1_000,
@@ -570,18 +330,17 @@ class TestCycleFoldBitEqual:
                 plc.run_until(
                     lambda state: state.tags.get(Done.name) is True,
                     max_cycles=1_000,
-                    fold=False,
+                    jit=False,
                 )
             return plc, stats
 
-        ref, _ = run(fold=False)
-        folded, stats = run(fold=True)
+        ref, _ = run(jit=False)
+        folded, stats = run(jit=True)
 
         assert folded.state.tags == ref.state.tags
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags[Step.name] == 2
-        assert stats.get("sterile_cycle", 0) == 0
-        assert stats["macro_folds"] >= 1
+        assert stats["stretches"] >= 1
 
 
 def _oscillation_fed_counter(
@@ -589,10 +348,8 @@ def _oscillation_fed_counter(
 ) -> tuple[Program, Counter]:
     """A counter counting the rising edges of a free-running oscillation.
 
-    Each rise is one count, so the counter is a monotone coordinate of the
-    oscillation's cycle (one count a period) and the cycle fold jumps it,
-    where the ordinary fold declines a counter that moves on its probe scan.
-    A watchdog reset by the oscillation keeps a timer in the window.
+    Each rise is one count, one count a period.  A watchdog reset by the oscillation keeps
+    a timer moving beside it.
     """
     Osc, A = Bool("Osc"), Bool("A")
     C = Counter.clone("CfC")
@@ -620,9 +377,9 @@ def _oscillation_fed_counter(
     return prog, C
 
 
-class TestCycleFoldEdgeCounter:
+class TestEdgeCounter:
     """A counter counts the rises of its input: under an oscillation it moves
-    one count a period, and a cycle jump lands it where stepping does."""
+    one count a period, and a coast lands it where stepping does."""
 
     @pytest.mark.parametrize(
         ("preset", "kw"),
@@ -634,20 +391,16 @@ class TestCycleFoldEdgeCounter:
             (1500, {"period3": True}),
         ],
     )
-    def test_cycle_jump_matches_stepping(self, preset: int, kw: dict[str, bool]) -> None:
+    def test_coast_matches_stepping(self, preset: int, kw: dict[str, bool]) -> None:
         prog, counter = _oscillation_fed_counter(preset, **kw)
         done = counter.Done.name
         folded = PLC(prog)
-        advances: list[tuple[str, object]] = []
-        assert cycle_fold_until(
-            folded, lambda s: s.tags.get(done) is True, budget=50_000, advances=advances
-        )
+        assert coast_until(folded, lambda s: s.tags.get(done) is True, budget=50_000)
         prog, _ = _oscillation_fed_counter(preset, **kw)
         stepped = PLC(prog)
         while stepped.state.tags.get(done) is not True:
             stepped.step()
 
-        assert any(name == counter.Acc.name for name, _value in advances)
         assert folded.state.scan_id == stepped.state.scan_id
         assert dict(folded.state.tags) == dict(stepped.state.tags)
         memory = {k: v for k, v in folded.state.memory.items() if not k.startswith("_frac")}
@@ -661,9 +414,7 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
 
     The soak is a self-calc (``+1``/scan) so it can reach long dwells
     without the 32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``
-    (full period 1 s = 100 scans at the default dt), so folding must align the
-    period to the clock (LCM with the period-2 oscillation = 100): the observed
-    window spans the clock's full cycle and every jump preserves its phase.
+    (full period 1 s = 100 scans at the default dt).
     """
     Osc = Bool("Osc")
     Ctr = Dint("Ctr")
@@ -685,48 +436,44 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     return prog
 
 
-class TestCycleFoldAcrossClocks:
+class TestAcrossClocks:
     def test_bit_equal_across_a_read_system_clock(self) -> None:
         ref = PLC(_clocked_active_hold_soak())
         ref.step()
-        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=200000, fold=False)
+        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=200000, jit=False)
         assert ref.state.tags.get("Done") is True
 
         cf = PLC(_clocked_active_hold_soak())
         cf.step()
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
-            cf, lambda s: s.tags.get("Done") is True, budget=200000, stats=stats
-        )
+        reached = coast_until(cf, lambda s: s.tags.get("Done") is True, budget=200000, stats=stats)
 
         assert reached is True
         # Bit-equal across the clock — including Blink (clock phase preserved).
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
         assert cf.state.tags.get("Blink") == ref.state.tags.get("Blink")
-        assert stats["macro_folds"] >= 1
+        assert stats["stretches"] >= 1
 
     def test_value_scales_with_soak_length(self) -> None:
-        # Observation cost is ~fixed (period-bound); the fold absorbs the rest, so
-        # a 10x longer soak costs roughly the same kernel scans.
+        # A 10x longer soak costs roughly the same interpreted scans.
         def run(soak_counts: int) -> int:
             cf = PLC(_clocked_active_hold_soak(soak_counts=soak_counts))
             cf.step()
             stats: dict[str, int] = {}
-            cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=100000, stats=stats)
+            coast_until(cf, lambda s: s.tags.get("Done") is True, budget=100000, stats=stats)
             assert cf.state.tags.get("Done") is True
             return stats["kernel_scans"]
 
         short = run(3_000)  # 3_000-scan soak
         long = run(30_000)  # 30_000-scan soak (10x)
-        # Kernel scans stay observation-bound: a 10x longer soak is nearly free.
         assert long < short * 2
         assert long < 3_000  # 10x more soak, an order of magnitude under its length
 
 
 def _rtc_reader_cycle_program() -> Program:
     """A period-2 oscillation beside an unconditional reader of the RTC second
-    and a rung that latches on its value: a cycle jump must not skip a tick."""
+    and a rung that latches on its value: a coast must not miss a tick."""
     from pyrung import calc, copy, latch
 
     Sec = Int("RcSec")
@@ -748,7 +495,7 @@ def _rtc_reader_cycle_program() -> Program:
     return prog
 
 
-class TestCycleFoldRtcTicks:
+class TestRtcTicks:
     @staticmethod
     def _plc() -> PLC:
         from datetime import datetime
@@ -758,31 +505,31 @@ class TestCycleFoldRtcTicks:
         plc.step()
         return plc
 
-    def test_cycle_jump_stops_at_rtc_ticks(self) -> None:
+    def test_coast_stops_at_rtc_ticks(self) -> None:
         ref = self._plc()
         for _ in range(6_000):
             ref.step()
         folded = self._plc()
         stats: dict[str, int] = {}
-        cycle_fold_until(folded, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+        coast_until(folded, lambda _s: False, budget=6_000, stats=stats)
 
         assert ref.state.tags["RcSeen"] is True
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags == ref.state.tags
 
-    def test_cause_refuses_a_jumped_scan(self) -> None:
-        """A cycle jump's skipped scans never ran: recorded cause() refuses them."""
+    def test_cause_answers_a_loop_scan_as_stepping_does(self) -> None:
+        """A question about a scan inside a stretch answers as stepping does."""
+        stepped = self._plc()
+        for _ in range(6_000):
+            stepped.step()
         folded = self._plc()
         stats: dict[str, int] = {}
-        cycle_fold_until(folded, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+        coast_until(folded, lambda _s: False, budget=6_000, stats=stats)
 
-        assert stats["cycle_folds"] >= 1
-        assert folded._fold_windows
-        first, last = folded._fold_windows[0]
-        assert first < last
-        with pytest.raises(ValueError, match="folded"):
-            folded.cause("RcTmr_Acc", first)
+        assert stats["stretches"] >= 1
+        for scan in (3_000, 5_999):
+            assert str(folded.cause("RcTmr_Acc", scan)) == str(stepped.cause("RcTmr_Acc", scan))
 
 
 def _clock_mirror_cycle_program(
@@ -857,10 +604,8 @@ def _assert_history_matches(folded: PLC, ref: PLC) -> None:
         assert got == want, sid
 
 
-class TestCycleFoldClockMirrors:
-    """Clock mirrors are ignored by the cycle observer, and a jump may cross RTC
-    ticks while every reader is off.  The jump leaves them stale, so a real scan
-    always follows it."""
+class TestClockMirrors:
+    """Clock mirrors, with their readers on and off: a coast must never leave one stale."""
 
     @staticmethod
     def _plc(prog: Program, **patch: object) -> PLC:
@@ -879,58 +624,36 @@ class TestCycleFoldClockMirrors:
             ref.step()
         return ref
 
-    # The first jump comes at scan 209 (208 scans used): 1_008 leaves exactly
-    # eight whole periods, so the jump would otherwise end the coast.
     @pytest.mark.parametrize("budget", [1_008, 1_500])
-    def test_cycle_jump_across_ticks_matches_stepping(self, budget: int) -> None:
+    def test_coast_across_ticks_matches_stepping(self, budget: int) -> None:
         ref = self._stepped(_clock_mirror_cycle_program(), budget)
         folded = self._plc(_clock_mirror_cycle_program())
-        assert folded._ensure_fold_context().time_mirrors is not None
         stats: dict[str, int] = {}
-        cycle_fold_until(
+        coast_until(
             folded,
             lambda _s: False,
             budget=budget,
-            kernel_budget=False,
             predicate_reads=frozenset(),
             stats=stats,
         )
 
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags == ref.state.tags
 
     def test_history_never_serves_a_stale_mirror(self) -> None:
-        """The jumped tip still holds the pre-jump clock copies, so history
-        replays that scan instead of serving it."""
         ref = self._stepped(_clock_mirror_cycle_program(), 1_500)
         folded = self._plc(_clock_mirror_cycle_program())
         stats: dict[str, int] = {}
-        cycle_fold_until(
+        coast_until(
             folded,
             lambda _s: False,
             budget=1_500,
-            kernel_budget=False,
             predicate_reads=frozenset(),
             stats=stats,
         )
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         _assert_history_matches(folded, ref)
-
-    def test_without_mirrors_the_cycle_never_repeats(self) -> None:
-        plc = self._plc(_clock_mirror_cycle_program())
-        fold_ctx = replace(plc._ensure_fold_context(), time_mirrors=None)
-        stats: dict[str, int] = {}
-        cycle_fold_until(
-            plc,
-            lambda _s: False,
-            budget=1_500,
-            kernel_budget=False,
-            fold_ctx=fold_ctx,
-            predicate_reads=frozenset(),
-            stats=stats,
-        )
-        assert stats["cycle_folds"] == 0
 
     @pytest.mark.parametrize(
         ("program", "patch"),
@@ -940,60 +663,53 @@ class TestCycleFoldClockMirrors:
         ],
         ids=["powered_reader", "continued_branch_on_where_it_stands"],
     )
-    def test_live_reader_blocks_the_jump_across_ticks(
+    def test_live_reader_across_ticks(
         self, program: dict[str, bool], patch: dict[str, object]
     ) -> None:
         ref = self._stepped(_clock_mirror_cycle_program(**program), 1_500, **patch)
         plc = self._plc(_clock_mirror_cycle_program(**program), **patch)
         stats: dict[str, int] = {}
-        cycle_fold_until(
+        coast_until(
             plc,
             lambda _s: False,
             budget=1_500,
-            kernel_budget=False,
             predicate_reads=frozenset(),
             stats=stats,
         )
 
-        assert stats.get("cycle_folds", 0) == 0
-        assert stats.get("rtc_readers_on", 0) >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
 
     @pytest.mark.parametrize("budget", [400, 1_500, 3_000])
-    def test_continued_branch_off_where_it_stands_lets_the_jump_through(self, budget: int) -> None:
+    def test_continued_branch_off_where_it_stands(self, budget: int) -> None:
         """A continued rung reads live (the row solve), so a branch behind
         ``X == 0`` under ``copy(1, X)`` never runs, though it was on when a
         continued rung read the earlier rung's snapshot.  Its mirror reader is
-        dead, and the jump equals stepping, history included."""
+        dead, and the coast equals stepping, history included."""
         ref = self._stepped(_clock_mirror_cycle_program(continued=True), budget)
         plc = self._plc(_clock_mirror_cycle_program(continued=True))
         stats: dict[str, int] = {}
-        cycle_fold_until(
+        coast_until(
             plc,
             lambda _s: False,
             budget=budget,
-            kernel_budget=False,
             predicate_reads=frozenset(),
             stats=stats,
         )
 
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
         _assert_history_matches(plc, ref)
 
-    # 208 kernel scans spends the budget on the scan that certifies the first
-    # cycle; a jump taken there would end the coast on stale mirrors.
     @pytest.mark.parametrize("budget", [208, 400])
-    def test_kernel_budget_never_ends_on_a_jump(self, budget: int) -> None:
+    def test_a_short_budget_ends_as_stepped(self, budget: int) -> None:
         plc = self._plc(_clock_mirror_cycle_program())
         stats: dict[str, int] = {}
-        cycle_fold_until(
+        coast_until(
             plc,
             lambda _s: False,
             budget=budget,
-            kernel_budget=True,
             predicate_reads=frozenset(),
             stats=stats,
         )
@@ -1001,7 +717,6 @@ class TestCycleFoldClockMirrors:
         ref = self._plc(_clock_mirror_cycle_program())
         for _ in range(plc.state.scan_id - ref.state.scan_id):
             ref.step()
-        assert stats["cycle_folds"] == (0 if budget == 208 else 1)
         assert plc.state.tags == ref.state.tags
 
     @pytest.mark.parametrize("declared", [None, frozenset({"CmSec"})], ids=["undeclared", "copy"])
@@ -1019,18 +734,17 @@ class TestCycleFoldClockMirrors:
             if stop(ref.state):
                 break
         plc = self._plc(_clock_mirror_cycle_program())
-        cycle_fold_until(plc, stop, budget=1_500, kernel_budget=False, predicate_reads=declared)
+        coast_until(plc, stop, budget=1_500, predicate_reads=declared)
         assert ref.state.tags["CmSec"] == 55
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
 
 
-class TestCycleJumpPatchesLand:
-    """A cycle jump lands its accumulator edits on the tip, clamped where the
-    timer clamps, and a logical budget never ends on the jump itself."""
+class TestAcrossAClamp:
+    """A coast across a timer's clamp lands on the tip where stepping does."""
 
     @pytest.mark.parametrize("unit", ["s", "ms"])
-    def test_budget_end_keeps_a_real_scan_after_the_jump(self, unit: str) -> None:
+    def test_budget_end_matches_stepping(self, unit: str) -> None:
         def build() -> Program:
             T, Hit = Bool("PjT"), Bool("PjHit")
             Tmr = Timer.clone("PjTmr")
@@ -1050,19 +764,19 @@ class TestCycleJumpPatchesLand:
         plc = PLC(build(), dt=0.010)
         plc.step()
         stats: dict[str, int] = {}
-        cycle_fold_until(plc, lambda _s: False, budget=6_000, kernel_budget=False, stats=stats)
+        coast_until(plc, lambda _s: False, budget=6_000, stats=stats)
 
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
         _assert_history_matches(plc, ref)
 
 
-class TestCycleJumpReadsTheIntegerAccumulator:
+class TestReadsTheIntegerAccumulator:
     """A rung reads a timer's integer accumulator, not its fractional progress:
     a seconds timer at 2.07 s reads 2, so ``Acc > 2`` is still ahead of it and
-    must bound the jump (the tumbler's rotate step transition went 11 scans
-    late when it did not)."""
+    must end the stretch (the tumbler's rotate step transition went 11 scans late
+    when it did not)."""
 
     @pytest.mark.parametrize(("form", "k"), [("gt", 2), ("ge", 3), ("eq", 3)])
     def test_comparison_on_a_seconds_timer_flips_where_stepping_does(
@@ -1093,14 +807,14 @@ class TestCycleJumpReadsTheIntegerAccumulator:
         for _ in range(7):
             plc.step()
         stats: dict[str, int] = {}
-        cycle_fold_until(plc, lambda _s: False, budget=493, kernel_budget=False, stats=stats)
+        coast_until(plc, lambda _s: False, budget=493, stats=stats)
 
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
 
 
-def _jump_and_step(
+def _coast_and_step(
     build: Any,
     *,
     budget: int = 300,
@@ -1108,7 +822,7 @@ def _jump_and_step(
     force: tuple[str, Any] | None = None,
     react: Any = None,
 ) -> tuple[PLC, PLC, dict[str, int]]:
-    """The same run under the cycle fold and stepped; a ``react`` runs every scan."""
+    """The same run in a coast and stepped; a ``react`` runs every scan."""
 
     def make() -> PLC:
         plc = PLC(build(), dt=0.010)
@@ -1125,7 +839,7 @@ def _jump_and_step(
         ref.step()
     plc = make()
     stats: dict[str, int] = {}
-    cycle_fold_until(plc, lambda _s: False, budget=budget, kernel_budget=False, stats=stats)
+    coast_until(plc, lambda _s: False, budget=budget, stats=stats)
     return plc, ref, stats
 
 
@@ -1135,9 +849,9 @@ def _assert_same_tags(plc: PLC, ref: PLC) -> None:
     assert {k: plc.state.tags.get(k) for k in keys} == {k: ref.state.tags.get(k) for k in keys}
 
 
-class TestCycleJumpDrumStep:
-    """A jump resolves a drum's preset from one state's step.  That state stands
-    for the period only if nothing writes the step around the drum's read."""
+class TestDrumStep:
+    """A drum reads its preset from the step it sees, which may not be the step a scan
+    boundary shows."""
 
     @staticmethod
     def _program(
@@ -1182,7 +896,7 @@ class TestCycleJumpDrumStep:
 
     @pytest.mark.parametrize("kind", ["time", "event"])
     def test_a_force_over_a_write_above_the_drum(self, kind: str) -> None:
-        plc, ref, _stats = _jump_and_step(
+        plc, ref, _stats = _coast_and_step(
             self._program(kind=kind, above=1), first={"En": True}, force=("Step", 3)
         )
         _assert_same_tags(plc, ref)
@@ -1190,7 +904,7 @@ class TestCycleJumpDrumStep:
 
     @pytest.mark.parametrize("kind", ["time", "event"])
     def test_a_callback_patch_over_a_write_below_the_drum(self, kind: str) -> None:
-        plc, ref, _stats = _jump_and_step(
+        plc, ref, _stats = _coast_and_step(
             self._program((5000, 5000, 200), kind, below=1),
             first={"En": True},
             react=lambda plc, _s: plc.patch({"Step": 3}),
@@ -1207,14 +921,12 @@ class TestCycleJumpDrumStep:
         def swap(plc: PLC, state: Any) -> None:
             plc.patch({"Step": 1 if state.tags.get("Step") == 3 else 3})
 
-        plc, ref, _stats = _jump_and_step(
+        plc, ref, _stats = _coast_and_step(
             self._program(presets), budget=budget, first={"En": True, "Step": first}, react=swap
         )
         _assert_same_tags(plc, ref)
 
-    def test_a_step_nothing_writes_still_jumps(self) -> None:
-        """The decline stops where the step moves: a jump on a plain drum still lands."""
-
+    def test_a_step_nothing_writes_stays_in_the_loop(self) -> None:
         def build() -> Program:
             Tog = Bool("Tog")
             with Program(strict=False) as prog:
@@ -1232,14 +944,14 @@ class TestCycleJumpDrumStep:
                     ).reset(Bool("R"))
             return prog
 
-        plc, ref, stats = _jump_and_step(build, budget=1500, first={"En": True})
+        plc, ref, stats = _coast_and_step(build, budget=1500, first={"En": True})
         _assert_same_tags(plc, ref)
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
 
 
-class TestCycleJumpWrittenInputs:
-    """The same read, with the tag written around it: the jump's bound comes from
-    what a boundary shows, and the period's scans read something else."""
+class TestWrittenInputs:
+    """The same read, with the tag written around it: a scan boundary shows one value, and
+    the reader reads another."""
 
     @staticmethod
     def _timer(above: int | None, below: int | None, comparison: bool = False) -> Any:
@@ -1272,26 +984,26 @@ class TestCycleJumpWrittenInputs:
 
     @pytest.mark.parametrize("comparison", [False, True], ids=["preset", "comparison"])
     def test_written_around_the_reader(self, comparison: bool) -> None:
-        plc, ref, _stats = _jump_and_step(self._timer(200, 5000, comparison))
+        plc, ref, _stats = _coast_and_step(self._timer(200, 5000, comparison))
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
 
     @pytest.mark.parametrize("comparison", [False, True], ids=["preset", "comparison"])
-    def test_written_on_one_side_still_jumps(self, comparison: bool) -> None:
+    def test_written_on_one_side_stays_in_the_loop(self, comparison: bool) -> None:
         for above, below in ((20_000, None), (None, 20_000)):
-            plc, ref, stats = _jump_and_step(
+            plc, ref, stats = _coast_and_step(
                 self._timer(above, below, comparison), budget=1500, first={"P": 20_000}
             )
             _assert_same_tags(plc, ref)
-            assert stats["cycle_folds"] >= 1
+            assert stats["stretches"] >= 1
 
     def test_a_force_over_a_write_above_the_reader(self) -> None:
-        plc, ref, _stats = _jump_and_step(self._timer(200, None), force=("P", 5000))
+        plc, ref, _stats = _coast_and_step(self._timer(200, None), force=("P", 5000))
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
 
     def test_a_callback_patch_over_a_write_below_the_reader(self) -> None:
-        plc, ref, _stats = _jump_and_step(
+        plc, ref, _stats = _coast_and_step(
             self._timer(None, 5000), first={"P": 200}, react=lambda plc, _s: plc.patch({"P": 200})
         )
         _assert_same_tags(plc, ref)
@@ -1318,7 +1030,7 @@ class TestCycleJumpWrittenInputs:
                     calc(Int("Since") + 1, Int("Since"))
             return prog
 
-        plc, ref, _stats = _jump_and_step(build)
+        plc, ref, _stats = _coast_and_step(build)
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
 
@@ -1348,15 +1060,14 @@ class TestCycleJumpWrittenInputs:
                     calc(Int("Since") + 1, Int("Since"))
             return prog
 
-        plc, ref, _stats = _jump_and_step(build)
+        plc, ref, _stats = _coast_and_step(build)
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
 
 
-class TestCycleJumpCountsInputWrites:
-    """A tag a rung may read between writes: a cycle jump counts its writes over
-    the scans it observed, which a proven period repeats.  At most one write per
-    scan, with the value held at every boundary, and every read sees that value."""
+class TestInputWrites:
+    """A tag a rung may read between writes, written directly, through a pointer, or only
+    on some scans of an oscillation."""
 
     BIG = Block("CwBig", TagType.INT, 1, 2000)
 
@@ -1369,7 +1080,7 @@ class TestCycleJumpCountsInputWrites:
         """A 2-scan cycle with a preset in a block a rung writes through a pointer."""
 
         def build() -> Program:
-            Big = TestCycleJumpCountsInputWrites.BIG
+            Big = TestInputWrites.BIG
             Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
             Ptr, Cmd = Int("Ptr"), Bool("Cmd")
             with Program(strict=False) as prog:
@@ -1391,31 +1102,30 @@ class TestCycleJumpCountsInputWrites:
 
         return build
 
-    def test_an_idle_indirect_writer_still_jumps(self) -> None:
+    def test_an_idle_indirect_writer_stays_in_the_loop(self) -> None:
         name = self.BIG[5].name
-        plc, ref, stats = _jump_and_step(self._indirect(), budget=2500, first={name: 20_000})
+        plc, ref, stats = _coast_and_step(self._indirect(), budget=2500, first={name: 20_000})
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
-        assert stats["cycle_folds"] >= 1
-        assert stats["cycle_folded_scans"] >= 1500
+        assert stats["stretches"] >= 1
+        assert stats["stretched_scans"] >= 1500
 
-    def test_an_indirect_write_of_another_slot_still_jumps(self) -> None:
+    def test_an_indirect_write_of_another_slot_stays_in_the_loop(self) -> None:
         name = self.BIG[5].name
-        plc, ref, stats = _jump_and_step(
+        plc, ref, stats = _coast_and_step(
             self._indirect(writer_on=True),
             budget=2500,
             first={name: 20_000, "Ptr2": 7},
         )
         _assert_same_tags(plc, ref)
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
 
-    def test_an_indirect_write_around_the_reader_declines(self) -> None:
-        plc, ref, stats = _jump_and_step(
+    def test_an_indirect_write_around_the_reader(self) -> None:
+        plc, ref, stats = _coast_and_step(
             self._indirect(above=200, below=5000), budget=300, first={"Ptr": 5}
         )
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
-        assert stats["cycle_folds"] == 0
 
     def test_a_pointer_walking_onto_the_input(self) -> None:
         def build() -> Program:
@@ -1434,7 +1144,7 @@ class TestCycleJumpCountsInputWrites:
                     copy(20, Big[Ptr])
             return prog
 
-        plc, ref, _stats = _jump_and_step(build, budget=1500, first={self.BIG[50].name: 20_000})
+        plc, ref, _stats = _coast_and_step(build, budget=1500, first={self.BIG[50].name: 20_000})
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
 
@@ -1460,26 +1170,23 @@ class TestCycleJumpCountsInputWrites:
 
         return build
 
-    def test_idle_writers_around_the_reader_jump(self) -> None:
-        plc, ref, stats = _jump_and_step(
+    def test_idle_writers_around_the_reader_stay_in_the_loop(self) -> None:
+        plc, ref, stats = _coast_and_step(
             self._gated("never", "never"), budget=3000, first={"P": 28_000}
         )
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
-        assert stats["cycle_folds"] >= 1
-        assert stats["cycle_folded_scans"] >= 2000
+        assert stats["stretches"] >= 1
+        assert stats["stretched_scans"] >= 2000
 
     @pytest.mark.parametrize(
         ("above", "below"),
         [("on", "on"), ("off", "off"), ("on", "off"), ("off", "on")],
     )
     def test_writes_in_only_some_scans_of_the_period(self, above: str, below: str) -> None:
-        plc, ref, stats = _jump_and_step(self._gated(above, below), budget=700)
+        plc, ref, stats = _coast_and_step(self._gated(above, below), budget=700)
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
-        if above == below:
-            # One scan of the period writes twice, and it is the scan that counts.
-            assert stats["cycle_folds"] == 0
 
     def test_a_writer_woken_by_the_timer_itself(self) -> None:
         def build() -> Program:
@@ -1497,7 +1204,7 @@ class TestCycleJumpCountsInputWrites:
                     copy(5000, P)
             return prog
 
-        plc, ref, _stats = _jump_and_step(build, budget=2500, first={"P": 20_000})
+        plc, ref, _stats = _coast_and_step(build, budget=2500, first={"P": 20_000})
         _assert_same_tags(plc, ref)
         assert ref.state.tags["Hit"] is True
 
@@ -1505,7 +1212,7 @@ class TestCycleJumpCountsInputWrites:
     def _mirror_program() -> Program:
         """Clock mirrors, an indirect writer that stores one when asked, and a preset
         in the block it writes: the writer's cone reaches the mirrors."""
-        Big = TestCycleJumpCountsInputWrites.BIG
+        Big = TestInputWrites.BIG
         Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
         Sec, Blink, Cmd, Ptr = Int("CwSec"), Bool("Blink"), Bool("Cmd"), Int("Ptr")
         with Program(strict=False) as prog:
@@ -1533,35 +1240,31 @@ class TestCycleJumpCountsInputWrites:
         plc.step()
         return plc
 
-    def test_a_writer_storing_a_clock_mirror_leaves_the_mirrors_ignored(self) -> None:
+    def test_a_writer_storing_a_clock_mirror(self) -> None:
         plc = self._mirror_plc()
-        assert plc._ensure_fold_context().time_mirrors is not None
         ref = self._mirror_plc()
         for _ in range(1500):
             ref.step()
         stats: dict[str, int] = {}
-        cycle_fold_until(
+        coast_until(
             plc,
             lambda _s: False,
             budget=1500,
-            kernel_budget=False,
             predicate_reads=frozenset(),
             stats=stats,
         )
-        assert stats["cycle_folds"] >= 1
+        assert stats["stretches"] >= 1
         assert plc.state.scan_id == ref.state.scan_id
         assert plc.state.tags == ref.state.tags
 
-    def test_the_mirror_writer_waking_after_a_jump(self) -> None:
+    def test_the_mirror_writer_waking_after_a_stretch(self) -> None:
         plc, ref = self._mirror_plc(), self._mirror_plc()
         for leg, cmd in ((1500, False), (1500, True)):
             for runner in (plc, ref):
                 runner.patch({"Cmd": cmd})
             for _ in range(leg):
                 ref.step()
-            cycle_fold_until(
-                plc, lambda _s: False, budget=leg, kernel_budget=False, predicate_reads=frozenset()
-            )
+            coast_until(plc, lambda _s: False, budget=leg, predicate_reads=frozenset())
             assert plc.state.scan_id == ref.state.scan_id
             assert plc.state.tags == ref.state.tags
         assert ref.state.tags["Hit"] is True

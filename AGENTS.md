@@ -14,7 +14,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite
-- `make test-fold` — the suite with every folded run checked against a stepped twin, scan by scan (`--fold-check`, `tests/fold_check.py`); run after fold, timer, counter or clock changes
+- `make test-fold` — the suite with every run in the guarded loop checked against a stepped twin, scan by scan (`--fold-check`, `tests/fold_check.py`); run after loop, timer, counter or clock changes
 - `make test-conformance` — conformance cases over Modbus TCP against the local soft PLC (`PLC=host[:port]` for a real CLICK, `TARGET=circuitpy` for the generated P1AM-200 code run locally, `GROUP=name` for some groups); `make conformance-export OUT=dir` writes the CLICK project
 - `make test-integration` — integration tests (needs hardware/network)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
@@ -44,6 +44,8 @@ src/pyrung/
 │   ├── rung.py          # Rung DSL, condition evaluation
 │   ├── runner.py        # Engine plus first-class causal Epoch lineage (step, seek, fork)
 │   ├── kernel.py        # Compiled execution kernel
+│   ├── compiled_run.py  # run_for/run_until on the kernel: interpreted prefix, checkpoints, stops
+│   ├── scan_trace.py    # Guarded scan loop traced from the kernel source (soundness argument in its docstring)
 │   ├── condition.py     # Condition combinators (And, Or, rise, fall, comparisons)
 │   ├── expression.py    # Expression tree for conditions/calc
 │   ├── history.py       # Time travel, scan log access

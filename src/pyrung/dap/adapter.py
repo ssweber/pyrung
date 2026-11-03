@@ -133,6 +133,8 @@ class DAPAdapter:
         self._capture = CaptureBuffer()
         self._live_server: Any = None
         self._harness: Any = None
+        # The runner on which a history panel refresh last ran out of what it may step again.
+        self._tag_changes_ran_out_on: Any = None
         # Bench links (pyrung.dap.links): session wiring over the program's
         # declared links, kept across reloads.
         self._bench_links: dict[str, Any] = {}

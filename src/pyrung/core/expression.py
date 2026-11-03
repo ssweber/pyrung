@@ -845,7 +845,7 @@ class SumExpr(Expression):
         self.block_range = block_range
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return sum(ctx.get_tag(tag.name, 0) for tag in self.block_range)
+        return sum(ctx.get_tag(tag.name, tag.default) for tag in self.block_range)
 
     def __repr__(self) -> str:
         return f"{_range_dsl(self.block_range)}.sum()"

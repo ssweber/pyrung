@@ -5,7 +5,7 @@ drives an *indicator*: an ``out()`` bit on rungs of plain contacts, whose reader
 all sit below its writers and write nothing but indicators.  The guard does not
 watch an indicator and each landing rebuilds it.  Anything else a clock-driven tag
 reaches keeps the clock a bound: a second clock on a rung, a comparison, a latch, a
-copy, a subroutine gated by it.  Blink indicators are common and cheap, so they fold.
+copy, a subroutine gated by it.  Blink indicators are common and cheap, so they stay in the loop.
 """
 
 from __future__ import annotations
@@ -42,6 +42,9 @@ from pyrung import (
 )
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
+from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 clk100 = system.sys.clock_100ms
 clk1s = system.sys.clock_1s
@@ -99,7 +102,7 @@ def _plc(body: Body, patch: dict[str, Any] | None) -> PLC:
 
 
 def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = None) -> None:
-    """Fold and replay seek equal stepping, at the end and at every scan the fold kept."""
+    """The loop and a replay equal stepping, at the end and at scans a replay reaches."""
     stepped = _plc(body, patch)
     expected: dict[int, dict[str, Any]] = {}
     for _ in range(scans):
@@ -107,26 +110,19 @@ def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = 
         expected[stepped.state.scan_id] = _state(stepped)
 
     folded = _plc(body, patch)
-    folded.run_until(lambda _s: False, max_cycles=scans, fold=True)
+    folded.run_until(NEVER, max_cycles=scans, jit=True)
     assert folded.state.scan_id == stepped.state.scan_id
     assert _state(folded) == expected[folded.state.scan_id]
 
     for target in (stepped.state.scan_id // 2, (stepped.state.scan_id * 3) // 4):
-        seek = stepped._replay_seek(target)
+        seek = stepped.replay_to(target)
         assert _state(seek) == expected[target]
 
 
 def _kernel_scans(body: Body, scans: int = 1200) -> int:
     plc = _plc(body, None)
-    counter = {"n": 0}
-    original = plc._run_single_scan
-
-    def wrapped(**options: Any) -> Any:
-        counter["n"] += 1
-        return original(**options)
-
-    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
-    plc.run_until(lambda _s: False, max_cycles=scans, fold=True)
+    counter = ScansOutsideLoop(plc)
+    plc.run_until(NEVER, max_cycles=scans, jit=True)
     return counter["n"]
 
 
@@ -134,8 +130,8 @@ def _assert_lands_as_stepped(body: Body, *conditions: Any) -> None:
     """``run_until`` stops on one scan with one state, folded or stepped, for each."""
     for condition in conditions:
         folded, stepped = _plc(body, None), _plc(body, None)
-        folded.run_until(condition, max_cycles=2000, fold=True)
-        stepped.run_until(condition, max_cycles=2000, fold=False)
+        folded.run_until(condition, max_cycles=2000, jit=True)
+        stepped.run_until(condition, max_cycles=2000, jit=False)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
@@ -490,13 +486,13 @@ class TestAClockThroughATag:
         def body() -> None:
             _two_blinks(lambda: calc(N + 1, N))()
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = _plc(body, None)
             plc.force(F, True)
-            plc.run_until(lambda _s: False, max_cycles=1200, fold=fold)
+            plc.run_until(NEVER, max_cycles=1200, jit=jit)
             return plc
 
-        assert _state(run(fold=True)) == _state(run(fold=False))
+        assert _state(run(jit=True)) == _state(run(jit=False))
 
     @pytest.mark.parametrize(
         "body",
@@ -642,7 +638,7 @@ def _indicator_of_a_rebuilt_value() -> None:
     _timer()
 
 
-class TestAnIndicatorStillFolds:
+class TestAnIndicatorStaysInTheLoop:
     """A clock-driven bit that gates nothing else moving: the common case, and exact."""
 
     @pytest.mark.parametrize(
@@ -656,8 +652,9 @@ class TestAnIndicatorStillFolds:
             pytest.param(_indicator_in_a_subroutine, id="in-a-subroutine"),
         ],
     )
-    def test_folds_exactly(self, body: Body) -> None:
-        assert _kernel_scans(body) <= 12
+    def test_runs_exactly(self, body: Body) -> None:
+        # A real scan at each edge of the 100 ms clock: 1 scan in 5.
+        assert _kernel_scans(body) <= 1200 // 4
         _assert_exact(body)
 
     @pytest.mark.parametrize(
@@ -673,7 +670,7 @@ class TestAnIndicatorStillFolds:
         _assert_exact(body, scans)
 
     def test_into_a_range_of_bits(self) -> None:
-        assert _kernel_scans(_blink_into_a_range) <= 12
+        assert _kernel_scans(_blink_into_a_range) <= 1200 // 4
         _assert_exact(_blink_into_a_range)
 
 
@@ -888,7 +885,7 @@ def _contact_on_a_comparison_result() -> None:
 
 
 class TestWhatIsNotAnIndicator:
-    """Each folds less than an indicator does, or not at all, and stays exact."""
+    """Each stays in the loop less than an indicator does, or not at all, and stays exact."""
 
     @pytest.mark.parametrize(
         "body",
@@ -904,7 +901,6 @@ class TestWhatIsNotAnIndicator:
         ],
     )
     def test_stays_exact_with_the_clock_as_a_bound(self, body: Body) -> None:
-        assert _kernel_scans(body) > 12
         _assert_exact(body)
 
     def test_a_branch_read_above_its_writer(self) -> None:
@@ -912,13 +908,13 @@ class TestWhatIsNotAnIndicator:
 
     def test_a_second_writer_stays_in_the_guard(self) -> None:
         # Its moves are not a function of the clock, and a probe scan shows them.
-        def run(fold: bool) -> tuple[int, dict[str, Any]]:
+        def run(jit: bool) -> tuple[int, dict[str, Any]]:
             calls: list[int] = []
             plc = _plc(_function_over_a_gated_blink(calls), None)
             # A monitor on what holds changes nothing here, and tells --fold-check to
             # leave this run alone: a stepped twin would call the same function.
             plc.monitor(G, lambda _cur, _prev: None)
-            plc.run_until(lambda _s: False, max_cycles=700, fold=fold)
+            plc.run_until(NEVER, max_cycles=700, jit=jit)
             return len(calls), _state(plc)
 
         assert run(True) == run(False)

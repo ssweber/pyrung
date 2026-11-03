@@ -584,6 +584,8 @@ The History panel (in the debug sidebar) has two tabs: **Tags** and **Chain**.
 
 Shows tag values at each retained scan. The slider scrubs through the scan cache; tag values update live as you drag. Values update automatically during `continue` runs. Right-click a tag to add it from the Data View or Graph View.
 
+Each entry is the scan a tag changed on. A long `run_for()` leaves scans with no record of that, so the panel steps them again when you open it, for up to about 3 seconds a request, newest first. What it hasn't read yet shows as a range with the net change across it, which claims no scan for that change; **Load older** reads on.
+
 ### Chain tab
 
 Run causal queries interactively. Type a query in the input field using the same syntax as the `cause`/`effect`/`recovers` console commands:

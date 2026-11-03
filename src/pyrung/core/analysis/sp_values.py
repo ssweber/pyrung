@@ -28,6 +28,7 @@ from pyrung.core.crossing import (
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
+    from pyrung.core.storage import StoreTransform
 
 
 def _values_match(a: Any, b: Any) -> bool:
@@ -47,7 +48,7 @@ def _values_match(a: Any, b: Any) -> bool:
     return False
 
 
-def _invert_affine(wv: Any, value: Any) -> Any | None:
+def _invert_affine(wv: Any, value: Any, source: StoreTransform | None = None) -> Any | None:
     """Source value an ``Affine`` write needs to produce *value*, or ``None``.
 
     This is a candidate projection, not a complete preimage: a clamp rail or
@@ -57,7 +58,7 @@ def _invert_affine(wv: Any, value: Any) -> Any | None:
     """
     if not isinstance(wv, Affine):
         return None
-    candidate = invert_affine_candidate(wv, value)
+    candidate = invert_affine_candidate(wv, value, source)
     return None if candidate is UNKNOWN else candidate
 
 

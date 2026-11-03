@@ -114,9 +114,9 @@ def _constraint_condition(
 ) -> Any | None:
     """Lower a crossing ``Constraint`` to an equivalent runtime condition.
 
-    The constraint algebra is the planner's data-only language; coasts and
-    folding need the executable Condition language so they can expose exact
-    reads and crossing thresholds.  Unsupported constraint shapes return
+    The constraint algebra is the planner's data-only language; coasts need the
+    executable Condition language so they can expose exact reads and crossing
+    thresholds.  Unsupported constraint shapes return
     ``None`` and leave the caller's predicate authoritative.
     """
     from pyrung.core.condition import (
@@ -587,7 +587,6 @@ def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
     # Hold rungs keep their memory under their own ``pilot:`` site keys.
     bind_sites(rungs, namespace=PILOT_NAMESPACE)
     plc._synthesis.holds = rungs
-    plc._fold_context_cache = None
     plc._compiled_replay_kernel = None
     plc._soft_exec_program_cache = None
     plc._causal_lineage.invalidate_current_epoch()

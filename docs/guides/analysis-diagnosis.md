@@ -189,7 +189,7 @@ PILOT works toward each target.
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too: PILOT carries the condition into folded trial coasts, so there is no two-scan wink where it blips true and settles false again. An opaque Python callable has no readable condition for folding; it is checked at trial endpoints, retained real snapshots, and kernel scans the coast actually executes, but not logical scans skipped by a fold. Use condition syntax when every logical scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too: PILOT carries the condition into trial coasts, so there is no two-scan wink where it blips true and settles false again. An opaque Python callable has no readable condition; it is checked at trial endpoints, retained real snapshots, and kernel scans the coast actually executes, but not scans a coast runs in the guarded loop. Use condition syntax when every logical scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
 
 Pass more than one condition — a tuple or list — for a **union of exclusions**: each is avoided independently.
 

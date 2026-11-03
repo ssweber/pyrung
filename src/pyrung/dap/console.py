@@ -176,9 +176,13 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.force(adapter._resolve_target_locked(tag), value)
+    name = adapter._resolve_target_locked(tag)
+    try:
+        runner.force(name, value)
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot force: {exc}") from exc
     execution_flow.invalidate_mid_scan(adapter)
-    return ConsoleResult(f"Forced {tag}={value!r}")
+    return ConsoleResult(f"Forced {tag}={runner.forces[name]!r}")
 
 
 @register("unforce", usage="unforce <tag>", group="data")
@@ -215,9 +219,13 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.patch({adapter._resolve_target_locked(tag): value})
+    name = adapter._resolve_target_locked(tag)
+    try:
+        runner.patch({name: value})
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
     execution_flow.invalidate_mid_scan(adapter)
-    return ConsoleResult(f"Patched {tag}={value!r}")
+    return ConsoleResult(f"Patched {tag}={runner.pending_patches[name]!r}")
 
 
 @register("continue", usage="continue", group="execution")
@@ -445,7 +453,7 @@ def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
             chain = runner.cause(tag, to=value)
         else:
             chain = runner.cause(tag, scan=scan)
-    except ValueError as exc:  # e.g. a scan a fold computed in one step
+    except ValueError as exc:  # e.g. too many unrecorded scans to settle
         raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No causal chain found for {tag}")
@@ -464,7 +472,7 @@ def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
             chain = runner.effect(tag, from_=value)
         else:
             chain = runner.effect(tag, scan=scan)
-    except ValueError as exc:  # e.g. a scan a fold computed in one step
+    except ValueError as exc:  # e.g. too many unrecorded scans to settle
         raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No effect chain found for {tag}")
@@ -759,14 +767,14 @@ class _PilotProgressFormatter:
             scan_before = data.get("scan_before")
             scan_after = data.get("scan_after", event.scan)
             span = scan_after - scan_before if scan_before is not None else None
-            skipped = data.get("coast_skipped_scans")
+            stretched = data.get("coast_stretched_scans")
             kernel = data.get("coast_kernel_scans")
             channel = data.get("bearing_coast_channel_tag")
             before = data.get("bearing_coast_before_value")
             after = data.get("bearing_coast_actual_value")
             elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
-            if isinstance(skipped, int) and skipped > 0 and isinstance(kernel, int):
-                elapsed += f" ({skipped:,} folded; {kernel:,} kernel)"
+            if isinstance(stretched, int) and stretched > 0 and isinstance(kernel, int):
+                elapsed += f" ({stretched:,} in the loop; {kernel:,} interpreted)"
             prefix = " " if self._wait_open or self._retry_open else "  "
             wait_channel = self._wait_channel
             resuming = self._resuming_open
@@ -1111,7 +1119,7 @@ def _format_prove_result(result: Any) -> str:
 def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:
     tags = []
     for name in names:
-        tag = runner._known_tags_by_name.get(name)
+        tag = runner._tag_known_or_reached(name)
         if tag is None:
             raise ValueError(f"{verb}: unknown tag '{name}'")
         tags.append(tag)
@@ -1493,6 +1501,14 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         if a_scan is not None and prov != "console":
             scan_sources.setdefault(a_scan, set()).add(prov)
 
+    # A force record repeats the set in force at each checkpoint: what changed is against the last.
+    force_records = log._force_changes_by_scan
+    earlier = [scan_id for scan_id in force_records if scan_id < start]
+    last_forces = force_records[max(earlier)] if earlier else {}
+
+    # Newest first, the way a replayed stretch is kept: oldest first steps one for each scan.
+    states = {scan_id: runner.history.at(scan_id) for scan_id in range(tip, start - 1, -1)}
+
     prev_state = None
     for scan_id in range(start, tip + 1):
         entries: list[str] = []
@@ -1502,14 +1518,10 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         if patches:
             for tag, val in sorted(patches.items()):
                 entries.append(f"  patch {tag} {val!r}")
-        force_snap = log._force_changes_by_scan.get(scan_id)
+        force_snap = force_records.get(scan_id)
         if force_snap is not None:
-            prev_scan = scan_id - 1
-            prev_forces = (
-                log._force_changes_by_scan.get(prev_scan, {}) if prev_scan >= log.base_scan else {}
-            )
-            for tag in sorted(set(force_snap) | set(prev_forces)):
-                old = prev_forces.get(tag)
+            for tag in sorted(set(force_snap) | set(last_forces)):
+                old = last_forces.get(tag)
                 new = force_snap.get(tag)
                 if old != new:
                     if new is not None and old is None:
@@ -1518,8 +1530,9 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
                         entries.append(f"  unforce {tag}")
                     else:
                         entries.append(f"  force {tag} {old!r} -> {new!r}")
+            last_forces = force_snap
 
-        cur_state = runner.history.at(scan_id)
+        cur_state = states[scan_id]
         if prev_state is not None:
             for key in sorted(set(cur_state.tags.keys()) | set(prev_state.tags.keys())):
                 old_v = prev_state.tags.get(key)

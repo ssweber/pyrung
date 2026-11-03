@@ -1,4 +1,4 @@
-"""Fold soundness fuzzer: saturated-heartbeat and stable-input shapes.
+"""Loop soundness fuzzer: saturated-heartbeat and stable-input shapes.
 
 **Saturated heartbeat:**  A system clock gating a rung that reads an accumulator
 through a comparison that saturates partway up the ramp.  The clock ends every
@@ -9,7 +9,7 @@ the accumulator.  None is an indicator (an edge contact remembers), so every clo
 edge ends a window; every tag must still be bit-equal to scan-by-scan.
 
 Both families compare the whole tag image exactly, timer accumulators
-included: a fold replays each timer's per-scan carry recurrence.
+included: the loop runs each timer's per-scan carry.
 
 Reproducer on failure: the drawn ``spec`` is the reproducer: it is printed via
 ``note`` and embedded in the assertion message, and ``_build(spec)`` /
@@ -98,18 +98,18 @@ def _build(spec: dict):
     return prog, src.Done
 
 
-def _run(spec: dict, *, fold: bool) -> dict:
+def _run(spec: dict, *, jit: bool) -> dict:
     prog, done = _build(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
-    plc.run_until(done, max_cycles=40_000, fold=fold)
+    plc.run_until(done, max_cycles=40_000, jit=jit)
     # Every tag, the scan-time diagnostics included: a landing records the
     # normal dt of the scan it stands for.
     return dict(plc.state.tags)
 
 
 def test_saturated_heartbeat_fold_is_bit_equal() -> None:
-    """Folded run_until(Done) must equal scan-by-scan across the heartbeat family."""
+    """run_until(Done) in the loop must equal scan-by-scan across the heartbeat family."""
 
     @given(spec=_heartbeat_spec())
     @settings(max_examples=MAX_EXAMPLES, deadline=None)
@@ -130,7 +130,7 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
     # Boundary-straddle regression: Done (16 750 ms; first found as a per-scan
     # counter's 1676 counts) lands at t=16.75 s, exactly a clock_500ms rise
     # edge.  Accumulated scan time drifts to 16.74999999999982 (clock low)
-    # while the fold's big-step timestamp lands on 16.75 (clock high) — the
+    # while a big-step timestamp lands on 16.75 (clock high) — the
     # OTE coil disagreed (Beat True vs False) until clock phase was
     # grid-snapped (system_points.clock_phase).
     @example(
@@ -147,8 +147,8 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run(spec, fold=True)
-        stepped = _run(spec, fold=False)
+        folded = _run(spec, jit=True)
+        stepped = _run(spec, jit=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -158,7 +158,7 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
             note(f"spec={spec}")
             note(f"fold != nofold: {diffs}")
             raise AssertionError(
-                f"fold disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+                f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
             )
 
     inner()
@@ -246,11 +246,11 @@ def _build_stable(spec: dict):
     return prog, src.Done, frozenset(stable_tags)
 
 
-def _run_stable(spec: dict, *, fold: bool) -> dict:
+def _run_stable(spec: dict, *, jit: bool) -> dict:
     prog, done, _stable = _build_stable(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
-    plc.run_until(done, max_cycles=40_000, fold=fold)
+    plc.run_until(done, max_cycles=40_000, jit=jit)
     return dict(plc.state.tags)
 
 
@@ -274,8 +274,8 @@ def test_stable_input_rungs_are_bit_equal() -> None:
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run_stable(spec, fold=True)
-        stepped = _run_stable(spec, fold=False)
+        folded = _run_stable(spec, jit=True)
+        stepped = _run_stable(spec, jit=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -285,14 +285,14 @@ def test_stable_input_rungs_are_bit_equal() -> None:
             note(f"spec={spec}")
             note(f"fold != nofold: {diffs}")
             raise AssertionError(
-                f"fold disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+                f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
             )
 
     inner()
 
 
 # ---------------------------------------------------------------------------
-# Composite readers: the shapes the fold reviews kept finding
+# Composite readers: shapes earlier reviews kept finding
 # ---------------------------------------------------------------------------
 
 _SOURCES = ["timer_ms", "timer_s", "counter", "counter_pulse_reset", "selfcalc"]
@@ -405,10 +405,10 @@ def _reader_body(j: int, r: dict, cond) -> None:
             latch(Bool(f"Hit{j}"))
 
 
-def _run_composite(spec: dict, *, fold: bool) -> tuple[int, dict]:
+def _run_composite(spec: dict, *, jit: bool) -> tuple[int, dict]:
     plc = PLC(_build_composite(spec), dt=spec["dt"])
     plc.step()
-    plc.run_for(spec["seconds"], fold=fold)
+    plc.run_for(spec["seconds"], jit=jit)
     image = dict(plc.state.tags)
     image.update({f"mem:{k}": v for k, v in plc.state.memory.items()})
     return plc.state.scan_id, image
@@ -433,8 +433,8 @@ def test_composite_readers_fold_is_bit_equal() -> None:
     @example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
     @example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
     def inner(spec: dict) -> None:
-        f_scan, folded = _run_composite(spec, fold=True)
-        s_scan, stepped = _run_composite(spec, fold=False)
+        f_scan, folded = _run_composite(spec, jit=True)
+        s_scan, stepped = _run_composite(spec, jit=False)
         if (f_scan, folded) != (s_scan, stepped):
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -443,7 +443,7 @@ def test_composite_readers_fold_is_bit_equal() -> None:
             }
             note(f"spec={spec}")
             raise AssertionError(
-                f"fold disagreed with scan-by-scan (scans {f_scan} vs {s_scan})\n"
+                f"the loop disagreed with scan-by-scan (scans {f_scan} vs {s_scan})\n"
                 f"  spec={spec}\n  diffs={diffs}"
             )
 

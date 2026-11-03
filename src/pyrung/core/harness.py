@@ -49,8 +49,7 @@ class _BoolCoupling:
     keeps the feedback asserted for ``off_delay`` after the enable drops.  The
     feedback tag *is* the off-delay's done bit, so the only register the program
     reads is ``Fb``; ``ton_acc`` / ``tof_acc`` are the timers' internal
-    accumulators (excluded from the fold plateau — they churn every scan but are
-    unobservable).
+    accumulators.
 
     The timer *instructions* themselves live in the runner's synthesis overlay
     (``plc._synthesis.plant``); this record keeps only the metadata and the
@@ -229,7 +228,9 @@ class Harness:
         self._installed = True
         self._discover_couplings()
         self._rebuild_couplings()
+        self._plc._note_plant_change()
         self._refresh_synthesis()
+        self._seed_plant_defaults()
         self._seed_bool_state()
         self._install_monitors()
         self._plc._harness = self
@@ -264,18 +265,22 @@ class Harness:
         plc._harness = clone
         return clone
 
-    def uninstall(self) -> None:
-        if not self._installed:
-            return
+    def _detach(self) -> None:
+        """Off the runner, leaving its plant rungs: they no longer belong to this harness."""
         self._installed = False
         for handle in self._monitors:
             handle.remove()
         self._monitors.clear()
         if self._plc._harness is self:
             self._plc._harness = None
+
+    def uninstall(self) -> None:
+        if not self._installed:
+            return
+        self._detach()
         if self._plc._synthesis is not None:
+            self._plc._note_plant_change()
             self._plc._synthesis.plant = []
-            self._plc._fold_context_cache = None
             self._plc._compiled_replay_kernel = None
             self._plc._soft_exec_program_cache = None
             self._plc._causal_lineage.invalidate_current_epoch()
@@ -319,7 +324,9 @@ class Harness:
         if self._installed:
             # Rebuild the overlay and monitors so changed couplings take
             # effect from the next scan (cut ones stop synthesizing).
+            self._plc._note_plant_change()
             self._refresh_synthesis()
+            self._seed_plant_defaults()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
@@ -484,7 +491,8 @@ class Harness:
 
     def _discover_couplings(self) -> None:
         seen_runtimes: set[int] = set()
-        for tag in list(self._plc._known_tags_by_name.values()):
+        reached = self._plc._tags_rungs_reach.declared_with(self._plc._known_tags_by_name)
+        for tag in reached.values():
             runtime = getattr(tag, "_pyrung_structure_runtime", None)
             if runtime is None:
                 self._try_add_flat_coupling(tag)
@@ -499,11 +507,13 @@ class Harness:
         if tag.link is None or tag.physical is None:
             return
         en_name, trigger_raw = _parse_link_spec(tag.link)
-        if en_name not in self._plc._known_tags_by_name:
+        en_tag = self._plc._tag_known_or_reached(en_name)
+        if en_tag is None:
             return
+        self._plc._register_known_tag(en_tag)
+        self._plc._register_known_tag(tag)
         trigger_value = None
         if trigger_raw is not None:
-            en_tag = self._plc._known_tags_by_name[en_name]
             trigger_value = _resolve_trigger_value(trigger_raw, en_tag)
         self._declared.append(Coupling(en_name, tag.name, tag.physical, trigger_value))
 
@@ -695,13 +705,22 @@ class Harness:
         # Plant rungs keep their memory under their own ``plant:`` site keys.
         bind_sites(plant, namespace=PLANT_NAMESPACE)
         self._plc._synthesis.plant = plant
-        # The overlay changed, so caches that snapshot it are stale: the fold
-        # context (acc sources) and the soft-exec replay kernel + its bracketed
-        # compilation unit — all rebuilt lazily on next use.
-        self._plc._fold_context_cache = None
+        # The overlay changed, so caches that snapshot it are stale: the soft-exec
+        # replay kernel + its bracketed compilation unit, rebuilt lazily on next use.
         self._plc._compiled_replay_kernel = None
         self._plc._soft_exec_program_cache = None
         self._plc._causal_lineage.invalidate_current_epoch()
+
+    def _seed_plant_defaults(self) -> None:
+        """Put each tag the plant uses in the state, at its default."""
+        current = self._plc._state.tags
+        seed = {
+            name: default
+            for name, default in self._plc._plant_tag_defaults().items()
+            if name not in current
+        }
+        if seed:
+            self._plc._edit_tip_tags(seed)
 
     def _seed_bool_state(self) -> None:
         """Seed each bool timer to the steady state implied by its current enable.
@@ -727,10 +746,7 @@ class Harness:
                 seed[c.ton_done_name] = True
                 seed[c.fb_name] = True
         if seed:
-            self._plc._state = self._plc._state.with_tags(seed)
-            self._plc._reset_cache(self._plc._state)
-            if self._plc._state.scan_id == 0:
-                self._plc._initial_state = self._plc._state
+            self._plc._edit_tip_tags(seed)
 
     def _install_monitors(self) -> None:
         # Analog couplings are declarative specs lowered to plant rungs (their

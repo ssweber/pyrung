@@ -91,7 +91,7 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
         # A clamp pins +/-Inf at its bound; NaN, and anything that wraps, is 0.
         if kind == "clamp" and value == value and storage.lower is not None:
             return storage.upper if value > 0 else storage.lower
-        return 0
+        return False if kind == "bool" else 0
     if kind == "bool":
         return bool(value)
     if kind == "char":

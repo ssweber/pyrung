@@ -38,7 +38,6 @@ from pyrung.core import (
     sqrt,
     system,
 )
-from pyrung.core.fold import _fits_dest
 from pyrung.core.storage import REAL_MAX, StoreTransform, store_value
 
 SC43 = system.fault.out_of_range
@@ -190,16 +189,6 @@ def test_out_of_range_literals_are_refused():
             calc(r * 1e39, r)
         # An Int destination clamps a large literal as before.
         copy(1e39, Int("I"))
-
-
-def test_fold_does_not_skip_a_real_store_past_the_range():
-    dest = Real("Dest")
-    assert _fits_dest((-1.0, 1.0), dest)
-    assert _fits_dest((-REAL_MAX, REAL_MAX), dest)
-    assert not _fits_dest((0.0, 3.5e38), dest)
-    assert not _fits_dest((-3.5e38, 0.0), dest)
-    assert not _fits_dest((0.0, INF), dest)
-    assert not _fits_dest((math.nan, math.nan), dest)
 
 
 def _same(stored, value):
@@ -467,10 +456,11 @@ def test_inf_and_nan_compare_as_ieee(runner_factory):
     assert plc.current_state.tags["Equal"] is False
 
 
+@pytest.mark.usefixtures("loop_from_first_scan")
 @pytest.mark.parametrize("start", [1.0, INF])
-def test_fold_of_a_real_that_overflows_matches_stepping(start):
+def test_a_real_that_overflows_in_the_loop_matches_stepping(start):
     """A REAL doubling each scan under a running timer reaches +Inf (and SC43)
-    the same way folded and stepped; from +Inf it stays +Inf."""
+    the same way in the loop and stepped; from +Inf it stays +Inf."""
     from pyrung.core import Timer, on_delay
 
     def build():
@@ -484,11 +474,11 @@ def test_fold_of_a_real_that_overflows_matches_stepping(start):
         return program, r
 
     states = []
-    for fold in (True, False):
+    for jit in (True, False):
         program, r = build()
         plc = PLC(program, dt=0.01)
         plc.patch({r: start})
-        plc.run_for(20.0, fold=fold)
+        plc.run_for(20.0, jit=jit)
         states.append(plc.current_state)
     folded, stepped = states
     assert folded.scan_id == stepped.scan_id

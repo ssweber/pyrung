@@ -106,32 +106,22 @@ state = runner.run_until_fn(
 
 The predicate receives the committed `SystemState` each scan.
 
-### Folding
+### `jit=`
 
-`run_for()` and `run_until()` fold by default: while only timers, counters and
-self-feeding calcs are moving, they compute the steady scans in one step and
-land on the same state and scan count as stepping.  Pass `fold=False` to step
-every scan.
+```python
+runner.run_for(3600)            # an hour of a plain timer at 10 ms takes about half a second
+runner.run_for(10, jit=False)   # every scan interpreted, recording as it goes
+```
 
-A callable predicate is judged on the state it is given (or `runner.state`);
-the fold records which tags it reads.  Anything else it consults, such as
-another runner or `history`, is invisible to the fold.
+`run_for()` and `run_until()` are a tracing JIT for scans.  Past the first 1,000 scans of
+a run, every scan executes in the compiled kernel, and scans that repeat the one before
+run in a guarded loop.  No scan is skipped: the run lands on the same state and scan count
+as stepping.
 
-A rung that reads a system clock (`sys.clock_100ms`, `sys.clock_1s`, ...) ends a
-folded stretch at each of the clock's edges, so a fast clock folds in short hops.
-The exception is a blink indicator: an `out()` on a rung of plain contacts, whose
-bit only drives other such rungs below it.  Its clock costs nothing, and each
-landing rebuilds the bit as stepping would.
-
-A rung that reads a block through an index with no declared range (`DS[Idx]`,
-`Idx` without `min`/`max` or `choices`) can see any element, so a value moving
-in that block ends a folded stretch.  One such index anywhere in a block is
-enough: a program whose alarm log indexes `DS` steps through a timer display
-elsewhere in `DS` instead of skipping it.  Give the index tag its range to keep
-the fold, and make the range true, because the fold takes it at its word.  It must
-include the value the index rests at (usually 0, so `choices` is often the right
-form): otherwise `never()` can raise or return a counterexample instead of proving
-the property.
+A callable predicate, a monitor, a breakpoint or a `when()` watches every scan, so the run
+stays interpreted, as it does for a program with no kernel.  A stop written as a tag or a
+condition stays in the kernel: prefer `run_until(Tmr.Done)` over
+`run_until(lambda s: s.tags["Tmr_Done"])` for a long wait.
 
 ## Injecting inputs
 
@@ -276,11 +266,15 @@ Every scan from 0 to the current tip is addressable.  Recent scans are served
 from an in-memory state cache (byte-bounded, default 100 MB); older scans are
 reconstructed on demand from the scan log and checkpoints.
 
-A folded `run_until()` or `run_for()` computes a steady stretch of scans in one
-step.  History still serves each of those scans, replaying them on demand, but
-recorded `cause()` and `effect()` raise `ValueError` for a scan inside such a
-stretch: its transitions were never recorded one by one.  Rerun with
-`fold=False` to explain it.
+A long `run_until()` or `run_for()` runs compiled and records no rung firings.
+History still serves each of those scans, replaying them on demand, and the
+first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
+them again for their records, so the answer is the one stepping gives.  A question
+that would step more than 250,000 scans raises `UnrecordedScansError` and names
+the range. What a question steps stays read, so ask first about a scan nearer the
+start of that range for `cause`, or nearer its end for `effect`, then ask again,
+from Python or the debugger. From Python, `cause()` also takes `since=`, and
+`jit=False` records the run as it goes.
 
 `previous_transition()` returns the latest matching recorded transition, or
 `None`. It uses compressed history indexes where available, independent of
@@ -347,6 +341,6 @@ runner.when(~Sensor).do(lambda state: runner.patch({Sensor: True}))  # run a cal
 runner.monitor(Motor, lambda curr, prev: print(f"{prev} → {curr}"))
 ```
 
-`.do()` runs a callback every scan its condition holds and lets the run continue — the hook for reactive inputs. Paired with `patch`, it re-asserts an input whenever the program drifts it: `when(~Sensor).do(...)` patches `Sensor` back True each time it falls (use `patch`, not `force` — a force would *pin* the tag, so the program could never drift it and the reaction would be moot). The patch changes visible state, so `run_until(..., fold=True)` won't fold past it — the window steps scan-by-scan while the callback is active, then folds normally once it stops firing.
+`.do()` runs a callback every scan its condition holds and lets the run continue — the hook for reactive inputs. Paired with `patch`, it re-asserts an input whenever the program drifts it: `when(~Sensor).do(...)` patches `Sensor` back True each time it falls (use `patch`, not `force` — a force would *pin* the tag, so the program could never drift it and the reaction would be moot).
 
 See [Testing — Monitoring changes](testing.md#monitoring-changes) and [Testing — Predicate breakpoints](testing.md#predicate-breakpoints-and-snapshots) for usage patterns.

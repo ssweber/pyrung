@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from operator import itemgetter
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.tag import Bool, Int, Real, Tag
@@ -269,46 +270,24 @@ _CLOCK_HALF_PERIODS = {
 
 # A clock toggles when ``floor(timestamp / half_period)`` increments.  The
 # timestamp is *meant* to advance on the dt grid, but it accumulates rounding
-# error scan-by-scan and is reconstructed by large jumps during a time fold —
-# two arithmetic paths that straddle a grid-aligned ``k * half_period`` boundary
-# differently (e.g. 16.74999999999982 vs 16.75 at a counter Done that lands on a
-# clock edge).  Snapping ``t / half_period`` up by a tiny epsilon before flooring
-# lands both paths on the same phase whenever the timestamp sits on — or a
-# rounding step below — an exact boundary, so a clock edge coinciding with a scan
-# grid point resolves identically with and without folding.  The epsilon is far
-# above realistic accumulation drift yet far below the smallest per-scan ratio
-# step (``dt / half_period``), so it never snaps a genuine mid-interval grid
-# point across a boundary.
+# error scan-by-scan, so it can sit just below a grid-aligned ``k * half_period``
+# boundary (e.g. 16.74999999999982 vs 16.75 at a counter Done that lands on a clock
+# edge).  Snapping ``t / half_period`` up by a tiny epsilon before flooring lands
+# on the phase whenever the timestamp sits on — or a rounding step below — an
+# exact boundary.  The epsilon is far above realistic accumulation drift yet far
+# below the smallest per-scan ratio step (``dt / half_period``), so it never snaps
+# a genuine mid-interval grid point across a boundary.
 _CLOCK_SNAP_EPS = 1e-7
 
 
 def clock_phase(timestamp: float, half_period: float) -> int:
-    """Half-periods elapsed at *timestamp*, robust to fold/no-fold float drift."""
+    """Half-periods elapsed at *timestamp*, robust to float drift."""
     return math.floor(timestamp / half_period + _CLOCK_SNAP_EPS)
 
 
 def clock_high(timestamp: float, half_period: float) -> bool:
     """True when a system clock of *half_period* reads high at *timestamp*."""
     return clock_phase(timestamp, half_period) % 2 == 1
-
-
-# Scan-id-derived signals: change every scan, so they have no periodic
-# edge to fold onto (see fold.py — reading either degrades fold to
-# scan-by-scan).
-_SCAN_DERIVED_NAMES = frozenset(
-    {
-        system.sys.scan_clock_toggle.name,
-        system.sys.scan_counter.name,
-    }
-)
-
-
-def scan_derived_names(names: Iterable[str]) -> frozenset[str]:
-    """The names among *names* that change every scan: the scan-id-derived
-    system points and each ``randint`` site's draw tag."""
-    from pyrung.core.expression import is_randint_tag
-
-    return frozenset(n for n in names if n in _SCAN_DERIVED_NAMES or is_randint_tag(n))
 
 
 _MODE_RUN_KEY = "_sys.mode.run"
@@ -322,6 +301,71 @@ _SD_ERROR_NONE = 0
 _SD_ERROR_MOUNT_FAILURE = 1
 _SD_ERROR_LOAD_FAILURE = 2
 _SD_ERROR_SAVE_FAILURE = 3
+
+# What SystemPointRuntime.on_scan_start() reads and clears, for the check that
+# it would do nothing.  Keep these with the hook.
+_SCAN_START_TAG_NAMES = (
+    system.fault.division_error.name,
+    system.fault.math_operation_error.name,
+    system.fault.out_of_range.name,
+    system.fault.address_error.name,
+    system.rtc.apply_date_error.name,
+    system.rtc.apply_time_error.name,
+    system.rtc.apply_date.name,
+    system.rtc.apply_time.name,
+    system.sys.cmd_mode_stop.name,
+    system.sys.cmd_watchdog_reset.name,
+)
+_SCAN_START_TAGS = itemgetter(*_SCAN_START_TAG_NAMES)
+# Read with a default and never bound by the hook: absent is off.
+_SD_EJECT_NAME = system.storage.sd.eject_cmd.name
+_SD_DELETE_ALL_NAME = system.storage.sd.delete_all_cmd.name
+_SCAN_START_MEMORY_KEYS = (
+    _MODE_RUN_KEY,
+    _SD_WRITE_STATUS_KEY,
+    _BATTERY_PRESENT_KEY,
+    _SD_READY_KEY,
+    _SD_ERROR_KEY,
+    _SD_ERROR_CODE_KEY,
+)
+_SCAN_START_MEMORY = itemgetter(*_SCAN_START_MEMORY_KEYS)
+_SCAN_TIME_MIN_NAME = system.sys.scan_time_min_ms.name
+_SCAN_TIME_MAX_NAME = system.sys.scan_time_max_ms.name
+
+# What the scan hooks bind on a state's first scan, whatever the rungs do.
+HOOK_BOUND_TAG_NAMES = frozenset(
+    {
+        *_SCAN_START_TAG_NAMES,
+        _SCAN_TIME_MIN_NAME,
+        _SCAN_TIME_MAX_NAME,
+    }
+)
+# Everything the scan hooks' quiet checks read, for whoever has to keep them quiet.
+HOOK_TAG_NAMES = HOOK_BOUND_TAG_NAMES | {_SD_EJECT_NAME, _SD_DELETE_ALL_NAME}
+HOOK_MEMORY_KEYS = frozenset({*_SCAN_START_MEMORY_KEYS, "_dt"})
+
+# Derived points that move with the scan id.
+SCAN_DERIVED_TAG_NAMES = frozenset(
+    {
+        system.sys.first_scan.name,
+        system.sys.scan_counter.name,
+        system.sys.scan_clock_toggle.name,
+    }
+)
+
+# The wall-clock fields, all whole seconds or coarser.
+RTC_FIELD_TAG_NAMES = frozenset(
+    {
+        system.rtc.year4.name,
+        system.rtc.year2.name,
+        system.rtc.month.name,
+        system.rtc.day.name,
+        system.rtc.weekday.name,
+        system.rtc.hour.name,
+        system.rtc.minute.name,
+        system.rtc.second.name,
+    }
+)
 
 
 def _click_weekday(value: datetime) -> int:
@@ -484,6 +528,34 @@ class SystemPointRuntime:
             return True, rtc_now.second
 
         return True, 0
+
+    def scan_start_is_quiet(self, tags: Mapping[str, Any], memory: Mapping[str, Any]) -> bool:
+        """Whether :meth:`on_scan_start` would change nothing on a kernel's state.
+
+        Every status and command tag it clears is bound and False, and no
+        memory default is missing.  A compiled scan asks this first because
+        the check costs a few C calls and the hook about twenty Python ones.
+        """
+        try:
+            values = _SCAN_START_TAGS(tags)
+            status = _SCAN_START_MEMORY(memory)
+        except KeyError:
+            return False
+        return (
+            values.count(False) == len(values)
+            and not tags.get(_SD_EJECT_NAME, False)
+            and not tags.get(_SD_DELETE_ALL_NAME, False)
+            and status[0] is True  # mode run
+            and status[1] is False  # SD write status
+        )
+
+    def scan_end_is_quiet(self, tags: Mapping[str, Any], dt: float) -> bool:
+        """Whether :meth:`on_scan_end` would change nothing for a scan of *dt*."""
+        low = tags.get(_SCAN_TIME_MIN_NAME)
+        high = tags.get(_SCAN_TIME_MAX_NAME)
+        if type(low) is not int or type(high) is not int:
+            return False
+        return low <= int(round(dt * 1000)) <= high
 
     def on_scan_start(self, ctx: ScanContext) -> None:
         self._ensure_memory_defaults(ctx)

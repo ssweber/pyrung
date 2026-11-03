@@ -40,7 +40,7 @@ An abstract counterexample may need a timing the PLC cannot show (a 30 ms
 timer done before a 1000 ms one started with it).  ``confirm`` replays every
 trace on the concrete PLC at the search's fixed ``dt``: a step where no tick
 moved is one scan; a step where one did runs, inputs held, until the state the
-search compares (``_compared_names``) changes, folding long waits.  If the
+search compares (``_compared_names``) changes.  If the
 first try lands elsewhere, the step's input change is moved to the scan the
 state would change on, and then the wait is moved before the plain steps
 leading up to it (``_slide_wait``: a timer that must finish two scans after
@@ -796,7 +796,7 @@ class _Replay:
         """Run with inputs held until the compared state changes or the property fails.
 
         With *target*, until the compared state is the target's instead.
-        Returns ``(scans, reached)``; folds the waits in between.
+        Returns ``(scans, reached)``.
         """
         start_key = self.key(plc)
         goal = self.key_of(target) if target is not None else None
@@ -823,9 +823,8 @@ class _Replay:
 class _StateView(Mapping[str, Any]):
     """A PLC state as the property reads it, tag by tag.
 
-    Lazy, so a wait reads only what the property reads and fold can still
-    skip the scans in between.  Unwritten tags read as their defaults and
-    system tags as the PLC resolves them.
+    Lazy, so a wait reads only what the property reads.  Unwritten tags read as
+    their defaults and system tags as the PLC resolves them.
     """
 
     __slots__ = ("_state", "_defaults", "_system", "_plc")

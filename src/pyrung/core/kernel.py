@@ -139,6 +139,9 @@ class CompiledKernel:
     block_specs: dict[str, BlockSpec] = field(default_factory=dict)
     edge_tags: set[str] = field(default_factory=set)
     source: str = ""
+    # ``source`` with the text of each function it calls, which it holds by reference:
+    # what a lock hashes, not what runs.
+    lock_source: str = ""
     blockless: bool = False
     has_io_gaps: bool = False
     # Optional leading pass, run *before* the input drain so it reads the previous

@@ -503,7 +503,7 @@ def investigate_excursion(
         for tag, value in candidate_holds
         if tag not in {action_tag for action_tag, _ in applied_actions}
     )
-    session = CoastSession(replay_fork, kind="excursion-replay")
+    session = CoastSession(replay_fork, kind="excursion-replay", waits_on_work=False)
     if ctx.program is not None:
         session.arm_pens(
             owner.profile.done.name

@@ -864,6 +864,7 @@ class QueryNamespace:
         rung.
         """
         plc = self._plc
+        plc._settle_compiled_ranges()
         idents: list[tuple[str | None, int]] = []
         ever_main = plc._rung_firing_timelines.ever_fired()
         idents.extend((None, i) for i in range(len(plc._logic)) if i not in ever_main)
@@ -887,19 +888,21 @@ class QueryNamespace:
         for a subroutine rung.
         """
         plc = self._plc
+        plc._settle_compiled_ranges()
         initial_scan_id = plc._initial_scan_id
-        scan_ids = [sid for sid in plc._history.scan_ids() if sid != initial_scan_id]
-        if not scan_ids:
+        scans = plc._history.scan_ids()
+        first = scans[0] if scans else initial_scan_id
+        if first == initial_scan_id:
+            first += 1
+        last = scans[-1] if scans else initial_scan_id
+        if first > last:
             return []
         hot_main = set(range(len(plc._logic)))
         hot_sub = self._subroutine_rung_ids()
-        for scan_id in scan_ids:
-            if hot_main:
-                hot_main &= plc._rung_firing_timelines.fired_on(scan_id)
-            if hot_sub:
-                hot_sub &= plc._node_firing_timelines.fired_on(scan_id)
-            if not hot_main and not hot_sub:
-                break
+        if hot_main:
+            hot_main &= plc._rung_firing_timelines.fired_throughout(first, last)
+        if hot_sub:
+            hot_sub &= plc._node_firing_timelines.fired_throughout(first, last)
         idents: list[tuple[str | None, int]] = [(None, i) for i in hot_main]
         idents.extend((rid.subroutine, rid.rung_index) for rid in hot_sub)
         idents.sort(key=_rung_sort_key)

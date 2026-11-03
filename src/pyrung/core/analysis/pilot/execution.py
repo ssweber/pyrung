@@ -284,10 +284,6 @@ class ExecutionReceipt:
             raise ValueError("execution receipt scans must follow their source")
 
     @property
-    def accelerators(self) -> tuple[tuple[str, Any], ...]:
-        return self.coast_receipt.advances if self.coast_receipt is not None else ()
-
-    @property
     def kernel_scan_ids(self) -> tuple[int, ...]:
         return tuple(scan for span in self.spans for scan in span.kernel_scan_ids)
 
@@ -303,8 +299,9 @@ class ExecutionReceipt:
         return self.stop.consumer_boundary_reached if self.stop is not None else None
 
     def owner_at(self, scan_id: int) -> EpochQuery | None:
+        # A span owns its range: scans a stretch ran between two kernel scans are real too.
         return next(
-            (span.owner for span in self.spans if scan_id in span.kernel_scan_ids),
+            (span.owner for span in self.spans if span.first_scan <= scan_id <= span.last_scan),
             None,
         )
 

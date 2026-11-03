@@ -222,7 +222,7 @@ Multiple `Fb` fields linked to the same `En` are independent timers, each with i
 
 ### How profile-driven feedback works
 
-A `profile=` spec is **declarative data**, not a Python function — the harness lowers it to real plant rungs (a guarded `calc` or timer), so it folds, traces, and round-trips through a CLICK nickname comment like everything else. There are three specs.
+A `profile=` spec is **declarative data**, not a Python function — the harness lowers it to real plant rungs (a guarded `calc` or timer), so it compiles, traces, and round-trips through a CLICK nickname comment like everything else. There are three specs.
 
 **`Ramp`** — a constant-slope analog response. `Fb` moves `up` units per second while `En` is active and `down` units per second otherwise (`down` is usually negative — an ambient decay or bleed-down; `0` means "hold on En fall"). Rates are per **second**, applied against the `sys.dt` system tag, so they're stable across scan periods:
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import math
 import re
+from collections import Counter
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS
@@ -87,6 +90,51 @@ def _first_defined_name(source: str) -> str | None:
     if match is not None:
         return match.group(1)
     return None
+
+
+def _module_level_binds(tree: ast.Module) -> Counter[str]:
+    """How many times each name is bound at the top of a module, and through ``global``."""
+    binds: Counter[str] = Counter()
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                binds[child.name] += 1
+                continue
+            if isinstance(child, ast.Import | ast.ImportFrom):
+                binds.update(a.asname or a.name.split(".")[0] for a in child.names)
+            elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                binds[child.id] += 1
+            elif isinstance(child, ast.ExceptHandler) and child.name:
+                binds[child.name] += 1
+            walk(child)
+
+    walk(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            binds.update(node.names)
+    return binds
+
+
+def _refuse_a_def_over_a_generated_name(source: str, function_sources: Mapping[str, str]) -> None:
+    """Refuse a generated module whose embedded ``def`` shares a name with its other code.
+
+    A def lands at the top of the module, so it and a helper, an import, a tag or another
+    function's alias of that name overwrite one another: the module calls something other
+    than the function, or the function's symbol is something else.  Asked of the module as
+    rendered rather than of a list of names, so it answers for what this program uses and
+    for this target.  Two embedded defs may share a name: each alias binds after its def.
+    """
+    if not function_sources:
+        return
+    defs = Counter(_first_defined_name(fn_source) for fn_source in function_sources.values())
+    binds = _module_level_binds(ast.parse(source))
+    for name, count in defs.items():
+        if name is not None and binds[name] > count:
+            raise ValueError(
+                f"Callable name would shadow a name the generated code uses: {name!r}. "
+                "Rename the function."
+            )
 
 
 def _coil_reset_value(

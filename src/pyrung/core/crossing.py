@@ -142,13 +142,16 @@ def evaluate_forward(
     return UNKNOWN
 
 
-def invert_affine_candidate(claim: Affine, output: Any) -> Any:
+def invert_affine_candidate(
+    claim: Affine, output: Any, source: StoreTransform | None = None
+) -> Any:
     """Return one source candidate that may make *claim* produce *output*.
 
     This is a proposal helper, not a complete reverse preimage: clamp rails and
     modular stores can have many producers.  Callers must verify the candidate
     in the interpreted fork. :data:`UNKNOWN` means no useful representative
-    could be derived.
+    could be derived.  *source* is the source tag's own store, when the caller
+    knows it: of a modular store's producers, prefer one the source can hold.
     """
 
     scale = claim.scale
@@ -183,6 +186,10 @@ def invert_affine_candidate(claim: Affine, output: Any) -> Any:
         candidate = _apply_store(candidate, storage)
         if candidate is UNKNOWN:
             return UNKNOWN
+        if source is not None and source.lower is not None and source.upper is not None:
+            if not source.lower <= candidate <= source.upper:
+                held = source.lower + (candidate - source.lower) % reduced_modulus
+                candidate = held if held <= source.upper else candidate
         produced = evaluate_forward(claim, {claim.source: candidate})
         return candidate if produced is not UNKNOWN and produced == output else UNKNOWN
 

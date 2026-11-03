@@ -26,6 +26,7 @@ from pyrung.core.analysis.graph import (
     PlanStep,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
+from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime, search_limits
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     ProbeExhaustedObservation,
@@ -127,6 +128,9 @@ from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.coast_run import CoastMemo, memo_of
+from pyrung.core.rung_firings import SearchQuestionRefused
+from pyrung.core.runner import SearchStopped
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -145,6 +149,8 @@ class _DriveOutcome:
     reason: str | None
     knowledge: dict[str, Any]
     root_route: TraceChoice | None
+    # The clock, the ledger or the program ended the search, so it says nothing about the target.
+    cut_short: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -395,14 +401,17 @@ def _finished_event(
     *,
     reached: bool,
     reason: str,
+    cut_short: bool = False,
 ) -> PilotEvent:
     """Build the single terminal recording shape for every loop exit."""
 
-    return PilotEvent(
+    _no_longer_searching(state)
+    event = PilotEvent(
         "finished",
         state.work.state.scan_id,
         {
             "reached": reached,
+            "cut_short": cut_short,
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
             "knowledge": _knowledge_payload(state, ctx.compass),
@@ -417,6 +426,20 @@ def _finished_event(
             ),
         },
     )
+    # The caller gets this fork to run, with no memo of the search's.
+    state.work._coast_memo = None
+    return event
+
+
+def _no_longer_searching(state: _PilotState) -> None:
+    """What a terminal reads is no search's: a limit there would end the search a second time.
+
+    The clock, the memory cap and the refusals to restart or to read end here, on the fork the
+    caller gets.  A checkpoint's world brings another fork, so each terminal step says it again.
+    """
+    if state.work._coast_memo is not None:
+        state.work._coast_memo.check_limits = None
+    state.work._search_refuses_restart = False
 
 
 def _stuck_event(
@@ -454,9 +477,11 @@ def _stopped_events(
     *,
     candidate_count: int,
     diagnosis: Stuck | None = None,
+    cut_short: bool = False,
 ) -> Iterator[PilotEvent]:
     """Emit one failed terminal sequence and restore its checkpoint world."""
 
+    _no_longer_searching(state)
     yield _stuck_event(
         state,
         ctx,
@@ -474,6 +499,7 @@ def _stopped_events(
         journal_acc_names,
         reached=False,
         reason=reason,
+        cut_short=cut_short,
     )
 
 
@@ -483,11 +509,72 @@ def _pilot_loop_events(
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
 
+    # What a search costs must not depend on the searches before it.
+    memo = plc._coast_memo = CoastMemo()
+    plc._search_refuses_restart = True
+    clock = ctx.wall_clock
+    memo.check_limits = search_limits(clock)
+    at_the_stop: dict[str, Any] = {}
+    try:
+        yield from _search_events(plc, ctx, at_the_stop)
+        return
+    except (SearchStopped, SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused) as ended:
+        stop = ended
+    state = at_the_stop["state"]
+    memo.check_limits = None
+    _no_longer_searching(state)
+    if isinstance(stop, SearchStopped):
+        termination = TheoryTermination.STUCK
+        reason = (
+            f"the program stopped itself at scan {stop.scan_id} and its next scan would "
+            "restart it; how() does not plan across a restart"
+        )
+    elif isinstance(stop, SearchOutOfTime):
+        termination = TheoryTermination.WALL_CLOCK
+        assert clock is not None
+        reason = _out_of_a_limit(
+            f"wall-clock budget exhausted ({clock.limit_s:g} s)", at_the_stop, ctx
+        )
+    elif isinstance(stop, SearchOutOfMemory):
+        termination = TheoryTermination.BUDGET
+        reason = _out_of_a_limit("memory budget exhausted (about 1 GB held)", at_the_stop, ctx)
+    else:
+        termination = TheoryTermination.STUCK
+        reason = _out_of_a_limit(f"a question was refused: {stop}", at_the_stop, ctx)
+    _theory_recording._run_optional_theory_hook(
+        _theory_recording._record_optional_theory_abandoned, state, termination
+    )
+    yield from _stopped_events(
+        state,
+        ctx,
+        at_the_stop.get("frame"),
+        reason,
+        at_the_stop["channels"],
+        at_the_stop["accumulators"],
+        candidate_count=0,
+        cut_short=True,
+    )
+
+
+def _out_of_a_limit(limit: str, at_the_stop: dict[str, Any], ctx: _PilotContext) -> str:
+    frame = at_the_stop.get("frame")
+    return _with_avoid_reason(limit, at_the_stop["state"], ctx, frame) + _frontier_clause(
+        at_the_stop.get("frontier", ()), frame.snap if frame is not None else None
+    )
+
+
+def _search_events(
+    plc: PLC,
+    ctx: _PilotContext,
+    at_the_stop: dict[str, Any],
+) -> Iterator[PilotEvent]:
+    """The search itself, leaving in *at_the_stop* what a terminal for a stop needs."""
+
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
     # ``channel_tag``) pick the transition label; the accumulator registers
     # (from every accumulating instruction's profile, incl. harness couplings)
-    # split accelerator patches from command inputs.  Both are static for the
+    # split accumulator patches from command inputs.  Both are static for the
     # life of this loop, so computed once here rather than per journal build.
     journal_channel_tags = frozenset(ctx.opaque_loop) | frozenset(
         role.channel_tag for role in ctx.pipeline_roles
@@ -497,6 +584,7 @@ def _pilot_loop_events(
         for owner in iter_advance_owners(ctx.program, harness=getattr(plc, "_harness", None))
         if owner.profile.accumulator is not None
     )
+    at_the_stop.update(channels=journal_channel_tags, accumulators=journal_acc_names)
     state = _PilotState(
         world=_World(
             work=plc,
@@ -510,6 +598,8 @@ def _pilot_loop_events(
         checkpoints=[],
         watch_tags=[],
     )
+    at_the_stop["state"] = state
+    memo_of(plc).work_left = lambda: state.budget.remaining(ctx.max_scans)
     invocation_snapshot = dict(state.work.state.tags)
     state.invocation_checkpoint = _CausalCheckpoint(
         key=(
@@ -591,7 +681,7 @@ def _pilot_loop_events(
     # investigate and revert it. Rejected modes fall through to the next mode in
     # the same turn.
     # The invocation ledger charges executed kernel scans and bounded research
-    # dispatches, including discarded work. Folded logical dwell is reported
+    # dispatches, including discarded work. Logical dwell in the loop is reported
     # separately; restoring a checkpoint never replenishes the allowance.
     last_frame: _IterationFrame | None = None
     last_frontier: tuple[_ActionPair, ...] = ()
@@ -755,12 +845,16 @@ def _pilot_loop_events(
             else None
         )
         last_frame = frame
+        at_the_stop["frame"] = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
+        at_the_stop["frontier"] = frontier
         # Finish observing the preceding execution even at the limit. The
         # next fork-consuming act, rather than its bookkeeping, is bounded.
         if state.search_scans >= ctx.max_scans:
             break
+        if ctx.wall_clock is not None:
+            ctx.wall_clock.check()
         if not isinstance(result, (Bearing, Stuck, GuidanceRequest)):
             state.budget.charge()
         _attempt_transition.prepare_oriented_result(state, result, orientation_world, frame)
@@ -1617,6 +1711,7 @@ def _pilot_loop_events(
             journal_channel_tags,
             journal_acc_names,
             candidate_count=0,
+            cut_short=True,
         )
         return
     _theory_recording._run_optional_theory_hook(
@@ -1670,4 +1765,5 @@ def _pilot_loop(
         reason=None if reached else final.data.get("reason"),
         knowledge=dict(final.data.get("knowledge", {})),
         root_route=final.data.get("root_route"),
+        cut_short=bool(final.data.get("cut_short")),
     )

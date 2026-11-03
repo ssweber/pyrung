@@ -87,9 +87,21 @@ def _merge_caveats(*groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(merged)
 
 
+def _what_the_search_chose(
+    inputs: dict[str, Any], domains: dict[str, tuple[Any, ...]]
+) -> dict[str, Any]:
+    """A trace step's inputs, without a value the tag was already holding and no domain offers.
+
+    A replay holds that value too, and could not always patch it back in (a default outside
+    its ``choices=``).
+    """
+    return {name: value for name, value in inputs.items() if value in domains.get(name, (value,))}
+
+
 def _build_trace(
     parent_map: dict[tuple[Any, ...], _ParentLink],
     key: tuple[Any, ...],
+    domains: dict[str, tuple[Any, ...]],
 ) -> tuple[list[TraceStep], tuple[str, ...]]:
     """Reconstruct the input trace and per-edge caveats to failure."""
     links: list[_ParentLink] = []
@@ -105,7 +117,7 @@ def _build_trace(
     for link in links:
         trace.append(
             TraceStep(
-                inputs=link.inputs,
+                inputs=_what_the_search_chose(link.inputs, domains),
                 scans=link.scans,
                 prev=link.prev,
                 timers=link.timers,
@@ -146,6 +158,48 @@ def _free_combo_intractable(
             ),
             "  every joint value of these inputs is a successor of one state; a property"
             " that reads fewer of them together stays under the cap",
+        ],
+        journal=context.journal,
+    )
+
+
+def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intractable | None:
+    """The answer to a search that found nothing, when finding nothing shows nothing."""
+    unbounded = context.inputs_a_callable_may_read
+    if unbounded:
+        return Intractable(
+            reason=(
+                f"no scan found, but a callable property may tell apart values of"
+                f" {', '.join(unbounded)} the search did not try"
+            ),
+            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+            estimated_space=visited,
+            tags=list(unbounded),
+            hints=[
+                f"  {name}: write the property as a condition, which names its comparisons."
+                " Every value is tried only with choices=, or on an integer whose min=/max="
+                " spans at most 1000 values and no comparison narrows it"
+                for name in unbounded
+            ],
+            journal=context.journal,
+        )
+    unanswered = context.unanswered_inputs
+    if not unanswered:
+        return None
+    names = sorted(unanswered)
+    return Intractable(
+        reason=(
+            f"no scan found, but the values tried on {', '.join(names)} may not be all that"
+            f" reach {', '.join(sorted(set(unanswered.values())))}"
+        ),
+        dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+        estimated_space=visited,
+        tags=names,
+        hints=[
+            f"  {name}: the way it reaches {target} can't be worked back from a comparison;"
+            " give an integer choices= or a min=/max= of at most 1000 values, or test it"
+            " with run_for()"
+            for name, target in sorted(unanswered.items())
         ],
         journal=context.journal,
     )
@@ -388,11 +442,11 @@ def _bfs_explore_gen(
                     journal=context.journal,
                 )
                 continue
-            trace, trace_caveats = _build_trace(parent_map, p_key)
+            trace, trace_caveats = _build_trace(parent_map, p_key, context.nondeterministic_dims)
             choices, moved, _open = _choice[0]
             trace.append(
                 TraceStep(
-                    inputs=input_dict,
+                    inputs=_what_the_search_chose(input_dict, context.nondeterministic_dims),
                     scans=edge_scans,
                     prev=bprev_dict or {},
                     timers=moved,
@@ -919,8 +973,9 @@ def _bfs_explore_gen(
             if ready is not None:
                 yield ready
 
+    undecided = _no_scan_found_intractable(context, len(visited))
     if project is not None:
-        yield _projected_states(project, projected_rows)
+        yield undecided or _projected_states(project, projected_rows)
         return
 
     caveats = context.caveats
@@ -953,9 +1008,9 @@ def _bfs_explore_gen(
         yield [
             r
             if r is not None
-            else Proven(states_explored=len(visited), caveats=caveats, journal=journal)
+            else undecided or Proven(states_explored=len(visited), caveats=caveats, journal=journal)
             for r in results
         ]
         return
 
-    yield [Proven(states_explored=len(visited), caveats=caveats, journal=journal)]
+    yield [undecided or Proven(states_explored=len(visited), caveats=caveats, journal=journal)]

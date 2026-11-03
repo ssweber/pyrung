@@ -81,7 +81,7 @@ def build_coupling_locked(
             profile=profile,
             system=keys.get("system"),
         )
-        en_tag = runner._known_tags_by_name.get(en_name)
+        en_tag = runner._tag_known_or_reached(en_name)
         trigger = (
             _resolve_trigger_value(trigger_raw, en_tag)
             if trigger_raw and en_tag is not None
@@ -111,7 +111,7 @@ def same_wiring(a: Coupling, b: Coupling) -> bool:
 
 
 def _is_bit(adapter: Any, tag_name: str) -> bool:
-    tag = adapter._require_runner_locked()._known_tags_by_name.get(tag_name)
+    tag = adapter._require_runner_locked()._tag_known_or_reached(tag_name)
     return tag is not None and tag.type == TagType.BOOL
 
 

@@ -682,14 +682,6 @@ def test_real_with_integer_bounds_is_not_enumerated_as_integers() -> None:
     _assert_counterexample(logic, bad, _OptConfig())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "review N2: an Int compared with fractional literals (In > 2.5, "
-        "In < 3.5) gets the literals +-1, not floor/ceil, so In = 3 is never "
-        "tried: false Proven"
-    ),
-)
 def test_int_between_fractional_literals() -> None:
     value = Int("KIn", external=True, min=0, max=2000)
     bad = Bool("KBad")
@@ -700,13 +692,6 @@ def test_int_between_fractional_literals() -> None:
     _assert_counterexample(logic, bad, _OptConfig())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "review N2: an Int compared with a fractional literal (In > 2.5) gets "
-        "a witness value it cannot hold (In = 3.5)"
-    ),
-)
 def test_int_witness_value_is_integral() -> None:
     value = Int("KIn", external=True, min=0, max=2000)
     bad = Bool("KBad")
@@ -764,7 +749,8 @@ def test_scaled_real_compared_with_literal() -> None:
     reason=(
         "pre-existing (base too): an unscoped callable property "
         "(never(p, lambda s: s['In'] == 301)) reads In where classify cannot "
-        "see it, so In keeps its program partition: false Proven"
+        "see it, so In keeps its program partition: declined as Intractable, "
+        "where a search of every value would find 301"
     ),
 )
 def test_unscoped_callable_property_reads_input() -> None:

@@ -248,7 +248,7 @@ def resolve_target_locked(adapter: Any, target: str) -> str:
     """
     runner = adapter._require_runner_locked()
     if (
-        target in runner._known_tags_by_name
+        runner._tag_known_or_reached(target) is not None
         or target in runner.current_state.tags
         or target in runner.forces
         or runner._system_runtime.resolve(target, runner.current_state)[0]

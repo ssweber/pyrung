@@ -128,7 +128,7 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
 
 
 @pytest.mark.parametrize("transition", ["reboot", "stop_to_run"])
-def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
+def test_a_dormant_range_keeps_through_a_battery_reboot_and_not_a_restart(
     transition: str,
 ) -> None:
     enabled = Bool("ResetRangeEnabled", external=True)
@@ -162,7 +162,15 @@ def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    assert not {"ResetRange1", "ResetRange2"} & set(compiled.current_state.tags)
+    for runner in (plc, compiled):
+        tags = runner.current_state.tags
+        if transition == "reboot":
+            # A battery keeps what a slot the rungs reach holds, named or not.
+            assert (tags["ResetRange1"], tags["ResetRange2"]) == (7, 7)
+            assert tags["ResetRangeEnabled"] is False
+            assert runner.current_state.scan_id == 1
+        else:
+            assert not {"ResetRange1", "ResetRange2"} & set(tags)
 
 
 def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
@@ -281,10 +289,8 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     compiled.reboot()
 
     _assert_states_equivalent(plc, compiled)
-    if key_kind == "tag":
-        assert compiled.current_state.tags["PatchedRange1"] == 31
-    else:
-        assert "PatchedRange1" not in compiled.current_state.tags
+    # The rungs reach it, so a battery keeps it, whichever way the patch spelled it.
+    assert compiled.current_state.tags["PatchedRange1"] == 31
 
 
 @pytest.mark.parametrize("compiled_step", ["step", "step_replay"])
@@ -944,7 +950,7 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     _assert_states_equivalent(replay, interpreted)
 
 
-def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
+def test_a_replay_of_a_world_the_kernel_cannot_run_lands_interpreted() -> None:
     enable = Bool("UnsupportedSeekEnable")
 
     with Program(strict=False) as program:
@@ -955,18 +961,10 @@ def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
     source.patch({"UnsupportedSeekEnable": True})
     source.run(5)
 
-    replay = source._replay_seek(4)
+    replay = source.replay_to(4)
 
     assert replay.state.scan_id == 4
     assert source._compiled_replay_supported_kernel() is None
-    assert source._last_replay_seek_stats == {
-        "logical_scans": 4,
-        "kernel_scans": 4,
-        "folded_scans": 0,
-        "ordinary_folded_scans": 0,
-        "cycle_folded_scans": 0,
-        "residual_scans": 4,
-    }
 
 
 def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:

@@ -154,9 +154,11 @@ class Intractable:
     PLC's timing does not give; check the timing with a ``run_for()`` test),
     ``"timers"`` (so many timers run at once that the ways they can finish
     on one scan pass the verifier's cap: prove a property whose scope reaches
-    fewer of them, or test the timing with ``run_for()``) or ``"property"``
+    fewer of them, or test the timing with ``run_for()``), ``"property"``
     (the property's ``rise()``/``fall()``, which the search leaves undecided,
-    gave a counterexample the concrete PLC did not reproduce).
+    gave a counterexample the concrete PLC did not reproduce) or ``"function"``
+    (a ``run_function`` whose answer may not follow from its inputs, which the
+    search does not call: ``hints`` names each one and why).
     A timing result carries the search's ``trace`` (each step's ``timers``
     names the ticks it moved; empty for the search kind) and
     ``diverged_at``, the index of the step where replay left it.

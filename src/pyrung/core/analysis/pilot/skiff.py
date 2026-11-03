@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.effect_observation import value_or_varied_replay_scan_ids
 from pyrung.core.analysis.pilot.effects import expectation_from_writer
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.input_overrides import held_candidates
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -499,7 +500,7 @@ def _declared_domain(tag_ref: Any) -> tuple[Any, ...] | None:
         return None
     choices = getattr(tag_ref, "choices", None)
     if choices:
-        return tuple(sorted(choices))
+        return tuple(sorted(held_candidates(tag_ref, choices))) or None
     mn = getattr(tag_ref, "min", None)
     mx = getattr(tag_ref, "max", None)
     if mn is not None and mx is not None and int(mn) == mn and int(mx) == mx:

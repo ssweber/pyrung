@@ -118,7 +118,12 @@ class CoverageCollector:
         self._reports: list[CoverageReport] = []
 
     def collect(self, plc: PLC) -> None:
-        """Collect a coverage report from a PLC instance after a test run."""
+        """Collect a coverage report from a PLC instance after a test run.
+
+        Coverage is of the whole run, however it ran, so the scans of a long compiled run
+        are stepped again here for their records even past the limit a single question has.
+        """
+        plc._settle_compiled_ranges(at_any_cost=True)
         self._reports.append(plc.query.report())
 
     def collect_report(self, report: CoverageReport) -> None:

@@ -1,16 +1,16 @@
 """Run trigger-driven coasts and return exact observation receipts.
 
-A ``CoastTrigger`` is a named state predicate. ``CoastSession`` advances with folding
-when safe, lands each crossing on a real recorded scan, re-arms nonterminal
-triggers, and records simultaneous terminal triggers in a ``CoastReceipt``.
-Steering execution may also arm trial-start-clear avoid triggers: readable
-conditions constrain folded logical spans, while opaque predicates observe only
-the real kernel scans a fold executes.
+A ``CoastTrigger`` is a named state predicate. ``CoastSession`` advances through
+the guarded scan loop (:mod:`pyrung.core.coast_run`), lands each crossing on the
+scan it happened, re-arms nonterminal triggers, and records simultaneous terminal
+triggers in a ``CoastReceipt``.  Steering execution may also arm trial-start-clear
+avoid triggers: readable conditions are judged on every scan, while opaque
+predicates observe only the interpreted scans a coast takes.
 
 The predicate callable decides whether a trigger fired. An optional compiled
-condition supplies crossing and protected-read metadata for folding only; it
-does not replace predicate semantics. This module records what happened but
-does not classify the observation as progress, regression, or acceptance.
+condition only says what the predicate reads; it does not replace predicate
+semantics. This module records what happened but does not classify the observation
+as progress, regression, or acceptance.
 """
 
 from __future__ import annotations
@@ -20,7 +20,10 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.coast_run import coast_until, memo_of, work_charged
+from pyrung.core.read_trace import _extract_condition_reads, _reads_untraced
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -48,7 +51,7 @@ class CoastLimits:
     # A departure's own transition chain (Holding -> Held) completes in
     # scans-to-seconds; the channel must stay silent for a full second of
     # scans before the landing is trusted.  A *policy* window, not a
-    # stepping loop — the confirmation seek folds through the silence.
+    # stepping loop — the confirmation seek's loop runs through the silence.
     landing_confirm_scans: int = 100
     landing_cap: int = 2_000
 
@@ -58,6 +61,9 @@ LIMITS = CoastLimits()
 # A bearing coast gets a generous budget of its own — timer dwell is waiting,
 # not searching, so it does not consume the pilot's iteration budget.
 _COAST_BUDGET = 10_000
+# The search work left, ten seeks that count scans, below which a wait counts scans whatever
+# holds it: a max_scans this small asks for a small search, not a long wait.
+_LEDGER_FOR_A_LONG_WAIT = 10 * _COAST_BUDGET // STRETCH_SCANS_PER_UNIT
 
 
 @dataclass(frozen=True)
@@ -65,10 +71,9 @@ class CoastTrigger:
     """One armed pen on the trend recorder.
 
     ``predicate`` is authoritative.  ``condition`` (a compiled ``Condition``)
-    is fold metadata only: its comparison atoms become crossing targets and
-    its reads become fold-protected tags. ``predicate_reads`` is the exact read
-    declaration for a predicate whose condition cannot be compiled; leaving it
-    ``None`` keeps an opaque callable out of sterile-cycle proofs. ``watched``
+    says what it reads. ``predicate_reads`` is the exact read declaration for a
+    predicate whose condition cannot be compiled; leaving it ``None`` has the
+    coast trace the predicate instead. ``watched``
     names the tags whose transitions the receipt records when this trigger
     fires. ``terminal`` triggers end the seek; nonterminal triggers record an
     event and re-arm (``one_shot`` disarms after the first firing instead).
@@ -101,7 +106,8 @@ class CoastReceipt:
     ``stop_reason``: ``"reached"`` (a target trigger fired), ``"departed"`` (a
     departure fired without a target), ``"quiescent"`` (a quiescence trigger or
     cone fixpoint), ``"timeout"`` (budget/ceiling exhausted, nothing fired),
-    ``"paused"`` (an external pause stopped the coast early), ``"dwell"``
+    ``"paused"`` (an external pause stopped the coast early), ``"stopped"``
+    (the program stopped itself, and the next scan would restart it), ``"dwell"``
     (a fixed dwell completed).
     ``fired`` names every terminal trigger true at the landing scan —
     simultaneous firings are all present.  ``trajectory`` is populated only
@@ -116,22 +122,17 @@ class CoastReceipt:
     events: tuple[CoastTriggerEvent, ...]
     budget: int
     kernel_scans: int = 0
-    macro_folds: int = 0
+    stretches: int = 0
     trajectory: tuple[dict[str, Any], ...] = ()
-    # Exact visible tag destinations written by ordinary or cycle folding, in
-    # execution order. These are the manual edits needed to reproduce each jump.
-    advances: tuple[tuple[str, Any], ...] = ()
-    # Cheap scalar timer carry updates replayed in lieu of full kernel scans.
-    timer_quanta_replayed: int = 0
 
     @property
     def logical_scans(self) -> int:
-        """Logical scan IDs advanced, including scans skipped by folds."""
+        """Scan IDs advanced, including the scans a stretch of the loop ran."""
         return self.end_scan - self.start_scan
 
     @property
-    def skipped_scans(self) -> int:
-        """Logical scans advanced without an interpreter execution."""
+    def stretched_scans(self) -> int:
+        """Scans advanced in the loop, with no interpreted scan to look at."""
         return self.logical_scans - self.kernel_scans
 
     @property
@@ -166,74 +167,22 @@ class CoastReceipt:
         )
 
 
-def _fold_metadata(
-    triggers: Iterable[CoastTrigger],
-) -> tuple[
-    dict[str, tuple[tuple[str, Any], ...]] | None,
-    frozenset[str],
-    frozenset[str],
-    frozenset[str],
-    frozenset[str] | None,
-]:
-    """Merge crossings, protected reads, and exact predicate declarations.
+def _trigger_reads(triggers: Iterable[CoastTrigger]) -> frozenset[str] | None:
+    """The tags every armed trigger reads, or None if one will not say.
 
-    Watched tags are always protected even without a condition — a receipt
-    cannot record a transition the fold skipped.
+    Watched tags count: an avoid's predicate reads the member's tags, and a
+    predicate that fails in a loop scan takes that for False.
     """
-    from pyrung.core.fold import (
-        _extract_condition_crossings,
-        _extract_condition_reads,
-        _fold_context_reads,
-    )
-
-    crossings: dict[str, tuple[tuple[str, Any], ...]] = {}
     reads: set[str] = set()
-    predicate_reads: set[str] = set()
-    predicates_declared = True
     for trigger in triggers:
         reads.update(trigger.watched)
-        if trigger.condition is None:
-            if trigger.predicate_reads is None:
-                predicates_declared = False
-            else:
-                reads.update(trigger.predicate_reads)
-                predicate_reads.update(trigger.predicate_reads)
-            continue
-        for tag, cmps in _extract_condition_crossings(trigger.condition).items():
-            crossings[tag] = crossings.get(tag, ()) + cmps
-        condition_reads = _extract_condition_reads(trigger.condition)
-        reads |= condition_reads
-        predicate_reads |= condition_reads
-
-    protected, clock_reads, scan_derived = _fold_context_reads(reads)
-    return (
-        crossings or None,
-        protected,
-        clock_reads,
-        scan_derived,
-        frozenset(predicate_reads) if predicates_declared else None,
-    )
-
-
-def _trigger_read_audit(
-    triggers: Iterable[CoastTrigger], fold_ctx: Any
-) -> tuple[frozenset[str], dict[str, tuple[tuple[str, Any], ...]]]:
-    """Fold coordinates the triggers read outside a comparison, and the comparisons.
-
-    A condition is audited leaf by leaf (``fold._condition_read_audit``); a
-    predicate with declared reads reads each of them opaquely.  Undeclared
-    predicates are traced by the coast loop instead.
-    """
-    from pyrung.core.fold import _condition_read_audit
-
-    triggers = list(triggers)
-    conditions = [t.condition for t in triggers if t.condition is not None]
-    unmodeled, found = _condition_read_audit(conditions, fold_ctx)
-    declared: set[str] = set()
-    for trigger in triggers:
-        if trigger.condition is None and trigger.predicate_reads is not None:
-            declared.update(trigger.predicate_reads)
-    return unmodeled | fold_ctx.unmodeled_coordinates(declared), found
+        if trigger.condition is not None:
+            reads |= _extract_condition_reads(trigger.condition)
+        elif trigger.predicate_reads is not None:
+            reads.update(trigger.predicate_reads)
+        else:
+            return None
+    return frozenset(reads)
 
 
 @dataclass
@@ -247,14 +196,14 @@ class CoastSession:
 
     plc: PLC
     kind: str = "coast"
-    # ``None`` preserves live PILOT's automatic kernel-budget policy when
-    # reactive holds are installed. Recorded incident replay sets ``False``:
-    # its window is measured in historical logical scans.
-    kernel_budget: bool | None = None
+    # A live wait may count what its scans cost, as the ledger does, rather than the scans:
+    # see :meth:`loop_scans_per_unit`.  A recorded replay's budget is history, not an allowance,
+    # so it stays in scans.
+    waits_on_work: bool = False
     # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
     # re-arming change recorder — the literal trend-recorder pen.  During a
-    # seek the pens ride as one internal nonterminal trigger (their tags are
-    # fold-protected, so every transition is an exact landing); during
+    # seek the pens ride as one internal nonterminal trigger (the coast is asked
+    # after every scan, so every transition is an exact landing); during
     # step-mode ops (dwell / settle / a caller's raw pulse scans) the caller
     # ticks :meth:`note_pens` once per scan.  Pens never end a seek — they
     # only write the timeline.
@@ -262,7 +211,7 @@ class CoastSession:
     _events: list[CoastTriggerEvent] = field(default_factory=list)
     _kernel_scan_ids: list[int] = field(default_factory=list, repr=False)
     _kernel_scan_seen: set[int] = field(default_factory=set, repr=False)
-    _last_cyclefold_stats: dict[str, int] = field(default_factory=dict)
+    _last_coast_stats: dict[str, int] = field(default_factory=dict)
     _avoid_triggers: tuple[CoastTrigger, ...] = field(default=(), init=False, repr=False)
 
     @property
@@ -276,7 +225,7 @@ class CoastSession:
         return tuple(self._kernel_scan_ids)
 
     def note_kernel_scan(self, scan_id: int | None = None) -> None:
-        """Retain one actual scan once; macro-folded logical skips never call this."""
+        """Retain one interpreted scan once; scans inside a stretch never call this."""
         exact_scan = self.plc.state.scan_id if scan_id is None else scan_id
         if exact_scan in self._kernel_scan_seen:
             return
@@ -298,8 +247,8 @@ class CoastSession:
 
         Re-arming an already-armed pen keeps its existing baseline (the pen
         is mid-stroke, not reset).  Callers own the universe; a per-scan-churny
-        tag (a raw accumulator) must never be a pen — it would collapse every
-        fold to step-mode.
+        tag (a raw accumulator) must never be a pen — it would end every stretch
+        on its first scan.
         """
         state_tags = self.plc.state.tags
         for t in tags:
@@ -328,13 +277,12 @@ class CoastSession:
             self.pens[t] = after
 
     def arm_avoid(self, avoid: Any) -> None:
-        """Arm clear ``avoid=`` members for folded seeks.
+        """Arm clear ``avoid=`` members for seeks.
 
         Arming is a trial-start decision.  A member already true at that point
         is intentionally omitted so the trial may leave an avoided state.
-        Opaque callables are armed without fold metadata: they are checked on
-        real kernel scans while condition-like members additionally constrain
-        skipped logical spans.
+        Opaque callables are armed without a condition: they are checked on
+        interpreted scans, while condition-like members also end a stretch.
         """
 
         members = getattr(avoid, "members", ()) if avoid is not None else ()
@@ -405,13 +353,29 @@ class CoastSession:
             terminal=False,
         )
 
+    def loop_scans_per_unit(self) -> int:
+        """How many loop scans a unit of this session's seek budget pays for.
+
+        A wait under the plan's own holds is one the plan committed to, so how long its timers
+        run is not what should end it: one unit per ``STRETCH_SCANS_PER_UNIT``, the ledger's own
+        charge, with the wall clock and the memory cap bounding it.  Any other wait counts scans:
+        it may be a program that never does what is asked, and the search has other moves.  A
+        small ledger counts scans too: one fruitless wait at this price would spend it whole.
+        """
+        synthesis = self.plc._synthesis
+        if not self.waits_on_work or synthesis is None or not getattr(synthesis, "holds", ()):
+            return 1
+        work_left = memo_of(self.plc).work_left
+        if work_left is not None and work_left() < _LEDGER_FOR_A_LONG_WAIT:
+            return 1
+        return STRETCH_SCANS_PER_UNIT
+
     def seek(self, triggers: Iterable[CoastTrigger], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal trigger fires; return the receipt.
 
-        Uses the layered ``cycle_fold_until`` engine for every seek.  It tries
-        the ordinary plateau/crossing fold first (over the full synthesis +
-        program rung surface), then adds a cycle-preserving macro skip when
-        changing inner state defeats the ordinary plateau proof.
+        Each scan runs, in :func:`~pyrung.core.coast_run.coast_until`, and *budget*
+        counts them: a seek that nothing ends lands where stepping would time out.  See
+        :meth:`loop_scans_per_unit` for the seek that counts what they cost instead.
         """
         plc = self.plc
         armed: list[CoastTrigger] = [*triggers, *self._avoid_triggers]
@@ -428,24 +392,22 @@ class CoastSession:
                 baseline.setdefault(t, plc.state.tags.get(t))
 
         kernel_scans = 0
-        macro_folds = 0
-        timer_quanta_replayed = 0
-        advances: list[tuple[str, Any]] = []
+        stretches = 0
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
 
         # After a nonterminal (pen) firing steps the world, the next armed trigger
-        # may already be true at that very scan — judge it BEFORE folding
-        # again, or the fold's advance-≥1-before-judging would land one scan
-        # late and a cascading transition could carry the machine past the
-        # crossing the active trigger selected.
+        # may already be true at that very scan: judge it BEFORE coasting again, or
+        # the coast's advance-one-before-judging would land one scan late and a
+        # cascading transition could carry the machine past the crossing the active
+        # trigger selected.
         judge_before_run = False
+        per_unit = self.loop_scans_per_unit()
         while True:
-            elapsed = plc.state.scan_id - start_scan
+            elapsed = work_charged(plc.state.scan_id - start_scan, kernel_scans, per_unit)
             remaining = budget - elapsed
             if remaining <= 0:
                 break
-            sterile = False
             state = plc.state
             now_fired = (
                 [trigger for trigger in armed if trigger.predicate(state)]
@@ -459,15 +421,6 @@ class CoastSession:
                 live = [
                     self._pen_trigger() if trigger.kind == PEN else trigger for trigger in armed
                 ]
-                (
-                    crossings,
-                    protected,
-                    clock_reads,
-                    scan_derived,
-                    declared_predicate_reads,
-                ) = _fold_metadata(live)
-
-                from pyrung.core.fold import _reads_untraced
 
                 def _any_pred(s: Any, _live: list[CoastTrigger] = live) -> bool:
                     for trigger in _live:
@@ -476,8 +429,8 @@ class CoastSession:
                             and trigger.condition is None
                             and trigger.predicate_reads is None
                         ):
-                            # An opaque avoid is judged only on executed scans:
-                            # its reads do not narrow the fold.
+                            # An opaque avoid is judged only on interpreted scans:
+                            # its reads do not narrow the coast's loops.
                             with _reads_untraced():
                                 if trigger.predicate(s):
                                     return True
@@ -487,40 +440,30 @@ class CoastSession:
 
                 # A seek always advances at least one scan before judging: a
                 # trigger already true at arm time lands after one scan, not zero.
-                from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-                from pyrung.core.fold import _merge_comparisons
-
                 stats: dict[str, int] = {}
-                fold_ctx = plc._ensure_fold_context(protected, clock_reads, scan_derived)
-                read_unmodeled, read_cmps = _trigger_read_audit(live, fold_ctx)
-                if read_cmps:
-                    crossings = _merge_comparisons(crossings or {}, read_cmps)
-                cycle_fold_until(
+                coast_until(
                     plc,
                     _any_pred,
                     budget=remaining,
-                    kernel_budget=self.kernel_budget,
-                    fold_ctx=fold_ctx,
-                    extra_comparisons=crossings,
-                    predicate_reads=declared_predicate_reads,
+                    predicate_reads=_trigger_reads(live),
                     stats=stats,
-                    advances=advances,
                     on_kernel_scan=self.note_kernel_scan,
-                    extra_unmodeled=read_unmodeled,
+                    loop_scans_per_unit=per_unit,
                 )
                 kernel_scans += stats.get("kernel_scans", 0)
-                macro_folds += stats.get("macro_folds", 0)
-                timer_quanta_replayed += stats.get("timer_quanta_replayed", 0)
-                self._last_cyclefold_stats = stats
-                # A certified sterile cycle is a *proof* no armed trigger can
-                # ever fire — the strongest form of timeout, arrived early.
-                sterile = bool(stats.get("sterile_cycle"))
+                stretches += stats.get("stretches", 0)
+                self._last_coast_stats = stats
 
                 state = plc.state
                 now_fired = [trigger for trigger in armed if trigger.predicate(state)]
                 if not now_fired:
-                    elapsed = state.scan_id - start_scan
-                    stop_reason = "timeout" if sterile or elapsed >= budget else "paused"
+                    elapsed = work_charged(state.scan_id - start_scan, kernel_scans, per_unit)
+                    if stats.get("stopped"):
+                        stop_reason = "stopped"
+                    elif stats.get("out_of_work"):
+                        stop_reason = "timeout"
+                    else:
+                        stop_reason = "timeout" if elapsed >= budget else "paused"
                     break
 
             scan = state.scan_id
@@ -572,7 +515,7 @@ class CoastSession:
             judge_before_run = True
 
         # A timeout can break out after a step the loop never judged, and an
-        # external pause can stop the fold between landings — write down any
+        # external pause can stop the coast between landings — write down any
         # pen drift the loop didn't get to evaluate (exact scan for the
         # timeout case; the pause case attributes to the pause scan).
         self.note_pens()
@@ -586,26 +529,22 @@ class CoastSession:
             events=tuple(self._events),
             budget=budget,
             kernel_scans=kernel_scans,
-            macro_folds=macro_folds,
-            advances=tuple(advances),
-            timer_quanta_replayed=timer_quanta_replayed,
+            stretches=stretches,
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "coast %s: %s at scan %d "
-                "(%d logical scans, %d kernel scans, %d skipped, %d macro folds, "
-                "%d timer quanta replayed) "
+                "(%d logical scans, %d kernel scans, %d stretched, %d stretches) "
                 "fired=%s%s",
                 self.kind,
                 receipt.stop_reason,
                 receipt.end_scan,
                 receipt.logical_scans,
                 receipt.kernel_scans,
-                receipt.skipped_scans,
-                receipt.macro_folds,
-                receipt.timer_quanta_replayed,
+                receipt.stretched_scans,
+                receipt.stretches,
                 ",".join(receipt.fired) or "-",
-                f" cyclefold={self._last_cyclefold_stats}" if self._last_cyclefold_stats else "",
+                f" stats={self._last_coast_stats}" if self._last_coast_stats else "",
             )
         return receipt
 
@@ -647,19 +586,15 @@ class CoastSession:
         scans (``"timeout"`` — a cap-hit value may be mid-transition and
         must never be classified as settled).
 
-        The confirmation window requires 100 stable scans as policy, not as a
-        stepping loop: the seek folds through the silence
-        (one fold for a quiet second; cyclefold when oscillating holds are
-        active), and every intermediate hop lands exactly and is recorded
-        on the session timeline — the transition chain becomes evidence.
+        The confirmation window requires 100 stable scans as policy, and every
+        intermediate hop lands exactly and is recorded on the session timeline —
+        the transition chain becomes evidence.
         """
         plc = self.plc
         start_scan = plc.state.scan_id
         stop_reason = "timeout"
         kernel_scans = 0
-        macro_folds = 0
-        timer_quanta_replayed = 0
-        advances: list[tuple[str, Any]] = []
+        stretches = 0
         while True:
             remaining = cap - (plc.state.scan_id - start_scan)
             if remaining <= 0:
@@ -670,9 +605,7 @@ class CoastSession:
                 budget=min(confirm_scans, remaining),
             )
             kernel_scans += receipt.kernel_scans
-            macro_folds += receipt.macro_folds
-            timer_quanta_replayed += receipt.timer_quanta_replayed
-            advances.extend(receipt.advances)
+            stretches += receipt.stretches
             if receipt.stop_reason == "timeout":
                 # Silent through the whole confirmation window: landed.
                 stop_reason = "quiescent"
@@ -689,9 +622,7 @@ class CoastSession:
             events=tuple(self._events),
             budget=cap,
             kernel_scans=kernel_scans,
-            macro_folds=macro_folds,
-            advances=tuple(advances),
-            timer_quanta_replayed=timer_quanta_replayed,
+            stretches=stretches,
         )
 
     def settle(
@@ -707,8 +638,8 @@ class CoastSession:
         Quiescence, not silence-for-N: stop the first scan (after *floor*)
         that no watched tag changed since the previous scan — a watched-tag
         fixpoint.  Deliberately step-mode: the fixpoint compares consecutive
-        kernel scans, which a fold would compress away; the ceiling keeps the
-        window small (the fold handles long dwells via :meth:`seek`).
+        interpreted scans; the ceiling keeps the window small (long dwells go
+        through :meth:`seek`).
 
         ``reached_fn`` (over the tags dict) short-circuits the dwell so a
         one-scan transient target (STARTING for a single scan on the way to
@@ -759,7 +690,7 @@ def value_trigger(
     terminal: bool = True,
 ) -> CoastTrigger:
     """``tag == value`` trigger: authoritative ``_values_match`` predicate plus a
-    compiled ``CompareEq`` condition for fold metadata when the tag is known."""
+    compiled ``CompareEq`` condition saying what it reads when the tag is known."""
 
     def _pred(s: Any) -> bool:
         return _values_match(s.tags.get(tag_name), value)
@@ -820,7 +751,7 @@ def departure_trigger(
 
 
 def _departure_condition(plc: PLC, holds: dict[str, Any], excluding: dict[str, Any]) -> Any | None:
-    """Compile the departure predicate for fold metadata; None when any leg
+    """Compile the departure predicate to say what it reads; None when any leg
     can't compile (the predicate stays authoritative either way)."""
     from pyrung.core.condition import AllCondition, AnyCondition, CompareNe
 
@@ -850,7 +781,7 @@ def predicate_trigger(
     watched: tuple[str, ...] = (),
     terminal: bool = True,
 ) -> CoastTrigger:
-    """Callable trigger with optional equivalent Condition fold metadata."""
+    """Callable trigger with an optional equivalent Condition."""
     return CoastTrigger(
         name=name,
         kind=kind,
@@ -902,7 +833,7 @@ def _coast_until(
 
     Callers name an immediate target and may add an outer/global target.  All
     supplied validity coordinates are held from the same start snapshot and
-    armed as one departure trigger in the same folded ``seek``.
+    armed as one departure trigger in the same ``seek``.
     """
 
     triggers = [*extra_triggers, target]

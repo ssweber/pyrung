@@ -2088,7 +2088,7 @@ def test_alarm_reset_action_scan_records_exact_watchdog_overwrite() -> None:
     ] == [("Watchdog_Done", True)]
 
 
-def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
+def test_expectation_bearing_coast_stays_in_the_loop_and_gap_is_unknown() -> None:
     enabled = Bool("FoldedEffectEnabled", external=True)
     effect = Int("FoldedEffect")
     with Program() as program:
@@ -2096,7 +2096,7 @@ def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
             copy(1, effect)
     plc = PLC(program)
     expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
-    session = CoastSession(plc, kind="expectation-fold")
+    session = CoastSession(plc, kind="expectation-stretch")
 
     receipt = session.seek(
         [value_trigger(plc, "never", TARGET, effect.name, 1)],
@@ -2110,8 +2110,8 @@ def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
         coast_receipt=receipt,
     )
 
-    assert receipt.macro_folds >= 1
-    assert receipt.skipped_scans > 0
+    assert receipt.stretches >= 1
+    assert receipt.stretched_scans > 0
     assert [item.disposition for item in observations] == ["UNKNOWN"]
 
 
@@ -2312,7 +2312,7 @@ def test_channel_abort_receipt_remains_authoritative_with_unknown_effect() -> No
         (),
         20,
         kernel_scans=5,
-        macro_folds=1,
+        stretches=1,
     )
     trial = SimpleNamespace(
         snap={"State": 91},

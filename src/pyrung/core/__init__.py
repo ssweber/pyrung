@@ -110,6 +110,7 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
+from pyrung.core.rung_firings import UnrecordedScansError
 from pyrung.core.runner import PLC
 from pyrung.core.state import SystemState
 from pyrung.core.structure import (
@@ -146,6 +147,7 @@ from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not i
 
 __all__ = [
     "PLC",
+    "UnrecordedScansError",
     "CompiledPLC",
     "ScanContext",
     "SystemState",

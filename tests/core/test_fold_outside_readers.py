@@ -1,13 +1,9 @@
-"""What a window has to leave alone, and who may watch one from outside a rung.
+"""Scan memory the tags do not show, and who may watch a run from outside a rung.
 
-A fold certifies a window with one probe scan.  The scan is a function of the tags
-and the scan memory, so the probe repeats only if it left both where it found them:
-every piece of memory counts unless the fold models it (``_FoldContext.held_memory``).
-
-A monitor, a stop predicate and a ``when()`` all read the state a scan leaves, from
-outside the rungs.  What they cannot watch through a window is one set
-(``_FoldContext.moves_or_skipped``): reading anything in it declines the window, or
-bounds it if the name is a coordinate.
+A scan is a function of the tags and the scan memory, so a program whose edge shows only in
+memory must not be repeated as if nothing moved.  A monitor, a stop predicate and a
+``when()`` read the state a scan leaves, from outside the rungs, and must see each scan they
+would see stepped.  Every program here runs in the loop and stepped, and the two must agree.
 """
 
 from __future__ import annotations
@@ -36,10 +32,12 @@ from pyrung import (
     subroutine,
     toggle,
 )
-from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-from pyrung.core.fold import _extract_condition_crossings
+from pyrung.core.coast_run import coast_until
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
+from tests.core.scan_loop_counts import NEVER
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 clk100 = system.sys.clock_100ms
 
@@ -97,7 +95,7 @@ def _timer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The plateau guard: every piece of scan memory counts unless the fold models it
+# Scan memory the tags do not show
 # ---------------------------------------------------------------------------
 
 
@@ -189,17 +187,17 @@ class TestAProbeThatLeftMemoryBehind:
     )
     def test_a_one_shot_that_rearms_on_a_timer(self, body: Body) -> None:
         stepped = _plc(body)
-        stepped.run_until(lambda _s: False, max_cycles=1000, fold=False)
+        stepped.run_until(NEVER, max_cycles=1000, jit=False)
         folded = _plc(body)
-        folded.run_until(lambda _s: False, max_cycles=1000, fold=True)
+        folded.run_until(NEVER, max_cycles=1000, jit=True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
     def test_a_count_lands_on_its_scan(self) -> None:
         stepped = _plc(_one_shot_copy)
-        stepped.run_until(N >= 500, max_cycles=3000, fold=False)
+        stepped.run_until(N >= 500, max_cycles=3000, jit=False)
         folded = _plc(_one_shot_copy)
-        folded.run_until(N >= 500, max_cycles=3000, fold=True)
+        folded.run_until(N >= 500, max_cycles=3000, jit=True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
@@ -214,48 +212,26 @@ class TestAProbeThatLeftMemoryBehind:
         ],
     )
     def test_an_edge_raised_from_below(self, body: Body) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = _plc(body)
-            plc.run_until(lambda _s: False, max_cycles=20, fold=False)
+            plc.run_until(NEVER, max_cycles=20, jit=False)
             plc.patch({"G": True})
-            plc.run_until(lambda _s: False, max_cycles=1000, fold=fold)
+            plc.run_until(NEVER, max_cycles=1000, jit=jit)
             return plc
 
         stepped, folded = run(False), run(True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
-    def test_a_timer_alone_still_folds(self) -> None:
+    def test_a_timer_alone_stays_in_the_loop(self) -> None:
         plc = _plc(_timer)
         counter = _count_kernel_scans(plc)
-        plc.run_until(lambda _s: False, max_cycles=700, fold=True)
+        plc.run_until(NEVER, max_cycles=700, jit=True)
         assert counter["n"] < 60
-
-    def test_memory_nobody_has_heard_of_counts(self) -> None:
-        plc = _plc(_timer)
-        plc.step()
-        ctx = plc._ensure_fold_context()
-        state = plc.state
-        assert "_frac:T_Acc" in state.memory and "_dt" in state.memory
-
-        held = ctx.held_memory(state)
-        assert "_frac:T_Acc" not in held and "_dt" not in held
-
-        new_key = state.set(memory=state.memory.set("_next_year:1", 0))
-        assert ctx.held_memory(new_key) != held, "absent and off are not the same"
-        assert ctx.held_memory(new_key)["_next_year:1"] == 0
-
-    def test_a_carry_only_a_timer_rule_moves_is_the_exception(self) -> None:
-        # A second timer's carry is modeled by name, not by its prefix: one the
-        # fold does not time counts.
-        plc = _plc(_timer)
-        ctx = plc._ensure_fold_context()
-        state = plc.state.set(memory=plc.state.memory.set("_frac:Other_Acc", 0.5))
-        assert ctx.held_memory(state)["_frac:Other_Acc"] == 0.5
 
 
 # ---------------------------------------------------------------------------
-# One set: what moves or is skipped
+# Programs a reader outside the rungs may watch
 # ---------------------------------------------------------------------------
 
 
@@ -280,57 +256,49 @@ def _lamp() -> None:
     _timer()
 
 
-class TestTheSet:
-    def test_it_holds_what_a_window_moves(self) -> None:
-        def done_read() -> None:
-            _lamp()
-            with Rung(T.Done):
-                out(Hit)
-            with Rung(Hit):
-                out(Y)
+def _done_read() -> None:
+    _lamp()
+    with Rung(T.Done):
+        out(Hit)
+    with Rung(Hit):
+        out(Y)
 
-        ctx = _plc(done_read)._ensure_fold_context()
-        moving = ctx.moves_or_skipped
-        assert {T.Acc.name, Lamp.name} <= moving
-        assert ctx.plateau_excluded <= moving
-        assert not {T.Done.name, Hit.name} & moving
 
-    def test_it_holds_what_a_window_leaves_stale(self) -> None:
-        ctx = _plc(_rebuilt_seconds, {"A": True})._ensure_fold_context()
-        assert Secs.name in ctx.landing_rebuilt
-        assert Secs.name in ctx.moves_or_skipped
-        assert Secs.name not in ctx.plateau_excluded
+def _clocked() -> None:
+    with Rung(clk100):
+        calc(N + 1, N)
+    _timer()
 
-    def test_it_holds_each_time_point_nothing_bounds(self) -> None:
-        moving = _plc(_timer)._ensure_fold_context().moves_or_skipped
-        assert system.sys.clock_1s.name in moving
-        assert system.sys.scan_counter.name in moving
-        assert system.sys.scan_clock_toggle.name in moving
-        assert system.rtc.second.name in moving
 
-    def test_it_leaves_out_a_clock_that_ends_windows(self) -> None:
-        def clocked() -> None:
-            with Rung(clk100):
-                calc(N + 1, N)
-            _timer()
+def _seconds() -> None:
+    with Rung(system.rtc.second == 30):
+        out(Lamp)
+    _timer()
 
-        moving = _plc(clocked)._ensure_fold_context().moves_or_skipped
-        assert clk100.name not in moving
-        assert system.sys.clock_1s.name in moving
 
-    def test_the_rtc_field_a_rung_reads_ends_windows(self) -> None:
-        def seconds() -> None:
-            with Rung(system.rtc.second == 30):
-                out(Lamp)
-            _timer()
-
-        moving = _plc(seconds)._ensure_fold_context().moves_or_skipped
-        assert system.rtc.second.name not in moving
-        assert system.rtc.minute.name in moving
+class TestPrograms:
+    @pytest.mark.parametrize(
+        ("body", "patch"),
+        [
+            pytest.param(_done_read, None, id="done-read"),
+            pytest.param(_rebuilt_seconds, {"A": True}, id="rebuilt"),
+            pytest.param(_stale_fault_flag, None, id="fault-flag"),
+            pytest.param(_timer, None, id="time-points"),
+            pytest.param(_clocked, None, id="clock"),
+            pytest.param(_seconds, None, id="rtc-field"),
+        ],
+    )
+    def test_each_runs_as_stepped(self, body: Body, patch: dict[str, Any] | None) -> None:
+        stepped = _plc(body, patch)
+        stepped.run_until(NEVER, max_cycles=1000, jit=False)
+        folded = _plc(body, patch)
+        folded.run_until(NEVER, max_cycles=1000, jit=True)
+        assert folded.state.scan_id == stepped.state.scan_id
+        assert _state(folded) == _state(stepped)
 
 
 def _timer_beside_an_oscillator() -> None:
-    # Every scan changes F, so only a cycle jump can skip one.
+    # Every scan changes F.
     with Rung(F):
         on_delay(T, preset=9000).reset(R)
     with Rung(~F):
@@ -343,14 +311,14 @@ class TestAMonitor:
         body: Body,
         tag: Any,
         *,
-        fold: bool,
+        jit: bool,
         patch: dict[str, Any] | None = None,
         scans: int = 1000,
     ) -> tuple[list[tuple[int, Any, Any]], PLC]:
         plc = _plc(body, patch)
         fired: list[tuple[int, Any, Any]] = []
         plc.monitor(tag, lambda cur, prev: fired.append((plc.state.scan_id, prev, cur)))
-        plc.run_until(lambda _s: False, max_cycles=scans, fold=fold)
+        plc.run_until(NEVER, max_cycles=scans, jit=jit)
         return fired, plc
 
     @pytest.mark.parametrize(
@@ -365,48 +333,45 @@ class TestAMonitor:
     def test_on_what_moves_fires_as_stepped(
         self, body: Body, tag: Any, patch: dict[str, Any] | None
     ) -> None:
-        folded, folded_plc = self._firings(body, tag, fold=True, patch=patch)
-        stepped, stepped_plc = self._firings(body, tag, fold=False, patch=patch)
+        folded, folded_plc = self._firings(body, tag, jit=True, patch=patch)
+        stepped, stepped_plc = self._firings(body, tag, jit=False, patch=patch)
         assert folded == stepped
         assert stepped
         assert _state(folded_plc) == _state(stepped_plc)
 
     @pytest.mark.parametrize("tag", [F, T.Acc], ids=["oscillator", "accumulator"])
     def test_on_a_cycle_fires_as_stepped(self, tag: Any) -> None:
-        def run(fold: bool) -> tuple[list[tuple[int, Any, Any]], PLC, dict[str, int]]:
+        def run(jit: bool) -> tuple[list[tuple[int, Any, Any]], PLC, dict[str, int]]:
             plc = _plc(_timer_beside_an_oscillator)
             fired: list[tuple[int, Any, Any]] = []
             plc.monitor(tag, lambda cur, prev: fired.append((plc.state.scan_id, prev, cur)))
             stats: dict[str, int] = {}
-            if fold:
-                cycle_fold_until(
-                    plc, lambda _s: False, budget=600, kernel_budget=False, stats=stats
-                )
+            if jit:
+                coast_until(plc, lambda _s: False, budget=600, stats=stats)
             else:
                 for _ in range(600):
                     plc.step()
             return fired, plc, stats
 
-        folded, folded_plc, stats = run(True)
+        folded, folded_plc, _stats = run(True)
         stepped, stepped_plc, _ = run(False)
         assert folded == stepped
         assert stepped
-        assert stats.get("macro_folds", 0) == 0
         assert _state(folded_plc) == _state(stepped_plc)
 
     def test_a_callback_counting_into_a_tag_counts_as_stepped(self) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = _plc(_rebuilt_seconds, {"A": True})
             plc.monitor(Secs, lambda _c, _p: plc.patch({"N": plc.state.tags.get("N", 0) + 1}))
-            plc.run_until(lambda _s: False, max_cycles=1000, fold=fold)
+            plc.run_until(NEVER, max_cycles=1000, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
         assert folded.state.tags["N"] == stepped.state.tags["N"] == 10
         assert _state(folded) == _state(stepped)
 
-    def test_on_what_holds_keeps_the_fold(self) -> None:
-        # Only a change of Hit can fire this, and a crossing lands on it.
+    def test_on_what_holds_fires_as_stepped(self) -> None:
+        # Only a change of Hit can fire this.
         def latched() -> None:
             _timer()
             with Rung(T.Acc >= 2000):
@@ -414,17 +379,19 @@ class TestAMonitor:
             with Rung(Hit):
                 out(Y)
 
-        def run(fold: bool) -> tuple[list[int], int]:
+        def run(jit: bool) -> tuple[list[int], int]:
             plc = _plc(latched)
             fired: list[int] = []
             plc.monitor(Hit, lambda _c, _p: fired.append(plc.state.scan_id))
             counter = _count_kernel_scans(plc)
-            plc.run_until(lambda _s: False, max_cycles=700, fold=fold)
+            plc.run_until(NEVER, max_cycles=700, jit=jit)
             return fired, counter["n"]
 
         folded, kernel_scans = run(True)
-        assert folded == run(False)[0]
-        assert kernel_scans < 100
+        stepped, stepped_scans = run(False)
+        assert folded == stepped
+        # A monitor watches every scan: the run steps.
+        assert kernel_scans == stepped_scans
 
 
 def _seconds_gated() -> None:
@@ -440,8 +407,8 @@ def _acc_view() -> None:
 
 
 class TestADeclaredRead:
-    """``cycle_fold_until(plc, pred, predicate_reads=...)`` with no context builds one
-    that guards them, and a given context that moves one traces the predicate."""
+    """``coast_until(plc, pred, predicate_reads=...)`` lands as stepped, whatever moves the
+    read."""
 
     @staticmethod
     def _stepped(body: Body, pred: Any, patch: dict[str, Any] | None, scans: int) -> PLC:
@@ -460,72 +427,47 @@ class TestADeclaredRead:
             pytest.param(_rebuilt_seconds, "T_Acc", 3000, None, id="coordinate"),
         ],
     )
-    @pytest.mark.parametrize("given_context", [False, True], ids=["no-context", "given-context"])
     def test_lands_as_stepped(
         self,
         body: Body,
         name: str,
         value: Any,
         patch: dict[str, Any] | None,
-        given_context: bool,
     ) -> None:
         def pred(state: Any) -> bool:
             return state.tags.get(name, 0) >= value
 
         stepped = self._stepped(body, pred, patch, 1000)
         plc = _plc(body, patch)
-        cycle_fold_until(
-            plc,
-            pred,
-            budget=1000,
-            kernel_budget=False,
-            predicate_reads=frozenset({name}),
-            fold_ctx=plc._ensure_fold_context() if given_context else None,
-        )
+        coast_until(plc, pred, budget=1000, predicate_reads=frozenset({name}))
         assert plc.state.scan_id == stepped.state.scan_id
         assert _state(plc) == _state(stepped)
 
     @pytest.mark.parametrize(
-        ("body", "name", "condition", "value", "patch"),
+        ("body", "name", "value", "patch"),
         [
-            pytest.param(_seconds_gated, "Secs", Secs >= 3, 3, {"A": True}, id="rebuilt"),
-            pytest.param(_acc_view, "Q", Q >= 3005, 3005, None, id="view-of-a-source"),
+            pytest.param(_seconds_gated, "Secs", 3, {"A": True}, id="rebuilt"),
+            pytest.param(_acc_view, "Q", 3005, None, id="view-of-a-source"),
         ],
     )
-    @pytest.mark.parametrize("given_context", [False, True], ids=["no-context", "given-context"])
-    def test_a_comparison_places_only_a_coordinate(
+    def test_a_value_derived_from_an_accumulator(
         self,
         body: Body,
         name: str,
-        condition: Any,
         value: int,
         patch: dict[str, Any] | None,
-        given_context: bool,
     ) -> None:
-        # A comparison ends a window on a source's own value.  One on anything else
-        # ends none, and a view's is on its source, so the read has to stand.
         def pred(state: Any) -> bool:
             return state.tags.get(name, 0) >= value
 
         stepped = self._stepped(body, pred, patch, 1000)
         assert stepped.state.scan_id == 300
         plc = _plc(body, patch)
-        cycle_fold_until(
-            plc,
-            pred,
-            budget=1000,
-            kernel_budget=False,
-            predicate_reads=frozenset({name}),
-            extra_comparisons=_extract_condition_crossings(condition),
-            fold_ctx=plc._ensure_fold_context() if given_context else None,
-        )
+        coast_until(plc, pred, budget=1000, predicate_reads=frozenset({name}))
         assert plc.state.scan_id == stepped.state.scan_id
         assert _state(plc) == _state(stepped)
 
-    def test_no_context_guards_the_read_it_was_told_of(self) -> None:
-        # No rung reads Lamp, so a context built blind leaves it out of the plateau
-        # guard: the read would have to be traced, a scan at a time.  Told of the
-        # read, the context guards Lamp and the windows stand.
+    def test_a_read_no_rung_reads_stays_in_the_loop(self) -> None:
         def body() -> None:
             _timer()
             with Rung(clk100, G):
@@ -536,48 +478,35 @@ class TestADeclaredRead:
 
         plc = _plc(body)
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
-            plc,
-            pred,
-            budget=1000,
-            kernel_budget=False,
-            predicate_reads=frozenset({"Lamp"}),
-            stats=stats,
+        reached = coast_until(
+            plc, pred, budget=1000, predicate_reads=frozenset({"Lamp"}), stats=stats
         )
         assert reached is False
         assert stats["kernel_scans"] < 100
         assert _state(plc) == _state(self._stepped(body, pred, None, 1000))
 
-    def test_a_read_nothing_moves_keeps_the_fold(self) -> None:
+    def test_a_read_nothing_moves_stays_in_the_loop(self) -> None:
         plc = _plc(_rebuilt_seconds)
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
+        reached = coast_until(
             plc,
             lambda state: state.tags.get("Hit") is True,
             budget=1000,
-            kernel_budget=False,
             predicate_reads=frozenset({"Hit"}),
             stats=stats,
         )
         assert reached is True
         assert stats["kernel_scans"] < 100
 
-    def test_a_placed_coordinate_folds_to_its_crossing(self) -> None:
-        # The comparison ends the window, so its read does not bound every change.
+    def test_a_read_of_an_accumulator_lands_on_its_crossing(self) -> None:
         def pred(state: Any) -> bool:
             return state.tags.get(T.Acc.name, 0) >= 3000
 
         stepped = self._stepped(_timer, pred, None, 1000)
         plc = _plc(_timer)
         stats: dict[str, int] = {}
-        reached = cycle_fold_until(
-            plc,
-            pred,
-            budget=1000,
-            kernel_budget=False,
-            predicate_reads=frozenset({T.Acc.name}),
-            extra_comparisons=_extract_condition_crossings(T.Acc >= 3000),
-            stats=stats,
+        reached = coast_until(
+            plc, pred, budget=1000, predicate_reads=frozenset({T.Acc.name}), stats=stats
         )
         assert reached is True
         assert plc.state.scan_id == stepped.state.scan_id
@@ -589,45 +518,13 @@ def _oscillator() -> None:
         out(F)
 
 
-def _sterile_stats(plc: PLC) -> dict[str, int]:
-    stats: dict[str, int] = {}
-    cycle_fold_until(
-        plc,
-        lambda _s: False,
-        predicate_reads=frozenset({"Y"}),
-        budget=200,
-        kernel_budget=True,
-        stats=stats,
-    )
-    return stats
-
-
-class TestASterileCycle:
-    """A coast on a cycle that can never reach its goal stops at once: what a run with
-    a Harness relies on.  Only a callback the ring cannot see keeps it going."""
-
-    def test_a_monitor_only_watches_it(self) -> None:
-        plc = _plc(_oscillator)
-        plc.monitor(F, lambda _new, _old: None)
-        stats = _sterile_stats(plc)
-        assert stats["sterile_cycle"] == 1
-        assert stats["kernel_scans"] < 200
-
-    def test_a_when_keeps_it_going(self) -> None:
-        plc = _plc(_oscillator)
-        plc.when(lambda _s: True).do(lambda _s: None)
-        stats = _sterile_stats(plc)
-        assert "sterile_cycle" not in stats
-        assert stats["kernel_scans"] == 200
-
-
 class TestWhenDo:
     """A ``when().do()`` runs on every scan its condition holds, on whatever it closes
-    over: skipping scans would skip it, so a jump declines."""
+    over."""
 
     @staticmethod
     def _run(
-        body: Body, condition: Any, patch: dict[str, Any] | None, *, fold: bool, scans: int = 1000
+        body: Body, condition: Any, patch: dict[str, Any] | None, *, jit: bool, scans: int = 1000
     ) -> tuple[list[int], PLC, dict[str, int]]:
         plc = _plc(body)
         fired: list[int] = []
@@ -639,8 +536,8 @@ class TestWhenDo:
 
         plc.when(condition).do(act)
         stats: dict[str, int] = {}
-        if fold:
-            cycle_fold_until(plc, lambda _s: False, budget=scans, kernel_budget=False, stats=stats)
+        if jit:
+            coast_until(plc, lambda _s: False, budget=scans, stats=stats)
         else:
             for _ in range(scans):
                 plc.step()
@@ -654,22 +551,22 @@ class TestWhenDo:
             pytest.param(_lamp, Lamp, None, id="on-an-indicator"),
             pytest.param(_timer, lambda _s: True, None, id="always"),
             pytest.param(_rebuilt_seconds, Secs >= 2, {"Q": 5}, id="on-a-rebuilt-value"),
+            pytest.param(_oscillator, lambda _s: True, None, id="on-an-oscillator"),
         ],
     )
-    def test_fires_as_stepped_across_a_cycle(
+    def test_fires_as_stepped(
         self, body: Body, condition: Any, patch: dict[str, Any] | None
     ) -> None:
-        folded, folded_plc, stats = self._run(body, condition, patch, fold=True)
-        stepped, stepped_plc, _ = self._run(body, condition, patch, fold=False)
+        folded, folded_plc, _stats = self._run(body, condition, patch, jit=True)
+        stepped, stepped_plc, _ = self._run(body, condition, patch, jit=False)
         assert folded == stepped
         assert folded_plc.state.scan_id == stepped_plc.state.scan_id
         assert _state(folded_plc) == _state(stepped_plc)
-        assert stats["macro_folds"] == 0
 
-    def test_a_jump_returns_once_it_is_gone(self) -> None:
+    def test_the_loop_returns_once_it_is_gone(self) -> None:
         plc = _plc(_timer)
         handle = plc.when(lambda _s: True).do(lambda _state: None)
         handle.remove()
         stats: dict[str, int] = {}
-        cycle_fold_until(plc, lambda _s: False, budget=1000, kernel_budget=False, stats=stats)
-        assert stats["macro_folds"] >= 1
+        coast_until(plc, lambda _s: False, budget=1000, stats=stats)
+        assert stats["stretches"] >= 1

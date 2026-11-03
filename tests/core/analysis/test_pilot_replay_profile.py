@@ -23,14 +23,13 @@ def test_partition_is_an_exhaustive_scalar_receipt() -> None:
     partition.add(
         {
             "logical_scans": 20,
-            "ordinary_folded_scans": 7,
-            "cycle_folded_scans": 8,
-            "residual_scans": 5,
+            "stretched_scans": 15,
+            "kernel_scans": 5,
         }
     )
 
     assert partition.logical == 20
-    assert partition.ordinary_folded + partition.cycle_folded + partition.residual == 20
+    assert partition.stretched + partition.residual == 20
 
 
 def test_profiler_records_candidate_interval_without_scan_log() -> None:
@@ -61,10 +60,10 @@ def test_profiler_records_candidate_interval_without_scan_log() -> None:
 
 def test_passing_shadow_does_not_qualify_unshadowed_populations() -> None:
     calls = [
-        CoastCall("replay", "overlay-a", 10, 20, 10, 0, 0, 5),
-        CoastCall("replay", "overlay-a", 20, 30, 10, 0, 0, 7),
-        CoastCall("replay", "overlay-b", 10, 20, 10, 0, 0, 11),
-        CoastCall("bearing_coast", "overlay-a", 10, 20, 10, 0, 0, 13),
+        CoastCall("replay", "overlay-a", 10, 20, 10, 0, 5),
+        CoastCall("replay", "overlay-a", 20, 30, 10, 0, 7),
+        CoastCall("replay", "overlay-b", 10, 20, 10, 0, 11),
+        CoastCall("bearing_coast", "overlay-a", 10, 20, 10, 0, 13),
     ]
     shadow = {
         "advancement_kind": "replay_coast",
@@ -82,9 +81,8 @@ def test_profile_report_does_not_apply_passing_shadow_globally() -> None:
     profile.coast_partitions["replay"].add(
         {
             "logical_scans": 12,
-            "ordinary_folded_scans": 4,
-            "cycle_folded_scans": 3,
-            "residual_scans": 5,
+            "stretched_scans": 7,
+            "kernel_scans": 5,
         }
     )
     events = [

@@ -763,7 +763,6 @@
   "plan_journal": [
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Clear",
@@ -780,7 +779,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Reset",
@@ -797,7 +795,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Start",

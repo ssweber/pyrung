@@ -1,10 +1,8 @@
-"""A fold input written around its reader.
+"""A preset or comparison operand written around its reader.
 
-A window's crossings come from the values a scan boundary shows: presets and
-comparison operands.  A rung reading such a tag between two writes reads a value
-no boundary shows, so the window has to stop at each value change, or the fold
-lands on the wrong scan.  The same rung with a single write, on either side of
-the reader, reads what the boundary shows, and keeps folding.
+A rung reading such a tag between two writes reads a value no scan boundary shows.  The same
+rung with a single write, on either side of the reader, reads what the boundary shows.  Every
+program here runs in the loop and stepped, and the landing and a replay must equal stepping.
 """
 
 from __future__ import annotations
@@ -37,12 +35,13 @@ from pyrung import (
     time_drum,
     time_event_drum,
 )
-from pyrung.core.analysis.pdg import build_program_graph, tags_read_between_writes
-from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
-from pyrung.core.fold import _build_fold_context
+from pyrung.core.coast_run import coast_until
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
+from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 P = Int("P")
 Hit = Bool("Hit")
@@ -76,7 +75,7 @@ def _state(plc: PLC) -> dict[str, Any]:
 
 def _run(
     body: Body,
-    fold: bool,
+    jit: bool,
     scans: int,
     *,
     dt: float = 0.01,
@@ -92,19 +91,18 @@ def _run(
     plc.step()
     if then:
         plc.patch(then)
-    plc.run_until(lambda _s: False, max_cycles=scans, fold=fold)
+    plc.run_until(NEVER, max_cycles=scans, jit=jit)
     return plc
 
 
 def _assert_exact(body: Body, scans: int = 700, **kwargs: Any) -> None:
-    """Fold, and a replay seek over a stepped recording, both equal stepping."""
+    """The loop, and a replay over a stepped recording, both equal stepping."""
     folded = _run(body, True, scans, **kwargs)
     stepped = _run(body, False, scans, **kwargs)
     assert folded.state.scan_id == stepped.state.scan_id
     assert _state(folded) == _state(stepped)
     for target in (stepped.state.scan_id // 2, stepped.state.scan_id - 1):
-        seek = stepped._replay_seek(target)
-        assert _state(seek) == _state(stepped.replay_to(target))
+        assert _state(stepped.replay_to(target)) == _state(_run(body, False, target - 1, **kwargs))
 
 
 def _kernel_scans(
@@ -114,15 +112,8 @@ def _kernel_scans(
     if patch:
         plc.patch(patch)
     plc.step()
-    counter = {"n": 0}
-    original = plc._run_single_scan
-
-    def wrapped(**options: Any) -> Any:
-        counter["n"] += 1
-        return original(**options)
-
-    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
-    plc.run_until(lambda _s: False, max_cycles=scans, fold=True)
+    counter = ScansOutsideLoop(plc)
+    plc.run_until(NEVER, max_cycles=scans, jit=True)
     assert plc.state.scan_id >= scans
     return counter["n"]
 
@@ -266,10 +257,6 @@ class TestWrittenAroundItsReader:
                 copy(5000, big[Ptr])
 
         _assert_exact(body, patch={"Ptr": 5})
-        program = _program(body)()
-        ctx = _build_fold_context(PLC(program, dt=0.01), build_program_graph(program), program)
-        assert ctx.written_inputs.get(big[5].name) == frozenset({"T_Acc"})
-        assert ctx.inputs_between_writes.get(big[5].name) == frozenset({"T_Acc"})
 
     def test_writes_inside_a_subroutine(self) -> None:
         @subroutine("Around")
@@ -390,22 +377,25 @@ class TestWrittenAroundItsReader:
 
 
 class TestReplaySeek:
-    """A seek folds between checkpoints with no write counts to go on."""
+    """A seek between checkpoints lands where stepping does."""
 
     BEFORE, AFTER = 19_000, 30_000  # scans 1900 and 3000 at 10 ms
     TOTAL, TARGET = 3_000, 1_950  # past the threshold, between checkpoints
 
-    def _seek(self, body: Body, patch: dict[str, Any] | None = None) -> tuple[PLC, PLC, PLC]:
-        plc = PLC(_program(body)(), dt=0.01)
-        if patch:
-            plc.patch(patch)
-        plc.step()
-        plc.run_until(lambda _s: False, max_cycles=self.TOTAL, fold=False)
-        return plc, plc._replay_seek(self.TARGET), plc.replay_to(self.TARGET)
+    def _seek(self, body: Body, patch: dict[str, Any] | None = None) -> tuple[PLC, PLC]:
+        def run(scans: int) -> PLC:
+            plc = PLC(_program(body)(), dt=0.01)
+            if patch:
+                plc.patch(patch)
+            plc.step()
+            plc.run_until(NEVER, max_cycles=scans, jit=False)
+            return plc
+
+        return run(self.TOTAL).replay_to(self.TARGET), run(self.TARGET - 1)
 
     @pytest.mark.parametrize("reader", [_timer_reader, _comparison_reader, _time_drum])
     def test_between_two_writes(self, reader: Body) -> None:
-        _plc, seek, ref = self._seek(
+        seek, ref = self._seek(
             _around(reader, self.BEFORE, self.AFTER), patch={"En": True, "P": self.BEFORE}
         )
         assert _state(seek) == _state(ref)
@@ -418,22 +408,25 @@ class TestReplaySeek:
             with Rung(Mode):
                 copy(self.AFTER, P)
 
-        plc = PLC(_program(body)(), dt=0.01)
-        plc.step()
-        plc.run_until(lambda _s: False, max_cycles=5, fold=False)
-        plc.patch({"Mode": True})
-        plc.run_until(lambda _s: False, max_cycles=self.TOTAL, fold=False)
-        assert _state(plc._replay_seek(self.TARGET)) == _state(plc.replay_to(self.TARGET))
+        def run(scans: int) -> PLC:
+            plc = PLC(_program(body)(), dt=0.01)
+            plc.step()
+            plc.run_until(NEVER, max_cycles=5, jit=False)
+            plc.patch({"Mode": True})
+            plc.run_until(NEVER, max_cycles=scans, jit=False)
+            return plc
 
-    def test_one_write_above_still_folds(self) -> None:
+        seek = run(self.TOTAL).replay_to(self.TARGET)
+        assert _state(seek) == _state(run(self.TARGET - 6))
+
+    def test_one_write_above(self) -> None:
         def body() -> None:
             with Rung():
                 copy(self.BEFORE, P)
             _comparison_reader()
 
-        plc, seek, ref = self._seek(body)
+        seek, ref = self._seek(body)
         assert _state(seek) == _state(ref)
-        assert 0 < plc._last_replay_seek_stats["kernel_scans"] < 100
 
 
 def _comparison_on(operand: Any) -> None:
@@ -452,15 +445,15 @@ def _written_above_only(value: int) -> Body:
     return body
 
 
-class TestAFoldInputStillFolds:
+class TestAnInputWrittenOnceStaysInTheLoop:
     """One write per scan, wherever it sits: the boundary shows what was read."""
 
-    # Just past the 15 s presets below: the landing is what has to come out right.
+    # Just past the 15 s presets below: what happens at the preset has to come out right.
     SCANS = 15_050
     DT = 0.001
     FEW = 100
 
-    def _folds(self, body: Body) -> None:
+    def _in_the_loop(self, body: Body) -> None:
         kernel = _kernel_scans(body, self.SCANS, dt=self.DT, patch={"P": 15_000})
         assert kernel < self.FEW, f"{kernel} kernel scans for {self.SCANS} logical"
         _assert_exact(body, self.SCANS, dt=self.DT, patch={"P": 15_000})
@@ -471,10 +464,10 @@ class TestAFoldInputStillFolds:
                 on_delay(T, 15_000)
             _hit_when_done()
 
-        self._folds(body)
+        self._in_the_loop(body)
 
     def test_written_above(self) -> None:
-        self._folds(_written_above_only(15_000))
+        self._in_the_loop(_written_above_only(15_000))
 
     def test_written_below(self) -> None:
         def body() -> None:
@@ -482,7 +475,7 @@ class TestAFoldInputStillFolds:
             with Rung():
                 copy(15_000, P)
 
-        self._folds(body)
+        self._in_the_loop(body)
 
     def test_written_in_the_same_rung(self) -> None:
         def body() -> None:
@@ -491,7 +484,7 @@ class TestAFoldInputStillFolds:
                 on_delay(T, P)
             _hit_when_done()
 
-        self._folds(body)
+        self._in_the_loop(body)
 
     def test_threshold_written_above(self) -> None:
         def body() -> None:
@@ -502,11 +495,9 @@ class TestAFoldInputStillFolds:
             with Rung(T.Acc >= P):
                 latch(Hit)
 
-        self._folds(body)
+        self._in_the_loop(body)
 
     def test_writers_on_both_sides_with_one_idle(self) -> None:
-        """The live probe counts one write, so what the graph allows did not happen."""
-
         def body() -> None:
             with Rung():
                 copy(15_000, P)
@@ -516,16 +507,13 @@ class TestAFoldInputStillFolds:
 
         assert _kernel_scans(body, self.SCANS, dt=self.DT, patch={"P": 15_000}) < self.FEW
 
-    def test_an_operand_no_rung_writes_is_not_an_input_here(self) -> None:
+    def test_an_operand_no_rung_writes(self) -> None:
         """It reads the same at every point of a scan."""
 
         def body() -> None:
             _comparison_on(P)
 
-        program = _program(body)()
-        ctx = _build_fold_context(PLC(program, dt=0.01), build_program_graph(program), program)
-        assert not ctx.written_inputs
-        assert not ctx.inputs_between_writes
+        _assert_exact(body, patch={"P": 200})
 
 
 class TestHoldAboveTheProgram:
@@ -547,40 +535,24 @@ class TestHoldAboveTheProgram:
 
     def test_a_held_operand_with_a_writer_below_the_reader(self) -> None:
         def stepped(plc: PLC) -> None:
-            plc.run_until(lambda _s: False, max_cycles=700, fold=False)
+            plc.run_until(NEVER, max_cycles=700, jit=False)
 
         def folded(plc: PLC) -> None:
-            plc.run_until(lambda _s: False, max_cycles=700, fold=True)
+            plc.run_until(NEVER, max_cycles=700, jit=True)
 
-        def cycle(plc: PLC) -> None:
-            cycle_fold_until(plc, lambda _s: False, budget=700, kernel_budget=False)
+        def coast(plc: PLC) -> None:
+            coast_until(plc, lambda _s: False, budget=700)
 
         ref = self._held(stepped)
         assert ref.state.tags["Hit"] is True
-        for advance in (folded, cycle):
+        for advance in (folded, coast):
             plc = self._held(advance)
             assert plc.state.scan_id == ref.state.scan_id
             assert _state(plc) == _state(ref)
 
-    def test_the_context_names_it(self) -> None:
-        def body() -> None:
-            _comparison_on(P)
-            with Rung():
-                copy(5000, P)
 
-        program = _program(body)()
-        plc = PLC(program, dt=0.01)
-        plc.step()
-        held = fork_with_pilot_rungs(plc, (PilotRung("P", 200, ~Hit),))
-        ctx = _build_fold_context(held, build_program_graph(program), program)
-        assert ctx.inputs_between_writes == {"P": frozenset({"T_Acc"})}
-
-
-class TestLiveProbeCountsTheScan:
-    def test_a_writer_waking_inside_the_run_bounds_the_next_window(self) -> None:
-        """One write certifies a window; the second writer turning on is a tag
-        change, so the plateau breaks first and the next probe counts two."""
-
+class TestAWriterThatWakes:
+    def test_a_writer_waking_inside_the_run(self) -> None:
         def body() -> None:
             with Rung():
                 copy(200, P)
@@ -624,7 +596,7 @@ class TestRebuiltOnTheClock:
         body = _rebuilt_on_the_clock(reader, on, off)
         _assert_exact(body, 1000, patch={"P": 20_000})
 
-    def test_the_edges_that_move_nothing_still_fold(self) -> None:
+    def test_the_edges_that_move_nothing_stay_in_the_loop(self) -> None:
         body = _rebuilt_on_the_clock(_comparison_reader, 20_000, 20_000)
         assert _kernel_scans(body, 1000, patch={"P": 20_000}) < 100
         _assert_exact(body, 1000, patch={"P": 20_000})
@@ -642,12 +614,12 @@ class TestRebuiltOnTheClock:
             with Rung(T.Acc >= P * (1 if shape == "ticks" else 500)):
                 latch(Hit)
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = PLC(_program(body)(), dt=0.01)
             plc.set_rtc(datetime(2026, 1, 1))
             plc.patch({"P": 20_000})
             plc.step()
-            plc.run_until(lambda _s: False, max_cycles=800, fold=fold)
+            plc.run_until(NEVER, max_cycles=800, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -655,13 +627,13 @@ class TestRebuiltOnTheClock:
         assert _state(folded) == _state(stepped)
 
     def test_a_mid_run_edge_shows_in_the_input(self) -> None:
-        """The value moves only at the edge: a landing on either side shows it."""
+        """The value moves only at the edge: a stop on either side shows it."""
         body = _rebuilt_on_the_clock(_comparison_reader, 3000, 20_000)
         for scans in (49, 50, 51, 99, 100, 101):
             _assert_exact(body, scans, patch={"P": 20_000})
 
 
-class TestAClockWakesAWriterTheProbeDidNotCount:
+class TestAClockWakesAWriter:
     """Every boundary shows the writer below; the gated writer above only shows mid-scan."""
 
     GATES = [system.sys.clock_1s, ~system.sys.clock_1s]
@@ -686,13 +658,7 @@ class TestAClockWakesAWriterTheProbeDidNotCount:
         body = self._body(reader, gate, chained)
         _assert_exact(body, 1300, patch={"P": 30_000})
 
-    def test_the_clock_is_hard(self) -> None:
-        program = _program(self._body(_comparison_reader, system.sys.clock_1s, True))()
-        ctx = _build_fold_context(PLC(program), build_program_graph(program), program)
-        assert 0.5 in ctx.clock_half_periods
-
-    def test_it_still_folds_between_the_edges(self) -> None:
-        """The phase with one write folds; the phase with two steps."""
+    def test_it_stays_in_the_loop_between_the_edges(self) -> None:
         body = self._body(_comparison_reader, system.sys.clock_1s)
         scans = 8000
         kernel = _kernel_scans(body, scans, dt=0.001, patch={"P": 30_000})
@@ -708,57 +674,14 @@ class TestAClockWakesAWriterTheProbeDidNotCount:
             with Rung():
                 copy(30_000, P)
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = PLC(_program(body)(), dt=0.01)
             plc.set_rtc(datetime(2026, 1, 1))
             plc.patch({"P": 30_000})
             plc.step()
-            plc.run_until(lambda _s: False, max_cycles=800, fold=fold)
+            plc.run_until(NEVER, max_cycles=800, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
         assert stepped.state.tags["Hit"] is True
         assert _state(folded) == _state(stepped)
-
-
-class TestTagsReadBetweenWrites:
-    """The static answer: execution order, as the rungs give it."""
-
-    @staticmethod
-    def _between(body: Body, written_before: tuple[str, ...] = ()) -> frozenset[str]:
-        program = _program(body)()
-        return tags_read_between_writes(program, build_program_graph(program), written_before)
-
-    def test_above_and_below_is_not_between(self) -> None:
-        def above() -> None:
-            with Rung():
-                copy(1, P)
-            _timer_reader()
-
-        def below() -> None:
-            _timer_reader()
-            with Rung():
-                copy(1, P)
-
-        assert "P" not in self._between(above)
-        assert "P" not in self._between(below)
-
-    def test_between(self) -> None:
-        assert "P" in self._between(_around(_timer_reader))
-
-    def test_something_above_the_program_counts_as_a_write(self) -> None:
-        def below() -> None:
-            _timer_reader()
-            with Rung():
-                copy(1, P)
-
-        assert "P" in self._between(below, written_before=("P",))
-
-    def test_a_for_body_is_seen_twice(self) -> None:
-        def body() -> None:
-            with Rung():
-                with forloop(2):
-                    copy(P, Int("Seen"))
-                    copy(1, P)
-
-        assert "P" in self._between(body)

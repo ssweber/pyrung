@@ -23,8 +23,8 @@ from pyrung.core.analysis.pilot.requirements import (
 )
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.crossing import Cmp
-from pyrung.core.fold import _extract_condition_reads
 from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.read_trace import _extract_condition_reads
 from pyrung.core.tag import Tag, TagType
 
 
