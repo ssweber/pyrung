@@ -278,7 +278,7 @@ def test_a_fork_knows_the_slots_its_parent_does() -> None:
     plc.patch({"DS2": 99999})
     plc.step()
     forked = plc.fork()
-    assert forked._slots_rungs_reach is plc._slots_rungs_reach
+    assert forked._tags_rungs_reach is plc._tags_rungs_reach
     forked.patch({"DS3": 99999})
     forked.step()
     assert forked.state.tags["DS3"] == 32767
@@ -316,6 +316,67 @@ def test_a_slot_nothing_reaches_means_the_same_whichever_came_first(
         plc.step()
         held.append(plc.current_state.tags["DS5"])
     assert held == [by_name if how_named == "name" else by_tag for how_named in order]
+
+
+def _touch_the_slot(slots: Block, program: Program) -> None:
+    _ = slots[5]
+
+
+def _patch_it_by_tag_on_an_earlier_runner(slots: Block, program: Program) -> None:
+    earlier = PLC(program, dt=0.01)
+    earlier.patch({slots[5]: 1})
+    earlier.step()
+
+
+def _validate_the_range(slots: Block, program: Program) -> None:
+    slots.select(1, 5).tags()
+
+
+@pytest.mark.parametrize(
+    "happened",
+    [_touch_the_slot, _patch_it_by_tag_on_an_earlier_runner, _validate_the_range],
+    ids=["touched", "by tag on an earlier runner", "its range listed"],
+)
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_name_means_what_the_rungs_say_whatever_else_happened_to_the_program(
+    engine, happened
+) -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
+    happened(slots, program)
+    plc = engine(program, dt=0.01)
+    assert "DS5" not in plc.current_state.tags
+    plc.patch({"DS5": 99999, "DS2": 99999})
+    plc.step()
+    assert plc.current_state.tags["DS5"] == 99999
+    assert plc.current_state.tags["DS2"] == 32767
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_tag_mapped_onto_a_block_a_rung_uses_holds_its_type_on_both_engines(engine) -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    Int("Mapped").map_to(slots[5])
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
+    plc = engine(program, dt=0.01)
+    plc.patch({"Mapped": 99999})
+    plc.step()
+    assert plc.current_state.tags["Mapped"] == 32767
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_name_a_rung_names_holds_its_type_on_both_engines(engine) -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    with Program(strict=False) as program:
+        with Rung():
+            copy(slots[5], Int("Shown"))
+    plc = engine(program, dt=0.01)
+    plc.patch({"DS5": 99999, "Shown": 3.9})
+    plc.step()
+    assert plc.current_state.tags["DS5"] == 32767
 
 
 @pytest.mark.parametrize("engine", [PLC, CompiledPLC])

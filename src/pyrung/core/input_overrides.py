@@ -77,6 +77,51 @@ def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
     return held
 
 
+class TagsRungsReach:
+    """The tags a program's rungs name, and the block slots a range or pointer reaches.
+
+    What a tag patched by name holds comes from here, on either engine.  It is read off the
+    rungs alone: a ``select()`` or a ``Block[Pointer]`` names only its block, whose slots stay
+    lazy until something asks for one, and something having asked says nothing about this
+    program.  Built the first time a name is looked up, and shared with forks, which skip
+    the walk.
+    """
+
+    __slots__ = ("_logic", "_program", "_by_name")
+
+    def __init__(self, logic: Iterable[Any], program: Any) -> None:
+        self._logic = logic
+        self._program = program
+        self._by_name: dict[str, Tag] | None = None
+
+    def get(self, name: str) -> Tag | None:
+        if self._by_name is None:
+            self._by_name = self._build()
+        return self._by_name.get(name)
+
+    def _build(self) -> dict[str, Tag]:
+        from pyrung.core.memory_block import BlockRange
+        from pyrung.core.runner import _iter_tags_and_edge_names
+        from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
+        roots: list[Any] = list(self._logic)
+        if self._program is not None:
+            for subroutine_rungs in self._program.subroutines.values():
+                roots.extend(subroutine_rungs)
+        uses: list[Any] = []
+        named, _edges = _iter_tags_and_edge_names(roots, block_uses=uses)
+        tags = list(named)
+        for use in uses:
+            if isinstance(use, BlockRange):
+                tags.extend(use.tags())
+            else:
+                block = use.block
+                tags.extend(
+                    block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)
+                )
+        return {tag.name: tag for tag in tags if tag.name not in SYSTEM_TAGS_BY_NAME}
+
+
 class InputOverrideManager:
     """Encapsulates one-shot patches and persistent force overrides."""
 

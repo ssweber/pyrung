@@ -46,7 +46,7 @@ from pyrung.core.executor import (
 )
 from pyrung.core.expression import RandIntExpr, randint_sites
 from pyrung.core.history import History
-from pyrung.core.input_overrides import InputOverrideManager
+from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import RungFiringTimelines
@@ -361,6 +361,7 @@ def _iter_tags_and_edge_names(
     """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.memory_block import (
+        Block,
         BlockRange,
         IndirectBlockRange,
         IndirectExprRef,
@@ -391,6 +392,11 @@ def _iter_tags_and_edge_names(
                 queue.extend(vars(current).values())
             continue
         if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+            continue
+        if isinstance(current, Block):
+            # A range holds its block, whose cache is every slot anything has asked for.  Of
+            # those a program's own are the ones a map_to put there.
+            queue.extend(current._mapped_tags.values())
             continue
 
         current_id = id(current)
@@ -653,49 +659,6 @@ def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any,
 
 def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
     return bool(calls_that_depend_on_more_than_their_inputs(program))
-
-
-class _SlotsRungsReach:
-    """The block slots a range or a pointer in a rung reaches, by name.
-
-    A runner knows the tags a rung names, and a ``select()`` or a ``Block[Pointer]`` names
-    only its block: its slots stay lazy until something asks for one.  A kernel lists them
-    as it binds the block, so these are the same slots, and a slot patched by name holds
-    its type on both engines and whatever else was patched first.  Built the first time a
-    name is not a known tag, and shared with forks, which skip the walk.
-    """
-
-    __slots__ = ("_logic", "_program", "_by_name")
-
-    def __init__(self, logic: Iterable[Any], program: Any) -> None:
-        self._logic = logic
-        self._program = program
-        self._by_name: dict[str, Tag] | None = None
-
-    def get(self, name: str) -> Tag | None:
-        if self._by_name is None:
-            self._by_name = self._build()
-        return self._by_name.get(name)
-
-    def _build(self) -> dict[str, Tag]:
-        from pyrung.core.memory_block import BlockRange
-
-        roots: list[Any] = list(self._logic)
-        if self._program is not None:
-            for subroutine_rungs in self._program.subroutines.values():
-                roots.extend(subroutine_rungs)
-        uses: list[Any] = []
-        _iter_tags_and_edge_names(roots, block_uses=uses)
-        slots: list[Tag] = []
-        for use in uses:
-            if isinstance(use, BlockRange):
-                slots.extend(use.tags())
-            else:
-                block = use.block
-                slots.extend(
-                    block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)
-                )
-        return {tag.name: tag for tag in slots}
 
 
 def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
@@ -1725,7 +1688,7 @@ class PLC:
             is_read_only=self._system_runtime.is_read_only,
             known_tag=self._tag_a_name_means,
         )
-        self._slots_rungs_reach = _SlotsRungsReach(self._logic, self._program)
+        self._tags_rungs_reach = TagsRungsReach(self._logic, self._program)
         # Known only because a patch or a force named them by Tag: a name means no more than
         # it did, so a string's answer doesn't depend on which came first.
         self._names_only_an_override_gave: set[str] = set()
@@ -2649,7 +2612,7 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        fork._slots_rungs_reach = self._slots_rungs_reach
+        fork._tags_rungs_reach = self._tags_rungs_reach
         fork._names_only_an_override_gave = set(self._names_only_an_override_gave)
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
@@ -3135,7 +3098,7 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        fork._slots_rungs_reach = self._slots_rungs_reach
+        fork._tags_rungs_reach = self._tags_rungs_reach
         fork._names_only_an_override_gave = set(self._names_only_an_override_gave)
         fork._state = state
         fork._reset_cache(state)
@@ -4138,7 +4101,7 @@ class PLC:
     def _tag_a_name_means(self, name: str) -> Tag | None:
         known = self._known_tags_by_name.get(name)
         if known is None or name in self._names_only_an_override_gave:
-            return self._slots_rungs_reach.get(name)
+            return self._tags_rungs_reach.get(name)
         return known
 
     def _register_tag_an_override_names(self, tag: Tag) -> None:

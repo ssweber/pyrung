@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 
 from pyrung.core.context import ScanContext, same_stored_value
 from pyrung.core.expression import randint_sites
-from pyrung.core.input_overrides import InputOverrideManager
+from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.site_memory import migrate_legacy_edge_memory, site_table_of
 from pyrung.core.state import SystemState
@@ -254,7 +254,7 @@ class CompiledPLC:
         )
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
-            known_tag=lambda name: self._known_tags_by_name.get(name),
+            known_tag=TagsRungsReach(program.rungs, program).get,
         )
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
