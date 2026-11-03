@@ -325,6 +325,7 @@ def test_a_monitor_fires_on_the_scan_stepping_fires_it() -> None:
 def test_a_tag_that_moves_without_a_write_keeps_the_coast_interpreted() -> None:
     clock = system.sys.clock_100ms
     plc = _runner(_ramp, 0.01)
+    start = plc.current_state.scan_id
     stats: dict[str, int] = {}
     coast_until(
         plc,
@@ -333,7 +334,7 @@ def test_a_tag_that_moves_without_a_write_keeps_the_coast_interpreted() -> None:
         predicate_reads=frozenset((clock.name,)),
         stats=stats,
     )
-    assert plc.current_state.scan_id == SCANS
+    assert plc.current_state.scan_id == start + SCANS
     assert stats["logical_scans"] == SCANS
     assert stats["ordinary_folded_scans"] == 0
 

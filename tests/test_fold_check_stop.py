@@ -73,13 +73,18 @@ def test_a_predicate_over_the_real_runner_is_not_asked() -> None:
 @pytest.fixture
 def installed(monkeypatch: pytest.MonkeyPatch):
     """The real wrappers, installed for this test only (everything is restored)."""
+    import pyrung.core.analysis.pilot.coast as pilot_coast
     import pyrung.core.analysis.pilot.cyclefold as cyclefold
+    import pyrung.core.coast_run as coast_run
     import pyrung.core.fold as fold
 
     for mod, name in (
         (fold, "fold_run_until"),
         (fold, "fold_run_for"),
         (cyclefold, "cycle_fold_until"),
+        (coast_run, "coast_until"),
+        (coast_run, "ENTRY_WAIT"),
+        (pilot_coast, "coast_until"),
         (compiled_run, "run_scans"),
         (compiled_run, "INTERPRETED_PREFIX"),
         (scan_trace, "MIN_RUN_SCANS"),
@@ -87,8 +92,8 @@ def installed(monkeypatch: pytest.MonkeyPatch):
         (scan_trace, "STRICT_SELF_CHECK"),
     ):
         monkeypatch.setattr(mod, name, getattr(mod, name))
-    monkeypatch.setattr(fold, "_fold_check_installed", False, raising=False)
-    return fold, cyclefold
+    monkeypatch.setattr(compiled_run, "_fold_check_installed", False, raising=False)
+    return fold, coast_run
 
 
 def _overshooting(extra: int):
@@ -130,16 +135,37 @@ def test_run_until_through_install_passes_an_exact_stop(installed, monkeypatch) 
     assert plc.state.scan_id == 5
 
 
-def test_cycle_fold_through_install_catches_a_late_stop(installed, monkeypatch) -> None:
-    _, cyclefold = installed
-    monkeypatch.setattr(cyclefold, "cycle_fold_until", _overshooting(2))
+def test_a_coast_through_install_catches_a_late_stop(installed, monkeypatch) -> None:
+    _, coast_run = installed
+
+    def overshoot(plc, predicate, **_kwargs):
+        return _overshooting(2)(plc, predicate)
+
+    monkeypatch.setattr(coast_run, "coast_until", overshoot)
     fold_check.install()
     plc = _plc()
     with (
         fold_check.deliberate(),
         pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 7"),
     ):
-        cyclefold.cycle_fold_until(plc, lambda s: s.tags["N"] >= 5, budget=100)
+        coast_run.coast_until(plc, lambda s: s.tags["N"] >= 5, budget=100)
+
+
+def test_a_coast_through_install_catches_a_run_past_its_budget(installed, monkeypatch) -> None:
+    _, coast_run = installed
+
+    def past(plc, _predicate, *, budget, **_kwargs):
+        for _ in range(budget + 1):
+            plc.step()
+        return False
+
+    monkeypatch.setattr(coast_run, "coast_until", past)
+    fold_check.install()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="asked for 4 scans from scan 0, landed at 5"),
+    ):
+        coast_run.coast_until(_plc(), lambda _s: False, budget=4)
 
 
 def test_a_stateful_predicate_is_not_advanced_by_the_check() -> None:
@@ -439,8 +465,8 @@ def test_a_raised_run_is_compared_and_raises_on(installed) -> None:
 def test_a_raised_run_landing_on_the_wrong_state_is_caught(installed, monkeypatch) -> None:
     real = compiled_run._install
 
-    def scanned_past(plc, replay, state, tip):
-        return real(plc, replay, state.with_tags({"Cnt": state.tags["Cnt"] + 300}), tip)
+    def scanned_past(plc, replay, state):
+        return real(plc, replay, state.with_tags({"Cnt": state.tags["Cnt"] + 300}))
 
     monkeypatch.setattr(compiled_run, "_install", scanned_past)
     fold_check.install()
@@ -678,8 +704,8 @@ def test_deliberate_does_not_mask_what_escapes_it() -> None:
 def _after_install(monkeypatch: pytest.MonkeyPatch, change: Any) -> None:
     real = compiled_run._install
 
-    def install(plc, replay, state, tip):
-        real(plc, replay, state, tip)
+    def install(plc, replay, state):
+        real(plc, replay, state)
         change(plc)
 
     monkeypatch.setattr(compiled_run, "_install", install)

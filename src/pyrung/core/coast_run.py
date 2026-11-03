@@ -51,7 +51,6 @@ from pyrung.core.scan_trace import (
     ScanLoop,
     ScanTrace,
     _record_block_writes,
-    CoastMoves,
     coast_loop,
     coast_moves,
     moving_tags,
@@ -432,6 +431,7 @@ def _try_stretch(
             state_kernel.timestamp = timestamp
             _record_block_writes(path.trace, state_kernel.blocks)
             total += used
+            scan_trace.TOTALS["loop scans"] += used
         return used
 
     kept = paths.paths

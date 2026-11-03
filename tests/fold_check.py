@@ -1,13 +1,13 @@
 """Fold differential check: every folded run against a stepped twin.
 
-Enabled by ``--fold-check`` (``make test-fold``).  The three fold entry points
-(``fold_run_until``, ``fold_run_for``, PILOT's ``cycle_fold_until``) are wrapped.
+Enabled by ``--fold-check`` (``make test-fold``).  The entry points (``fold_run_until``,
+``fold_run_for``, ``compiled_run.run_scans``, PILOT's ``coast_until``) are wrapped.
 Before a folded run starts, a twin is built from the same tip state, forces,
 pending patches and synthesis overlay; after the run, the twin steps the same
 number of scans one by one, and every state the folded run itself produced
 (executed scans and landings, as cached) must equal the twin's state at that
 scan: tags and memory exactly, the timestamp to within a microsecond.  A
-run_until-style driver (``fold_run_until``, ``cycle_fold_until``) also hands the twin its stop predicate: if
+run_until-style driver (``fold_run_until``, ``coast_until``) also hands the twin its stop predicate: if
 it is true on the twin at a scan before the one where the folded run stopped, the fold
 overshot and :class:`FoldMismatch` says so.  A predicate that reads the real runner
 instead of its argument (it would answer about the wrong runner on a twin) or that
@@ -28,6 +28,10 @@ A run is skipped, and counted, when the twin cannot reproduce it: an active
 than fixed-step.  A compiled run longer than ``FOLD_CHECK_MAX_SCANS`` scans (default
 200000) is compared at its landing with real compiled scans, and its loop scans
 counted apart from those compared scan by scan.
+
+A coast is compared like a compiled run: exactly, and with the runner around the state,
+since both run real scans and the loop.  Its stretches fire finely here too, and it asks
+for one as soon as it can, so a short coast still reaches the loop.
 
 A compiled run is also held to what was asked of it: it lands on the scans asked for,
 or short of them only where stepping's stop predicate holds.  The runner around the state
@@ -623,12 +627,12 @@ def _filled(cell: Any) -> bool:
 def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) -> bool | None:
     """``predicate`` as the twin sees it, or None when the twin cannot answer it.
 
-    Reuses the fold's own ``_traced_call`` (it swaps the twin's tip for the traced
+    Reuses the read trace's ``_traced_call`` (it swaps the twin's tip for the traced
     state, so a predicate reading ``twin.state`` works).  The real runner's state is
     poisoned for the call: a closure over the real runner is detected, not answered.
     A predicate that raises is unknown on this scan only (``False`` is not assumed).
     """
-    from pyrung.core.fold import _traced_call
+    from pyrung.core.read_trace import _traced_call
 
     real = plc._state
     poison = _PoisonedState()
@@ -936,7 +940,7 @@ def _checked(
             )
         if stop_held is None:
             _note_skip("short landing not judged: no answer from the predicate")
-    if kind == "compiled":
+    if kind in ("compiled", "coast"):
         _depth += 1
         try:
             compare_runners(kind, plc, twin, start)
@@ -950,22 +954,27 @@ def _checked(
 
 
 def install() -> None:
-    """Wrap the fold entry points (idempotent)."""
+    """Wrap the entry points (idempotent)."""
+    import pyrung.core.analysis.pilot.coast as pilot_coast
     import pyrung.core.analysis.pilot.cyclefold as cyclefold
+    import pyrung.core.coast_run as coast_run
     import pyrung.core.fold as fold
 
-    if getattr(fold, "_fold_check_installed", False):
+    if getattr(compiled_run, "_fold_check_installed", False):
         return
-    setattr(fold, "_fold_check_installed", True)  # noqa: B010
+    setattr(compiled_run, "_fold_check_installed", True)  # noqa: B010
 
     run_until, run_for, cycle = fold.fold_run_until, fold.fold_run_for, cyclefold.cycle_fold_until
     compiled_scans = compiled_run.run_scans
+    coast = coast_run.coast_until
     # Send every run through the kernel: a short run is the common test.
     setattr(compiled_run, "INTERPRETED_PREFIX", 1)  # noqa: B010
     # Every run in the loop, finely, and a self check mismatch is a failure.
     setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
     setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
+    # A coast asks for the loop at its second scan, so a short one reaches it.
+    setattr(coast_run, "ENTRY_WAIT", 1)  # noqa: B010
     if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
         scan_trace.SELF_CHECK_OBSERVERS.append(_note_self_check_mismatch)
 
@@ -1002,12 +1011,22 @@ def install() -> None:
     setattr(fold, "fold_run_for", fold_run_for)  # noqa: B010
     setattr(cyclefold, "cycle_fold_until", cycle_fold_until)  # noqa: B010
 
+    def coast_until(plc: Any, predicate: Any, *, budget: int, **kwargs: Any) -> Any:
+        return _checked(
+            "coast",
+            plc,
+            lambda: coast(plc, predicate, budget=budget, **kwargs),
+            predicate,
+            budget=budget,
+        )
+
+    setattr(coast_run, "coast_until", coast_until)  # noqa: B010
+    setattr(pilot_coast, "coast_until", coast_until)  # noqa: B010
+
 
 def wall_budget(seconds: float) -> float:
     """A wall-clock test budget, widened while the check steps a twin of every fold."""
-    import pyrung.core.fold as fold
-
-    return seconds * 10 if getattr(fold, "_fold_check_installed", False) else seconds
+    return seconds * 10 if getattr(compiled_run, "_fold_check_installed", False) else seconds
 
 
 def vacuous() -> str | None:
