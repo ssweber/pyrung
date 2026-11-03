@@ -14,6 +14,7 @@ from pyrung.core import PLC
 from pyrung.core.analysis.pilot.skiff import _declared_domain
 from pyrung.core.analysis.prove import Counterexample, Proven, never
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
+from pyrung.core.analysis.pilot.skiff import _declared_domain
 from pyrung.core.input_overrides import held_candidates, refuses_value
 
 Y = Bool("Y")
@@ -161,6 +162,53 @@ def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
     result = never(program, Y)
     assert isinstance(result, Counterexample)
     assert result.trace[-1].inputs["In"] >= 4
+
+
+@pytest.mark.parametrize(
+    ("tag", "given"),
+    [
+        (R, -1),
+        (R, 2),
+        (R, 1.5),
+        (In, 3.0),
+        (In, True),
+        (W, 7.0),
+        (C, "A"),
+    ],
+)
+def test_a_candidate_the_tag_holds_as_an_equal_value_keeps_its_form(tag, given) -> None:
+    assert [repr(v) for v in held_candidates(tag, [given])] == [repr(given)]
+
+
+@pytest.mark.parametrize(
+    ("tag", "given", "stored"),
+    [
+        (In, 3.5, "3"),
+        (In, 99999, "32767"),
+        (W, -1, "65535"),
+        (R, 1e39, "inf"),
+        (C, "", repr("\x00")),
+    ],
+)
+def test_a_candidate_the_store_would_change_is_mapped(tag, given, stored) -> None:
+    assert [repr(v) for v in held_candidates(tag, [given])] == [stored]
+
+
+def test_a_witness_on_a_real_keeps_the_form_of_its_literal() -> None:
+    temp = Real("FormTemp", choices={-1: "open", 5: "fine"})
+    hit = Bool("FormHit")
+    with Program(strict=False) as program:
+        with Rung(temp == -1):
+            out(hit)
+    result = never(program, hit)
+    assert isinstance(result, Counterexample)
+    witness = [step.inputs["FormTemp"] for step in result.trace if "FormTemp" in step.inputs]
+    assert [repr(v) for v in witness] == ["-1"]
+
+
+def test_a_declared_domain_on_a_real_keeps_the_form_of_its_choices() -> None:
+    temp = Real("FormTemp", choices={-1: "open", 5: "fine"})
+    assert [repr(v) for v in _declared_domain(temp)] == ["-1", "5"]
 
 
 def test_held_candidates_is_what_the_store_makes_of_each_value() -> None:
