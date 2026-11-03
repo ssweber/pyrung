@@ -189,8 +189,8 @@ def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
     rung writes nothing else, affine self-referential calc) PLUS an unrelated
     timer so the fold has a plateau to fold.
 
-    Unprotected, X is an exact self-calc fold source (``_selfcalc_sources``):
-    one unconditional ``calc(X + 1, X)`` into an INT."""
+    Unprotected, X moves by a constant the scan loop checks: one unconditional
+    ``calc(X + 1, X)`` into an INT."""
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     X = Int("X")

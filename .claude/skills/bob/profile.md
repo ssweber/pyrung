@@ -62,8 +62,9 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
   (the queue's lock); up to ~5 builders iterating on targeted tests in parallel.
 - Stage commands, timeouts and presets are in `devtools/mergeq/mergeq.toml`; measured
   durations are in each job's `done/<id>.json` (a full train has run ~45 min).
-- A branch touching `fold.py` or `pilot/cyclefold.py` gates on `lint,prove,pilot,tumbler,fold`,
-  not `fast`: `fast` has no tumbler, and a fold change broke a pilot golden past READY once.
+- A branch touching `scan_trace.py`, `compiled_run.py` or `coast_run.py` gates on
+  `lint,prove,pilot,tumbler,fold`, not `fast`: `fast` has no tumbler, and a change to the run's
+  fast path broke a pilot golden past READY once.
 - A branch landing outside a train still gates on the `test` stage if it changes anything under
   `src/`: a codegen fix gated on lint, prove, pilot, tumbler and conf-cp turned two `tests/core`
   tests red on dev once, and it stayed red until the next `test` run (2026-11-02).

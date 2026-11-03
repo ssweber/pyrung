@@ -109,7 +109,7 @@ The predicate receives the committed `SystemState` each scan.
 ### `jit=`
 
 ```python
-runner.run_for(3600)            # an hour of a plain timer takes about 0.4 s
+runner.run_for(3600)            # an hour of a plain timer at 10 ms takes about half a second
 runner.run_for(10, jit=False)   # every scan interpreted, recording as it goes
 ```
 
