@@ -823,9 +823,8 @@ class _Replay:
 class _StateView(Mapping[str, Any]):
     """A PLC state as the property reads it, tag by tag.
 
-    Lazy, so a wait reads only what the property reads and the loop can still
-    run the scans in between.  Unwritten tags read as their defaults and
-    system tags as the PLC resolves them.
+    Lazy, so a wait reads only what the property reads.  Unwritten tags read as
+    their defaults and system tags as the PLC resolves them.
     """
 
     __slots__ = ("_state", "_defaults", "_system", "_plc")
