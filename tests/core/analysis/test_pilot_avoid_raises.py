@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Or, Program, Rung, Timer, copy, on_delay, out
+from pyrung import PLC, And, Bool, Int, Or, Program, Rung, Timer, copy, on_delay, out
 from pyrung.core import AvoidCheckError
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget, pilot_events, pilot_how
@@ -418,8 +418,44 @@ def test_a_condition_with_a_program_owned_side_is_asked_with_real_values() -> No
 
     assert _hold_allowed(ctx, ("Input", 5), {"Limit": 10}) is True
     assert _hold_allowed(ctx, ("Input", 50), {"Limit": 10}) is False
-    # True at rest too, so the hold is not what forces it.
+    # True without the hold too, so the hold is not what forces it.
     assert _hold_allowed(ctx, ("Input", 5), {"Limit": -1}) is True
+
+
+def test_rest_does_not_hide_a_real_input_the_check_reads() -> None:
+    """Speed is 5 in the real state and 0 at rest; S sends the check to real values."""
+    resting = {"Speed": 0, "Sensor": False}
+    real = {"S": 6, "Speed": 5, "Sensor": False}
+    ctx = _hold_ctx(
+        _compile_avoid(lambda s: s["S"] == 6 and s["Speed"] > 3 and s["Sensor"]), resting
+    )
+
+    assert _hold_allowed(ctx, ("Sensor", True), real) is False
+    assert _hold_allowed(ctx, ("Sensor", True), {**real, "Speed": 1}) is True
+
+
+def test_a_condition_on_a_real_input_is_not_hidden_by_rest() -> None:
+    sensor, speed, limit = Bool("Sensor"), Int("Speed"), Int("Lim")
+    ctx = _hold_ctx(_compile_avoid(And(sensor, speed > limit)), {"Speed": 0, "Sensor": False})
+    real = {"Speed": 5, "Sensor": False, "Lim": 0}
+
+    assert _hold_allowed(ctx, ("Sensor", True), real) is False
+    assert _hold_allowed(ctx, ("Sensor", True), {**real, "Speed": -1}) is True
+
+
+def test_releasing_a_real_input_is_judged_from_it_being_on() -> None:
+    resting = {"Speed": 0, "Sensor": False}
+    ctx = _hold_ctx(_compile_avoid(lambda s: s["S"] == 6 and not s["Sensor"]), resting)
+
+    assert _hold_allowed(ctx, ("Sensor", False), {"S": 6, "Speed": 0, "Sensor": True}) is False
+
+
+def test_resting_fills_only_what_the_real_state_lacks() -> None:
+    resting = {"Hold": False, "Spare": True}
+    ctx = _hold_ctx(_compile_avoid(lambda s: s["S"] == 6 and s["Spare"] and s["Hold"]), resting)
+
+    assert _hold_allowed(ctx, ("Hold", True), {"S": 6}) is False
+    assert _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": False}) is True
 
 
 def test_each_member_of_a_union_is_judged_on_its_own() -> None:
@@ -549,6 +585,55 @@ def test_a_condition_refused_on_the_baseline_stays_refused() -> None:
     plan = _drive(prog, state == 7, state == 9999)
 
     assert plan.status is PlanStatus.STOPPED
+
+
+def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
+    """RecipeShown copies Recipe every scan, so no real state has them apart.
+
+    Putting Recipe back at 0 under a real RecipeShown of 5 would be a state that never
+    happens, and raise for it.
+    """
+    sensor = Bool("HoldSensor", external=True)
+    recipe = Int("Recipe", external=True)
+    shown = Int("RecipeShown")
+    stable_on = Timer.clone("HoldStableOn")
+    stable_off = Timer.clone("HoldStableOff")
+    on_wd = Timer.clone("HoldOnWD")
+    off_wd = Timer.clone("HoldOffWD")
+    run = Timer.clone("HoldRun")
+    state = Int("HoldState", default=6)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(recipe, shown)
+        with Rung(state == 6, sensor):
+            on_delay(stable_on, 30, "ms")
+        with Rung(state == 6, ~sensor):
+            on_delay(stable_off, 30, "ms")
+        with Rung(state == 6):
+            on_delay(on_wd, 70, "ms").reset(stable_off.Done)
+        with Rung(state == 6):
+            on_delay(off_wd, 70, "ms").reset(stable_on.Done)
+        with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+            copy(8, state)
+        with Rung(state == 6):
+            on_delay(run, 250, "ms")
+        with Rung(state == 6, run.Done):
+            copy(7, state)
+
+    def _in_step(snapshot: dict) -> bool:
+        if snapshot["Recipe"] == snapshot["RecipeShown"]:
+            return False
+        raise ValueError("out of step")
+
+    plc = PLC(prog, dt=0.010)
+    plc.patch({"Recipe": 5})
+    plc.step()
+
+    plan = plc.how(state == 7, avoid=_in_step, max_scans=2000)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.total_scans == 24
+    assert _holds(plan) > 0
 
 
 def test_a_check_raising_only_with_a_hold_on_reaches_the_caller() -> None:

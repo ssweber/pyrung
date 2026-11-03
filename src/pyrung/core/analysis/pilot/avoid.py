@@ -78,10 +78,10 @@ def _resting_violations(
     The baseline has the steerable inputs and nothing else, so a check can raise on it
     for a tag every real state has.  That is no answer about the hold, so that check is
     asked again with real values: *real*, the state the search is judging the hold from,
-    inputs at rest.  The hold forces it if it goes true with the hold on and was clear
-    without.  A raise there is the check's own and reaches the caller.  A check the
-    baseline can answer keeps that answer, so a condition reading a tag the baseline lacks
-    still refuses the hold.
+    with resting filling only what it lacks.  The hold forces it if it goes true with the
+    hold on and was clear without.  A raise there is the check's own and reaches the
+    caller.  A check the baseline can answer keeps that answer, so a condition reading a
+    tag the baseline lacks still refuses the hold.
     """
     resting = dict(getattr(ctx, "resting", {}) or {})
     held = dict(pairs)
@@ -92,9 +92,9 @@ def _resting_violations(
         try:
             return _avoid_member_true(check, pred, {**resting, **held})
         except _AvoidCheckRaised:
-            at_rest = {**real, **resting}
-            return _avoid_member_true(check, pred, {**at_rest, **held}) and not _avoid_member_true(
-                check, pred, at_rest
+            now = {**resting, **real}
+            return _avoid_member_true(check, pred, {**now, **held}) and not _avoid_member_true(
+                check, pred, now
             )
 
     return tuple(check for check, pred in checks if forces(check, pred))

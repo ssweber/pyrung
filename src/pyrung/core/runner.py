@@ -989,7 +989,8 @@ class AvoidCheckError(Exception):
     def __init__(self, check: str, error: Exception) -> None:
         super().__init__(
             f"avoid check {check!r} raised {type(error).__name__}: {error}. "
-            "how() cannot tell whether that state is avoided, so it stopped without a plan. "
+            "how() asks a check about states it may enter, with the inputs it would set "
+            "applied, and cannot tell whether this one is avoided, so it stopped without a plan. "
             "A callable reads a tag a state may not have yet with snapshot.get(name, default). "
             "A condition compares what it finds, so check each tag it names is in the program "
             "and the two sides can be compared."

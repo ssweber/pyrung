@@ -236,8 +236,9 @@ An avoid check that raises travels the same way (`_AvoidCheckRaised`, from `avoi
 `api.py` names it `AvoidCheckError` for the caller: a check that raised has not said a state
 is clear, so no gate may read it as a pass. Evaluate avoid through `avoid.py`, not by calling
 it. The resting baseline has only the steerable inputs, so a check that raises there is asked
-again on the real state the search is judging the hold from, inputs at rest
-(`_resting_violations`); a raise there is real.
+again on the real state the search is judging the hold from, with resting filling only what
+that state lacks (`_resting_violations`). A raise there reaches the caller, though what the
+check was asked about is that state with the hold laid over it, which no scan has produced.
 
 ## Attempt transaction
 
