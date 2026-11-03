@@ -2,7 +2,7 @@
 
 Two seams land here (see scratchpad/coastsession/DESIGN.md Part 1):
 
-- ``fold._extract_condition_reads(condition)`` collects *every* tag a
+- ``read_trace._extract_condition_reads(condition)`` collects *every* tag a
   ``run_until`` condition reads (bare contacts, edges, both sides of a
   comparison), so the caller can thread them into the fold context.
 - ``runner.run_until`` (Tag/Condition path only) splits those reads into
@@ -21,7 +21,7 @@ from __future__ import annotations
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
 from pyrung.core import And, Or, fall, rise, system
 from pyrung.core.condition import _as_condition
-from pyrung.core.fold import _extract_condition_reads
+from pyrung.core.read_trace import _extract_condition_reads
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import _CLOCK_HALF_PERIODS
 

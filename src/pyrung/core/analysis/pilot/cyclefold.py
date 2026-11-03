@@ -451,7 +451,7 @@ def cycle_fold_until(
     and re-detect after each landing (the ring is cleared, so a regime change forces
     fresh observation). *extra_unmodeled* names coordinates the predicate reads
     other than by a comparison; with undeclared *predicate_reads* its reads are
-    traced at every judgement (``fold._traced_call``), and either keeps a jump
+    traced at every judgement (``read_trace._traced_call``), and either keeps a jump
     from carrying a coordinate it read.  Declared reads protect themselves: with no
     *fold_ctx* the context is built to guard them, and a given context that moves
     one the predicate has no comparison for gets the predicate traced instead.  Any
@@ -461,20 +461,20 @@ def cycle_fold_until(
     ``logical_scans`` and ``skipped_scans`` derived alongside the diagnostic
     breakdown.
     """
+    from pyrung.core.compiled_run import _replace_tip_state
     from pyrung.core.fold import (
         _acc_totals,
         _analog_recurrence,
         _fold_context_reads,
         _harness_nearest_scan,
         _OrdinaryFoldStrategy,
-        _replace_tip_state,
         _rtc_hard_fields,
         _rtc_jump_room,
         _scan_callbacks,
-        _traced_call,
         _without_soft_rtc_ticks,
         fold_run_until,
     )
+    from pyrung.core.read_trace import _traced_call
 
     if fold_ctx is None:
         fold_ctx = plc._ensure_fold_context(*_fold_context_reads(predicate_reads or ()))

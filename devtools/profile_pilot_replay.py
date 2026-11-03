@@ -31,7 +31,6 @@ import pyrung.core.runner as runner_module
 from pyrung import PLC
 from pyrung.core.analysis.pilot import causal as causal_module
 from pyrung.core.analysis.pilot import coast as coast_module
-from pyrung.core.analysis.pilot import cyclefold as cyclefold_module
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.runner import _compile_avoid
@@ -173,7 +172,7 @@ def observe(profile: Profile) -> Iterator[None]:
     coast_stack: list[str] = []
     shadow_active = [False]
     original_seek = coast_module.CoastSession.seek
-    original_cycle = cyclefold_module.cycle_fold_until
+    original_coast = coast_module.coast_until
     original_compiled_step = CompiledPLC.step
     original_compiled_step_replay = CompiledPLC.step_replay
     original_capture = PLC._replay_capture_at
@@ -190,7 +189,7 @@ def observe(profile: Profile) -> Iterator[None]:
         finally:
             coast_stack.pop()
 
-    def cycle(
+    def coast(
         plc: PLC,
         predicate: Callable[[Any], bool],
         *args: Any,
@@ -201,24 +200,26 @@ def observe(profile: Profile) -> Iterator[None]:
         kwargs["stats"] = local_stats
         start_scan = plc.state.scan_id
         try:
-            return original_cycle(plc, predicate, *args, **kwargs)
+            return original_coast(plc, predicate, *args, **kwargs)
         finally:
             kind = coast_stack[-1] if coast_stack else "unscoped"
-            profile.coast_partitions[kind].add(local_stats)
+            # coast_until's kernel_scans has each landing, which its stretch's scans may also
+            # count, so skipped_scans is the share that partitions.
+            partition = {
+                "logical_scans": int(local_stats.get("logical_scans", 0)),
+                "ordinary_folded_scans": int(local_stats.get("skipped_scans", 0)),
+                "residual_scans": int(local_stats.get("kernel_scans", 0)),
+            }
+            profile.coast_partitions[kind].add(partition)
             call = CoastCall(
                 kind=kind,
                 overlay_fingerprint=executable_overlay_fingerprint(plc),
                 start_scan=start_scan,
                 end_scan=plc.state.scan_id,
-                logical=int(local_stats.get("logical_scans", 0)),
-                ordinary_folded=int(local_stats.get("ordinary_folded_scans", 0)),
-                cycle_folded=int(local_stats.get("cycle_folded_scans", 0)),
-                residual=int(
-                    local_stats.get(
-                        "residual_scans",
-                        local_stats.get("kernel_scans", 0),
-                    )
-                ),
+                logical=partition["logical_scans"],
+                ordinary_folded=partition["ordinary_folded_scans"],
+                cycle_folded=0,
+                residual=partition["residual_scans"],
             )
             profile.coast_calls.append(call)
             profile.coast_owners.append(plc)
@@ -332,7 +333,7 @@ def observe(profile: Profile) -> Iterator[None]:
                 profile.witness_time.add(started)
 
     coast_module.CoastSession.seek = seek
-    cyclefold_module.cycle_fold_until = cycle  # ty: ignore[invalid-assignment]
+    coast_module.coast_until = coast  # ty: ignore[invalid-assignment]
     CompiledPLC.step = compiled_step
     CompiledPLC.step_replay = compiled_step_replay
     PLC._replay_capture_at = capture
@@ -345,7 +346,7 @@ def observe(profile: Profile) -> Iterator[None]:
         yield
     finally:
         coast_module.CoastSession.seek = original_seek
-        cyclefold_module.cycle_fold_until = original_cycle
+        coast_module.coast_until = original_coast
         CompiledPLC.step = original_compiled_step
         CompiledPLC.step_replay = original_compiled_step_replay
         PLC._replay_capture_at = original_capture
