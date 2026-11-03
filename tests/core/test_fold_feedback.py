@@ -309,7 +309,7 @@ class TestFeedbackKeepsFolding:
         replay._replay_slabs.clear()
         for scan in (2_000, 3_000, 3_999, 4_000):
             assert replay.history.at(scan).tags["Temp"].hex() == ran[scan].tags["Temp"].hex(), scan
-        assert replay._last_replay_seek_stats["ordinary_folded_scans"] == 0
+        assert replay._last_replay_seek_stats.get("ordinary_folded_scans", 0) == 0
 
     def test_a_plant_at_rest_folds_under_a_copy_reader(self) -> None:
         def enable() -> None:

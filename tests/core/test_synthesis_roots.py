@@ -492,7 +492,7 @@ def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
         again = replay.history.at(scan).tags
         assert repr(again["Temp"]) == repr(ran[scan].tags["Temp"]), scan
         assert again["Over"] is ran[scan].tags["Over"], scan
-    assert replay._last_replay_seek_stats["ordinary_folded_scans"] == 0
+    assert replay._last_replay_seek_stats.get("ordinary_folded_scans", 0) == 0
 
     assert plc._harness is harness
     plc._recent_state_cache.clear()
