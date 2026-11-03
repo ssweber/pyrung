@@ -575,14 +575,19 @@ class CompiledPLC:
             self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
+        next_scan_id = scan_id + 1
+        next_timestamp = timestamp + self._dt
         next_state = self._state.scanned(
-            scan_id + 1, timestamp + self._dt, self._commit_tags(), self._commit_memory()
+            next_scan_id, next_timestamp, self._commit_tags(), self._commit_memory()
         )
-        self._kernel.scan_id = next_state.scan_id
-        self._kernel.timestamp = next_state.timestamp
+        self._kernel.scan_id = next_scan_id
+        self._kernel.timestamp = next_timestamp
         self._state = next_state
-        self._sync_runtime_flags_from_state()
-        return self._state
+        # The commit just published this memory, and the kernel's holds both keys.
+        memory = self._kernel.memory
+        self._running = bool(memory.get(_MODE_RUN_KEY, True))
+        self._battery_present = bool(memory.get(_BATTERY_PRESENT_KEY, self._battery_present))
+        return next_state
 
     def step_replay(self, *, defer_flush: bool = False) -> None:
         """Run one lightweight replay step.
