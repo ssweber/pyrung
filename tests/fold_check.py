@@ -370,6 +370,7 @@ def _set_the_same_rtc(plc: Any, twin: Any, scan: int) -> bool:
             _rtc_parts(theirs),
             _rtc_parts(had_then(plc, our_time)),
             _rtc_parts(had_then(twin, their_time)),
+            strict=True,
         )
     )
 

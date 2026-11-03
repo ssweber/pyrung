@@ -423,9 +423,7 @@ def _bfs_explore_gen(
                     journal=context.journal,
                 )
                 continue
-            trace, trace_caveats = _build_trace(
-                parent_map, p_key, context.nondeterministic_dims
-            )
+            trace, trace_caveats = _build_trace(parent_map, p_key, context.nondeterministic_dims)
             choices, moved, _open = _choice[0]
             trace.append(
                 TraceStep(

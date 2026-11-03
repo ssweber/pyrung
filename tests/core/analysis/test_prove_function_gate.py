@@ -283,9 +283,7 @@ def _lock(
     lock = tmp_path / "pyrung.lock"
     monkeypatch.chdir(tmp_path)
     monkeypatch.delitem(sys.modules, "gate_row", raising=False)
-    monkeypatch.setattr(
-        sys, "argv", ["pyrung", "lock", "gate_row:logic", "-o", str(lock), *args]
-    )
+    monkeypatch.setattr(sys, "argv", ["pyrung", "lock", "gate_row:logic", "-o", str(lock), *args])
     try:
         cli.main()
         code = 0
