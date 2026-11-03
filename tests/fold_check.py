@@ -25,16 +25,19 @@ have proved nothing about the loop.
 A run is skipped, and counted, when the twin cannot reproduce it: an active
 ``when()`` registration or a monitor other than a Harness feedback notifier
 (their callbacks act on the folded runner only), replay mode, or a time mode other
-than fixed-step.  A compiled run longer than ``FOLD_CHECK_MAX_SCANS`` scans (default
-200000) is compared at its landing with real compiled scans, and its loop scans
+than fixed-step.  A compiled run or a coast longer than ``FOLD_CHECK_MAX_SCANS`` scans
+(default 200000) is compared at its landing with real compiled scans, and its loop scans
 counted apart from those compared scan by scan.
 
 A coast is compared like a compiled run: exactly, and with the runner around the state,
-since both run real scans and the loop.  Its stretches fire finely here too, and it asks
-for one as soon as it can, so a short coast still reaches the loop.  What it leaves in the
-firing indexes must match what stepping leaves (:func:`compare_records`), where a stretch
+since both run real scans and the loop.  Its stretches fire finely here too.  It keeps its
+production constants: its checkpoints and their force records are some of stepping's, equal
+at each.  What it leaves in the firing indexes must match what stepping leaves
+(:func:`compare_records`), scans it left out being stepped again to compare, where a stretch
 is allowed one thing: a value column may say ``Unknown``, and a column that does may say a
-tag varied where it did not.
+tag varied where it did not.  how()'s clock, memory cap and ledger are no scan's doing, so a
+coast they stop isn't held to the scans asked or to a true predicate, and all else is
+compared at the landing it reached.
 
 A compiled run is also held to what was asked of it: it lands on the scans asked for,
 or short of them only where stepping's stop predicate holds.  The runner around the state

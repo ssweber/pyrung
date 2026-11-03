@@ -74,14 +74,27 @@ class TestTheLedger:
 
 
 class _Stateful:
-    """A function that keeps state between calls, so no scan of its program may be skipped."""
+    """A function that keeps state between calls, so no kernel may run its program.
+
+    What it says doesn't depend on that state, or a lockstep twin sharing it would differ.
+    """
 
     def __init__(self) -> None:
         self.calls = 0
 
     def __call__(self) -> dict[str, int]:
         self.calls += 1
-        return {"seen": self.calls % 7}
+        return {"seen": 3}
+
+
+@pytest.fixture
+def most_calls(request: pytest.FixtureRequest) -> int:
+    """What a search over 3000 scans may call the function, a scan being one call.
+
+    Under lockstep every coast's twin calls it too, and so do the windows stepped again to
+    compare (21002 calls, measured), still far under a seek that ignores the ledger (120000).
+    """
+    return 3200 * (10 if request.config.getoption("fold_check", default=False) else 1)
 
 
 def _no_loop(preset_scans: int) -> tuple[PLC, _Stateful]:
@@ -101,12 +114,12 @@ def _no_loop(preset_scans: int) -> tuple[PLC, _Stateful]:
 class TestASearchWithNoLoop:
     # Every scan is interpreted, and max_scans is how many of them it may run.
 
-    def test_a_long_timer_stops_at_the_ledger(self) -> None:
+    def test_a_long_timer_stops_at_the_ledger(self, most_calls: int) -> None:
         plc, function = _no_loop(120_000)
         plan = plc.how(Lamp, max_scans=3000, wall_clock_s=None)
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
-        assert function.calls < 3200
+        assert function.calls < most_calls
 
     def test_it_stops_at_what_it_may_hold(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The bound on memory, for when max_scans is no bound at all.
@@ -118,11 +131,12 @@ class TestASearchWithNoLoop:
         assert plan.reason.startswith("memory budget exhausted")
         assert "physical link" not in plan.reason
 
-    def test_the_ledger_does_not_stop_what_it_can_pay_for(self) -> None:
+    def test_the_ledger_does_not_stop_what_it_can_pay_for(self, most_calls: int) -> None:
         plc, function = _no_loop(1000)
         plan = plc.how(Lamp, max_scans=3000, wall_clock_s=None)
         assert plan.status is PlanStatus.REACHED
-        assert function.calls < 3200
+        assert plan.fork.state.scan_id == 1000
+        assert function.calls < most_calls
 
 
 def _linked_motor() -> PLC:
