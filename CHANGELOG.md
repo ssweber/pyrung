@@ -191,6 +191,7 @@
 - `fill(Tbl[P], ...)`, `forloop(Tbl[P])` and `search(R == Tbl[P], ...)` with an address below the block set `fault.address_error` in the simulator, as compiled replay and generated CircuitPython already did: the fill and the search write nothing and the loop runs no iteration. They stopped the scan with `IndexError`, and `always()` and `never()` raised it; the analyses see the flag written by them.
 - A `select()` with tag bounds (`DS.select(Start, End)`) with a bound out of its block sets `fault.address_error` and writes nothing, past the end too, on every engine (pyrung's choice, as a CLICK takes a pointer only in Copy); `search()` over one now compiles, where it generated an `IndentationError`.
 - A `select()` with tag bounds across a gap of a sparse block skips the gap on every engine, as a static `select()` does, where compiled replay and generated CircuitPython set `fault.address_error`; so `always()` and `never()` no longer report `Proven` on what the simulator did not do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan on every engine.
+- An interpreted `rng.sum()` reads a slot's declared default when nothing else has put the slot in memory, where it used to read 0, matching the compiled kernel and generated CircuitPython.
 
 ## v0.15.2 (2026-10-11)
 
