@@ -22,6 +22,8 @@ yourself, or run the gate.
   600 s). In PowerShell use `python -I devtools/mergeq/mergeq.py run --timeout 300 -- <cmd>`.
   Heavy suites (the non-light stages in `devtools/mergeq/mergeq.toml`) are refused for agents
   by a hook: the queue runs them. Do not take the heavy lock.
+- A new test file: also run it once under `--fold-check` (`timeout 300 uv run pytest --fold-check
+  <file> -q`). The gate's `fold-new` stage does the same; failing it there costs a gate round.
 - Before handing back, grep `tests/` for every symbol, field, message and behaviour you changed
   and run those files too. Narrow `-k` filters have missed stale expectations before.
 - Before handing back, run `git diff <base>...HEAD --stat` and read the diff of every file

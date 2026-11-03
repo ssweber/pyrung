@@ -196,6 +196,22 @@ if IS_WINDOWS:
         _k32.CloseHandle(handle)
         return bool(ok) and code.value == 259  # STILL_ACTIVE
 
+    _k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+
+    def _proc_start(pid: int) -> str | None:
+        """When the process was created (FILETIME ticks), or None if it is not running."""
+        if not _pid_alive(pid):  # an exited process keeps its times while a handle is open
+            return None
+        handle = _k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        ok = _k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times))
+        _k32.CloseHandle(handle)
+        if not ok:
+            return None
+        return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+
     class _PidList(ctypes.Structure):
         _fields_ = [
             ("Assigned", wintypes.DWORD),
@@ -306,6 +322,13 @@ else:
         except OSError:
             return False
         return True
+
+    def _proc_start(pid: int) -> str | None:
+        """When the process was created (`ps` lstart text), or None if it is not running."""
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], text=True, capture_output=True
+        ).stdout.strip()
+        return out or None
 
     class ProcGroup:  # type: ignore[no-redef]
         def __init__(
@@ -557,7 +580,9 @@ def cmd_next(_args: argparse.Namespace) -> int:
     jid = job["id"]
     branches = _branches(job)
     pid_file = running / f"{jid}.pid"
-    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    # "<pid> <creation time>": cancel kills only a process that still has this creation time,
+    # so a pid reused after a reboot is never taken for the runner.
+    pid_file.write_text(f"{os.getpid()} {_proc_start(os.getpid()) or ''}", encoding="utf-8")
     result: dict = {
         **job,
         "branches": branches,
@@ -729,6 +754,32 @@ def cmd_land(args: argparse.Namespace) -> int:
     return 0
 
 
+def _kill_runner(pid_text: str) -> str | None:
+    """Kill the runner a pid file names, if it is still that process. Returns why it did not
+    (stale file, reused pid, unreadable or unverifiable file), or None after the kill.
+
+    The file survives a reboot, and Windows reuses pids, so the pid alone proves nothing: the
+    process must also have the creation time recorded when the runner started.
+    """
+    parts = pid_text.split(None, 1)
+    if not parts or not parts[0].isdigit():
+        return f"pid file is unreadable ({pid_text.strip()[:40]!r})"
+    pid, recorded = int(parts[0]), (parts[1].strip() if len(parts) > 1 else "")
+    current = _proc_start(pid)
+    if current is None:
+        return f"stale pid file: runner {pid} is no longer running"
+    if not recorded:
+        return f"pid file for {pid} has no creation time to check it against (older runner)"
+    if current != recorded:
+        return f"stale pid file: pid {pid} now belongs to a different process"
+    # Killing the runner closes its job handles, which kills each stage's tree too.
+    if IS_WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+    else:
+        os.kill(pid, 9)
+    return None
+
+
 def cmd_cancel(args: argparse.Namespace) -> int:
     queue, running, done, _logs, cand_root, _jobs, _procs = CFG.dirs()
     jid = args.id
@@ -744,12 +795,9 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         return 4
     pid_file = running / f"{jid}.pid"
     if pid_file.exists():
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-        # Killing the runner closes its job handles, which kills each stage's tree too.
-        if IS_WINDOWS:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
-        else:
-            os.kill(pid, 9)
+        why = _kill_runner(pid_file.read_text(encoding="utf-8"))
+        if why:
+            print(f"{why}; nothing killed", file=sys.stderr)
         pid_file.unlink(missing_ok=True)
     for entry in _procs_dir().glob(f"{jid}-*.json") if _procs_dir().exists() else []:
         _terminate_job(entry.stem)

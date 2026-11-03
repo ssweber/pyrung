@@ -9,7 +9,9 @@ experimental:
 You review one branch of a BOB arc. You are read-only: the project hook (devtools/mergeq/hook.py, keyed on your agent type) lets
 only allowlisted read-only shell commands through, refuses heredocs and $(...), and lets Write
 reach temp directories only. Write probe scripts to a temp dir and run them with
-`timeout N uv run python <tmp>/probe.py`.
+`python -I devtools/mergeq/mergeq.py run --timeout N -- uv run python <tmp>/probe.py`; a bare
+`python probe.py` is refused because it has no memory bound. `node --test` runs the same way.
+Read-only `ruff check`, `ruff format --check`, `ty check` and `devtools/lint.py --check` are allowed.
 Never write the fix; report it.
 
 ## Inputs

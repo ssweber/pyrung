@@ -20,7 +20,7 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
 | `submit --id X --branch B [--branch C ...] [--stages P]` | queue a job; several branches = a train, merged in order. `P` is a preset (`fast`, `heavy`, `train`, `default`) or a comma list of stages |
 | `next` | run the oldest job: merge onto the base in a scratch worktree, `install`, then stages cheapest first under the heavy lock, stop at the first failure. One job per call: launch it in the background to be notified. Exit 0 pass, 1 fail, 2 conflict (`conflict_branch` names it), 3 empty, 4 error |
 | `land --id X` | fast-forward the base to `refs/mergeq/X`, the exact merge that passed. Refuses if the base or a branch moved since the test, or the main checkout has tracked changes on the base |
-| `status` / `cancel --id X` | queue state and the lock; cancel kills a running job's process trees and cleans up |
+| `status` / `cancel --id X` | queue state and the lock; cancel kills a running job's process trees and cleans up. The runner's pid file also records its creation time: a stale file (process gone, or the pid reused after a reboot) is reported and removed, and kills nothing |
 | `run [--heavy] [--timeout S] [--name N] -- CMD` | run CMD as a kill-on-close process group (Windows Job Object; process group elsewhere). `--heavy` waits for and holds the machine-wide lock. Exit = CMD's, 124 timeout, 125 lock wait expired |
 | `ps [--all]` | mergeq-run groups (runner pid, process count, peak memory, cwd); `--all` adds test processes mergeq did not start |
 | `reap --name PREFIX` / `reap --unmanaged [--match RE] [--dry-run]` | kill every group whose name starts with PREFIX / stray processes under the repo or worktrees (language servers excluded) |
@@ -51,7 +51,14 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
     named job (`ps`, `reap --name bob-builder@drum`); PowerShell gets a refusal with the fix;
   - for the reviewer agent (`agent_type == reviewer_agent`): shell segments must match
     `reviewer_allow`, redirects only to /dev/null or `reviewer_write_roots`, no heredocs,
-    `$(...)` or PowerShell, and Write only under the write roots;
+    `$(...)` or PowerShell, and Write only under the write roots. Scratch scripts
+    (`reviewer_script`) and `reviewer_bounded` commands (`node --test`) run only as
+    `mergeq.py run --timeout N -- <command>` (N at most `reviewer_max_timeout`; no `--heavy`),
+    so the Job Object's memory cap applies; the bare form is refused. ruff and ty are allowed in
+    read-only forms only (no `--fix`, no in-place format);
+  - for the read-only agent (`agent_type == readonly_agent`, `bob-investigator`): the
+    reviewer's rules minus scripts, `mergeq run` and anything in `readonly_refuse` (pytest,
+    node --test, make). For investigations that must not run tests;
   - matches heavy/timeout patterns on the command with heredoc bodies and quoted strings
     blanked, so commit messages and docs written through a heredoc don't trip it;
   - fails closed: if the hook breaks, shell calls are refused with the error (the main
@@ -73,5 +80,8 @@ failing test ids and the log tail.
 3. Keep `experimental.cacheTtl: 1h` in the agent files (Claude Code 2.1.248+; older:
    `"subagentPromptCacheTtl": "1h"` in `~/.claude/settings.json`). Resumed builders and
    reviewers stay cached across long gate stages; the default is 5 minutes.
-4. `timeout 120 uv run pytest devtools/mergeq -q`, then reload hooks (`/hooks` or a fresh
+4. Stage `fold-new` (`make test-fold-new`, `devtools/fold_new_tests.py`) runs the test files a
+   branch adds under `--fold-check` before the full lockstep; drop it from presets and
+   `mergeq.toml` if the repo has no such check.
+5. `timeout 120 uv run pytest devtools/mergeq -q`, then reload hooks (`/hooks` or a fresh
    session) and check that a heavy stage command is refused and a pytest comes back wrapped.

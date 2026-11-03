@@ -19,6 +19,12 @@ Rules (mergeq.toml [hook]):
 - reviewer (agent_type == reviewer_agent): every shell segment must match reviewer_allow,
   redirects may only target /dev/null or reviewer_write_roots, heredocs and command
   substitution are refused, PowerShell is refused, and Write/Edit only reach the write roots.
+  Scratch scripts (reviewer_script) and reviewer_bounded commands (node --test) run only as
+  `python -I devtools/mergeq/mergeq.py run --timeout N -- <command>`, whose Job Object applies
+  the job_memory_mb cap; the same command bare has no memory bound and is refused.
+- readonly (agent_type == readonly_agent): the reviewer's rules, minus everything that runs
+  code: no scripts, no mergeq run, no test commands (readonly_refuse). For investigations that
+  must not execute tests.
 """
 
 from __future__ import annotations
@@ -122,45 +128,119 @@ def _segments(cmd: str) -> list[list[str]]:
     return segs
 
 
-def _check_reviewer_shell(cfg: dict, tool: str, cmd: str) -> None:
+def _words(seg: list[str], roots: list[Path]) -> list[str]:
+    """The segment's command words: redirects checked and dropped, VAR=value prefixes dropped."""
+    words: list[str] = []
+    i = 0
+    while i < len(seg):
+        tok = seg[i]
+        if re.fullmatch(r"\d", tok) and i + 1 < len(seg) and seg[i + 1] in REDIRECTS:
+            i += 1  # the fd of `2>&1` / `2>/dev/null`
+            continue
+        if tok in REDIRECTS or tok == "<":
+            target = seg[i + 1] if i + 1 < len(seg) else ""
+            i += 2
+            if tok == "<" or target in ("/dev/null", "1", "2") or _under(target, roots):
+                continue
+            raise Refuse(f"redirect to {target!r} is outside the scratch roots")
+        words.append(tok)
+        i += 1
+    while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", words[0]):
+        words = words[1:]  # leading VAR=value assignments
+    return words
+
+
+def _bounded_inner(words: list[str], max_timeout: int, roots: list[Path]) -> list[str] | None:
+    """The command of `python -I .../mergeq.py run --timeout N [--name X] -- CMD`, or None if
+    the segment is not that form. Raises Refuse for a malformed one: only --timeout (required,
+    at most max_timeout) and --name are accepted, so --heavy and the lock stay out of reach."""
+    if not (
+        len(words) > 4
+        and re.fullmatch(r"python[0-9.]*", words[0])
+        and words[1] == "-I"
+        and re.fullmatch(r"\S*mergeq\.py", words[2])
+        and words[3] == "run"
+    ):
+        return None
+    if _under(words[2], roots):
+        raise Refuse("mergeq.py must be the repo's, not a file under the scratch roots")
+    timeout = None
+    i = 4
+    while i < len(words) and words[i] != "--":
+        if words[i] == "--timeout" and i + 1 < len(words) and re.fullmatch(r"\d+", words[i + 1]):
+            timeout = int(words[i + 1])
+        elif (
+            words[i] == "--name" and i + 1 < len(words) and re.fullmatch(r"[\w.@-]+", words[i + 1])
+        ):
+            pass
+        else:
+            raise Refuse(
+                f"mergeq run for the reviewer takes only --timeout N and --name X, not {words[i]!r}"
+            )
+        i += 2
+    if i >= len(words) - 1:
+        raise Refuse("mergeq run needs `-- <command>` after its options")
+    if timeout is None or not 0 < timeout <= max_timeout:
+        raise Refuse(f"mergeq run needs --timeout N with N in 1..{max_timeout}")
+    return words[i + 1 :]
+
+
+def _script_of(pattern: re.Pattern[str], text: str, roots: list[Path]) -> str | None:
+    """The script a `python <script>.py` command runs, or None. The repo's own mergeq.py is not
+    a scratch script (`mergeq.py status` has its own allow rule); a mergeq.py under the scratch
+    roots is."""
+    m = pattern.search(text)
+    if not m:
+        return None
+    script = m.group("script")
+    if Path(script).name == "mergeq.py" and not _under(script, roots):
+        return None
+    return script
+
+
+def _check_reviewer_shell(cfg: dict, tool: str, cmd: str, readonly: bool = False) -> None:
+    who = "the read-only agent" if readonly else "the reviewer"
     if tool == "PowerShell":
-        raise Refuse("the reviewer uses Bash only (read-only allowlist); PowerShell is refused")
+        raise Refuse(f"{who} uses Bash only (read-only allowlist); PowerShell is refused")
     hook = cfg.get("hook", {})
     allow = [re.compile(p) for p in hook.get("reviewer_allow", [])]
+    bounded = [re.compile(p) for p in hook.get("reviewer_bounded", [])]
+    refuse = [re.compile(p) for p in hook.get("readonly_refuse", [])]
     script_pat = re.compile(hook.get("reviewer_script", r"$^"))
+    max_timeout = int(hook.get("reviewer_max_timeout", 1800))
     roots = _roots(cfg)
+    fix = "python -I devtools/mergeq/mergeq.py run --timeout 300 -- "
     for seg in _segments(cmd):
-        words: list[str] = []
-        i = 0
-        while i < len(seg):
-            tok = seg[i]
-            if re.fullmatch(r"\d", tok) and i + 1 < len(seg) and seg[i + 1] in REDIRECTS:
-                i += 1  # the fd of `2>&1` / `2>/dev/null`
-                continue
-            if tok in REDIRECTS or tok == "<":
-                target = seg[i + 1] if i + 1 < len(seg) else ""
-                i += 2
-                if tok == "<" or target in ("/dev/null", "1", "2") or _under(target, roots):
-                    continue
-                raise Refuse(f"redirect to {target!r} is outside the scratch roots")
-            words.append(tok)
-            i += 1
-        while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", words[0]):
-            words = words[1:]  # leading VAR=value assignments
+        words = _words(seg, roots)
         if not words:
             continue
         text = " ".join(words)
-        m = script_pat.search(text)
-        if m:
-            if _under(m.group("script"), roots):
+        if readonly:
+            if hit := next((p.pattern for p in refuse if p.search(text)), None):
+                raise Refuse(f"the read-only agent runs no tests or code (matched {hit!r})")
+            if (
+                _script_of(script_pat, text, roots)
+                or _bounded_inner(words, max_timeout, roots) is not None
+            ):
+                raise Refuse("the read-only agent runs no scripts and no mergeq run")
+        inner = None if readonly else _bounded_inner(words, max_timeout, roots)
+        if inner is not None:
+            text = " ".join(inner)
+            script = _script_of(script_pat, text, roots)
+            if script:
+                if _under(script, roots):
+                    continue
+                raise Refuse(f"probe scripts must live under the scratch roots, not {script!r}")
+            if any(p.search(text) for p in bounded) or any(p.search(text) for p in allow):
                 continue
+            raise Refuse(f"{inner[0]!r} is not on the reviewer's allowlist ({text[:80]!r})")
+        if _script_of(script_pat, text, roots) or any(p.search(text) for p in bounded):
             raise Refuse(
-                f"probe scripts must live under the scratch roots, not {m.group('script')!r}"
+                f"run this bounded (a bare run has no memory limit): `{fix}<command>`; "
+                "--timeout N sets the time limit and the Job Object caps memory"
             )
         if not any(p.search(text) for p in allow):
-            raise Refuse(
-                f"{words[0]!r} is not on the reviewer's read-only allowlist ({text[:80]!r})"
-            )
+            raise Refuse(f"{words[0]!r} is not on {who}'s read-only allowlist ({text[:80]!r})")
 
 
 # --------------------------------------------------------------------------- everyone
@@ -188,20 +268,22 @@ def check(event: dict, cfg: dict) -> dict | None:
     tool = event.get("tool_name", "")
     tool_input = event.get("tool_input") or {}
     hook = cfg.get("hook", {})
-    reviewer = event.get("agent_type") == hook.get("reviewer_agent", "bob-reviewer")
+    agent = event.get("agent_type")
+    readonly = bool(agent) and agent == hook.get("readonly_agent", "bob-investigator")
+    reviewer = readonly or agent == hook.get("reviewer_agent", "bob-reviewer")
     subagent = bool(event.get("agent_id") or event.get("agent_type"))
     if tool in EDIT_TOOLS:
         path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
         if reviewer and not _under(path, _roots(cfg)):
             raise Refuse(
-                f"the reviewer is read-only; {path} is outside the scratch roots. Report the fix instead"
+                f"this agent is read-only; {path} is outside the scratch roots. Report the fix instead"
             )
         return None
     if tool not in SHELL_TOOLS:
         return None
     cmd = tool_input.get("command", "")
     if reviewer:
-        _check_reviewer_shell(cfg, tool, cmd)
+        _check_reviewer_shell(cfg, tool, cmd, readonly)
     code = _code_only(cmd)
     if not subagent:
         for pattern in hook.get("heavy_exempt", []):

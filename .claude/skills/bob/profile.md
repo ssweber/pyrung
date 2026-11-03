@@ -49,6 +49,17 @@ following evaluation (stepping, condition trace, state panes, time travel, reloa
 sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
 `docs/internal/debug-spec.md`.
 
+## Compare gate: `how()` and history changes
+
+A branch that moves `how()` (pilot planning, `core/analysis/pilot/`) or history (seek, scan log,
+checkpoints, `core/history.py`, `core/scan_log.py`) gets an old-vs-new answers compare, and the
+compare's program set must include programs with long waits (timers and dwells of minutes to
+hours, a drum step, a `Pulse` of 60 s), not only the corpus goldens. Two debugger blockers got
+past tumbler, the 215-answer corpus compare and lockstep, because none of them held a long wait
+(2026-11-03). Put it in the builder brief (build the long-wait programs, run the compare on the
+base and the branch) and the reviewer brief (check that the set has them), and in the gate list
+for the branch: `lint,tumbler,fold` at least. Bound every compare run (machine budget below).
+
 ## Models
 
 - Builders: Opus at `effort: high` for prover / fold / kernel / executor / rung evaluation /
@@ -70,6 +81,13 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
   `src/`: a codegen fix gated on lint, prove, pilot, tumbler and conf-cp turned two `tests/core`
   tests red on dev once, and it stayed red until the next `test` run (2026-11-02).
 - Never run `make test-fuzz` or `make bench` in an orchestration session.
+- Reviewers run scratch scripts and `node --test` only as
+  `python -I devtools/mergeq/mergeq.py run --timeout N -- <command>`; the hook refuses the bare form
+  (no memory bound) and allows ruff/ty read-only forms. For an investigation that must not run
+  tests, spawn `bob-investigator` (read-only: no tests, no scripts) instead of a reviewer.
+- A branch that adds a test file gets it checked under `--fold-check` by the `fold-new` stage in
+  `fast`, `default` and `heavy` (before `test`), so the file does not first meet lockstep in the
+  full `fold` stage. Builders run `pytest --fold-check <new file>` themselves.
 - Any run that exercises pilot or the prover, scratch scripts included, has a memory and time bound
   (user, 2026-11-02: an unbounded one can OOM the machine). Run it through
   `mergeq.py run --timeout N`, whose Job Object applies `job_memory_mb`. pytest also has its own
