@@ -85,6 +85,10 @@ HELD = [
     ("I", math.inf, 32767),
     ("I", -math.inf, -32768),
     ("I", math.nan, 0),
+    # Not bool(inf): a non-finite stores as 0 into anything but a clamp's bound.
+    ("Enable", math.inf, False),
+    ("Enable", -math.inf, False),
+    ("Enable", math.nan, False),
 ]
 
 
@@ -144,6 +148,24 @@ def test_a_real_still_takes_inf_and_nan(value: float) -> None:
         plc.patch({R: value})
         plc.step()
         assert repr(plc.current_state.tags["R"]) == repr(value)
+
+
+@pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan])
+def test_a_copy_of_a_non_finite_into_a_bool_is_false_on_every_path(value: float) -> None:
+    def program() -> Program:
+        with Program(strict=False) as built:
+            with Rung():
+                copy(Real("Src"), Bool("Dst"))
+        return built
+
+    for plc in (PLC(program(), dt=0.01), CompiledPLC(program(), dt=0.01)):
+        plc.patch({"Src": value})
+        plc.step()
+        assert plc.current_state.tags["Dst"] is False
+    looped = PLC(program(), dt=0.01)
+    looped.patch({"Src": value})
+    looped.run(1_500)
+    assert looped.state.tags["Dst"] is False
 
 
 def test_a_name_nothing_reads_has_no_type_to_hold() -> None:
