@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
 
     from pyrung.core.analysis.causal import CausalChain
+    from pyrung.core.coast_run import CoastMemo
     from pyrung.core.condition import Condition
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
@@ -1615,6 +1616,8 @@ class PLC:
         self._last_acc_writes: dict[str, int] | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
+        # What coasts keep for later coasts: a search's, shared with its forks.
+        self._coast_memo: CoastMemo | None = None
         # Constant-size instrumentation for the most recent sparse point seek.
         # This is deliberately not a per-scan trace: replay folding must not
         # trade CPU savings for memory proportional to the skipped interval.
@@ -2591,6 +2594,7 @@ class PLC:
             ),
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
+        fork._coast_memo = self._coast_memo
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         if self._harness is not None:

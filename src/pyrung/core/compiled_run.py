@@ -44,6 +44,28 @@ INTERPRETED_PREFIX = 1000
 LOOP_OBSERVERS: list[Callable[[PLC, SystemState], None]] = []
 
 
+def _replace_tip_state(
+    runner: PLC, state: SystemState, tag_edits: dict[str, Any] | None = None
+) -> None:
+    """Install *state* as the tip without a scan.
+
+    Keeps the runner's plain-dict read mirror of the tip tags valid.  *state*
+    has the tip's tags, plus *tag_edits* when given; any other tag change
+    drops the mirror (the next scan rebuilds it).
+    """
+    if runner._state_tags_read_cache_state is runner._state:
+        if tag_edits:
+            cache = runner._state_tags_read_cache
+            if cache is not None:
+                cache.update(tag_edits)
+            runner._state_tags_read_cache_state = state
+        elif state.tags is runner._state.tags:
+            runner._state_tags_read_cache_state = state
+        else:
+            runner._state_tags_read_cache_state = None
+    runner._state = state
+
+
 def _someone_watches_each_scan(plc: PLC) -> bool:
     for registration in plc._breakpoints_by_id.values():
         if registration.enabled and not registration.removed:
@@ -130,8 +152,6 @@ def _run_compiled(
     is undone: the tip stays at the last state materialized and the scans from
     there on step interpreted, which raises or warns exactly as stepping does.
     """
-    from pyrung.core.fold import _replace_tip_state
-
     start = plc._state
     first_scan_id = start.scan_id + 1
     replay = CompiledPLC(
@@ -166,7 +186,7 @@ def _run_compiled(
             if checkpoint or LOOP_OBSERVERS:
                 settled = replay._materialize_replay_state()
                 if checkpoint:
-                    _install(plc, replay, settled, _replace_tip_state)
+                    _install(plc, replay, settled)
                 for observer in LOOP_OBSERVERS:
                     observer(plc, settled)
             continue
@@ -189,7 +209,7 @@ def _run_compiled(
         state = replay._materialize_replay_state()
         settled = state
         if checkpoint:
-            _install(plc, replay, state, _replace_tip_state)
+            _install(plc, replay, state)
         if predicate is not None and predicate(state):
             loop.stop_held()
             break
@@ -199,7 +219,7 @@ def _run_compiled(
     elif settled.scan_id != replay._kernel.scan_id:
         settled = replay._materialize_replay_state()
     if settled.scan_id != plc._state.scan_id:
-        _install(plc, replay, settled, _replace_tip_state)
+        _install(plc, replay, settled)
     if settled.scan_id >= first_scan_id:
         plc._record_fold_landing(first_scan_id)
         plc._bounds_violations = {}
@@ -253,7 +273,7 @@ class _BoundsWatch:
         return bool(check_bounds(values, self._constrained))
 
 
-def _install(plc: PLC, replay: CompiledPLC, state: SystemState, replace_tip: Callable) -> None:
+def _install(plc: PLC, replay: CompiledPLC, state: SystemState) -> None:
     """Make *state* the tip, with all a commit leaves on the runner.
 
     Its RTC applies are recorded under their own scans, it is cached, checkpointed
@@ -265,7 +285,7 @@ def _install(plc: PLC, replay: CompiledPLC, state: SystemState, replace_tip: Cal
     while applied and applied[0][0] <= state.scan_id:
         scan_id, base, base_sim_time = applied.pop(0)
         plc._set_rtc_and_record(base, base_sim_time, scan_id=scan_id)
-    replace_tip(plc, state)
+    _replace_tip_state(plc, state)
     plc._record_fold_landing()
     plc._apply_history_retention(state.scan_id)
     plc._sync_runtime_flags_from_state()

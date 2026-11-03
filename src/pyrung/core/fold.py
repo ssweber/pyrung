@@ -36,13 +36,18 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 from pyrsistent import PMap
 
+from pyrung.core.compiled_run import _replace_tip_state
+from pyrung.core.read_trace import (
+    _FIELD_READ,
+    _READ_ALL,
+    _traced_call,
+)
 from pyrung.core.storage import real_in_range
 
 _PMAP: Any = PMap  # its bucket accessors are private API
@@ -3104,46 +3109,6 @@ def _extract_condition_crossings(condition: Any) -> dict[str, tuple[tuple[str, A
     return {k: tuple(v) for k, v in out.items()}
 
 
-def _extract_condition_reads(condition: Any) -> frozenset[str]:
-    """Every tag name a ``run_until`` condition reads, regardless of form.
-
-    Where :func:`_extract_condition_crossings` collects only comparison
-    thresholds (for the crossing arithmetic), this collects *all* reads —
-    bare contacts, ``rise``/``fall`` edges, comparison left sides, tag
-    operands on comparison right sides, and both legs of ``ArithAtom``
-    compounds.  The caller threads the set into the fold context as
-    protected reads (``target_names``), so a condition tag classified as
-    churn-excluded or an indicator cannot be folded past.  A junk name
-    (a Char *value* operand that happens to be a string) is harmless —
-    protection only ever narrows folding, never unsounds it.
-    """
-    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or, _condition_to_expr
-    from pyrung.core.tag import Tag
-
-    out: set[str] = set()
-
-    def add_operand(operand: Any) -> None:
-        if isinstance(operand, Tag):
-            out.add(operand.name)
-        elif isinstance(operand, str):
-            out.add(operand)
-
-    def visit(e: Any) -> None:
-        if isinstance(e, Atom):
-            out.add(e.tag)
-            add_operand(e.operand)
-        elif isinstance(e, ArithAtom):
-            out.add(e.left)
-            out.add(e.right)
-            add_operand(e.operand)
-        elif isinstance(e, (And, Or)):
-            for term in e.terms:
-                visit(term)
-
-    visit(_condition_to_expr(condition))
-    return frozenset(out)
-
-
 def _condition_read_audit(
     conditions: Collection[Any], ctx: _FoldContext
 ) -> tuple[frozenset[str], dict[str, tuple[tuple[str, Any], ...]]]:
@@ -4440,126 +4405,6 @@ def _scan_callbacks(runner: Any, ctx: _FoldContext) -> tuple[bool, bool, bool]:
     moving = ctx.moves_or_skipped
     blocks_window = any_when or any(r.tag_name in moving for r in live_monitors)
     return blocks_window, any_when, bool(live_monitors)
-
-
-def _replace_tip_state(
-    runner: PLC, state: SystemState, tag_edits: dict[str, Any] | None = None
-) -> None:
-    """Install *state* as the tip without a scan.
-
-    Keeps the runner's plain-dict read mirror of the tip tags valid.  *state*
-    has the tip's tags, plus *tag_edits* when given; any other tag change
-    drops the mirror (the next scan rebuilds it).
-    """
-    if runner._state_tags_read_cache_state is runner._state:
-        if tag_edits:
-            cache = runner._state_tags_read_cache
-            if cache is not None:
-                cache.update(tag_edits)
-            runner._state_tags_read_cache_state = state
-        elif state.tags is runner._state.tags:
-            runner._state_tags_read_cache_state = state
-        else:
-            runner._state_tags_read_cache_state = None
-    runner._state = state
-
-
-# Reads of an opaque stop predicate.  A callable ``run_until`` predicate is
-# judged on a state whose field and tag reads are recorded: a window may fold
-# only if, at the probe, the predicate read no value the window moves (it then
-# takes the same path and returns the same answer on every skipped scan).
-_READ_TRACES: list[set[str]] = []
-_READ_ALL = "*"  # iterated or compared the whole tag map
-_FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
-
-
-class _TracedTags(PMap):
-    """A tag map that records which keys are read while a trace is active."""
-
-    __slots__ = ()
-
-    def __getitem__(self, key: Any) -> Any:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(key)
-        return _PMAP._getitem(self._buckets, key)
-
-    def __contains__(self, key: Any) -> bool:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(key)
-        return _PMAP._contains(self._buckets, key)
-
-    def iteritems(self) -> Any:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
-        return PMap.iteritems(self)
-
-    def __eq__(self, other: object) -> bool:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
-        return PMap.__eq__(self, other)
-
-    __hash__ = PMap.__hash__
-
-
-def _traced_state_class() -> type:
-    global _TRACED_STATE
-    if _TRACED_STATE is None:
-        from pyrung.core.state import SystemState
-
-        class _TracedState(SystemState):
-            """A SystemState whose field reads (and tag reads) are recorded."""
-
-            __slots__ = ()
-
-            def __getitem__(self, key: Any) -> Any:
-                value = _PMAP._getitem(self._buckets, key)
-                if key == "tags":
-                    return _PMAP.__new__(_TracedTags, value._size, value._buckets)
-                if _READ_TRACES:
-                    _READ_TRACES[-1].add(_FIELD_READ + str(key))
-                return value
-
-        _TRACED_STATE = _TracedState
-    return _TRACED_STATE
-
-
-_TRACED_STATE: type | None = None
-
-
-@contextmanager
-def _reads_untraced() -> Iterator[None]:
-    """Keep the reads inside the block out of the active trace.
-
-    For a predicate whose contract is to be judged only on the scans a coast
-    really executes (PILOT's opaque ``avoid=`` callables): its reads must not
-    bound the windows that skip the others.
-    """
-    _READ_TRACES.append(set())
-    try:
-        yield
-    finally:
-        _READ_TRACES.pop()
-
-
-def _traced_call(
-    predicate: Callable[[SystemState], bool], runner: PLC
-) -> tuple[bool, frozenset[str]]:
-    """``predicate(runner.state)`` and every tag (or state field) it read.
-
-    The tip itself is swapped for the traced state during the call, so a
-    predicate that reads ``plc.state`` instead of its argument is traced too.
-    """
-    state = runner._state
-    traced = _PMAP.__new__(_traced_state_class(), state._size, state._buckets)
-    reads: set[str] = set()
-    _READ_TRACES.append(reads)
-    runner._state = traced
-    try:
-        hit = bool(predicate(traced))
-    finally:
-        runner._state = state
-        _READ_TRACES.pop()
-    return hit, frozenset(reads)
 
 
 @dataclass(frozen=True)

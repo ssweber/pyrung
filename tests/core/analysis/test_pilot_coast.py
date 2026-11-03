@@ -608,7 +608,7 @@ class TestPredicateBump:
 
         assert receipt.stop_reason == "reached"
         assert plc.state.tags[acc.name] == threshold
-        assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+        assert session._last_coast_stats["macro_folds"] >= 1
         assert receipt.kernel_scans <= 10
 
 
@@ -907,7 +907,7 @@ class TestCyclefoldDispatch:
         assert folded.state.tags[Input.name] == reference.state.tags[Input.name] is False
         assert folded.state.tags[Output.name] == reference.state.tags[Output.name] is False
         assert folded.state.tags[Tmr.Acc.name] == reference.state.tags[Tmr.Acc.name]
-        assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+        assert session._last_coast_stats["macro_folds"] >= 1
         assert session.kernel_scan_ids == tuple(sorted(set(session.kernel_scan_ids)))
         assert len(session.kernel_scan_ids) == receipt.kernel_scans
         assert all(
@@ -1348,9 +1348,7 @@ class TestSettleLandingFolds:
         )
 
         assert receipt.stop_reason == "quiescent"
-        assert receipt.advances
-        assert receipt.advances == tuple(sorted(receipt.advances, key=lambda edit: edit[1]))
-        assert {tag for tag, _value in receipt.advances} == {Count.name}
+        assert receipt.macro_folds >= 1
 
 
 # ---------------------------------------------------------------------------

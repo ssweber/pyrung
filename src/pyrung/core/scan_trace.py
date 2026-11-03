@@ -660,6 +660,7 @@ class _Tracer:
         self.edge_bits: dict[str, bool] = {}
         self._globals: dict[str, _Value] = {}
         self._known_truth: dict[str, bool] = {}
+        self._own_lists: dict[int, list[Any]] = {}
         self._temp_count = 0
         self._statements: dict[type, Callable[[Any, _Frame], None]] = {
             ast.Assign: self._assign,
@@ -740,6 +741,23 @@ class _Tracer:
     def _current(self, key: tuple[Any, ...]) -> Any:
         return _current_value(self._kernel, key)
 
+    def release(self) -> None:
+        """Keep only what writing another loop needs.  A coast keeps many traces."""
+        self.cells = {key: self.cells[key] for key in self.entries}
+        self.constants = {}
+        self.seeds = set()
+        self.written = set()
+        self.not_live = []
+        self.edge_bits = {}
+        self._globals = {}
+        self._known_truth = {}
+        self._own_lists = {}
+        self._statements = {}
+        self._expressions = {}
+        self._source = cast("Any", None)
+        self._replay = cast("Any", None)
+        self._kernel = None
+
     def _is_moving(self, key: tuple[Any, ...]) -> bool:
         return key[0] == "tags" and key[1] in MOVING_SYSTEM_TAGS
 
@@ -754,9 +772,7 @@ class _Tracer:
         current = self._current(key)
         if current is not MISSING and not isinstance(current, _SCALAR_TYPES):
             raise Decline("state holds a value that is not a scalar")
-        if key in self.seeds:
-            if current is MISSING:
-                raise Decline("missing seed")
+        if key in self.seeds and current is not MISSING:
             local = f"L{len(self.entries)}"
             cell = _Value(current, local, is_bool=self._is_moving_clock(key))
             self.entries[key] = cell
@@ -775,6 +791,10 @@ class _Tracer:
             raise Decline("scan stores a value that is not a scalar")
         if key in self.seeds:
             self.read(key)
+            if key not in self.entries:
+                # A cell that moved once and this state lacks reads as a constant absence,
+                # and the scan adding it repeats nothing.
+                raise Decline("scan adds a moving cell")
         else:
             self.constants.setdefault(key, self._current(key))
         self.cells[key] = value
@@ -912,6 +932,13 @@ class _Tracer:
         container = self._eval(target.value, frame)
         index = self._pinned(self._eval(target.slice, frame))
         reference = container.concrete
+        if isinstance(reference, list) and id(reference) in self._own_lists:
+            # A list this scan built, so nothing outside the scan can see it.
+            try:
+                reference[index] = value
+            except (IndexError, TypeError) as exc:
+                raise _KernelRaised(exc) from exc
+            return
         if not isinstance(reference, _Ref):
             raise Decline("store into a local container")
         self.write(self._cell_key(reference, index), value)
@@ -1144,7 +1171,10 @@ class _Tracer:
 
     def _sequence(self, node: ast.List | ast.Tuple, frame: _Frame) -> _Value:
         items = [self._eval(item, frame) for item in node.elts]
-        return _Value(items if isinstance(node, ast.List) else tuple(items))
+        if isinstance(node, ast.Tuple):
+            return _Value(tuple(items))
+        self._own_lists[id(items)] = items
+        return _Value(items)
 
     def _attribute(self, node: ast.Attribute, _frame: _Frame) -> _Value:
         raise Decline(f"attribute {node.attr}")
@@ -1175,6 +1205,7 @@ class _Tracer:
         for name in names:
             frame.locals.pop(name, None)
         frame.locals.update(outer)
+        self._own_lists[id(results)] = results
         return _Value(results)
 
     def _call(self, node: ast.Call, frame: _Frame) -> _Value:
@@ -1393,7 +1424,7 @@ def _current_value(kernel: Any, key: tuple[Any, ...]) -> Any:
 # --- A trace and its loop -----------------------------------------------------
 
 
-@dataclass
+@dataclass(eq=False)
 class ScanTrace:
     """The result of tracing one scan: when it applies, and the loop that repeats it."""
 
@@ -1406,6 +1437,8 @@ class ScanTrace:
     source: str
     op_count: int
     guard_count: int
+    # The finished tracer, released, for a coast to write its own loops from.
+    plan: _Tracer | None = None
 
     def holds(self, replay: CompiledPLC, form: StopForm | None) -> bool:
         """Whether every constant of this trace is as it was when it was traced."""
@@ -1430,11 +1463,40 @@ class ScanTrace:
 
 
 def _render_loop(tracer: _Tracer) -> ScanTrace:
+    """The trace a finished tracer describes, with its plain loop."""
+    loop, source, body = _loop_function(tracer)
+    block_writes: dict[str, set[int]] = {}
+    for key in tracer.written:
+        if key[0] == "block":
+            block_writes.setdefault(key[1], set()).add(key[2])
+    return ScanTrace(
+        constants=tuple(tracer.constants.items()),
+        loop=loop,
+        block_writes=tuple((symbol, frozenset(cells)) for symbol, cells in block_writes.items()),
+        not_live=tuple(tracer.not_live),
+        edge_bits=tracer.edge_bits,
+        seeds=frozenset(tracer.seeds),
+        source=source,
+        op_count=sum(1 for op in body if isinstance(op, _Op)),
+        guard_count=sum(1 for op in body if isinstance(op, _Guard)),
+    )
+
+
+def _loop_function(
+    tracer: _Tracer,
+    *,
+    guards: tuple[_Guard, ...] = (),
+    seen: tuple[tuple[str, tuple[Any, ...]], ...] = (),
+) -> tuple[Callable[..., tuple[int, float]], str, list[_Op | _Guard]]:
     """Write the loop a finished tracer describes.
 
     An iteration computes into temporaries and assigns the moving locals last, in
     one statement, so a guard or an exception leaves them at the last whole scan.
     Only what changed goes back to the kernel, and only if a scan ran.
+
+    *guards* are extra, checked after the scan's own and before its commit.  *seen*
+    lists (name, cell): after each commit those values go in the loop's ``seen``
+    argument and it asks its ``stop`` argument whether to leave.
     """
     arrays: dict[str, str] = {}
     loads: list[str] = []
@@ -1467,9 +1529,9 @@ def _render_loop(tracer: _Tracer) -> ScanTrace:
             if cell.local is not None:
                 live.add(cell.local)
 
-    body = _live_operations(tracer.ops, live)
+    body = _live_operations([*tracer.ops, *guards], live)
     lines = [
-        "def _scan_loop(tags, blocks, memory, ts, dt, limit, rtc_fields):",
+        "def _scan_loop(tags, blocks, memory, ts, dt, limit, rtc_fields, seen=None, stop=None):",
         "    used = 0",
     ]
     if needs_rtc:
@@ -1495,6 +1557,11 @@ def _render_loop(tracer: _Tracer) -> ScanTrace:
     lines += [
         "            used += 1",
         "            ts += dt",
+    ]
+    if seen:
+        lines += [f"            seen[{name!r}] = {tracer.entry_locals[key]}" for name, key in seen]
+        lines.append("            if stop(): break")
+    lines += [
         "    except Exception:",
         "        pass",  # As a failed guard: the real scan runs this iteration.
     ]
@@ -1506,22 +1573,7 @@ def _render_loop(tracer: _Tracer) -> ScanTrace:
     namespace: dict[str, Any] = {"clock_high": clock_high, "math": math}
     namespace.update({f"K{i}": value for i, value in enumerate(tracer.loop_constants)})
     exec(compile(source, "<scan loop>", "exec"), namespace)  # noqa: S102
-
-    block_writes: dict[str, set[int]] = {}
-    for key in tracer.written:
-        if key[0] == "block":
-            block_writes.setdefault(key[1], set()).add(key[2])
-    return ScanTrace(
-        constants=tuple(tracer.constants.items()),
-        loop=namespace["_scan_loop"],
-        block_writes=tuple((symbol, frozenset(cells)) for symbol, cells in block_writes.items()),
-        not_live=tuple(tracer.not_live),
-        edge_bits=tracer.edge_bits,
-        seeds=frozenset(tracer.seeds),
-        source=source,
-        op_count=sum(1 for op in body if isinstance(op, _Op)),
-        guard_count=sum(1 for op in body if isinstance(op, _Guard)),
-    )
+    return namespace["_scan_loop"], source, body
 
 
 def _live_operations(ops: list[_Op | _Guard], live: set[str]) -> list[_Op | _Guard]:
@@ -1553,11 +1605,14 @@ def build_trace(
     seeds: set[tuple[Any, ...]],
     form: StopForm | None,
     constrained: Mapping[str, TagConstraint],
+    *,
+    keep_plan: bool = False,
 ) -> ScanTrace:
     """Trace the scan about to run, to the fixed point of what moves.
 
     Raises :class:`Decline`.  Grows *seeds*: what moved once may well move again,
-    and the next trace should know.
+    and the next trace should know.  *keep_plan* lets a coast write its own loops
+    of this scan (:func:`coast_loop`).
     """
     for _pass in range(MAX_FIXED_POINT_PASSES):
         tracer = _Tracer(source, replay, seeds)
@@ -1572,11 +1627,123 @@ def build_trace(
             if form is not None:
                 tracer.judge_stop(form)
             tracer.judge_bounds(constrained)
-            return _render_loop(tracer)
+            trace = _render_loop(tracer)
+            if keep_plan:
+                tracer.release()
+                trace.plan = tracer
+            return trace
         if moved & _HOOK_KEYS:
             raise Decline("scan changes what the scan hooks read")
         seeds |= moved
     raise Decline("no fixed point")
+
+
+# --- A coast's loop of a trace --------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CoastMoves:
+    """What the scans of a coast loop do to the tags, by name.
+
+    In a coast loop a tag changes only by a checked constant integer delta, by an
+    exact flip the path itself makes, or as a float ramp.  So a tag's values over
+    a stretch can be told from where it ended.
+    """
+
+    moved: tuple[tuple[str, int], ...]  # (name, delta each scan)
+    free: tuple[str, ...]  # float ramps
+    flips: tuple[tuple[str, Any, Any], ...]  # (name, from, to): a loop of these runs one scan
+    held: tuple[str, ...]  # computed from a moving value, and keeping theirs
+
+
+def _tag_of_cell(key: tuple[Any, ...], block_names: Mapping[str, Mapping[int, str]]) -> str | None:
+    if key[0] == "tags":
+        return key[1]
+    if key[0] == "block":
+        return block_names.get(key[1], {}).get(key[2])
+    return None
+
+
+def moving_tags(
+    plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]
+) -> dict[tuple[Any, ...], str]:
+    """The tags a trace's scans may change, by cell.  Memory is not state a reader sees."""
+    named = {}
+    for key, entry in plan.entries.items():
+        name = _tag_of_cell(key, block_names)
+        if name is not None and plan.cells[key] is not entry:
+            named[key] = name
+    return named
+
+
+def coast_moves(plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]) -> CoastMoves:
+    """What each scan of this trace does to the tags.
+
+    The same source moves a tag differently from different values: a saturating
+    timer adds 10 up to its limit and then nothing, so two traces are the same path
+    only if this is the same too.
+    """
+    return _coast_guards(plan, block_names, frozenset(), frozenset())[1]
+
+
+def coast_loop(
+    plan: _Tracer,
+    block_names: Mapping[str, Mapping[int, str]],
+    watched: frozenset[str],
+    seen: frozenset[str],
+) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str]:
+    """This trace's loop, kept to :class:`CoastMoves`.
+
+    It leaves before the scan that would change a *watched* tag.  After each scan
+    it hands the moving tags in *seen* to its ``seen`` argument and asks ``stop``.
+    These are only further reasons to leave, so a scan it does run is one the plain
+    loop would also run.
+    """
+    guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
+    loop, source, _body = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
+    return loop, moves, source
+
+
+def _coast_guards(
+    plan: _Tracer,
+    block_names: Mapping[str, Mapping[int, str]],
+    watched: frozenset[str],
+    seen: frozenset[str],
+) -> tuple[list[_Guard], CoastMoves, list[tuple[str, tuple[Any, ...]]]]:
+    guards: list[_Guard] = []
+    moved: list[tuple[str, int]] = []
+    free: list[str] = []
+    flips: list[tuple[str, Any, Any]] = []
+    held: list[str] = []
+    seen_cells: list[tuple[str, tuple[Any, ...]]] = []
+    for key, name in moving_tags(plan, block_names).items():
+        cell = plan.cells[key]
+        old = plan.entry_locals[key]
+        new = plan._atom(cell)
+        uses = (old,) if cell.local is None else (old, cell.local)
+        before = plan.entries[key].concrete
+        after = cell.concrete
+        if name in seen:
+            seen_cells.append((name, key))
+        free_to_move = name not in watched and cell.local is not None
+        if free_to_move and type(after) is int and type(before) is int:
+            delta = after - before
+            guards.append(_Guard(f"{new} - {old} != {delta!r}", uses))
+            if delta:
+                moved.append((name, delta))
+            else:
+                held.append(name)
+        elif free_to_move and type(after) is float and type(before) is float:
+            free.append(name)
+        elif name in watched or same(after, before) or after == before:
+            # Equal across types too: 0 to False on an Int driven by out() is no transition.
+            guards.append(_Guard(f"{old} != {new}", uses))
+        else:
+            guards.append(_Guard(f"{old} != {plan._atom(_Value(before))}", (old,)))
+            if cell.local is not None:
+                guards.append(_Guard(f"{new} != {plan._atom(_Value(after))}", (cell.local,)))
+            flips.append((name, before, after))
+    return guards, CoastMoves(tuple(moved), tuple(free), tuple(flips), tuple(held)), seen_cells
 
 
 # --- Driving the loop through a run --------------------------------------------
@@ -1605,6 +1772,8 @@ class _PendingCheck:
 
 class ScanLoop:
     """One run's guarded loop.  Ask :meth:`advance` before every real scan."""
+
+    _keep_plans = False
 
     def __init__(
         self,
@@ -1637,9 +1806,14 @@ class ScanLoop:
     def _whole_run_blocker(
         self, kernel: CompiledKernel, budget: int, predicate: Callable[..., bool] | None
     ) -> str | None:
-        replay = self._replay
         if budget < MIN_RUN_SCANS:
             return "short run"
+        if predicate is not None and self._stop_form is None:
+            return "stop predicate form"
+        return self._program_blocker(kernel)
+
+    def _program_blocker(self, kernel: CompiledKernel) -> str | None:
+        replay = self._replay
         if kernel.blockless:
             return "blockless kernel"
         if replay._forces:
@@ -1651,8 +1825,6 @@ class ScanLoop:
                 return "scan-derived system tag"
             if name not in _CLASSIFIED_SYSTEM_TAGS:
                 return "unclassified system tag"
-        if predicate is not None and self._stop_form is None:
-            return "stop predicate form"
         return None
 
     # -- The driver's calls -----------------------------------------------------
@@ -1820,6 +1992,7 @@ class ScanLoop:
                 self._seeds,
                 self._stop_form,
                 self._constrained,
+                keep_plan=self._keep_plans,
             )
         except Decline as declined:
             self._note_decline(str(declined))

@@ -127,6 +127,7 @@ from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.coast_run import CoastMemo
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -482,6 +483,9 @@ def _pilot_loop_events(
     ctx: _PilotContext,
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
+
+    # What a search costs must not depend on the searches before it.
+    plc._coast_memo = CoastMemo()
 
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
