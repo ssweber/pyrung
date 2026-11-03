@@ -19,7 +19,7 @@ Frames are also sent after any state change outside continue (step, force, patch
 ### Request-Based When Stopped (Pull)
 
 After a `stopped` event, views that need historical data use DAP custom requests:
-- `pyrungTagChanges` — backward pagination of tag change history
+- `pyrungTagChanges` — backward pagination of tag change history. Each entry is a scan that changed a tag. Scans a compiled run didn't record are stepped again on the request, within a 3 s allowance; what's left comes back as one last entry with `window: true`, spanning `prevScanId`+1..`scanId`, whose `changes` are the net across it and claim no scan
 - `pyrungSeek` — move playhead to a historical scan
 - `pyrungForkAt` — fork a new runner from a historical scan
 - `pyrungHistoryInfo` — get retained scan range

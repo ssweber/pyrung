@@ -6,6 +6,7 @@ custom requests.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,16 @@ from pyrung.dap.handlers import monitor_data_breakpoints
 from pyrung.dap.internal_tags import visible_tag_names
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+
+# What one panel request may spend stepping unrecorded scans again.  The scans it reads stay
+# read, so the next request goes on from there.
+_SETTLE_CLOCK_S = 3.0
+# Scans to step at a time, so the clock is looked at often: the first stretch, then what a
+# quarter of a second buys at the speed measured.
+_SETTLE_FIRST_STRETCH = 500
+_SETTLE_MIN_STRETCH = 200
+_SETTLE_MAX_STRETCH = 16_000
+_SETTLE_STRETCH_S = 0.25
 
 
 @dataclass(frozen=True)
@@ -132,56 +143,129 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     if not tags:
         return {"entries": []}, []
 
-    # Snapshot only cached states (cheap O(1) lookups) under the lock,
-    # then release immediately so the continue worker isn't starved.
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
-        cache = runner._recent_state_cache
-        cached_states = {sid: state for sid, (state, _) in cache.items()}
-        tip = runner._state
-        cached_states[tip.scan_id] = tip
-
-    # All states are immutable PRecords — safe to read outside the lock.
-    all_scan_ids = sorted(cached_states.keys())
-    entries: list[dict[str, Any]] = []
-
-    for index in range(len(all_scan_ids) - 1, 0, -1):
-        scan_id = all_scan_ids[index]
-        if raw_before_scan is not None and scan_id >= raw_before_scan:
-            continue
-        if raw_after_scan is not None and scan_id <= raw_after_scan:
-            break
-
-        prev_scan_id = all_scan_ids[index - 1]
-        previous_state = cached_states[prev_scan_id]
-        current_state = cached_states[scan_id]
-
-        changes: dict[str, list[str]] = {}
-        for tag_name in visible_tag_names(tags):
-            old_value = previous_state.tags.get(tag_name)
-            new_value = current_state.tags.get(tag_name)
-            if old_value == new_value:
-                continue
-            changes[tag_name] = [
-                adapter._format_value(old_value),
-                adapter._format_value(new_value),
-            ]
-
-        if not changes:
-            continue
-
-        entries.append(
-            {
-                "scanId": scan_id,
-                "prevScanId": prev_scan_id,
-                "timestamp": current_state.timestamp,
-                "changes": changes,
-            }
+        entries = _read_changes(
+            adapter,
+            runner,
+            visible_tag_names(tags),
+            raw_count,
+            before=raw_before_scan,
+            after=raw_after_scan,
         )
-        if len(entries) >= raw_count:
-            break
-
     return {"entries": entries}, []
+
+
+def _read_changes(
+    adapter: Any,
+    runner: Any,
+    names: list[str],
+    count: int,
+    *,
+    before: int | None,
+    after: int | None,
+) -> list[dict[str, Any]]:
+    """The newest *count* scans that changed *names*, read from what each scan committed.
+
+    Scans that ran with no records are stepped again first, a stretch at a time from the newest,
+    and keep the records that gives them.  When a request may step no more, what it has not read
+    comes back as one window entry, which says how the tags stand at its two ends and claims
+    no scan for any change inside.
+
+    A refresh that ran out of allowance leaves the next refreshes to read only what is recorded,
+    so each stop of a stepping session does not pay for it again: a page asked for by its
+    *before* goes on reading.
+    """
+    history = runner.history
+    newest = history.newest_scan_id
+    lower = max(history.oldest_scan_id, after if after is not None else history.oldest_scan_id)
+    cursor = newest + 1 if before is None else min(before, newest + 1)
+    entries: list[dict[str, Any]] = []
+    may_settle = not adapter._thread_running_locked() and (
+        before is not None or adapter._tag_changes_ran_out_on is not runner
+    )
+    deadline = time.monotonic() + _SETTLE_CLOCK_S
+    stretch = _SETTLE_FIRST_STRETCH
+    while cursor - 1 > lower and len(entries) < count:
+        unread = runner._unrecorded_in(lower + 1, cursor - 1)
+        top = max((end for _owner, (_start, end) in unread), default=None)
+        if top is None:
+            first = lower + 1
+        elif top < cursor - 1:
+            first = top + 1
+        else:
+            if not may_settle or time.monotonic() >= deadline:
+                if before is None and may_settle:
+                    adapter._tag_changes_ran_out_on = runner
+                break
+            # From a checkpoint, so stepping starts there and a window can end there at no cost.
+            interval = runner._checkpoint_interval
+            first = max(lower + 1, (cursor - stretch) // interval * interval + 1)
+            began = time.monotonic()
+            runner._settle_compiled_ranges(first, cursor - 1)
+            took = time.monotonic() - began
+            stretch = int((cursor - first) / max(took, 1e-3) * _SETTLE_STRETCH_S)
+            stretch = max(_SETTLE_MIN_STRETCH, min(_SETTLE_MAX_STRETCH, stretch))
+        found = _changes_within(runner, names, first, cursor, count - len(entries))
+        for scan_id in sorted(found, reverse=True)[: count - len(entries)]:
+            entries.append(
+                {
+                    "scanId": scan_id,
+                    "prevScanId": scan_id - 1,
+                    "timestamp": runner._timestamp_at(scan_id),
+                    "changes": {
+                        name: [
+                            adapter._format_value(transition.from_value),
+                            adapter._format_value(transition.to_value),
+                        ]
+                        for name, transition in found[scan_id].items()
+                    },
+                }
+            )
+        cursor = first
+    if len(entries) < count and cursor - 1 > lower:
+        entries.append(_window_entry(adapter, history, names, lower, cursor - 1))
+    return entries
+
+
+def _changes_within(
+    runner: Any, names: list[str], first: int, before: int, most: int
+) -> dict[int, dict[str, Any]]:
+    """Scans in *first*..*before*-1 and what changed on them, each tag's newest *most* changes.
+
+    A tag cut short has *most* newer scans of its own, so the newest *most* scans here are whole.
+    """
+    found: dict[int, dict[str, Any]] = {}
+    for name in names:
+        cursor = before
+        for _ in range(most):
+            transition = runner._causal_last_committed_transition_before(name, cursor)
+            if transition is None or transition.scan_id < first:
+                break
+            found.setdefault(transition.scan_id, {})[name] = transition
+            cursor = transition.scan_id
+    return found
+
+
+def _window_entry(
+    adapter: Any, history: Any, names: list[str], lower: int, upper: int
+) -> dict[str, Any]:
+    """Scans *lower*+1..*upper*, not read: how the tags differ across them, and no more."""
+    start = history.at(lower)
+    end = history.at(upper)
+    changes: dict[str, list[str]] = {}
+    for name in names:
+        old_value = start.tags.get(name)
+        new_value = end.tags.get(name)
+        if old_value != new_value:
+            changes[name] = [adapter._format_value(old_value), adapter._format_value(new_value)]
+    return {
+        "window": True,
+        "scanId": upper,
+        "prevScanId": lower,
+        "timestamp": end.timestamp,
+        "changes": changes,
+    }
 
 
 def on_pyrung_fork_at(adapter: Any, args: dict[str, Any]) -> HandlerResult:

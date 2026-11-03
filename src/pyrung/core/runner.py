@@ -1854,6 +1854,26 @@ class PLC:
             raise KeyError(scan_id)
         return owner.state_at(scan_id)
 
+    def _timestamp_at(self, scan_id: int) -> float:
+        """A scan's timestamp, added up from the nearest state its epoch holds, not stepped to."""
+        owner = self._causal_lineage.owner_at(scan_id)
+        if owner is None:
+            raise KeyError(scan_id)
+        plc = owner._runner()
+        if scan_id == plc._state.scan_id:
+            return plc._state.timestamp
+        held = plc._recent_state_cache.get(scan_id)
+        if held is not None:
+            return held[0].timestamp
+        anchor = plc._replay_anchor_scan(scan_id)
+        state = plc._checkpoints.get(anchor, plc._initial_state)
+        timestamp = state.timestamp
+        dts = plc._scan_log._dts
+        base = plc._scan_log.base_scan
+        for scan in range(state.scan_id + 1, scan_id + 1):
+            timestamp += plc._dt if dts is None else dts[scan - base]
+        return timestamp
+
     def _causal_state_in_cache(self, scan_id: int) -> bool:
         owner = self._causal_lineage.owner_at(scan_id)
         return owner.state_in_cache(scan_id) if owner is not None else False
@@ -2386,14 +2406,26 @@ class PLC:
         nearest checkpoint: the answer is then what a stepped run recorded, because it is
         one.  An epoch's ranges settle once, for every fork that holds it.
         """
+        asked = self._unrecorded_in(first, last)
+        if not asked:
+            return
+        # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
+        scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
+        if scans > SETTLE_SCAN_LIMIT and not at_any_cost:
+            raise self._refusal(asked[0][1][0], asked[-1][1][1], scans)
+        for owner, (start, end) in asked:
+            owner._settle_window(start, end, self._search_limits())
+
+    def _unrecorded_in(
+        self, first: int | None = None, last: int | None = None
+    ) -> list[tuple[PLC, tuple[int, int]]]:
+        """Each epoch's scans in *first*..*last* that ran without records, by the epoch's runner."""
         lineage = self._causal_lineage
         owners = [self] if self._unrecorded_scans else []
         for epoch in lineage.sealed_epochs:
             if epoch.unrecorded_scans:
                 owners.append(lineage._query_for(epoch)._runner())
-        if not owners:
-            return
-        asked = [
+        return [
             (
                 owner,
                 (
@@ -2405,14 +2437,6 @@ class PLC:
             for start, end in owner._unrecorded_scans
             if (last is None or start <= last) and (first is None or end >= first)
         ]
-        if not asked:
-            return
-        # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
-        scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
-        if scans > SETTLE_SCAN_LIMIT and not at_any_cost:
-            raise self._refusal(asked[0][1][0], asked[-1][1][1], scans)
-        for owner, (start, end) in asked:
-            owner._settle_window(start, end, self._search_limits())
 
     def _replay_anchor_scan(self, scan_id: int) -> int:
         anchor = self._nearest_checkpoint_at_or_before(scan_id)
