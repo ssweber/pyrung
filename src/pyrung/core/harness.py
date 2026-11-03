@@ -230,6 +230,7 @@ class Harness:
         self._discover_couplings()
         self._rebuild_couplings()
         self._refresh_synthesis()
+        self._seed_plant_defaults()
         self._seed_bool_state()
         self._install_monitors()
         self._plc._harness = self
@@ -320,6 +321,7 @@ class Harness:
             # Rebuild the overlay and monitors so changed couplings take
             # effect from the next scan (cut ones stop synthesizing).
             self._refresh_synthesis()
+            self._seed_plant_defaults()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
@@ -702,6 +704,33 @@ class Harness:
         self._plc._compiled_replay_kernel = None
         self._plc._soft_exec_program_cache = None
         self._plc._causal_lineage.invalidate_current_epoch()
+
+    def _seed_plant_defaults(self) -> None:
+        """Put each tag the plant uses in the state, at its default.
+
+        A plant stores its timers' zeros from its first scan, into tags no rung has
+        written.  A kernel holds an absent tag at its default and notices a write only
+        by the value leaving it, so it could not say when such a tag joined the state.
+        Present from the install, these tags read and commit the same in every engine.
+        """
+        from pyrung.core.runner import _iter_tags_and_edge_names
+        from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
+        synthesis = self._plc._synthesis
+        if synthesis is None:
+            return
+        current = self._plc._state.tags
+        tags, _edge_names = _iter_tags_and_edge_names(synthesis.plant)
+        seed = {
+            tag.name: tag.default
+            for tag in tags
+            if tag.name not in current and tag.name not in SYSTEM_TAGS_BY_NAME
+        }
+        if seed:
+            self._plc._state = self._plc._state.with_tags(seed)
+            self._plc._reset_cache(self._plc._state)
+            if self._plc._state.scan_id == 0:
+                self._plc._initial_state = self._plc._state
 
     def _seed_bool_state(self) -> None:
         """Seed each bool timer to the steady state implied by its current enable.

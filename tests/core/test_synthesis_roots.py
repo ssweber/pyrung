@@ -9,8 +9,13 @@ recorded as nondeterministic input.
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
 from pyrung import Bool, Int, Program, Rung, copy
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
@@ -189,3 +194,48 @@ def test_bool_replay_compiled_and_interpreted_agree() -> None:
         assert compiled.current_state.tags["Fb"] == live[s - 1]
         assert interpreted.current_state.tags["Fb"] == live[s - 1]
         assert compiled.current_state.tags["Stage"] == interpreted.current_state.tags["Stage"]
+
+
+# ── A plant's tags are in the state from the install ──────────────────────────
+
+
+def test_the_install_gives_each_plant_tag_its_default() -> None:
+    plc = PLC(_coupling_program(), dt=0.1)
+    Harness(plc).install()
+
+    assert plc._initial_state is plc.state
+    assert {name: value for name, value in plc.state.tags.items() if name.startswith("__cpl_")} == {
+        "__cpl_ond__Fb": False,
+        "__cpl_on__Fb": 0,
+        "__cpl_off__Fb": 0,
+    }
+
+
+def _exact(tags: Any) -> dict[str, tuple[type, Any]]:
+    return {name: (type(value), value) for name, value in tags.items()}
+
+
+@pytest.mark.parametrize("exact_anchor", [False, True], ids=["preview", "anchor"])
+@pytest.mark.parametrize("enable", [True, False], ids=["enabled", "not_enabled"])
+def test_a_kernel_holds_the_plant_tags_stepping_does(exact_anchor: bool, enable: bool) -> None:
+    """A plant stores its timers' zeros from its first scan, into a tag no rung has written."""
+    plc = PLC(_coupling_program(), dt=0.01)
+    Harness(plc).install()
+    plc.patch({"Enable": enable})
+    plc.step()
+    twin = plc.fork()
+    kernel = plc._compiled_replay_supported_kernel()
+    assert kernel is not None
+    replay = CompiledPLC(
+        plc._soft_exec_program(),
+        initial_state=plc.state,
+        dt=plc._dt,
+        compiled=kernel,
+        exact_anchor=exact_anchor,
+    )
+    replay._set_rtc_internal(plc._system_runtime._rtc_now(plc.state), plc.state.timestamp)
+
+    for _ in range(40):
+        replay.step_replay()
+        twin.step()
+        assert _exact(replay._materialize_replay_state().tags) == _exact(twin.state.tags)
