@@ -508,15 +508,27 @@ def coast_until(
     after a scan that asks to pause, or when *deadline* says so.  Returns whether it
     holds there.  *predicate_reads* is the exact set of tags *predicate* reads
     through ``state.tags``; without it the reads are traced.  *stats* gets
-    ``logical_scans``, ``kernel_scans`` (interpreted), ``macro_folds`` (stretches)
-    and ``ordinary_folded_scans`` (scans in them).
+    ``logical_scans``, ``kernel_scans``, ``macro_folds`` (stretches) and
+    ``ordinary_folded_scans`` (scans in them).  *on_kernel_scan* and ``kernel_scans``
+    have each interpreted scan and the landing, which a stretch may have run.
     """
     start_scan = plc.state.scan_id
     kernel_scans = 0
     stretches = 0
     stretched = 0
+    last_noted = start_scan
+
+    def note(scan: int) -> None:
+        nonlocal kernel_scans, last_noted
+        last_noted = scan
+        kernel_scans += 1
+        if on_kernel_scan is not None:
+            on_kernel_scan(scan)
 
     def finish(reached: bool) -> bool:
+        # A stretch may be what landed, and a caller reads its answer there.
+        if plc.state.scan_id != last_noted:
+            note(plc.state.scan_id)
         if stats is not None:
             logical = plc.state.scan_id - start_scan
             stats.update(
@@ -556,9 +568,7 @@ def coast_until(
         plc._consume_pause_request()
         plc._ensure_running()
         plc._run_single_scan(consume_pause_request=False)
-        if on_kernel_scan is not None:
-            on_kernel_scan(plc._state.scan_id)
-        kernel_scans += 1
+        note(plc._state.scan_id)
         since += 1
         paused = plc._consume_pause_request()
         hit = bool(predicate(plc.state))

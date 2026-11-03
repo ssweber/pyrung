@@ -1280,7 +1280,7 @@ class TestSettleLandingCapHonesty:
 
 
 class TestSettleLandingFolds:
-    def test_departure_settlement_receipt_owns_only_actual_kernel_scans(self):
+    def test_departure_settlement_receipt_owns_the_scans_of_its_range(self):
         from pyrung.core.analysis.pilot.departure import _settle_departure
 
         plc = PLC(_static_channel_long_timer_program(), dt=0.010)
@@ -1303,7 +1303,9 @@ class TestSettleLandingFolds:
             for scan in range(receipt.start_scan + 1, receipt.end_scan + 1)
             if scan not in execution.kernel_scan_ids
         )
-        assert execution.point_at(skipped) is None
+        assert execution.point_at(skipped) is not None
+        assert execution.point_at(receipt.start_scan) is None
+        assert execution.point_at(receipt.end_scan + 1) is None
 
     def test_confirmation_window_folds_scan_ids_still_elapse(self):
         plc = PLC(_static_channel_long_timer_program(), dt=0.010)

@@ -303,8 +303,9 @@ class ExecutionReceipt:
         return self.stop.consumer_boundary_reached if self.stop is not None else None
 
     def owner_at(self, scan_id: int) -> EpochQuery | None:
+        # A span owns its range: scans a stretch ran between two kernel scans are real too.
         return next(
-            (span.owner for span in self.spans if scan_id in span.kernel_scan_ids),
+            (span.owner for span in self.spans if span.first_scan <= scan_id <= span.last_scan),
             None,
         )
 

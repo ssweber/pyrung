@@ -656,7 +656,6 @@ def _apply_actions(
     session = CoastSession(
         fork,
         kind="pulse",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1071,7 +1070,6 @@ def _try_single_program_scan(
     session = CoastSession(
         fork,
         kind=("observe_scan" if isinstance(bearing.act, ObserveScan) else "program_scan"),
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1171,7 +1169,6 @@ def _try_bearing_coast(
     session = CoastSession(
         fork,
         kind="bearing_coast",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1342,7 +1339,6 @@ def _try_program_continuation_seek(
     session = CoastSession(
         fork,
         kind="letrun",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1525,7 +1521,6 @@ def _try_program_continuation_settle(
     session = CoastSession(
         fork,
         kind="settle",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_pens(_pen_tags(state, ctx))
     dwell = _settle_watched_tags(
@@ -1661,7 +1656,7 @@ def _coast_to_bearing(
         # horizon explicitly; a counterfactual that makes the distant boundary
         # unreachable must not turn that bounded proof into a fresh long coast.
         if estimate is not None and budget is None:
-            coast_budget = max(coast_budget, estimate + 2)
+            coast_budget = max(coast_budget, estimate + 3)
         heading_target = predicate_trigger(
             "target",
             TARGET,

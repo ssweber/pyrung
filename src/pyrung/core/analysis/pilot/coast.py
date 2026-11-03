@@ -196,10 +196,6 @@ class CoastSession:
 
     plc: PLC
     kind: str = "coast"
-    # ``None`` preserves live PILOT's automatic kernel-budget policy when
-    # reactive holds are installed. Recorded incident replay sets ``False``:
-    # its window is measured in historical logical scans.
-    kernel_budget: bool | None = None
     # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
     # re-arming change recorder — the literal trend-recorder pen.  During a
     # seek the pens ride as one internal nonterminal trigger (their tags are
