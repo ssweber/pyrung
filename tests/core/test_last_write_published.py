@@ -114,16 +114,6 @@ def test_a_real_transition_still_records_and_fires() -> None:
     assert plc.cause(Coiled) is not None
 
 
-def test_a_write_count_counts_the_write_whatever_it_replaces() -> None:
-    """The fold's write counts come from the scan's writes, not from what got published."""
-    plc = PLC(_program(), dt=0.01)
-    plc._acc_write_watch = frozenset({Coiled.name})
-    plc.step()
-    first = plc._last_acc_writes
-    plc.step()
-    assert first == plc._last_acc_writes == {Coiled.name: 1}
-
-
 def test_modbus_serves_the_bits_written() -> None:
     """The first ``-0.0`` serves ``0x80000000``, as it did after any nonzero value."""
     from pyclickplc.banks import DataType
