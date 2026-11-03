@@ -288,6 +288,29 @@ class TestFeedbackKeepsFolding:
         assert counter["n"] < 50
         assert plc.state.tags["Temp"] == pytest.approx(100.0)
 
+    def test_a_seek_does_not_fold_a_plant_with_no_harness(self) -> None:
+        """A replay keeps the plant and not the harness, so the fold cannot model it.
+
+        A single scan's step is under half an ulp here, so Temp has stopped.  A landing
+        scan with the window's dt moves it.
+        """
+        plc = _plant(Approach(100.0, 5.0), self._copy_reader, far_s=800)
+        ran = {}
+        for _ in range(4_000):
+            plc.step()
+            ran[plc.state.scan_id] = plc.state
+        replay = plc.replay_to(1_000)
+        assert replay._harness is None
+        assert replay._synthesis is not None and replay._synthesis.plant
+        replay.run_for(30.0)
+        assert replay.state.scan_id == 4_000
+
+        replay._recent_state_cache.clear()
+        replay._replay_slabs.clear()
+        for scan in (2_000, 3_000, 3_999, 4_000):
+            assert replay.history.at(scan).tags["Temp"].hex() == ran[scan].tags["Temp"].hex(), scan
+        assert replay._last_replay_seek_stats["ordinary_folded_scans"] == 0
+
     def test_a_plant_at_rest_folds_under_a_copy_reader(self) -> None:
         def enable() -> None:
             with Rung(Tog, ~Tog):

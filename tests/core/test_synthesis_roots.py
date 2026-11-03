@@ -302,6 +302,25 @@ def test_a_coupling_change_leaves_earlier_scans_as_they_ran() -> None:
     )
 
 
+def test_an_uninstall_leaves_earlier_scans_as_they_ran() -> None:
+    plc = PLC(_late_link_program(), dt=0.01)
+    harness = Harness(plc)
+    harness.set_overrides(_late_coupling())
+    harness.install()
+    plc.patch({"Enable": True})
+    ran = _run_recording(plc, 20)
+    assert any(name.startswith("_frac:") for name in plc.state.memory)
+
+    harness.uninstall()
+    ran.update(_run_recording(plc, 20))
+    plc._recent_state_cache.clear()
+    plc._replay_slabs.clear()
+
+    for scan_id, state in ran.items():
+        assert _exact(plc.history.at(scan_id).tags) == _exact(state.tags), scan_id
+        assert plc.history.at(scan_id).memory == state.memory, scan_id
+
+
 def test_a_coupling_change_on_a_checkpoint_edits_the_checkpoint() -> None:
     plc = PLC(_late_link_program(), dt=0.01)
     harness = Harness(plc)

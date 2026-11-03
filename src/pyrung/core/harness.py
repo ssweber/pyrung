@@ -276,6 +276,7 @@ class Harness:
         if self._plc._harness is self:
             self._plc._harness = None
         if self._plc._synthesis is not None:
+            self._plc._note_plant_change()
             self._plc._synthesis.plant = []
             self._plc._fold_context_cache = None
             self._plc._compiled_replay_kernel = None

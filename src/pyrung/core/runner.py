@@ -3221,8 +3221,6 @@ class PLC:
         return replay
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
-        if self._earlier_plant_at(scan_id) is not None:
-            return None  # The kernel is compiled from the current plant.
         """The kernel, if it can rebuild every key of the scans after *scan_id*'s checkpoint.
 
         Stepping adds a tag to the state on its first write.  A kernel holds an absent
@@ -3233,6 +3231,8 @@ class PLC:
         A rung reading the scan time minimum: the first scan's hook takes the scan time
         when the tag is absent, and a kernel has the tag, at 0, so it would stay 0.
         """
+        if self._earlier_plant_at(scan_id) is not None:
+            return None  # The kernel is compiled from the current plant.
         kernel = self._compiled_replay_supported_kernel()
         if kernel is None:
             return None
