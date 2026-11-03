@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
-import inspect
-import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +32,7 @@ from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
     Expression,
 )
+from pyrung.core.function_source import embedded_source, is_the_function
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -725,14 +725,26 @@ class CodegenContext:
             return existing
 
         try:
-            source = inspect.getsource(fn)
+            rendered = embedded_source(fn)
         except (OSError, TypeError) as exc:
             raise ValueError(f"Could not inspect source for callable {fn!r}") from exc
-        rendered = textwrap.dedent(source).rstrip()
         if not rendered:
             raise ValueError(f"Could not inspect source for callable {fn!r}")
-        if _first_defined_name(rendered) is None:
+        defined = _first_defined_name(rendered)
+        if defined is None:
             raise ValueError(f"Callable source is not inspectable for embedding: {fn!r}")
+        if not is_the_function(rendered, fn):
+            raise ValueError(
+                f"Callable source is not the function it stands for: {fn!r}. Embedding copies "
+                "the text of a plain def: the file may have changed since the import, or the "
+                "function uses a closure, a decorator or a wrapper."
+            )
+        if defined == "math" or hasattr(builtins, defined):
+            # The def lands in the generated module, over the name its other code calls.
+            raise ValueError(
+                f"Callable name would shadow a name the generated code uses: {fn!r}. "
+                "Rename the function."
+            )
 
         fn_name = getattr(fn, "__name__", type(fn).__name__)
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))

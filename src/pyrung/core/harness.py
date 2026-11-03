@@ -266,15 +266,19 @@ class Harness:
         plc._harness = clone
         return clone
 
-    def uninstall(self) -> None:
-        if not self._installed:
-            return
+    def _detach(self) -> None:
+        """Off the runner, leaving its plant rungs: they no longer belong to this harness."""
         self._installed = False
         for handle in self._monitors:
             handle.remove()
         self._monitors.clear()
         if self._plc._harness is self:
             self._plc._harness = None
+
+    def uninstall(self) -> None:
+        if not self._installed:
+            return
+        self._detach()
         if self._plc._synthesis is not None:
             self._plc._note_plant_change()
             self._plc._synthesis.plant = []

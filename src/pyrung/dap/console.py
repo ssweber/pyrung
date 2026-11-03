@@ -176,9 +176,10 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.force(adapter._resolve_target_locked(tag), value)
+    name = adapter._resolve_target_locked(tag)
+    runner.force(name, value)
     execution_flow.invalidate_mid_scan(adapter)
-    return ConsoleResult(f"Forced {tag}={value!r}")
+    return ConsoleResult(f"Forced {tag}={runner.forces[name]!r}")
 
 
 @register("unforce", usage="unforce <tag>", group="data")
@@ -215,9 +216,10 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.patch({adapter._resolve_target_locked(tag): value})
+    name = adapter._resolve_target_locked(tag)
+    runner.patch({name: value})
     execution_flow.invalidate_mid_scan(adapter)
-    return ConsoleResult(f"Patched {tag}={value!r}")
+    return ConsoleResult(f"Patched {tag}={runner.pending_patches[name]!r}")
 
 
 @register("continue", usage="continue", group="execution")

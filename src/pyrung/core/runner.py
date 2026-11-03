@@ -16,7 +16,6 @@ import dis
 import inspect
 import logging
 import math
-import textwrap
 import time
 import warnings
 from collections import OrderedDict
@@ -47,6 +46,11 @@ from pyrung.core.executor import (
     execute_program,
 )
 from pyrung.core.expression import RandIntExpr, randint_sites
+from pyrung.core.function_source import (
+    KERNEL_COMPILE_FLAGS,
+    embedded_source,
+    is_the_function,
+)
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -479,7 +483,6 @@ _SELF_CONTAINED_BUILTINS = frozenset(
         "enumerate",
         "filter",
         "float",
-        "format",
         "frozenset",
         "hex",
         "int",
@@ -509,8 +512,12 @@ _SELF_CONTAINED_BUILTINS = frozenset(
 )
 
 #: Attributes that hand a function a frame, and through it the globals of its module.
-_FRAME_ATTRIBUTES = frozenset(
+#: ``format`` and ``format_map`` are here for the same reason: they walk attributes named
+#: in a text that can be built while the function runs, so no constant can clear them.
+_ATTRIBUTES_PAST_ITS_SCOPE = frozenset(
     {
+        "format",
+        "format_map",
         "ag_frame",
         "cr_frame",
         "f_back",
@@ -534,18 +541,16 @@ def _reaches_past_its_scope(code: CodeType) -> bool:
     """Whether *code* imports, or asks an object for a dunder or a frame.
 
     An import shares a module's state with every other caller of it, and a dunder
-    (``__globals__``, ``__defaults__``, ``__traceback__``) or a frame hands over the
-    function's own module, by a route no global name shows.
+    (``__globals__``, ``__defaults__``, ``__traceback__``), a frame or ``str.format``
+    (``"{0.__globals__}"``) hands over the function's own module, by a route no global
+    name shows.
     """
     for instruction in dis.get_instructions(code):
         if instruction.opname == "IMPORT_NAME":
             return True
     for name in code.co_names:
-        if name.startswith("__") or name in _FRAME_ATTRIBUTES:
+        if name.startswith("__") or name in _ATTRIBUTES_PAST_ITS_SCOPE:
             return True
-    # str.format walks attributes named in its text: "{0.__class__}".
-    if any(isinstance(constant, str) and "__" in constant for constant in code.co_consts):
-        return True
     return any(
         _reaches_past_its_scope(constant)
         for constant in code.co_consts
@@ -571,8 +576,7 @@ def _copies_its_defaults(fn: Any) -> bool:
     if not positional and not keyword:
         return True
     try:
-        source = textwrap.dedent(inspect.getsource(fn))
-        definition = ast.parse(source).body[0]
+        definition = ast.parse(embedded_source(fn)).body[0]
     except (IndexError, OSError, SyntaxError, TypeError):
         return False
     if not isinstance(definition, ast.FunctionDef):
@@ -621,7 +625,16 @@ def _means_the_same_in_a_kernel(fn: Any) -> bool:
             continue  # Every kernel imports it.
         if name in function_globals or not _is_self_contained_builtin(name):
             return False
-    return True
+    return _kernel_embeds_the_function(fn)
+
+
+def _kernel_embeds_the_function(fn: Any) -> bool:
+    """Whether the text a kernel embeds is what *fn* runs: a file changes, a function doesn't."""
+    try:
+        text = embedded_source(fn)
+    except (OSError, TypeError):
+        return False
+    return is_the_function(text, fn, flags=KERNEL_COMPILE_FLAGS)
 
 
 def _program_calls_what_a_kernel_cannot_copy(program: Any) -> bool:
@@ -654,6 +667,8 @@ def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
             "requires generate_circuitpy",
             "Could not inspect source for callable",
             "Callable source is not inspectable",
+            "Callable source is not the function",
+            "Callable name would shadow",
             "Unsupported",
         )
     )
@@ -3125,6 +3140,10 @@ class PLC:
 
                 replay._synthesis = Synthesis()
             replay._synthesis.plant = list(earlier_plant)
+            if replay._harness is not None:
+                # Today's couplings do not describe these rungs, and the fold bounds a
+                # plant by what its harness says.  A replay with no harness says nothing.
+                replay._harness._detach()
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
@@ -3158,7 +3177,7 @@ class PLC:
             base, base_sim_time = log.rtc_base_changes[scan_id]
             replay._set_rtc_internal(base, base_sim_time)
         if scan_id in log.patches_by_scan:
-            replay.patch(log.patches_by_scan[scan_id])
+            replay.patch_as_recorded(log.patches_by_scan[scan_id])
         if log.dts is not None:
             replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
         submits = log.io_submits_by_scan.get(scan_id, {})
@@ -3334,7 +3353,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
 
             probe = (
                 strategy.capture_state(replay._materialize_replay_state())
@@ -3825,7 +3844,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
             if scan_id >= start_scan_id:
                 replay.step()
                 results.append(replay.current_state)
@@ -3884,7 +3903,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
             replay.step()
             for record in log.io_submits_by_scan.get(scan_id, {}).values():
                 for tag_name, value in record.tag_writes:
@@ -4294,6 +4313,11 @@ class PLC:
         """
         self._register_known_tags_from_mapping_keys(tags)
         self._input_overrides.patch(tags)
+
+    def patch_as_recorded(self, recorded: Mapping[str, bool | int | float | str]) -> None:
+        """Queue a patch a scan log recorded: see ``InputOverrideManager.restore_patch``."""
+        self._register_known_tags_from_mapping_keys(recorded)
+        self._input_overrides.restore_patch(recorded)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         """Persistently override a tag value until explicitly removed.

@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, copy, latch, out
+from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, on_delay, out
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Approach, Physical, Ramp
 from pyrung.core.runner import PLC
 
 _SWITCH = Physical("Switch", on_delay="200ms", off_delay="100ms")
@@ -456,6 +456,65 @@ def test_a_replayed_range_across_a_late_install_keeps_each_side() -> None:
             assert _exact(state.tags) == _exact(ran[state.scan_id].tags), state.scan_id
     assert across[0].tags["Temp"] == 0.0
     assert _exact(plc.history.at(700).tags) == _exact(across[10].tags)
+
+
+def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
+    """The plant it runs is not the one today's harness describes: its seek runs each scan."""
+    enable, over, shown = Bool("Enable"), Bool("Over"), Real("Shown")
+    timer = Timer.clone("Tm")
+    temp = Real(
+        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+    )
+    with Program(strict=False) as program:
+        with Rung(enable):
+            on_delay(timer, preset=800_000)
+        with Rung():
+            copy(temp, shown)
+        with Rung(shown >= 100.0):
+            out(over)
+    plc = PLC(program, dt=0.01)
+    harness = Harness(plc)
+    harness.install()
+    plc.patch({"Enable": True})
+    ran = {}
+    for _ in range(4_000):
+        plc.step()
+        ran[plc.state.scan_id] = plc.state
+    harness.set_overrides({"Temp": None})
+    plc.run(20)
+
+    replay = plc.replay_to(1_000)
+    assert replay._harness is None
+    replay.run_for(30.0)
+    replay._recent_state_cache.clear()
+    replay._replay_slabs.clear()
+    for scan in (2_000, 3_000, 3_999, 4_000):
+        again = replay.history.at(scan).tags
+        assert repr(again["Temp"]) == repr(ran[scan].tags["Temp"]), scan
+        assert again["Over"] is ran[scan].tags["Over"], scan
+    assert replay._last_replay_seek_stats["ordinary_folded_scans"] == 0
+
+    assert plc._harness is harness
+    plc._recent_state_cache.clear()
+    plc._replay_slabs.clear()
+    assert repr(plc.history.at(3_999).tags["Temp"]) == repr(ran[3_999].tags["Temp"])
+
+
+def test_a_replay_with_no_change_keeps_its_harness() -> None:
+    enable = Bool("Enable")
+    temp = Real(
+        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+    )
+    with Program(strict=False) as program:
+        with Rung():
+            copy(temp, Real("Shown"))
+        with Rung(enable):
+            out(Bool("Lamp"))
+    plc = PLC(program, dt=0.01)
+    Harness(plc).install()
+    plc.patch({"Enable": True})
+    plc.run(50)
+    assert plc._replay_to_interpreted(20)._harness is not None
 
 
 def test_a_reset_forgets_the_earlier_plants() -> None:
