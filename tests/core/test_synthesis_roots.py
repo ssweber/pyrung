@@ -19,6 +19,7 @@ from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
 from pyrung.core.physical import Approach, Physical, Ramp
 from pyrung.core.runner import PLC
+from tests.core.scan_loop_counts import ScansOutsideLoop
 
 _SWITCH = Physical("Switch", on_delay="200ms", off_delay="100ms")
 
@@ -485,14 +486,15 @@ def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
 
     replay = plc.replay_to(1_000)
     assert replay._harness is None
+    counter = ScansOutsideLoop(replay)
     replay.run_for(30.0)
+    assert counter["n"] == 3_000, "every scan of the seek ran"
     replay._recent_state_cache.clear()
     replay._replay_slabs.clear()
     for scan in (2_000, 3_000, 3_999, 4_000):
         again = replay.history.at(scan).tags
         assert repr(again["Temp"]) == repr(ran[scan].tags["Temp"]), scan
         assert again["Over"] is ran[scan].tags["Over"], scan
-    assert replay._last_replay_seek_stats.get("ordinary_folded_scans", 0) == 0
 
     assert plc._harness is harness
     plc._recent_state_cache.clear()

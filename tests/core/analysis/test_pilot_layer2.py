@@ -135,6 +135,20 @@ def _no_hold_excursion_program():
     return prog, y_Motor, y_Stage
 
 
+def _state_repeats(plc: PLC, *, within: int = 200) -> bool:
+    """Stepping on from here returns to a state it has already been in."""
+    fork = plc.fork()
+    seen = set()
+    for _ in range(within):
+        fork.step()
+        state = fork.state
+        now = (frozenset(state.tags.items()), frozenset(state.memory.items()))
+        if now in seen:
+            return True
+        seen.add(now)
+    return False
+
+
 def test_no_hold_excursion_not_nogooded(monkeypatch) -> None:
     """Excursion without steerable hold — action must NOT be nogooded.
 
@@ -145,12 +159,19 @@ def test_no_hold_excursion_not_nogooded(monkeypatch) -> None:
     """
     from pyrung.core.analysis.pilot import coast
 
-    coast_stats: list[dict[str, int]] = []
+    sterile_coasts = []
     coast_until = coast.coast_until
 
-    def capture_coast_stats(*args, **kwargs):
-        result = coast_until(*args, **kwargs)
-        coast_stats.append(dict(kwargs["stats"]))
+    def capture_coast_stats(plc, *args, **kwargs):
+        result = coast_until(plc, *args, **kwargs)
+        stats = kwargs["stats"]
+        if (
+            not result
+            and stats["logical_scans"] == kwargs["budget"]
+            and stats["kernel_scans"] < 100
+            and _state_repeats(plc)
+        ):
+            sterile_coasts.append(dict(stats))
         return result
 
     monkeypatch.setattr(coast, "coast_until", capture_coast_stats)
@@ -159,9 +180,9 @@ def test_no_hold_excursion_not_nogooded(monkeypatch) -> None:
     plc = PLC(prog, dt=0.010)
     path = pilot_how(plc, y_Stage == 1, max_scans=200)
     assert not path.reachable
-    assert any(
-        stats["ordinary_folded_scans"] and stats["kernel_scans"] < 100 for stats in coast_stats
-    )
+    # The sterile proof: a seek ran out its whole budget, nearly all of it in the loop, and
+    # lands in a cycle.  What repeats exactly goes on repeating, so nothing was waiting.
+    assert sterile_coasts
 
 
 # ---------------------------------------------------------------------------

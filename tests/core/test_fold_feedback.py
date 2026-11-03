@@ -302,14 +302,15 @@ class TestFeedbackKeepsFolding:
         replay = plc.replay_to(1_000)
         assert replay._harness is None
         assert replay._synthesis is not None and replay._synthesis.plant
+        counter = _kernel_scans(replay)
         replay.run_for(30.0)
         assert replay.state.scan_id == 4_000
+        assert counter["n"] == 3_000, "every scan of the seek ran"
 
         replay._recent_state_cache.clear()
         replay._replay_slabs.clear()
         for scan in (2_000, 3_000, 3_999, 4_000):
             assert replay.history.at(scan).tags["Temp"].hex() == ran[scan].tags["Temp"].hex(), scan
-        assert replay._last_replay_seek_stats.get("ordinary_folded_scans", 0) == 0
 
     def test_a_plant_at_rest_folds_under_a_copy_reader(self) -> None:
         def enable() -> None:
