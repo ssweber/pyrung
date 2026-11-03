@@ -218,7 +218,10 @@ discarding an attempt or restoring a checkpoint never refunds work. Receipted
 interpreted scans are charged once by epoch ownership, a work unit each, and loop
 scans one unit per `STRETCH_SCANS_PER_UNIT`. Loop scans are charged when their seek
 returns and never stop it (charging them by the scan would turn right answers into
-declines); a seek's interpreted scans stop at what the ledger has left. Research requests consume at least one
+declines); a seek's interpreted scans stop at what the ledger has left. A seek's own budget
+counts scans, except a live wait under the plan's holds with a ledger that can pay for it
+(`CoastSession.loop_scans_per_unit`), which counts them as the ledger does: its timers' length
+is not what should end it, and the wall clock and the memory cap bound it. Research requests consume at least one
 work unit and retain their local caps. The allowance is not a wall-clock deadline;
 `WallClock` is one, on by default in `how()` and off in tests that assert answers. The
 assignment survey and frontier probes check the remaining allowance before scans.

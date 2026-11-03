@@ -20,8 +20,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.coast_run import coast_until
+from pyrung.core.coast_run import coast_until, memo_of, work_charged
 from pyrung.core.read_trace import _extract_condition_reads, _reads_untraced
 
 if TYPE_CHECKING:
@@ -60,6 +61,9 @@ LIMITS = CoastLimits()
 # A bearing coast gets a generous budget of its own — timer dwell is waiting,
 # not searching, so it does not consume the pilot's iteration budget.
 _COAST_BUDGET = 10_000
+# The search work left, ten seeks that count scans, below which a wait counts scans whatever
+# holds it: a max_scans this small asks for a small search, not a long wait.
+_LEDGER_FOR_A_LONG_WAIT = 10 * _COAST_BUDGET // STRETCH_SCANS_PER_UNIT
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,10 @@ class CoastSession:
 
     plc: PLC
     kind: str = "coast"
+    # A live wait may count what its scans cost, as the ledger does, rather than the scans:
+    # see :meth:`loop_scans_per_unit`.  A recorded replay's budget is history, not an allowance,
+    # so it stays in scans.
+    waits_on_work: bool = False
     # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
     # re-arming change recorder — the literal trend-recorder pen.  During a
     # seek the pens ride as one internal nonterminal trigger (the coast is asked
@@ -345,11 +353,29 @@ class CoastSession:
             terminal=False,
         )
 
+    def loop_scans_per_unit(self) -> int:
+        """How many loop scans a unit of this session's seek budget pays for.
+
+        A wait under the plan's own holds is one the plan committed to, so how long its timers
+        run is not what should end it: one unit per ``STRETCH_SCANS_PER_UNIT``, the ledger's own
+        charge, with the wall clock and the memory cap bounding it.  Any other wait counts scans:
+        it may be a program that never does what is asked, and the search has other moves.  A
+        small ledger counts scans too: one fruitless wait at this price would spend it whole.
+        """
+        synthesis = self.plc._synthesis
+        if not self.waits_on_work or synthesis is None or not getattr(synthesis, "holds", ()):
+            return 1
+        work_left = memo_of(self.plc).work_left
+        if work_left is not None and work_left() < _LEDGER_FOR_A_LONG_WAIT:
+            return 1
+        return STRETCH_SCANS_PER_UNIT
+
     def seek(self, triggers: Iterable[CoastTrigger], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal trigger fires; return the receipt.
 
         Each scan runs, in :func:`~pyrung.core.coast_run.coast_until`, and *budget*
-        counts them: a seek that nothing ends lands where stepping would time out.
+        counts them: a seek that nothing ends lands where stepping would time out.  See
+        :meth:`loop_scans_per_unit` for the seek that counts what they cost instead.
         """
         plc = self.plc
         armed: list[CoastTrigger] = [*triggers, *self._avoid_triggers]
@@ -376,8 +402,9 @@ class CoastSession:
         # cascading transition could carry the machine past the crossing the active
         # trigger selected.
         judge_before_run = False
+        per_unit = self.loop_scans_per_unit()
         while True:
-            elapsed = plc.state.scan_id - start_scan
+            elapsed = work_charged(plc.state.scan_id - start_scan, kernel_scans, per_unit)
             remaining = budget - elapsed
             if remaining <= 0:
                 break
@@ -421,6 +448,7 @@ class CoastSession:
                     predicate_reads=_trigger_reads(live),
                     stats=stats,
                     on_kernel_scan=self.note_kernel_scan,
+                    loop_scans_per_unit=per_unit,
                 )
                 kernel_scans += stats.get("kernel_scans", 0)
                 stretches += stats.get("stretches", 0)
@@ -429,7 +457,7 @@ class CoastSession:
                 state = plc.state
                 now_fired = [trigger for trigger in armed if trigger.predicate(state)]
                 if not now_fired:
-                    elapsed = state.scan_id - start_scan
+                    elapsed = work_charged(state.scan_id - start_scan, kernel_scans, per_unit)
                     if stats.get("stopped"):
                         stop_reason = "stopped"
                     elif stats.get("out_of_work"):

@@ -1191,6 +1191,7 @@ def _try_bearing_coast(
     session = CoastSession(
         fork,
         kind="bearing_coast",
+        waits_on_work=getattr(ctx, "collect_action_attribution", True),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1360,6 +1361,7 @@ def _try_program_continuation_seek(
     session = CoastSession(
         fork,
         kind="letrun",
+        waits_on_work=getattr(ctx, "collect_action_attribution", True),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1677,7 +1679,8 @@ def _coast_to_bearing(
         # horizon explicitly; a counterfactual that makes the distant boundary
         # unreachable must not turn that bounded proof into a fresh long coast.
         if estimate is not None and budget is None:
-            coast_budget = max(coast_budget, estimate + 3)
+            scans_per_unit = session.loop_scans_per_unit() if session else 1
+            coast_budget = max(coast_budget, estimate // scans_per_unit + 3)
         heading_target = predicate_trigger(
             "target",
             TARGET,

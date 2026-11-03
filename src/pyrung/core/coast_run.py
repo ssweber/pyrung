@@ -929,13 +929,15 @@ def coast_until(
     predicate_reads: frozenset[str] | None = None,
     stats: dict[str, int] | None = None,
     on_kernel_scan: Callable[[int], None] | None = None,
+    loop_scans_per_unit: int = 1,
 ) -> bool:
     """Run *plc* up to *budget* scans, until *predicate* holds on a committed scan.
 
     Stops as stepping would: on the first scan where it holds, or at the budget, or
     after a scan that asks to pause, or after the program stops itself.  Returns whether it
-    holds there.  *predicate_reads* is the exact set of tags *predicate* reads
-    through ``state.tags``; without it the reads are traced.  *stats* gets
+    holds there.  *loop_scans_per_unit* is how many loop scans one unit of *budget* pays
+    for; an interpreted scan is always a unit.  *predicate_reads* is the exact set of tags
+    *predicate* reads through ``state.tags``; without it the reads are traced.  *stats* gets
     ``logical_scans``, ``kernel_scans``, ``stretches`` and ``stretched_scans`` (the logical
     scans ``kernel_scans`` leaves).  *on_kernel_scan* and ``kernel_scans`` have each
     interpreted scan and the landing, which a stretch may have run.
@@ -992,7 +994,11 @@ def coast_until(
     # The ledger charges a seek when it returns, so one that cannot loop could spend it many
     # times over first.  A loop scan is a hundredth of one of these, and stays out of it.
     work = None if memo.work_left is None else max(1, memo.work_left())
-    while plc.state.scan_id - start_scan < budget:
+
+    def charged() -> int:
+        return work_charged(plc.state.scan_id - start_scan, kernel_scans, loop_scans_per_unit)
+
+    while charged() < budget:
         if work is not None and kernel_scans >= work:
             if stats is not None:
                 stats["out_of_work"] = 1
@@ -1021,7 +1027,7 @@ def coast_until(
         hit = bool(predicate(plc.state))
         if hit or paused:
             return finish(hit)
-        limit = budget - (plc.state.scan_id - start_scan)
+        limit = (budget - charged()) * loop_scans_per_unit
         if not can_loop or since < wait or limit < 2:
             continue
         since = 0
@@ -1059,6 +1065,11 @@ def coast_until(
             fails += 1
             wait = min(ENTRY_WAIT * 2**fails, MAX_WAIT_AFTER_NONE)
     return finish(bool(predicate(plc.state)))
+
+
+def work_charged(logical_scans: int, kernel_scans: int, loop_scans_per_unit: int) -> int:
+    """What *logical_scans* cost, *kernel_scans* of them interpreted and the rest in the loop."""
+    return kernel_scans + (logical_scans - kernel_scans) // loop_scans_per_unit
 
 
 def _moves_without_a_write(names: Any) -> bool:
