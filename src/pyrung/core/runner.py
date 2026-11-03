@@ -1886,9 +1886,7 @@ class PLC:
         writes = owner.committed_tag_timelines.rung_writes_at(tag_name, scan_id)
         if writes is None or tag_name not in writes:
             return None
-        prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
-        before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
-        return Transition(tag_name, scan_id, before, writes[tag_name])
+        return self._committed_transition(tag_name, scan_id, writes[tag_name])
 
     def _causal_last_committed_transition_before(
         self,
@@ -1899,9 +1897,16 @@ class PLC:
         latest = self._causal_raw_committed_transition_before(tag_name, before_scan_id)
         if latest is None:
             return None
-        scan_id, after = latest
+        return self._committed_transition(tag_name, latest[0], latest[1])
+
+    def _committed_transition(self, tag_name: str, scan_id: int, after: Any) -> Transition:
+        """The two sides of a change, a side no column can say read from its state."""
         prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
         before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
+        if before is _UNKNOWN_VALUE:
+            before = self.history.at(scan_id - 1).tags.get(tag_name)
+        if after is _UNKNOWN_VALUE:
+            after = self.history.at(scan_id).tags.get(tag_name)
         return Transition(tag_name, scan_id, before, after)
 
     @property

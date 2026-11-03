@@ -1712,7 +1712,7 @@ class CoastMoves:
     """
 
     moved: tuple[tuple[str, int], ...]  # (name, delta each scan)
-    free: tuple[str, ...]  # float ramps
+    free: tuple[str, ...]  # float ramps: it moves on each scan, by what no one record says
     flips: tuple[tuple[str, Any, Any], ...]  # (name, from, to): a loop of these runs one scan
     held: tuple[str, ...]  # computed from a moving value, and keeping theirs
 
@@ -1814,7 +1814,14 @@ def _coast_guards(
             else:
                 held.append(name)
         elif free_to_move and type(after) is float and type(before) is float:
-            free.append(name)
+            # Nothing says how far a Real moves, only whether it does, and a scan that holds
+            # it is another path: a record of it says "moved" on every scan it runs.
+            if after == before:
+                guards.append(_Guard(f"{new} != {old}", uses))
+                held.append(name)
+            else:
+                guards.append(_Guard(f"{new} == {old}", uses))
+                free.append(name)
         elif name in watched or same(after, before) or after == before:
             # Equal across types too: 0 to False on an Int driven by out() is no transition.
             guards.append(_Guard(f"{old} != {new}", uses))
