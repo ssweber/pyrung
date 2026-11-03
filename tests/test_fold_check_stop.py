@@ -830,6 +830,7 @@ def test_the_tests_using_own_twin_are_these() -> None:
         *(
             f"test_fold_check_stop.py::{name}"
             for name in (
+                "test_inside_an_own_twin_block_it_may_land_short",
                 "test_own_twin_still_holds_a_run_to_the_scans_asked",
                 "test_own_twin_leaves_other_runners_checked",
                 "test_own_twin_must_compare",
@@ -1117,6 +1118,68 @@ class TestACoastStoppedByTheLedger:
         stats: dict[str, int] = {}
         coast_run.coast_until(plc, lambda _s: False, budget=100, stats=stats)
         assert stats["out_of_work"] == 1
+
+    def test_its_predicate_has_to_be_false_where_it_landed(self) -> None:
+        plc = _counting()
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="predicate true"):
+            fold_check._checked(
+                "coast",
+                plc,
+                lambda: [plc.step() for _ in range(9)],
+                lambda state: state.scan_id == 9,
+                budget=100,
+                out_of_work=lambda: True,
+            )
+
+    def _stops_too_long_to_step(self, monkeypatch, predicate: Any) -> PLC:
+        monkeypatch.setattr(fold_check, "MAX_SCANS", 5)
+        plc = _counting()
+        fold_check._checked(
+            "coast",
+            plc,
+            lambda: [plc.step() for _ in range(9)],
+            predicate,
+            budget=100,
+            out_of_work=lambda: True,
+        )
+        return plc
+
+    def test_too_long_to_step_it_is_still_asked_where_it_landed(self, monkeypatch) -> None:
+        assert self._stops_too_long_to_step(monkeypatch, lambda _s: False).state.scan_id == 9
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="predicate true"):
+            self._stops_too_long_to_step(monkeypatch, lambda state: state.scan_id == 9)
+
+    def test_a_stop_is_held_to_the_ledger(self) -> None:
+        fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 5, "out_of_work": 1})
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stopped for its ledger"):
+            fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 4, "out_of_work": 1})
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stopped for its ledger"):
+            fold_check._hold_to_the_ledger("coast", None, {"kernel_scans": 4, "out_of_work": 1})
+
+    def test_a_coast_past_its_ledger_is_caught(self) -> None:
+        fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 6})  # a stretch's landing
+        fold_check._hold_to_the_ledger("coast", None, {"kernel_scans": 700})  # no search
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="with 5 left"):
+            fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 7})
+
+    def test_a_raised_coast_says_nothing_about_it(self) -> None:
+        fold_check._hold_to_the_ledger("coast", 5, {})
+
+
+def test_inside_an_own_twin_block_it_may_land_short() -> None:
+    plc = _counting()
+    with fold_check.own_twin(plc) as compare:
+        fold_check._checked(
+            "coast",
+            plc,
+            lambda: [plc.step() for _ in range(9)],
+            lambda _s: False,
+            budget=100,
+            out_of_work=lambda: True,
+        )
+        stepped = _counting()
+        stepped.run(9)
+        compare(stepped)
 
 
 # --- The runner around the state ---------------------------------------------------------

@@ -66,6 +66,7 @@ import pyrung.core.compiled_run as compiled_run
 import pyrung.core.rung_firings as rung_firings
 import pyrung.core.scan_trace as scan_trace
 from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime
+from pyrung.core.rung_firings import SearchQuestionRefused
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
 # Firing sizes for the loop: short ones to compare often, long ones to reach far.
@@ -678,8 +679,8 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
         plc._last_replay_seek_stats = seek_stats
 
 
-# how() runs out of these, and they are BaseExceptions so its own catches leave them alone.
-_SEARCH_LIMITS = (SearchOutOfTime, SearchOutOfMemory)
+# how() ends on these, and they are BaseExceptions so its own catches leave them alone.
+_SEARCH_LIMITS = (SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused)
 
 
 class _NotTheTwin(BaseException):
@@ -1036,6 +1037,41 @@ def _judge_a_short_landing_on_its_last_scan(
         )
 
 
+def _judge_a_ledger_stop_at_its_landing(kind: str, plc: Any, twin: Any, ask: Any) -> None:
+    """Too long to step: a coast asks its predicate before its ledger, so it was false here."""
+    hit = None if ask is None else _predicate_on_twin(ask, plc, twin)
+    if hit is None or isinstance(hit, _Raised):
+        _note_skip("ledger stop not judged: too long to step, no answer from the predicate")
+    elif hit:
+        raise _mismatch(
+            f"fold-check ({kind}): stopped for its ledger at scan {plc._state.scan_id} with "
+            "the stop predicate true"
+        )
+
+
+def _hold_to_the_ledger(kind: str, left: int | None, said: dict[str, int]) -> None:
+    """A coast's stop for its ledger against what the ledger had left as the coast began.
+
+    The ledger is the search's own, so this can't say *left* is right, and a loop scan is
+    charged after its seek, so it says nothing about those.  Interpreted scans it can count.
+    A raised coast says none of this.
+    """
+    if "kernel_scans" not in said:
+        return
+    interpreted = said["kernel_scans"]
+    if "out_of_work" in said:
+        if left is None or interpreted < left:
+            raise _mismatch(
+                f"fold-check ({kind}): stopped for its ledger after {interpreted} interpreted "
+                f"scans with {left} left"
+            )
+    # A landing a stretch ran is noted too, past the last scan the ledger could stop.
+    elif left is not None and interpreted > left + 1:
+        raise _mismatch(
+            f"fold-check ({kind}): ran {interpreted} interpreted scans with {left} left"
+        )
+
+
 def _checked(
     kind: str,
     plc: Any,
@@ -1050,8 +1086,8 @@ def _checked(
     """Run *call* and check it against a stepped twin; *budget* is the scans asked of it.
 
     *out_of_work* says how() stopped the run for its ledger: as with its clock that is no
-    scan's doing, so it isn't held to its budget or asked for a true predicate where it landed.
-    All else is compared at that landing.
+    scan's doing, so it isn't held to its budget.  The coast asks its predicate first, so the
+    predicate has to be false where it landed.  All else is compared at that landing.
     """
     global _depth
     if _depth:
@@ -1063,7 +1099,14 @@ def _checked(
             result = call()
         finally:
             block.landed = plc._state.scan_id
-        _hold_to_the_scans_asked(kind, start, plc._state.scan_id, budget, predicate)
+        n = plc._state.scan_id - start
+        _hold_to_the_scans_asked(
+            kind,
+            start,
+            plc._state.scan_id,
+            n if out_of_work is not None and out_of_work() else budget,
+            predicate,
+        )
         return result
     reason = _skip_reason(plc)
     if reason is not None:
@@ -1103,7 +1146,8 @@ def _checked(
     loop_scans = scan_trace.TOTALS["loop scans"] - loop_scans_before
     end = plc._state.scan_id
     n = end - start
-    if out_of_work is not None and out_of_work():
+    ledger_stop = out_of_work is not None and out_of_work()
+    if ledger_stop:
         budget = n
     # A raise is a run stopped early, by whatever raised: that is judged below.
     _hold_to_the_scans_asked(
@@ -1124,6 +1168,8 @@ def _checked(
             STATS["loop scans, landing only (a run too long to step)"] += loop_scans
             if short and plain_ask is None:
                 _judge_a_short_landing_on_its_last_scan(kind, plc, twin, ask, budget, n)
+            if ledger_stop:
+                _judge_a_ledger_stop_at_its_landing(kind, plc, twin, ask)
             if raised is not None:
                 hit = None if ask is None else _predicate_on_twin(ask, plc, twin)
                 stop_raised = hit.raised if isinstance(hit, _Raised) else None
@@ -1179,7 +1225,7 @@ def _checked(
         sid = twin._state.scan_id
         if (sid - start) % truth_every == 0 or sid in sample:
             truth[sid] = twin._state
-        if ask is not None and (sid < end or short or raised is not None):
+        if ask is not None and (sid < end or short or ledger_stop or raised is not None):
             first = not asked
             before = _fingerprint(ask, plc) if first else None
             hit = _predicate_on_twin(ask, plc, twin)
@@ -1215,6 +1261,11 @@ def _checked(
             f"{twin._state.scan_id}"
         )
     _compare(kind, end, plc._state, twin._state)
+    if ledger_stop and stop_held:
+        raise _mismatch(
+            f"fold-check ({kind}): stopped for its ledger at scan {end} with the stop "
+            "predicate true"
+        )
     if short:
         if stop_held is False:
             raise _mismatch(
@@ -1299,7 +1350,10 @@ def install() -> None:
     ) -> Any:
         said = {} if stats is None else stats
         said.pop("out_of_work", None)
-        return _checked(
+        said.pop("kernel_scans", None)
+        memo = plc._coast_memo
+        left = None if memo is None or memo.work_left is None else max(1, memo.work_left())
+        result = _checked(
             "coast",
             plc,
             lambda: coast(plc, predicate, budget=budget, stats=said, **kwargs),
@@ -1307,6 +1361,8 @@ def install() -> None:
             budget=budget,
             out_of_work=lambda: "out_of_work" in said,
         )
+        _hold_to_the_ledger("coast", left, said)
+        return result
 
     setattr(coast_run, "coast_until", coast_until)  # noqa: B010
     setattr(pilot_coast, "coast_until", coast_until)  # noqa: B010
