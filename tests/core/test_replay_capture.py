@@ -204,10 +204,6 @@ def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> 
     assert source._last_replay_slab_stats == {
         "runup_scans": 1399,
         "materialized_states": 1600,
-        "folded_runup": 1,
-        "ordinary_folded_scans": source._last_replay_seek_stats["ordinary_folded_scans"],
-        "cycle_folded_scans": 0,
-        "residual_scans": source._last_replay_seek_stats["residual_scans"] + 1600,
     }
     assert source._state_at(2998).scan_id == 2998
 
@@ -235,10 +231,6 @@ def test_causal_slab_spans_intermediate_checkpoints_as_one_contiguous_window() -
     assert source._last_replay_slab_stats == {
         "runup_scans": 199,
         "materialized_states": 1600,
-        "folded_runup": 1,
-        "ordinary_folded_scans": source._last_replay_seek_stats["ordinary_folded_scans"],
-        "cycle_folded_scans": 0,
-        "residual_scans": source._last_replay_seek_stats["residual_scans"] + 1600,
     }
     assert source._state_at(601) is slab[601]
 

@@ -2826,9 +2826,9 @@ class PLC:
     def _replay_slab_fill(self, scan_id: int) -> SystemState:
         """Populate one bounded causal slab and return *scan_id*.
 
-        A folded tail may be far from its last checkpoint. Positioning and
-        materialization are separate: fold the run-up when the executable World
-        is provably stable, then retain only one fixed-size working set.
+        A stretch's checkpoints can be far apart.  Positioning and materialization
+        are separate: the run-up goes through the compiled kernel and leaves nothing
+        behind, and only one fixed-size working set is retained.
         """
         desired_start = max(
             self._initial_scan_id + 1,
@@ -2846,28 +2846,20 @@ class PLC:
         slab_start = max(anchor_scan + 1, desired_start)
         slab_end = scan_id
 
-        positioned_with_fold = False
         kernel = self._replay_kernel_from(anchor_scan)
         if slab_start > anchor_scan + 1 and kernel is not None:
             # History ownership has already selected the immutable execution
             # epoch that ran this scan. Its synthesis brackets are therefore
-            # stable replay logic, just like the bare Program, and the ordinary
-            # fold proof may position through a long cold gap without densely
-            # re-executing it. A descendant never reaches this branch with its
-            # own overlay for an inherited scan: ``_causal_state_at`` delegates
-            # to the historical owner first.
-            positioned = self._replay_to_compiled(
-                slab_start - 1,
-                kernel,
-                fold=True,
-            )
+            # stable replay logic, just like the bare Program. A descendant never
+            # reaches this branch with its own overlay for an inherited scan:
+            # ``_causal_state_at`` delegates to the historical owner first.
+            positioned = self._replay_to_compiled(slab_start - 1, kernel)
             states = self._replay_range_from_compiled(
                 positioned,
                 slab_start,
                 slab_end,
                 kernel,
             )
-            positioned_with_fold = True
         else:
             states = self._replay_range(anchor_scan + 1, slab_end)
             if slab_start > anchor_scan + 1:
@@ -2883,19 +2875,6 @@ class PLC:
         self._last_replay_slab_stats = {
             "runup_scans": max(0, slab_start - anchor_scan - 1),
             "materialized_states": len(slab),
-            "folded_runup": int(positioned_with_fold),
-            "ordinary_folded_scans": (
-                self._last_replay_seek_stats.get("ordinary_folded_scans", 0)
-                if positioned_with_fold
-                else 0
-            ),
-            "cycle_folded_scans": 0,
-            "residual_scans": (
-                self._last_replay_seek_stats.get("residual_scans", 0)
-                if positioned_with_fold
-                else max(0, slab_start - anchor_scan - 1)
-            )
-            + len(slab),
         }
         if scan_id in slab:
             return slab[scan_id]
@@ -3702,8 +3681,7 @@ class PLC:
         # at-fire-time ConditionView).  Position the fork at ``target - 1`` from
         # the shared historical slab.  A causal walk asks for many adjacent and
         # repeated points, so the bounded slab is intentional amortization; its
-        # refill may use a folded compiled run-up without throwing that locality
-        # away.
+        # refill may use a compiled run-up without throwing that locality away.
         prev_scan = target_scan_id - 1
         if prev_scan >= self._initial_scan_id and prev_scan >= self._scan_log.base_scan:
             prev_state = self._state_at(prev_scan)
@@ -3943,8 +3921,7 @@ class PLC:
     ) -> list[SystemState]:
         """Materialize one bounded range after a separately-positioned run-up.
 
-        ``positioned`` must be at ``start_scan_id - 1``.  The caller may have
-        reached it with folded compiled replay; this second phase deliberately
+        ``positioned`` must be at ``start_scan_id - 1``.  This second phase
         executes every requested scan and retains exactly those states for the
         causal slab.
         """
