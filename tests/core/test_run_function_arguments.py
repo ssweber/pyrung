@@ -349,6 +349,73 @@ class TestConstants:
         with pytest.raises(ValueError, match="can't rebuild"):
             _generate(program)
 
+    @pytest.mark.parametrize(
+        "wrap_first, wrap_second",
+        [
+            pytest.param(lambda x: x, lambda x: [x], id="itself and in a list"),
+            pytest.param(lambda x: [x], lambda x: x, id="in a list and itself"),
+            pytest.param(lambda x: x, lambda x: (x,), id="itself and in a tuple"),
+            pytest.param(lambda x: [x], lambda x: [x], id="in two lists"),
+            pytest.param(lambda x: {"k": x}, lambda x: (1, [x]), id="deeper in each"),
+        ],
+    )
+    def test_code_py_refuses_a_list_two_constants_share(self, wrap_first, wrap_second):
+        shared = [0]
+        with Program(strict=False) as program:
+            with Rung():
+                run_function(constant, ins={"v": A, "value": wrap_first(shared)}, outs={"out": B})
+                run_function(constant, ins={"v": A, "value": wrap_second(shared)}, outs={"out": A})
+        with pytest.raises(ValueError, match="shares a list or dict"):
+            _generate(program)
+
+    def test_what_refusing_a_shared_list_saves_a_code_py_from(self):
+        """Every path that runs it says the same: the change shows through the other constant."""
+        C = Int("C")
+
+        def bump(v, m):
+            m[0] += 1
+            return {"out": m[0]}
+
+        def read_nested(v, m):
+            return {"out": m[0][0]}
+
+        def build() -> Program:
+            shared = [0]
+            with Program(strict=False) as program:
+                with Rung():
+                    run_function(bump, ins={"v": A, "m": shared}, outs={"out": C})
+                    run_function(read_nested, ins={"v": A, "m": [shared]}, outs={"out": B})
+            return program
+
+        plc = PLC(build(), dt=0.01)
+        compiled = CompiledPLC(build(), dt=0.01)
+        for runner in (plc, compiled):
+            for _ in range(4):
+                runner.step()
+            assert runner.current_state.tags["B"] == 4
+            assert runner.current_state.tags["C"] == 4
+
+    def test_code_py_takes_one_list_handed_twice_and_two_equal_lists(self):
+        """One object is one binding, and two equal lists are two: the text says each."""
+
+        def bump(v, m):
+            m[0] += 1
+            return {"out": m[0]}
+
+        C = Int("C")
+        shared = [0]
+        with Program(strict=False) as one:
+            with Rung():
+                run_function(bump, ins={"v": A, "m": shared}, outs={"out": B})
+                run_function(bump, ins={"v": A, "m": shared}, outs={"out": C})
+        with Program(strict=False) as two:
+            with Rung():
+                run_function(bump, ins={"v": A, "m": [0]}, outs={"out": B})
+                run_function(bump, ins={"v": A, "m": [0]}, outs={"out": C})
+        assert "_fc_0 = [0]" in _generate(one).code
+        assert "_fc_1" not in _generate(one).code
+        assert "_fc_1 = [0]" in _generate(two).code
+
     def test_a_literal_keeps_its_text(self):
         program = _always_called(
             takes_literals,
