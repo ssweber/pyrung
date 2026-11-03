@@ -215,8 +215,7 @@ def pilot_how(
     ``max_scans`` bounds invocation search work, including discarded attempts,
     probe scans, and bounded research requests; restoring a checkpoint never
     refunds it. Work is in interpreted scans: a scan that ran in the guarded
-    loop costs a hundredth of one, and traces and kernel compiles are charged
-    too. Research tools also keep their local caps.
+    loop costs a hundredth of one. Research tools also keep their local caps.
 
     ``wall_clock_s`` is a backstop on real time, since most of a search's time
     is work the ledger does not charge. A how() that runs out of it stops and
