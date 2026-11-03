@@ -11,10 +11,8 @@ from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
 from pyrung.circuitpy.codegen._constants import _STORE_TYPE_HELPERS
 from pyrung.circuitpy.codegen.context import CodegenContext
-from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core.system_points import system
 
-_SYSTEM_SLOT_BY_HARDWARE = {slot.hardware.name: slot for slot in SYSTEM_CLICK_SLOTS}
 _WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "XD", "YD", "SD"}
 _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
 #: Banks a rung can use raw (``ds[3901]``), served as used.  System points and
@@ -131,88 +129,12 @@ def _backing_global_for_slot(ctx: CodegenContext, slot: _ModbusBackedSlot) -> st
     return ctx.block_symbols[block_id]
 
 
-def _modbus_valid_ranges(bank: str) -> tuple[tuple[int, int], ...]:
-    cfg = BANKS[bank]
-    addresses: set[int] = set()
-    if cfg.valid_ranges is not None:
-        for lo, hi in cfg.valid_ranges:
-            for idx in range(lo, hi + 1):
-                addr, _ = plc_to_modbus(bank, idx)
-                addresses.add(addr)
-    else:
-        for idx in range(cfg.min_addr, cfg.max_addr + 1):
-            addr, _ = plc_to_modbus(bank, idx)
-            addresses.add(addr)
-    ordered = sorted(addresses)
-    if not ordered:
-        return ()
-    ranges: list[tuple[int, int]] = []
-    lo = hi = ordered[0]
-    for addr in ordered[1:]:
-        if addr == hi + 1:
-            hi = addr
-            continue
-        ranges.append((lo, hi))
-        lo = hi = addr
-    ranges.append((lo, hi))
-    return tuple(ranges)
-
-
 def _word_start_expr(word_index_expr: str) -> str:
     return (
         f"(1 if int({word_index_expr}) == 0 else "
         f"21 if int({word_index_expr}) == 1 else "
         f"(((int({word_index_expr}) // 2) * 100) + 1))"
     )
-
-
-def _render_sparse_reverse_coil(bank: str, base: int) -> list[str]:
-    return [
-        f"    if {base} <= addr <= {base + 31}:",
-        f"        _offset = addr - {base}",
-        "        if _offset < 16:",
-        f'            return ("{bank}", _offset + 1)',
-        f'        return ("{bank}", 21 + (_offset - 16))',
-        f"    if {base + 32} <= addr <= {base + 47}:",
-        f'        return ("{bank}", 101 + (addr - {base + 32}))',
-        f"    if {base + 64} <= addr <= {base + 79}:",
-        f'        return ("{bank}", 201 + (addr - {base + 64}))',
-        f"    if {base + 96} <= addr <= {base + 111}:",
-        f'        return ("{bank}", 301 + (addr - {base + 96}))',
-        f"    if {base + 128} <= addr <= {base + 143}:",
-        f'        return ("{bank}", 401 + (addr - {base + 128}))',
-        f"    if {base + 160} <= addr <= {base + 175}:",
-        f'        return ("{bank}", 501 + (addr - {base + 160}))',
-        f"    if {base + 192} <= addr <= {base + 207}:",
-        f'        return ("{bank}", 601 + (addr - {base + 192}))',
-        f"    if {base + 224} <= addr <= {base + 239}:",
-        f'        return ("{bank}", 701 + (addr - {base + 224}))',
-        f"    if {base + 256} <= addr <= {base + 271}:",
-        f'        return ("{bank}", 801 + (addr - {base + 256}))',
-    ]
-
-
-def _render_reverse_register_case(bank: str) -> list[str]:
-    mapping = MODBUS_MAPPINGS[bank]
-    cfg = BANKS[bank]
-    if bank == "TXT":
-        max_reg = mapping.base + ((cfg.max_addr + 1) // 2) - 1
-        return [
-            f"    if {mapping.base} <= addr <= {max_reg}:",
-            f'        return ("TXT", ((addr - {mapping.base}) * 2) + 1, 0)',
-        ]
-    if cfg.min_addr == 0:
-        max_reg = mapping.base + cfg.max_addr
-        return [
-            f"    if {mapping.base} <= addr <= {max_reg}:",
-            f'        return ("{bank}", addr - {mapping.base}, 0)',
-        ]
-    max_reg = mapping.base + (mapping.width * cfg.max_addr) - 1
-    return [
-        f"    if {mapping.base} <= addr <= {max_reg}:",
-        f"        _offset = addr - {mapping.base}",
-        f'        return ("{bank}", (_offset // {mapping.width}) + 1, _offset % {mapping.width})',
-    ]
 
 
 def _render_ethernet_setup(ctx: CodegenContext) -> list[str]:

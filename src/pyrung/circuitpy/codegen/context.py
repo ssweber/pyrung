@@ -298,7 +298,6 @@ class CodegenContext:
     uses_board_switch: bool = False
     uses_board_led: bool = False
     uses_board_neopixel: bool = False
-    uses_board_save_memory_cmd: bool = False
     uses_random: bool = False
     _current_function: str | None = None
     # Open forloop nesting while compiling, so nested loops get their own
@@ -741,9 +740,6 @@ class CodegenContext:
         self._name_counters[prefix] = n
         return f"{prefix}_{n}"
 
-    def reset_name_counters(self) -> None:
-        self._name_counters.clear()
-
     def state_key_for(self, obj: Any) -> str:
         """The site key ``bind_sites`` gave *obj*; raises for an unbound object.
 
@@ -1075,7 +1071,6 @@ class CodegenContext:
         }
         self.uses_board_switch = _BOARD_SWITCH_TAG in names
         self.uses_board_led = _BOARD_LED_TAG in names
-        self.uses_board_save_memory_cmd = _BOARD_SAVE_MEMORY_CMD_TAG in names
         self.uses_board_neopixel = bool(
             {_BOARD_NEOPIXEL_R_TAG, _BOARD_NEOPIXEL_G_TAG, _BOARD_NEOPIXEL_B_TAG} & names
         )

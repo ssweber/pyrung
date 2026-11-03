@@ -45,12 +45,6 @@ def _optional_value_type_name(value: Any) -> str | None:
     return None
 
 
-def _optional_range_type_name(range_value: Any) -> str | None:
-    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
-        return range_value.block.type.name
-    return None
-
-
 def _value_type_name(value: Any) -> str:
     if isinstance(value, Tag):
         return value.type.name
