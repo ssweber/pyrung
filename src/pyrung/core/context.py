@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from math import copysign
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pyrsistent import PMap, pmap
@@ -36,11 +37,25 @@ WriteOccurrenceSink = Callable[
 _MISSING = object()
 
 
+def same_stored_value(old: Any, new: Any) -> bool:
+    """Whether storing *new* over *old* leaves the same value, type and sign of zero too.
+
+    ``==`` is not enough: a state that kept the old object on ``False`` over ``0`` or
+    ``-0.0`` over ``0.0`` would depend on when it was last published, and a compiled
+    range publishes sparsely.  What a tag holds is what was last written to it.
+    """
+    if old is new:
+        return True
+    if type(old) is not type(new) or old != new:
+        return False
+    return type(new) is not float or new != 0.0 or copysign(1.0, old) == copysign(1.0, new)
+
+
 def _commit_changed(base: PMap, pending: Mapping[str, Any]) -> PMap:
     """Publish only final values that differ from the immutable scan base."""
     evolver = None
     for key, value in pending.items():
-        if base.get(key, _MISSING) == value:
+        if same_stored_value(base.get(key, _MISSING), value):
             continue
         if evolver is None:
             evolver = base.evolver()

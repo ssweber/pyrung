@@ -10,6 +10,7 @@ cannot pass as agreement.
 from __future__ import annotations
 
 import ast
+import math
 import random
 from collections import Counter
 from collections.abc import Callable
@@ -56,6 +57,7 @@ from pyrung import (
 )
 from pyrung import Counter as CounterBlock
 from pyrung.core import compiled_run, scan_trace
+from pyrung.core.context import same_stored_value
 from pyrung.core.expression import randint
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical, Ramp
@@ -738,6 +740,124 @@ def test_every_system_tag_read_and_written_equals_stepping(name: str, fine_loop:
     """Keys included: a stored point stays out of the state until its first write."""
     program = _build(_reads_and_writes(SYSTEM_TAGS_BY_NAME[name]))
     _lockstep(program, [(1.0, {Run: True}), (2.0, {})])
+
+
+# --- A tag holds what was last written --------------------------------------------
+
+
+Coiled = Int("TrCoiled")
+CoiledReal = Real("TrCoiledReal")
+Gained = Real("TrGained")
+Source = Real("TrSource")
+
+
+def _pulsed_coil_on_int() -> None:
+    with Rung(Hit):
+        out(Coiled)
+
+
+def _pulsed_oneshot_on_int() -> None:
+    with Rung(Hit):
+        out(Coiled, oneshot=True)
+
+
+def _pulsed_coil_on_real() -> None:
+    with Rung(Hit):
+        out(CoiledReal)
+
+
+def _pulsed_coil_on_a_slot() -> None:
+    with Rung(Hit):
+        out(Ds[1])
+
+
+def _pulsed_coil_on_a_range() -> None:
+    with Rung(Hit):
+        out(Ds.select(1, 3))
+
+
+def _pulsed_latch_over_a_stored_one() -> None:
+    with Rung(fall(system.sys.clock_1s)):
+        copy(1, Coiled)
+    with Rung(rise(system.sys.clock_1s)):
+        reset(Coiled)
+    with Rung(Hit):
+        latch(Coiled)
+
+
+def _pulsed_negative_gain() -> None:
+    with Rung(Hit):
+        copy(5.5, Source)
+    with Rung(~Hit):
+        copy(0.0, Source)
+    with Rung():
+        calc(Source * -1.0, Gained)
+
+
+LAST_WRITTEN = {
+    "coil_on_int": _pulsed_coil_on_int,
+    "oneshot_on_int": _pulsed_oneshot_on_int,
+    "coil_on_real": _pulsed_coil_on_real,
+    "coil_on_a_slot": _pulsed_coil_on_a_slot,
+    "coil_on_a_range": _pulsed_coil_on_a_range,
+    "latch_over_a_stored_one": _pulsed_latch_over_a_stored_one,
+    "negative_gain": _pulsed_negative_gain,
+}
+
+
+@pytest.mark.parametrize("name", sorted(LAST_WRITTEN))
+def test_a_stretch_between_published_states_leaves_what_stepping_does(
+    name: str, fine_loop: None
+) -> None:
+    """A value that leaves and comes back to an equal one of another type or sign of zero,
+    between two published states: 0 -> True -> False, 0.0 -> -5.5 -> -0.0."""
+
+    def program() -> None:
+        with Rung(Run):
+            on_delay(T, 10_000_000)
+        with Rung(rise(system.sys.clock_1s), T.Acc > 100):
+            out(Hit)
+        LAST_WRITTEN[name]()
+
+    counts = _lockstep(_build(program), [(0.01, {Run: True}), (4.0, {})])
+    assert counts["loop scans"] > 0
+
+
+def test_stepping_publishes_the_write_that_equals_what_the_tag_held() -> None:
+    def program() -> None:
+        with Rung(Run):
+            out(Coiled)
+        with Rung():
+            calc(Source * -1.0, Gained)
+
+    plc = PLC(_build(program), dt=0.01)
+    plc.step()
+    assert plc.state.tags[Coiled.name] is False
+    assert math.copysign(1.0, plc.state.tags[Gained.name]) == -1.0
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "same"),
+    [
+        (0, 0, True),
+        (700, 350 * 2, True),
+        (False, False, True),
+        (1.5, 3.0 / 2, True),
+        (0.0, 0.0 * 1, True),
+        (-0.0, 0.0 * -1, True),
+        ("a", "a", True),
+        (0, False, False),
+        (True, 1, False),
+        (0, 0.0, False),
+        (0.0, -0.0, False),
+        (-0.0, 0.0, False),
+        (1, 2, False),
+        (float("nan"), float("nan"), False),
+        (object(), 0, False),
+    ],
+)
+def test_same_stored_value(old: Any, new: Any, same: bool) -> None:
+    assert same_stored_value(old, new) is same
 
 
 # --- Stop predicates --------------------------------------------------------------

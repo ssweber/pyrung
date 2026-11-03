@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
-from pyrung.core.context import ScanContext
+from pyrung.core.context import ScanContext, same_stored_value
 from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -824,9 +824,10 @@ class CompiledPLC:
         path did ``pmap(self._committed_tags())`` every scan — re-hashing all
         ~N tags to build a PMap ~identical to the prior one.  A PLC scan changes
         a handful of tags, so we instead seed an evolver from the previous
-        commit (``self._state.tags``) and set only the tags whose value differs
-        from ``self._prev_committed_tags`` (a plain-dict mirror kept for fast
-        ``get``).  Structural sharing makes this O(changed) instead of O(N).
+        commit (``self._state.tags``) and set only the tags whose stored value
+        differs (``same_stored_value``) from ``self._prev_committed_tags`` (a
+        plain-dict mirror kept for fast ``get``).  Structural sharing makes this
+        O(changed) instead of O(N).
 
         Returns the committed ``PMap`` and refreshes the plain-dict mirror.
         The committed key set only grows during stepping (``_live_block_tags``
@@ -849,7 +850,7 @@ class CompiledPLC:
                 del evolver[name]
                 continue
             committed[name] = value
-            if prev_dict[name] != value:
+            if not same_stored_value(prev_dict[name], value):
                 evolver[name] = value
         for name in live | self._extra_commit_tag_names:
             if name in committed or name in _DERIVED_TAG_NAMES:
@@ -869,7 +870,7 @@ class CompiledPLC:
         prev = self._state.memory
         evolver = prev.evolver()
         for key, value in self._kernel.memory.items():
-            if prev.get(key, _MISSING) != value:
+            if not same_stored_value(prev.get(key, _MISSING), value):
                 evolver[key] = value
         return evolver.persistent()
 
