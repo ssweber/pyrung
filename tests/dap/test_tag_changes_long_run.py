@@ -8,12 +8,13 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out, runner as runner_module
+from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out
+from pyrung.core import runner as runner_module
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.handlers import history_seek
 from pyrung.dap.protocol import read_message
 
-WATCHED = ["Lamp", "Stage", "T2_Done", "Mirror", "Patched"]
+WATCHED = ["Lamp", "Stage", "T2_Done", "Held", "Mirror", "Patched"]
 
 _SCRIPT = """
 from pyrung.core import PLC, Bool, Int, Program, Rung, Timer, copy, latch, on_delay, out
@@ -83,7 +84,6 @@ class Session:
         arguments.setdefault("count", 500)
         return self._request("pyrungTagChanges", arguments)["body"]["entries"]
 
-
     def chain(self, query: str) -> dict[str, Any]:
         return self._request("pyrungCausal", {"query": query}, expect_success=False)
 
@@ -148,7 +148,9 @@ def test_a_transition_keeps_its_own_scan_and_a_pulse_is_not_lost(compiled: Sessi
     assert by_scan[3005]["changes"]["Lamp"] == ["False", "True"]
 
     rises = sorted(
-        scan for scan, entry in by_scan.items() if entry["changes"].get("T2_Done", [0, 0])[1] == "True"
+        scan
+        for scan, entry in by_scan.items()
+        if entry["changes"].get("T2_Done", [0, 0])[1] == "True"
     )
     # One scan up, one scan down, every time round: the timer holds its Acc for neither.
     assert len(rises) >= 39
