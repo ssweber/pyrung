@@ -1679,8 +1679,13 @@ def _coast_to_bearing(
         # horizon explicitly; a counterfactual that makes the distant boundary
         # unreachable must not turn that bounded proof into a fresh long coast.
         if estimate is not None and budget is None:
+            # The loop's scans are what the estimate counts, at their price; the interpreted
+            # scans around them cost a unit each.  No charge exceeds the scans themselves.
             scans_per_unit = session.loop_scans_per_unit() if session else 1
-            coast_budget = max(coast_budget, estimate // scans_per_unit + 3)
+            coast_budget = max(
+                coast_budget,
+                min(estimate + 3, estimate // scans_per_unit + _COAST_BUDGET),
+            )
         heading_target = predicate_trigger(
             "target",
             TARGET,

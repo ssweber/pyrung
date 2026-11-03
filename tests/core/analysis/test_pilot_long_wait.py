@@ -35,6 +35,18 @@ def _chain(first: int, second: int, unit: str) -> tuple[Program, Bool]:
     return prog, lamp
 
 
+def _one_timer(preset: int, unit: str, coil: Any = latch) -> tuple[Program, Bool]:
+    go = Bool("LwGo")
+    lamp = Bool("LwLamp")
+    t1 = Timer.clone("LwT1")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            on_delay(t1, preset=preset, unit=unit)
+        with Rung(t1.Done):
+            coil(lamp)
+    return prog, lamp
+
+
 def _soak() -> tuple[Program, Bool]:
     start = Bool("LwStart", external=True)
     run = Bool("LwRun")
@@ -111,6 +123,7 @@ def _stepped_from_the_start(fork: PLC) -> PLC:
         (12, 8, "min", 120_001),
         (20, 10, "min", 180_001),
         (1200, 1, "sec", 120_099),
+        (2, 2, "h", 1_439_999),
     ],
 )
 def test_a_chain_of_timers_under_a_hold_lands_on_the_first_scan(
@@ -124,6 +137,48 @@ def test_a_chain_of_timers_under_a_hold_lands_on_the_first_scan(
     assert fork.state.tags[goal.name] is True
     assert fork.history.at(fork.state.scan_id - 1).tags[goal.name] is False
     assert path.replay().state.tags == fork.state.tags
+
+
+@pytest.mark.parametrize(
+    ("preset", "unit", "coil", "scans"),
+    [
+        pytest.param(9990, "sec", latch, 999_000, id="9990s"),
+        pytest.param(9995, "sec", latch, 999_500, id="9995s"),
+        pytest.param(10_000, "sec", latch, 1_000_000, id="10000s"),
+        pytest.param(3, "h", latch, 1_080_000, id="3h"),
+        pytest.param(4, "h", latch, 1_440_000, id="4h"),
+        pytest.param(4, "h", out, 1_440_000, id="4h_out"),
+        pytest.param(8, "h", latch, 2_880_000, id="8h"),
+        pytest.param(24, "h", latch, 8_640_000, id="24h"),
+    ],
+)
+def test_one_timer_past_a_million_scans_lands_on_the_first_scan(
+    preset: int, unit: str, coil: Any, scans: int
+) -> None:
+    """The estimate pays for the loop's scans, and the interpreted scans around them are paid too."""
+    prog, goal = _one_timer(preset, unit, coil)
+    path = _how(prog, goal)
+    assert path.reachable, str(path)
+    fork = path.fork
+    assert fork.state.scan_id == 1 + scans
+    assert fork.state.tags[goal.name] is True
+    assert fork.state.tags["LwT1_Done"] is True
+    assert fork.history.at(fork.state.scan_id - 1).tags[goal.name] is False
+    assert path.replay().state.tags == fork.state.tags
+
+
+@pytest.mark.parametrize("coil", [latch, out], ids=["latch", "out"])
+def test_one_timer_stepped_from_the_start_lands_there_too(coil: Any) -> None:
+    prog, goal = _one_timer(5, "min", coil)
+    path = _how(prog, goal)
+    assert path.reachable, str(path)
+    fork = path.fork
+    assert fork.state.scan_id == 30_002
+    stepped = _stepped_from_the_start(fork)
+    assert stepped.state.scan_id == fork.state.scan_id
+    assert stepped.state.tags == fork.state.tags
+    assert stepped.state.tags[goal.name] is True
+    assert stepped.history.at(fork.state.scan_id - 1).tags[goal.name] is False
 
 
 @pytest.mark.parametrize(
