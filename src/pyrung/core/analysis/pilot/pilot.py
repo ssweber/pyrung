@@ -404,7 +404,7 @@ def _finished_event(
 ) -> PilotEvent:
     """Build the single terminal recording shape for every loop exit."""
 
-    return PilotEvent(
+    event = PilotEvent(
         "finished",
         state.work.state.scan_id,
         {
@@ -424,6 +424,11 @@ def _finished_event(
             ),
         },
     )
+    # The caller gets this fork to run.  The search's clock, memo and refusal to restart
+    # end with the search.
+    state.work._coast_memo = None
+    state.work._search_refuses_restart = False
+    return event
 
 
 def _stuck_event(
