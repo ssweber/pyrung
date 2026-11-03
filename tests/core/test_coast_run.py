@@ -525,6 +525,68 @@ class TestARungThatFiresInsideARange:
         self._check(plc, self._stepped(600))
 
 
+def _writes_two_values_a_scan() -> None:
+    # A loop's record cannot say which attempt was the rung's last.
+    with Rung():
+        on_delay(T, 30000)
+    with Rung():
+        copy(T.Acc, X)
+        calc(T.Acc + 1, X)
+    with Rung(X > 2):
+        out(Hit)
+
+
+def _writes_too_many_values() -> None:
+    # A stepped run's record gives up on a column this various.
+    with Rung():
+        on_delay(T, 30000)
+    with Rung():
+        calc(T.Acc * T.Acc % 1009, X)
+    with Rung(X > 2):
+        out(Hit)
+
+
+class TestRungFiringsAlwaysHaveTheirValues:
+    SCANS = 1000
+
+    def _stepped(self, build) -> PLC:
+        plc = _runner(build, 0.01)
+        for _ in range(self.SCANS):
+            plc.step()
+        return plc
+
+    def _coasted(self, build) -> PLC:
+        plc = _runner(build, 0.01)
+        coast_until(plc, lambda _state: False, budget=self.SCANS)
+        return plc
+
+    @pytest.mark.parametrize("build", [_writes_two_values_a_scan, _writes_too_many_values])
+    @pytest.mark.parametrize("run", ["_stepped", "_coasted"])
+    def test_each_says_what_the_scan_wrote(self, build, run: str) -> None:
+        plc = getattr(self, run)(build)
+        stepped = self._stepped(build)
+        for scan in (1, 2, 150, 500, 777, self.SCANS):
+            firings = plc.rung_firings(scan)
+            assert firings == stepped.rung_firings(scan), scan
+            assert firings[1]["AdvX"] == plc.history.at(scan).tags["AdvX"], scan
+
+    def test_the_records_did_give_up_on_these(self) -> None:
+        # Or the test above asks nothing of the replay.
+        for plc in (
+            self._coasted(_writes_two_values_a_scan),
+            self._stepped(_writes_too_many_values),
+        ):
+            assert plc._recorded_rung_firings(777)[1]["AdvX"] is _UNKNOWN_VALUE
+
+    def test_too_far_to_step_again_is_a_named_error(self, monkeypatch) -> None:
+        plc = self._stepped(_writes_too_many_values)
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
+        anchor = plc._nearest_checkpoint_at_or_before(776)
+        assert anchor is not None and 777 - anchor > 10
+        with pytest.raises(UnrecordedScansError, match=r"scans 777\.\.777 include"):
+            plc.rung_firings(777)
+
+
 def test_a_long_wait_runs_in_the_loop() -> None:
     plc = _runner(_ramp, 0.01)
     stats: dict[str, int] = {}
@@ -752,6 +814,39 @@ class TestRecordsPastTheirCap:
             assert str(plc.cause(Toggle, scan)) == str(stepped.cause(Toggle, scan))
         assert not plc._fold_windows
         compare_records("records past the cap", plc, stepped, 0)
+
+    def test_one_scan_far_from_a_checkpoint_counts_the_run_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plc = self._coasted(monkeypatch, 200)
+        tip = plc.state.scan_id
+        first, last = plc._fold_windows[-1]
+        plc._checkpoints.clear()
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", last - plc._initial_scan_id - 1)
+        with pytest.raises(UnrecordedScansError) as refused:
+            plc.rung_firings(last)
+        assert refused.value.scans == last - plc._initial_scan_id
+        assert tip == plc.state.scan_id
+        assert plc._fold_windows[-1] == (first, last)
+
+    def test_a_settle_polls_the_searchs_limits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        plc = self._coasted(monkeypatch, 200)
+        first, last = plc._fold_windows[-1]
+        plc._checkpoints.clear()
+        ran_out = RuntimeError("out of time")
+        polls = {"n": 0}
+
+        def check() -> None:
+            polls["n"] += 1
+            if polls["n"] == 5:
+                raise ran_out
+
+        memo_of(plc).check_limits = check
+        with pytest.raises(RuntimeError, match="out of time"):
+            plc.rung_firings(last)
+        assert polls["n"] == 5
+        # Nothing of it was kept, and a later question can still ask.
+        assert plc._fold_windows[-1] == (first, last)
 
     def test_too_far_to_settle_is_a_named_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         plc = self._coasted(monkeypatch, 200)

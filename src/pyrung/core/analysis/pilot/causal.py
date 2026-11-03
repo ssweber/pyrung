@@ -195,7 +195,7 @@ def _program_written_changes(
                 continue
 
             # User logic follows patches and both synthesis brackets.
-            main_firings = plc.rung_firings(scan_id)
+            main_firings = plc._recorded_rung_firings(scan_id)
             if any(
                 tag in writes and _values_match(writes[tag], value)
                 for writes in main_firings.values()

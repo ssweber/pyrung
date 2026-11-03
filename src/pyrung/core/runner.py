@@ -49,7 +49,12 @@ from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
-from pyrung.core.rung_firings import SETTLE_SCAN_LIMIT, RungFiringTimelines, UnrecordedScansError
+from pyrung.core.rung_firings import (
+    _UNKNOWN_VALUE,
+    SETTLE_SCAN_LIMIT,
+    RungFiringTimelines,
+    UnrecordedScansError,
+)
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
 from pyrung.core.state import SystemState
@@ -1931,11 +1936,42 @@ class PLC:
         Values are attempted writes, including a later writer reasserting the
         already-pending value. Transition consumers compare committed state;
         causal execution consumers retain the exact writer occurrence.
+
+        A column of values too various to keep, or that a loop's record cannot speak for,
+        is read by stepping the scan again from the nearest checkpoint, up to
+        ``UnrecordedScansError`` where that is too far.
         """
         target = self._playhead if scan_id is None else scan_id
+        firings = self._recorded_rung_firings(target)
+        if any(value is _UNKNOWN_VALUE for writes in firings.values() for value in writes.values()):
+            owner = self._causal_lineage.owner_at(target)
+            assert owner is not None
+            return owner._runner()._rung_firings_stepped_again(target, self._search_limits())
+        return firings
+
+    def _recorded_rung_firings(self, target: int) -> PMap:
+        """What the timelines say of *target*, a value they gave up on as ``_UNKNOWN_VALUE``."""
         self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.rung_firing_timelines.at(target) if owner is not None else pmap()
+
+    def _rung_firings_stepped_again(
+        self, target: int, check_limits: Callable[[], None] | None
+    ) -> PMap:
+        steps = target - self._replay_anchor_scan(target - 1)
+        if steps > SETTLE_SCAN_LIMIT:
+            raise UnrecordedScansError(target, target, steps)
+        anchor = self._nearest_checkpoint_at_or_before(target - 1)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+        for scan_id in range(anchor_scan_id + 1, target + 1):
+            if check_limits is not None:
+                check_limits()
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            if scan_id == target:
+                # One scan's values, which the run-up cannot have made too various to keep.
+                replay._rung_firing_timelines = RungFiringTimelines()
+            replay.step()
+        return replay._rung_firing_timelines.at(target)
 
     def _node_firings_at(self, scan_id: int | None = None) -> PMap:
         """Return node-level subroutine/synthesis firings for the given scan.
@@ -2254,7 +2290,7 @@ class PLC:
         return recorded_cause(
             logic=self._logic,
             history=cast(History, cause_history),
-            rung_firings_fn=self.rung_firings,
+            rung_firings_fn=self._recorded_rung_firings,
             tag=tag,
             scan_id=scan,
             pdg=self._ensure_pdg() if self._logic else None,
@@ -2347,7 +2383,7 @@ class PLC:
         return recorded_effect(
             logic=self._logic,
             history=self._history,
-            rung_firings_fn=self.rung_firings,
+            rung_firings_fn=self._recorded_rung_firings,
             tag=tag,
             scan_id=scan,
             steady_state_k=steady_state_k,
@@ -2387,16 +2423,29 @@ class PLC:
         ]
         if not asked:
             return
-        scans = sum(end - start + 1 for _owner, (start, end) in asked)
+        # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
+        scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
         if scans > SETTLE_SCAN_LIMIT:
             raise UnrecordedScansError(asked[0][1][0], asked[-1][1][1], scans)
         for owner, (start, end) in asked:
-            owner._settle_window(start, end)
+            owner._settle_window(start, end, self._search_limits())
 
-    def _settle_window(self, first: int, last: int) -> None:
+    def _replay_anchor_scan(self, scan_id: int) -> int:
+        anchor = self._nearest_checkpoint_at_or_before(scan_id)
+        return anchor if anchor is not None else self._initial_scan_id
+
+    def _search_limits(self) -> Callable[[], None] | None:
+        """What a how() asking this question polls while it waits for the answer."""
+        return None if self._coast_memo is None else self._coast_memo.check_limits
+
+    def _settle_window(
+        self, first: int, last: int, check_limits: Callable[[], None] | None
+    ) -> None:
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for scan_id in range(anchor_scan_id + 1, last + 1):
+            if check_limits is not None:
+                check_limits()
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             replay.step()
         self._rung_firing_timelines.replace_range(replay._rung_firing_timelines, first, last)

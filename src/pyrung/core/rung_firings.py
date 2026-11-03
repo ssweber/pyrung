@@ -32,8 +32,9 @@ class UnrecordedScansError(ValueError):
 
     def __init__(self, first: int, last: int, scans: int) -> None:
         super().__init__(
-            f"scans {first}..{last} include {scans} that ran compiled and have no records yet, "
-            f"and a question may step at most {SETTLE_SCAN_LIMIT} again to get them; "
+            f"scans {first}..{last} include some that ran compiled and have no records yet, "
+            f"and getting them means stepping {scans} again from the nearest checkpoint, where "
+            f"a question may step at most {SETTLE_SCAN_LIMIT}; "
             "ask over a shorter range (since=, or an earlier scan) or run them stepped"
         )
         self.first = first
