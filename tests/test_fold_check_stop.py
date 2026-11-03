@@ -675,6 +675,23 @@ def test_own_twin_catches_a_reset_only_one_runner_took() -> None:
         compare(twin)
 
 
+def test_own_twin_catches_a_reset_only_the_twin_took() -> None:
+    plc = _plc()
+    twin = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch),
+        fold_check.own_twin(plc) as compare,
+    ):
+        plc.run(3)
+        twin.run(3)
+        twin.stop()
+        twin.start()
+        plc.run(2)
+        twin.run(2)
+        compare(twin)
+
+
 def test_own_twin_sees_a_base_the_run_left_off() -> None:
     plc = _plc()
     twin = _plc()
@@ -1038,6 +1055,7 @@ def test_the_tests_using_own_twin_are_these() -> None:
                 "test_own_twin_compare_sees_another_scan",
                 "test_own_twin_lets_off_a_reset_both_runners_took",
                 "test_own_twin_catches_a_reset_only_one_runner_took",
+                "test_own_twin_catches_a_reset_only_the_twin_took",
                 "test_own_twin_sees_a_base_the_run_left_off",
                 "test_own_twin_sees_a_base_the_stepped_runner_moved_and_the_run_did_not",
                 "test_own_twin_lets_two_runners_start_at_their_own_times",

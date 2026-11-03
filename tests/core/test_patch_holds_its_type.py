@@ -347,7 +347,6 @@ def test_a_name_means_what_the_rungs_say_whatever_else_happened_to_the_program(
             blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
     happened(slots, program)
     plc = engine(program, dt=0.01)
-    assert "DS5" not in plc.current_state.tags
     plc.patch({"DS5": 99999, "DS2": 99999})
     plc.step()
     assert plc.current_state.tags["DS5"] == 99999

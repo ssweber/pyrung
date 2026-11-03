@@ -128,7 +128,7 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
 
 
 @pytest.mark.parametrize("transition", ["reboot", "stop_to_run"])
-def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
+def test_a_dormant_range_keeps_through_a_battery_reboot_and_not_a_restart(
     transition: str,
 ) -> None:
     enabled = Bool("ResetRangeEnabled", external=True)
@@ -162,11 +162,15 @@ def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    if transition == "reboot":
-        # A battery keeps what a slot the rungs reach holds, named or not.
-        assert compiled.current_state.tags["ResetRange2"] == 7
-    else:
-        assert not {"ResetRange1", "ResetRange2"} & set(compiled.current_state.tags)
+    for runner in (plc, compiled):
+        tags = runner.current_state.tags
+        if transition == "reboot":
+            # A battery keeps what a slot the rungs reach holds, named or not.
+            assert (tags["ResetRange1"], tags["ResetRange2"]) == (7, 7)
+            assert tags["ResetRangeEnabled"] is False
+            assert runner.current_state.scan_id == 1
+        else:
+            assert not {"ResetRange1", "ResetRange2"} & set(tags)
 
 
 def test_compiled_plc_initial_state_defines_live_block_membership() -> None:

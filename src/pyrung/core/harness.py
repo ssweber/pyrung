@@ -493,7 +493,7 @@ class Harness:
 
     def _discover_couplings(self) -> None:
         seen_runtimes: set[int] = set()
-        reached = {**self._plc._tags_rungs_reach.declared(), **self._plc._known_tags_by_name}
+        reached = self._plc._tags_rungs_reach.declared_with(self._plc._known_tags_by_name)
         for tag in reached.values():
             runtime = getattr(tag, "_pyrung_structure_runtime", None)
             if runtime is None:

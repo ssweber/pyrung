@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable
+from itertools import count
 from types import SimpleNamespace
 from typing import Any
 
@@ -36,6 +37,7 @@ from pyrung.core import (
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical, Ramp
+from pyrung.core.tag import Tag
 from pyrung.dap.bounds_console import emit_bounds_violations
 from pyrung.dap.console import _resolve_tags
 from pyrung.dap.handlers.simulation import resolve_target_locked
@@ -182,14 +184,20 @@ def test_one_program_means_the_same_on_each_runner_of_it(engine, reset) -> None:
 
 
 def test_what_a_run_asked_of_a_program_is_not_what_its_rungs_say() -> None:
+    # What the runner knows can grow with what has been asked, as a block's cache does.  What
+    # the rungs reach, which a reset, the limits and the plants go by, cannot.
+    def reach(plc) -> tuple[set[str], set[str]]:
+        named = {tag.name for tag in plc._tags_rungs_reach.walk().named}
+        return named, plc._tags_rungs_reach.names()
+
     rc, sink = _blocks()
     program = _through_a_range(rc, sink)
-    before = set(PLC(program, dt=0.01)._known_tags_by_name)
+    before = reach(PLC(program, dt=0.01))
     ran = PLC(program, dt=0.01)
     ran.patch({"Go": True})
     ran.run(2)
     CompiledPLC(program, dt=0.01)
-    assert set(PLC(program, dt=0.01)._known_tags_by_name) == before
+    assert reach(PLC(program, dt=0.01)) == before
 
 
 def test_a_call_in_bare_rungs_reaches_its_subroutine() -> None:
@@ -310,9 +318,35 @@ def test_plc_tags_holds_a_slot_a_range_reaches(named) -> None:
     plc = PLC(_through_a_range(rc, sink), dt=0.01)
     assert plc.tags["Rc2"] is rc[2]
     assert "Rc5" not in plc.tags
-    assert "Rc2" not in plc.current_state.tags
+    # A slot something named before the runner was built starts in the state, as ever.
+    assert ("Rc2" in plc.current_state.tags) is named
     plc.step()
-    assert "Rc2" not in plc.current_state.tags
+    assert ("Rc2" in plc.current_state.tags) is named
+
+
+def test_plc_tags_makes_a_slot_a_tag_only_when_it_is_read() -> None:
+    rc, sink = _blocks()
+    plc = PLC(_through_a_range(rc, sink), dt=0.01)
+    tags = plc.tags
+    assert "Rc2" in tags and "Rc5" not in tags
+    assert {"Rc1", "Rc2", "Rc3", "Go"} <= set(tags)
+    assert len(tags) == len(set(tags))
+    assert not rc._tag_cache
+    assert tags["Rc2"] is rc[2]
+    assert tags.get("Rc5") is None
+    with pytest.raises(KeyError):
+        tags["Rc5"]
+
+
+def test_plc_tags_follows_a_slot_named_after_it_was_asked() -> None:
+    rc, sink = _blocks()
+    plc = PLC(_through_a_range(rc, sink), dt=0.01)
+    assert "Rc2" in plc.tags
+    rc.slot(2, name="Late")
+    assert "Late" in plc.tags and "Rc2" not in plc.tags
+    assert plc.tags["Late"] is rc[2]
+    plc.patch({"Late": 99999})
+    assert plc.pending_patches["Late"] == 32767
 
 
 def test_plc_tags_holds_both_ends_of_a_plant_on_a_slot() -> None:
@@ -458,3 +492,109 @@ def test_a_slots_limits_hold_over_a_run_as_they_do_stepping(scans) -> None:
             plc.step()
 
     assert violations(lambda plc: plc.run(scans)) == violations(stepped) == (7, ["Rc2"])
+
+
+def _pointing_at(addr: int, factory) -> tuple[Program, Block, Tag]:
+    """A block read through a pointer, so every slot is reached and only *addr* is read."""
+    slots = Block("Sq", TagType.INT, 1, 5, default_factory=factory)
+    pointer = Int("Ptr", default=addr)
+    seen = Int("Seen")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(slots[pointer], seen)
+    return program, slots, seen
+
+
+def _refuses_three(addr: int) -> int:
+    if addr == 3:
+        raise ValueError("no slot 3")
+    return addr * 10
+
+
+def _ask_for_the_tags(plc) -> None:
+    assert "Sq2" in plc.tags
+
+
+def _patch_another_slot(plc) -> None:
+    plc.patch({"Sq4": 99999})
+
+
+def _patch_the_refusing_slot(plc) -> None:
+    plc.patch({"Sq3": 99999})
+    assert plc.pending_patches["Sq3"] == 32767
+
+
+WITHOUT_THE_SLOT_READ = [
+    pytest.param(_ask_for_the_tags, id="plc.tags"),
+    pytest.param(_reboot, id="reboot"),
+    pytest.param(_restart, id="restart"),
+    pytest.param(_patch_another_slot, id="patch by name"),
+]
+
+
+@pytest.mark.parametrize(
+    "asked", [*WITHOUT_THE_SLOT_READ, pytest.param(_patch_the_refusing_slot, id="patch it")]
+)
+def test_a_factory_refusing_a_slot_nothing_reads_stops_nothing(asked) -> None:
+    program, _slots, seen = _pointing_at(2, _refuses_three)
+    plc = PLC(program, dt=0.01)
+    asked(plc)
+    plc.step()
+    assert plc.current_state.tags[seen.name] == 20
+
+
+def test_a_factory_is_called_for_a_reset_slot_no_more_than_for_a_run() -> None:
+    def first_read(asked) -> int:
+        calls = count(101)
+        program, _slots, seen = _pointing_at(1, lambda addr: next(calls))
+        plc = PLC(program, dt=0.01)
+        if asked is not None:
+            asked(plc)
+        plc.step()
+        return plc.current_state.tags[seen.name]
+
+    assert first_read(None) == 101
+    for asked in (_ask_for_the_tags, _reboot, _restart, _patch_another_slot):
+        assert first_read(asked) == 101
+
+
+@pytest.mark.parametrize("asked", WITHOUT_THE_SLOT_READ)
+def test_a_slot_stays_configurable_until_something_reads_it(asked) -> None:
+    program, slots, _seen = _pointing_at(1, None)
+    slots.slot(2, retentive=True)
+    plc = PLC(program, dt=0.01)
+    asked(plc)
+    slots.slot(2).reset()
+    assert slots[2].retentive is False
+
+
+def test_patching_a_slot_by_name_leaves_it_configurable() -> None:
+    program, slots, _seen = _pointing_at(1, None)
+    slots.slot(2, retentive=True)
+    plc = PLC(program, dt=0.01)
+    plc.patch({"Sq2": 99999})
+    assert plc.pending_patches["Sq2"] == 32767
+    slots.slot(2).reset()
+
+
+def test_a_cached_slot_a_rung_does_not_reach_is_known_as_ever() -> None:
+    rc, sink = _blocks()
+    _ = rc[5]
+    plc = PLC(_through_a_range(rc, sink), dt=0.01)
+    assert plc._known_tags_by_name["Rc5"] is rc[5]
+    assert plc.current_state.tags["Rc5"] == 0
+    assert plc.tags["Rc5"] is rc[5]
+
+
+def test_how_reads_a_readonly_slot_something_named_outside_the_rungs() -> None:
+    held, copied = Block("Hq", TagType.INT, 1, 5), Block("Dq", TagType.INT, 1, 5)
+    seen = Bool("Seen")
+    held.slot(2, readonly=True, external=False)
+    _ = held[2]
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(held.select(1, 3), copied.select(1, 3))
+        with Rung(copied[2] == 7):
+            out(seen)
+    plan = PLC(program, dt=0.01).how(seen)
+    assert "Hq2" not in str(plan), plan

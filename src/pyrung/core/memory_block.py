@@ -334,6 +334,8 @@ class Block:
     # block is mapped onto a hardware bank range. The bank owns the register;
     # this block is a named window into it.
     _hw_alias: dict[int, tuple[Block, int]] = field(default_factory=dict, repr=False)
+    # Bumped whenever a slot's name can have changed, for whatever indexes slots by name.
+    _slot_names_changed: int = field(default=0, init=False, repr=False, compare=False)
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
     _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
         default=None, init=False, repr=False
@@ -587,6 +589,7 @@ class Block:
     ) -> None:
         if field_name == "name":
             refuse_system_point_in_block(new_value, self.name, addr)
+            self._slot_names_changed += 1
         entry = self._slot_config.get(addr)
         if entry is None:
             entry = SlotConfig()
@@ -613,6 +616,7 @@ class Block:
         self._slot_config.clear()
         self._mapped_tags.clear()
         self._hw_alias.clear()
+        self._slot_names_changed += 1
 
     @overload
     def slot(self, addr: int) -> SlotView: ...
@@ -952,6 +956,7 @@ class Block:
                     # TagMap report it as a hardware address conflict.
                     continue
                 hw_block._mapped_tags[hw_addr] = slot_tag
+                hw_block._slot_names_changed += 1
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)
 

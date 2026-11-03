@@ -21,33 +21,33 @@ if TYPE_CHECKING:
     from pyrung.core.tag import Tag
 
 
-def _value_a_tag_holds(tag: Tag, value: Any, what: str) -> Any:
-    """What *tag* holds when a patch or force writes *value*.
+def _value_a_type_holds(tag_type: TagType, value: Any, what: str) -> Any:
+    """What a tag of *tag_type* holds when a patch or force writes *value*.
 
     The value is stored as a ``copy()`` stores it: a tag holds its own type, so it can
     always serve it (a Modbus read packs by the tag's type, and a float into an INT
     raises there).  A value no store of that type can make sense of is refused rather
     than guessed at, as is a finite REAL no float32 holds.
     """
-    if tag.type is TagType.CHAR:
+    if tag_type is TagType.CHAR:
         held = store_char(value)
         if not isinstance(held, str) or len(held) != 1:
             raise ValueError(f"{what}: a CHAR holds one character, not {value!r}")
         return held
     if not isinstance(value, bool | int | float):
-        raise ValueError(f"{what}: {tag.type.name} holds a number, not {value!r}")
-    if tag.type is TagType.REAL:
+        raise ValueError(f"{what}: {tag_type.name} holds a number, not {value!r}")
+    if tag_type is TagType.REAL:
         # +/-Inf and NaN are accepted: a REAL holds them (a Math overflow stores
         # +/-Inf), so a patch or force can put one back.
         check_real_value(value, what, allow_non_finite=True)
-    transform = copy_store_transform(tag.type)
+    transform = copy_store_transform(tag_type)
     return value if transform is None else store_value(value, transform)
 
 
 def refuses_value(tag: Tag, value: Any) -> bool:
     """Whether a patch of *tag* with *value* raises."""
     try:
-        _value_a_tag_holds(tag, value, "candidate")
+        _value_a_type_holds(tag.type, value, "candidate")
     except ValueError:
         return True
     return False
@@ -73,7 +73,7 @@ def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
             stored = store_real(value)
             held.add(value if value == stored and not isinstance(value, bool) else stored)
         elif not refuses_value(tag, value):
-            held.add(_value_a_tag_holds(tag, value, "candidate"))
+            held.add(_value_a_type_holds(tag.type, value, "candidate"))
     return held
 
 
@@ -81,6 +81,9 @@ class _RungsWalked(NamedTuple):
     named: tuple[Tag, ...]
     edge_names: frozenset[str]
     block_uses: list[Any]
+    # What the walk found going on from the rungs into a block's cache or a program's
+    # own attributes: what has been asked of them so far, not what the rungs say.
+    beyond_rungs: tuple[Tag, ...]
 
 
 def _addresses_reached(use: Any) -> range | tuple[int, ...]:
@@ -89,6 +92,15 @@ def _addresses_reached(use: Any) -> range | tuple[int, ...]:
     if isinstance(use, BlockRange):
         return use.addresses
     return use.block._window_addresses(use.block.start, use.block.end)
+
+
+def _slot_is_retentive(block: Any, addr: int) -> bool:
+    tag = block._tag_cache.get(addr)
+    if tag is None:
+        tag = block._mapped_tags.get(addr)
+    if tag is not None:
+        return tag.retentive
+    return block._slot_field(addr, "retentive", block.retentive)
 
 
 def _addresses_that_declare(block: Any) -> list[int]:
@@ -120,19 +132,52 @@ class TagsRungsReach:
     reset keeps and whose limits and plants count.  It is read off the rungs alone: a
     ``select()`` or a ``Block[Pointer]`` names only its block, whose slots stay lazy until
     something asks for one, and something having asked says nothing about this program.
-    Walked the first time it is asked, and shared with forks, which skip the walk.
+    Nothing here makes a slot into a tag unless a tag is what was asked for: a slot's
+    factory may count its calls or refuse an address, and a slot not yet a tag can still
+    be configured.  Walked the first time it is asked, and shared with forks, which skip
+    the walk.
     """
 
-    __slots__ = ("_logic", "_program", "_walked", "_by_name")
+    __slots__ = (
+        "_logic",
+        "_program",
+        "_walked",
+        "_named_by_name",
+        "_reached",
+        "_slots",
+        "_slots_as_of",
+    )
 
     def __init__(self, logic: Iterable[Any], program: Any) -> None:
         self._logic = logic
         self._program = program
         self._walked: _RungsWalked | None = None
-        self._by_name: dict[str, Tag] | None = None
+        self._named_by_name: dict[str, Tag] | None = None
+        self._reached: list[tuple[Any, set[int]]] | None = None
+        self._slots: dict[str, tuple[Any, int]] = {}
+        self._slots_as_of: int = -1
 
     def get(self, name: str) -> Tag | None:
-        return self.every_tag().get(name)
+        slot = self._slots_by_name().get(name)
+        if slot is not None:
+            block, addr = slot
+            return block._get_tag(addr)
+        return self._named().get(name)
+
+    def type_of(self, name: str) -> TagType | None:
+        slot = self._slots_by_name().get(name)
+        if slot is not None:
+            block, addr = slot
+            mapped = block._mapped_tags.get(addr)
+            return block.type if mapped is None else mapped.type
+        tag = self._named().get(name)
+        return None if tag is None else tag.type
+
+    def names(self) -> set[str]:
+        return {*self._slots_by_name(), *self._named()}
+
+    def has(self, name: str) -> bool:
+        return name in self._slots_by_name() or name in self._named()
 
     def declared(self) -> dict[str, Tag]:
         """The slots reached that declare limits, choices or a plant.
@@ -155,6 +200,14 @@ class TagsRungsReach:
                         found[tag.name] = tag
         return found
 
+    def declared_with(self, known: Mapping[str, Tag]) -> dict[str, Tag]:
+        """The slots that declare, and of *known* the tags more than a cached slot put there."""
+        beyond = {tag.name for tag in self.walk().beyond_rungs}
+        return {
+            **self.declared(),
+            **{name: tag for name, tag in known.items() if name not in beyond},
+        }
+
     def kept_through_a_reset(
         self,
         current: Mapping[str, Any],
@@ -167,12 +220,22 @@ class TagsRungsReach:
 
         One it does not keep is left out: it holds its default, and stays lazy.
         """
-        for tag in self.every_tag().values():
-            name = tag.name
-            if name in rebuilt or name not in current:
+        if not preserve_all and not preserve_retentive:
+            return
+        slots = self._slots_by_name()
+        named = self._named()
+        for name, value in current.items():
+            if name in rebuilt:
                 continue
-            if preserve_all or (preserve_retentive and tag.retentive):
-                rebuilt[name] = current[name]
+            slot = slots.get(name)
+            if slot is not None:
+                retentive = _slot_is_retentive(*slot)
+            elif name in named:
+                retentive = named[name].retentive
+            else:
+                continue
+            if preserve_all or retentive:
+                rebuilt[name] = value
 
     def walk(self) -> _RungsWalked:
         if self._walked is None:
@@ -183,20 +246,69 @@ class TagsRungsReach:
                 for subroutine_rungs in self._program.subroutines.values():
                     roots.extend(subroutine_rungs)
             uses: list[Any] = []
-            named, edges = _iter_tags_and_edge_names(roots, block_uses=uses)
-            self._walked = _RungsWalked(named, edges, uses)
+            beyond: list[Tag] = []
+            named, edges = _iter_tags_and_edge_names(roots, block_uses=uses, beyond_rungs=beyond)
+            self._walked = _RungsWalked(named, edges, uses, tuple(beyond))
         return self._walked
 
-    def every_tag(self) -> dict[str, Tag]:
-        if self._by_name is None:
+    def _named(self) -> dict[str, Tag]:
+        if self._named_by_name is None:
             from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
-            walked = self.walk()
-            tags = list(walked.named)
-            for use in walked.block_uses:
-                tags.extend(use.block._get_tag(addr) for addr in _addresses_reached(use))
-            self._by_name = {tag.name: tag for tag in tags if tag.name not in SYSTEM_TAGS_BY_NAME}
-        return self._by_name
+            self._named_by_name = {
+                tag.name: tag for tag in self.walk().named if tag.name not in SYSTEM_TAGS_BY_NAME
+            }
+        return self._named_by_name
+
+    def _slots_by_name(self) -> dict[str, tuple[Any, int]]:
+        """(block, address) by name, of each slot reached.  Asks no block for a tag."""
+        if self._reached is None:
+            by_block: dict[int, tuple[Any, set[int]]] = {}
+            for use in self.walk().block_uses:
+                entry = by_block.setdefault(id(use.block), (use.block, set()))
+                entry[1].update(_addresses_reached(use))
+            self._reached = list(by_block.values())
+        as_of = sum(block._slot_names_changed for block, _ in self._reached)
+        if as_of != self._slots_as_of:
+            from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
+            slots: dict[str, tuple[Any, int]] = {}
+            for block, addresses in self._reached:
+                for addr in addresses:
+                    name = block._effective_slot_name(addr)
+                    if name not in SYSTEM_TAGS_BY_NAME:
+                        slots[name] = (block, addr)
+            self._slots = slots
+            self._slots_as_of = as_of
+        return self._slots
+
+
+class TagsKnownOrReached(Mapping[str, "Tag"]):
+    """``plc.tags``: the tags a runner knows, and what its rungs reach, read as asked."""
+
+    __slots__ = ("_known", "_reach")
+
+    def __init__(self, known: Mapping[str, Tag], reach: TagsRungsReach) -> None:
+        self._known = known
+        self._reach = reach
+
+    def __getitem__(self, name: str) -> Tag:
+        tag = self._known.get(name)
+        if tag is None:
+            tag = self._reach.get(name)
+        if tag is None:
+            raise KeyError(name)
+        return tag
+
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and (name in self._known or self._reach.has(name))
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._known
+        yield from sorted(self._reach.names() - self._known.keys())
+
+    def __len__(self) -> int:
+        return len(self._reach.names() | self._known.keys())
 
 
 class InputOverrideManager:
@@ -206,10 +318,10 @@ class InputOverrideManager:
         self,
         *,
         is_read_only: Callable[[str], bool],
-        known_tag: Callable[[str], Tag | None] | None = None,
+        known_type: Callable[[str], TagType | None] | None = None,
     ) -> None:
         self._is_read_only = is_read_only
-        self._known_tag = known_tag
+        self._known_type = known_type
         self._pending_patches: dict[str, bool | int | float | str] = {}
         self._forces: dict[str, bool | int | float | str] = {}
 
@@ -247,14 +359,14 @@ class InputOverrideManager:
     def _held(
         self, key: str | Tag, name: str, value: bool | int | float | str, *, method: str
     ) -> bool | int | float | str:
-        tag = key if isinstance(key, TagClass) else None
-        if tag is None and self._known_tag is not None:
-            tag = self._known_tag(name)
-        if tag is None:
+        tag_type = key.type if isinstance(key, TagClass) else None
+        if tag_type is None and self._known_type is not None:
+            tag_type = self._known_type(name)
+        if tag_type is None:
             # A name no rung reads has no type here.  Only a CHAR can be written "":
             # a blank stores NUL.
             return store_char(value)
-        return _value_a_tag_holds(tag, value, f"{method}() of {name}")
+        return _value_a_type_holds(tag_type, value, f"{method}() of {name}")
 
     def patch(
         self,

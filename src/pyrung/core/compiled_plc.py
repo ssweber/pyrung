@@ -255,7 +255,7 @@ class CompiledPLC:
         self._tags_rungs_reach = TagsRungsReach(program.rungs, program)
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
-            known_tag=self._tags_rungs_reach.get,
+            known_type=self._tags_rungs_reach.type_of,
         )
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
