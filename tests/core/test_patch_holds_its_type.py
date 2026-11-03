@@ -20,16 +20,16 @@ from pyrung.core.compiled_plc import CompiledPLC
 
 ds = ClickBlocks()[6]
 Enable, Lamp = Bool("Enable"), Bool("Lamp")
-I, D, W = Int("I"), Dint("D"), Word("W")
+Ii, D, W = Int("I"), Dint("D"), Word("W")
 R, C = Real("R"), Char("C")
-TAGS = {"I": I, "D": D, "W": W, "R": R, "C": C, "Enable": Enable}
+TAGS = {"I": Ii, "D": D, "W": W, "R": R, "C": C, "Enable": Enable}
 
 
 def _program() -> Program:
     with Program(strict=False) as program:
         with Rung(Enable):
             out(Lamp)
-            copy(I, D)
+            copy(Ii, D)
         with Rung(Lamp):
             copy(W, W)
             copy(R, R)
@@ -113,9 +113,7 @@ def test_a_force_stores_what_the_tag_holds(name: str, value: Any, want: Any) -> 
         ("R", 1e39, "outside the REAL range"),
     ],
 )
-def test_a_value_no_store_can_make_sense_of_is_refused(
-    name: str, value: Any, message: str
-) -> None:
+def test_a_value_no_store_can_make_sense_of_is_refused(name: str, value: Any, message: str) -> None:
     for plc in _engines():
         with pytest.raises(ValueError, match=message):
             plc.patch({name: value})

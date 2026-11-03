@@ -509,7 +509,16 @@ _SELF_CONTAINED_BUILTINS = frozenset(
 
 #: Attributes that hand a function a frame, and through it the globals of its module.
 _FRAME_ATTRIBUTES = frozenset(
-    {"ag_frame", "cr_frame", "f_back", "f_builtins", "f_globals", "f_locals", "gi_frame", "tb_frame"}
+    {
+        "ag_frame",
+        "cr_frame",
+        "f_back",
+        "f_builtins",
+        "f_globals",
+        "f_locals",
+        "gi_frame",
+        "tb_frame",
+    }
 )
 
 
@@ -562,9 +571,12 @@ def _copies_its_defaults(fn: Any) -> bool:
         return True
     try:
         source = textwrap.dedent(inspect.getsource(fn))
-        arguments = ast.parse(source).body[0].args  # type: ignore[attr-defined]
-    except (AttributeError, IndexError, OSError, SyntaxError, TypeError):
+        definition = ast.parse(source).body[0]
+    except (IndexError, OSError, SyntaxError, TypeError):
         return False
+    if not isinstance(definition, ast.FunctionDef):
+        return False  # A lambda's source is the statement it sits in: only a def is read.
+    arguments = definition.args
     named = [
         *zip(arguments.defaults, positional, strict=False),
         *(
