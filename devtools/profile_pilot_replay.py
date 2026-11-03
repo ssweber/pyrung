@@ -5,9 +5,9 @@ The default drive is the exact Tumbler completion route that excludes
 and retains only aggregate counters and exact call intervals -- never a
 per-scan log.
 
-Run the checked benchmark and write its machine-readable artifact::
+Run the benchmark and write its machine-readable report::
 
-    uv run python -u devtools/profile_pilot_replay.py --write
+    uv run python -u devtools/profile_pilot_replay.py --write PATH
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ sys.path.insert(0, str(_ROOT))
 
 from tests.tumbler.skeleton import dump_skeleton, extract_skeleton  # noqa: E402
 
-DEFAULT_JSON = _ROOT / "scratchpad" / "pilot-docs" / "E1_RESIDUAL_REPLAY_DATA.json"
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
 
 
@@ -733,10 +732,8 @@ def main() -> None:
     parser.add_argument("--wall-seconds", type=float, default=300.0)
     parser.add_argument(
         "--write",
-        nargs="?",
-        const=str(DEFAULT_JSON),
         metavar="PATH",
-        help="write JSON as well as printing it (default: checked report artifact)",
+        help="write JSON as well as printing it",
     )
     args = parser.parse_args()
     report = run_exact_route(max_scans=args.max_scans, wall_seconds=args.wall_seconds)

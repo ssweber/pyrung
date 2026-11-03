@@ -14,8 +14,7 @@ normal Act→Verify pipeline, reported relationally (the relation is the
 requirement; the value is an example).  Equality/mask-shaped free-word gates keep
 the honest ``choices=`` decline (``test_pilot_sandbox_gate.py``).
 
-The machine-local fill project is the live tier of this gate
-(``scratchpad/burner/repro_fill_free_word.py``, not CI).
+The machine-local fill project is the live tier of this gate (not CI).
 """
 
 from __future__ import annotations
