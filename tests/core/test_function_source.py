@@ -1,4 +1,4 @@
-"""A kernel and a code.py embed a function's text: that text must be the function."""
+"""A code.py embeds a function's text, which must be the function. A kernel calls the function."""
 
 from __future__ import annotations
 
@@ -139,7 +139,7 @@ def test_a_source_file_edited_after_the_import_is_not_embedded(tmp_path, monkeyp
     _rewrite(path, "def edited(v):\n    return {'out': 2222}\n")
     program = _program(module.edited)
     assert not is_the_function(embedded_source(module.edited), module.edited)
-    assert not _has_a_kernel(program)
+    assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == 1
     with pytest.raises(ValueError, match="not the function"):
         _from_code_py(module.edited, "edited")
@@ -152,7 +152,7 @@ def test_a_line_shift_after_the_import_is_not_embedded(tmp_path, monkeypatch):
         "def other(v):\n    return {'out': 99}\n\ndef shifted(v):\n    return {'out': 1}\n",
     )
     program = _program(module.shifted)
-    assert not _has_a_kernel(program)
+    assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == 1
     with pytest.raises(ValueError, match="not the function"):
         _from_code_py(module.shifted, "shifted")
@@ -227,14 +227,12 @@ def test_the_comparison_sees_each_part_of_a_function():
     "name,expected",
     [("min", 99), ("math", 99)],
 )
-def test_a_function_named_like_what_the_kernel_calls_does_not_break_the_kernel(
-    tmp_path, monkeypatch, name, expected
-):
+def test_a_kernel_calls_a_function_named_like_what_it_calls(tmp_path, monkeypatch, name, expected):
     module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
     caller, _ = _import(tmp_path, monkeypatch, "def caller(v):\n    return {'out': min(v, 5)}\n")
     fn = getattr(module, name)
     program = _program(fn, caller.caller)
-    assert not _has_a_kernel(program)
+    assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == expected
     assert _seeks_as_it_ran(program, "C") == 5
     with pytest.raises(ValueError, match="would shadow"):
@@ -260,19 +258,19 @@ def _generates(program, *, force_runtime: bool):
 
 
 @pytest.mark.parametrize("name", ["_store_int", "_wrap_int"])
-def test_a_function_named_like_a_generated_helper_gets_no_kernel(tmp_path, monkeypatch, name):
-    """Over the helper a kernel stores with, a replay would clamp nothing, or raise."""
+def test_a_kernel_keeps_its_helper_and_calls_a_function_named_like_it(tmp_path, monkeypatch, name):
+    """No def lands over the helper a kernel stores with: it has no def of the function."""
     module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
     program = _stores_two_ways(getattr(module, name))
 
-    assert not _has_a_kernel(program)
+    assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program, "Clamped") == 32767
     assert _seeks_as_it_ran(program) == 99
     _seeks_as_it_ran(program, "Wrapped")
 
 
-def test_a_function_named_like_another_functions_alias_gets_no_kernel(tmp_path, monkeypatch):
-    """``_fn_other`` is the symbol that calls ``other``: one of the two would be lost."""
+def test_a_kernel_calls_a_function_named_like_another_functions_symbol(tmp_path, monkeypatch):
+    """``_fn_other`` is the symbol that calls ``other``: each symbol is its own function."""
     module, _ = _import(
         tmp_path,
         monkeypatch,
@@ -280,7 +278,7 @@ def test_a_function_named_like_another_functions_alias_gets_no_kernel(tmp_path, 
     )
     program = _program(module._fn_other, module.other)
 
-    assert not _has_a_kernel(program)
+    assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == 1
     assert _seeks_as_it_ran(program, "C") == 2
 
@@ -322,7 +320,7 @@ def test_a_function_with_a_name_of_its_own_embeds(tmp_path, monkeypatch, name):
 
 
 def test_two_functions_may_share_a_name(tmp_path, monkeypatch):
-    """Each alias binds right after its def, so each call reaches its own function."""
+    """Each symbol is bound to its own function."""
     first, _ = _import(tmp_path, monkeypatch, "def same(v):\n    return {'out': 1}\n")
     second, _ = _import(tmp_path, monkeypatch, "def same(v):\n    return {'out': 2}\n")
     program = _program(first.same, second.same)
@@ -333,7 +331,7 @@ def test_two_functions_may_share_a_name(tmp_path, monkeypatch):
 
 
 def test_a_name_only_code_py_binds_leaves_the_kernel_alone(tmp_path, monkeypatch):
-    """Asked of each module as rendered: a code.py imports ``time``, a kernel does not."""
+    """A code.py imports ``time``, so a def there would be lost.  A kernel has no def."""
     module, _ = _import(tmp_path, monkeypatch, "def time(v):\n    return {'out': 99}\n")
     program = _program(module.time)
 

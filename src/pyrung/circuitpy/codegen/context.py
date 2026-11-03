@@ -86,6 +86,12 @@ class StaticRangeLayout:
     uses_backing_storage: bool
 
 
+def _name_for_the_lock(fn: Any) -> str:
+    """What a lock sees of a callable with no source: its names, and no address."""
+    kind = type(fn)
+    return f"{kind.__module__}.{kind.__qualname__} {getattr(fn, '__qualname__', '')}"
+
+
 def describe_static_range(range_value: BlockRange) -> StaticRangeLayout:
     """Return the semantic elements and physical span of a static range."""
 
@@ -203,6 +209,8 @@ class CodegenContext:
     # block is a named window onto the bank's array, not storage of its own.
     block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
+    #: A kernel's globals: each symbol bound to the object itself.
+    function_objects: dict[str, Any] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
     uses_board_switch: bool = False
@@ -723,6 +731,8 @@ class CodegenContext:
         existing = self.function_symbols_by_obj.get(key)
         if existing is not None:
             return existing
+        if self.kernel_runtime:
+            return self._call_by_reference(fn)
 
         try:
             rendered = embedded_source(fn)
@@ -750,6 +760,23 @@ class CodegenContext:
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
         self.function_sources[symbol] = rendered
         self.function_symbols_by_obj[key] = symbol
+        return symbol
+
+    def _call_by_reference(self, fn: Any) -> str:
+        """Bind *fn* itself to a symbol: a kernel lives in this process and calls the function.
+
+        Its text is kept for the lock only, so a lock sees an edit to the function.  Whether
+        that text is what *fn* runs doesn't matter here, and nothing about *fn* is refused.
+        """
+        fn_name = getattr(fn, "__name__", type(fn).__name__)
+        symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
+        try:
+            text = embedded_source(fn)
+        except (OSError, SyntaxError, TypeError):
+            text = ""
+        self.function_sources[symbol] = text or f"# {_name_for_the_lock(fn)}"
+        self.function_objects[symbol] = fn
+        self.function_symbols_by_obj[id(fn)] = symbol
         return symbol
 
     def _ensure_block_binding(

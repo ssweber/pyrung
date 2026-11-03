@@ -219,7 +219,7 @@ def program_hash(program: Program) -> str:
     from pyrung.circuitpy.codegen import compile_kernel
 
     compiled = compile_kernel(program, blockless=True, proof_metadata=True)
-    return hashlib.sha256(compiled.source.encode()).hexdigest()[:16]
+    return hashlib.sha256(compiled.lock_source.encode()).hexdigest()[:16]
 
 
 def check_lock(
