@@ -1,6 +1,8 @@
 """Invocation work accounting, shared by disposable experiments and never restored."""
 
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,10 +18,25 @@ DEFAULT_WALL_CLOCK_S = 300.0
 
 # A clock makes an answer depend on the machine, so a test that asserts answers turns it off.
 WALL_CLOCK_ENABLED = True
+# What one search may add to the heap, in the allocator's blocks: about 1 GB.  A search keeps
+# every state it scans, on purpose (``cause()`` reads them without a replay), and how much one
+# holds depends on how many tags change per scan, so scans would not bound it: 23 blocks and
+# 1.6 KB a scan on a small program with no loop, much more when more changes.
+MAX_SEARCH_BLOCKS = 16_000_000
+_POLLS_PER_BLOCK_COUNT = 1024
 
 
-class SearchOutOfTime(Exception):
-    """A how() ran out of its wall clock.  The search ends with a terminal saying so."""
+class SearchOutOfTime(BaseException):
+    """A how() ran out of its wall clock.  The search ends with a terminal saying so.
+
+    A BaseException, as ``asyncio.CancelledError`` is: the search reads its causes under
+    many ``except Exception`` that mean "no evidence", and a clock that runs out while one
+    is being read is not evidence of anything.
+    """
+
+
+class SearchOutOfMemory(BaseException):
+    """A how() holds all a search may.  The search ends with a terminal saying so."""
 
 
 @dataclass(frozen=True)
@@ -38,6 +55,23 @@ class WallClock:
     def check(self) -> None:
         if time.monotonic() >= self.stop_at:
             raise SearchOutOfTime
+
+
+def search_limits(clock: WallClock | None) -> Callable[[], None]:
+    """What a running search polls: its clock, and what it holds since this call."""
+    start = sys.getallocatedblocks()
+    polls = 0
+
+    def check() -> None:
+        nonlocal polls
+        if clock is not None:
+            clock.check()
+        polls += 1
+        if polls % _POLLS_PER_BLOCK_COUNT == 0:  # it walks the allocator's pools
+            if sys.getallocatedblocks() - start > MAX_SEARCH_BLOCKS:
+                raise SearchOutOfMemory
+
+    return check
 
 
 @dataclass

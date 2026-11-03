@@ -63,6 +63,7 @@ from typing import Any
 import pyrung.core.compiled_run as compiled_run
 import pyrung.core.rung_firings as rung_firings
 import pyrung.core.scan_trace as scan_trace
+from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
 # Firing sizes for the loop: short ones to compare often, long ones to reach far.
@@ -613,6 +614,10 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
         plc._last_replay_seek_stats = seek_stats
 
 
+# how() runs out of these, and they are BaseExceptions so its own catches leave them alone.
+_SEARCH_LIMITS = (SearchOutOfTime, SearchOutOfMemory)
+
+
 class _NotTheTwin(BaseException):
     """The predicate touched the real runner's state while the twin was asked.
 
@@ -822,7 +827,7 @@ def _judge_a_raised_run(
     twin: Any,
     start: int,
     truth: dict[int, Any],
-    raised: Exception,
+    raised: BaseException,
     stop_raised: type[Exception] | None,
     predicate_answers: bool,
 ) -> None:
@@ -832,13 +837,11 @@ def _judge_a_raised_run(
     place the run's landing goes uncompared otherwise.  The raise is either the stop
     predicate's, on the landing itself, or the next scan's.
     """
-    from pyrung.core.analysis.pilot.budget import SearchOutOfTime
-
     global _depth
     end = plc._state.scan_id
-    # how()'s wall clock is no scan's doing and stepping has none to run out of, so it
-    # isn't asked to raise.  What the run left is compared below like any other.
-    if stop_raised is not type(raised) and not isinstance(raised, SearchOutOfTime):
+    # how()'s limits are no scan's doing and stepping has none to run out of, so it isn't
+    # asked to raise.  What the run left is compared below like any other.
+    if stop_raised is not type(raised) and not isinstance(raised, _SEARCH_LIMITS):
         _depth += 1
         try:
             on_twin = _one_scan(twin)
@@ -870,7 +873,7 @@ def _judge_a_raised_run(
 def _judge_the_raise_alone(
     kind: str,
     plc: Any,
-    raised: Exception,
+    raised: BaseException,
     ask: Callable[[Any], bool] | None,
     predicate: Callable[[Any], bool] | None,
 ) -> None:
@@ -1011,12 +1014,12 @@ def _checked(
         compiled_run.LOOP_OBSERVERS.append(observe)
     loop_scans_before = scan_trace.TOTALS["loop scans"]
     result = None
-    raised: Exception | None = None
+    raised: BaseException | None = None
     try:
         result = call()
     except (FoldMismatch, scan_trace.SelfCheckMismatch):
         raise
-    except Exception as exc:
+    except (Exception, *_SEARCH_LIMITS) as exc:
         raised = exc
     finally:
         _depth -= 1

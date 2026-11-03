@@ -433,6 +433,8 @@ class CoastSession:
                     elapsed = state.scan_id - start_scan
                     if stats.get("stopped"):
                         stop_reason = "stopped"
+                    elif stats.get("out_of_work"):
+                        stop_reason = "timeout"
                     else:
                         stop_reason = "timeout" if elapsed >= budget else "paused"
                     break

@@ -185,7 +185,9 @@ class CoastMemo:
     traces: int = 0
     counts: Counter[str] = field(default_factory=Counter)
     # Raises when the search has to stop.  Asked between scans and between fires.
-    check_time: Callable[[], None] | None = None
+    check_limits: Callable[[], None] | None = None
+    # What the search's ledger has left, in interpreted scans.
+    work_left: Callable[[], int] | None = None
 
 
 def memo_of(plc: PLC) -> CoastMemo:
@@ -826,8 +828,8 @@ def _try_stretch(
 
     kept = paths.paths
     while total < limit and not asked_to_stop:
-        if memo.check_time is not None:
-            memo.check_time()
+        if memo.check_limits is not None:
+            memo.check_limits()
         if loop._blocked() is not None:
             break
         fired: _Path | None = None
@@ -963,9 +965,16 @@ def coast_until(
     since = 0
     fails = 0
     learned: _Path | None = None
+    # The ledger charges a seek when it returns, so one that cannot loop could spend it many
+    # times over first.  A loop scan is a hundredth of one of these, and stays out of it.
+    work = None if memo.work_left is None else max(1, memo.work_left())
     while plc.state.scan_id - start_scan < budget:
-        if memo.check_time is not None:
-            memo.check_time()
+        if work is not None and kernel_scans >= work:
+            if stats is not None:
+                stats["out_of_work"] = 1
+            break
+        if memo.check_limits is not None:
+            memo.check_limits()
         plc._consume_pause_request()
         plc._ensure_running()
         plc._run_single_scan(consume_pause_request=False)

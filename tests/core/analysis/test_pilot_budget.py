@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import PLC, Bool, Physical, Program, Rung, Timer, on_delay, out
+from pyrung import PLC, Bool, Int, Physical, Program, Rung, Timer, on_delay, out, run_function
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget
 from pyrung.core.analysis.pilot.budget import SearchBudget
@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.working_theory import TheoryTermination
 Slow = Timer.clone("Slow")
 Lamp = Bool("Lamp")
 y_Done = Bool("y_Done")
+Seen = Int("Seen")
 
 
 def _receipt(*scans: int, epoch: str = "e") -> SimpleNamespace:
@@ -64,6 +65,58 @@ class TestTheLedger:
         plan = _slow_lamp(2_000_000).how(Lamp, max_scans=200)
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
+
+
+class _Stateful:
+    """A function that keeps state between calls, so no scan of its program may be skipped."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> dict[str, int]:
+        self.calls += 1
+        return {"seen": self.calls % 7}
+
+
+def _no_loop(preset_scans: int) -> tuple[PLC, _Stateful]:
+    function = _Stateful()
+    with Program() as logic:
+        with Rung():
+            on_delay(Slow, preset=preset_scans)
+        with Rung():
+            run_function(function, outs={"seen": Seen})
+        with Rung(Slow.Done):
+            out(Lamp)
+    plc = PLC(logic, dt=0.001)
+    assert plc._compiled_replay_supported_kernel() is None
+    return plc, function
+
+
+class TestASearchWithNoLoop:
+    # Every scan is interpreted, and max_scans is how many of them it may run.
+
+    def test_a_long_timer_stops_at_the_ledger(self) -> None:
+        plc, function = _no_loop(120_000)
+        plan = plc.how(Lamp, max_scans=3000, wall_clock_s=None)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("budget exhausted")
+        assert function.calls < 3200
+
+    def test_it_stops_at_what_it_may_hold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The bound on memory, for when max_scans is no bound at all.
+        monkeypatch.setattr(budget, "MAX_SEARCH_BLOCKS", 1_000)
+        monkeypatch.setattr(budget, "_POLLS_PER_BLOCK_COUNT", 1)
+        plc, _function = _no_loop(1_000_000)
+        plan = plc.how(Lamp, max_scans=10**9, wall_clock_s=None)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("memory budget exhausted")
+        assert "physical link" not in plan.reason
+
+    def test_the_ledger_does_not_stop_what_it_can_pay_for(self) -> None:
+        plc, function = _no_loop(1000)
+        plan = plc.how(Lamp, max_scans=3000, wall_clock_s=None)
+        assert plan.status is PlanStatus.REACHED
+        assert function.calls < 3200
 
 
 def _linked_motor() -> PLC:

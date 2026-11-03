@@ -26,7 +26,7 @@ from pyrung.core.analysis.graph import (
     PlanStep,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
-from pyrung.core.analysis.pilot.budget import SearchOutOfTime
+from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime, search_limits
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     ProbeExhaustedObservation,
@@ -128,7 +128,7 @@ from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.coast_run import CoastMemo
+from pyrung.core.coast_run import CoastMemo, memo_of
 from pyrung.core.runner import SearchStopped
 
 if TYPE_CHECKING:
@@ -501,8 +501,7 @@ def _pilot_loop_events(
     memo = plc._coast_memo = CoastMemo()
     plc._search_refuses_restart = True
     clock = ctx.wall_clock
-    if clock is not None:
-        memo.check_time = clock.check
+    memo.check_limits = search_limits(clock)
     at_the_stop: dict[str, Any] = {}
     try:
         yield from _search_events(plc, ctx, at_the_stop)
@@ -515,15 +514,12 @@ def _pilot_loop_events(
     except SearchOutOfTime:
         termination = TheoryTermination.WALL_CLOCK
         assert clock is not None
-        frame = at_the_stop.get("frame")
-        reason = _with_avoid_reason(
-            f"wall-clock budget exhausted ({clock.limit_s:g} s)",
-            at_the_stop["state"],
-            ctx,
-            frame,
-        ) + _frontier_clause(
-            at_the_stop.get("frontier", ()), frame.snap if frame is not None else None
+        reason = _out_of_a_limit(
+            f"wall-clock budget exhausted ({clock.limit_s:g} s)", at_the_stop, ctx
         )
+    except SearchOutOfMemory:
+        termination = TheoryTermination.BUDGET
+        reason = _out_of_a_limit("memory budget exhausted (about 1 GB held)", at_the_stop, ctx)
     else:
         return
     state = at_the_stop["state"]
@@ -539,6 +535,13 @@ def _pilot_loop_events(
         at_the_stop["accumulators"],
         candidate_count=0,
         cut_short=True,
+    )
+
+
+def _out_of_a_limit(limit: str, at_the_stop: dict[str, Any], ctx: _PilotContext) -> str:
+    frame = at_the_stop.get("frame")
+    return _with_avoid_reason(limit, at_the_stop["state"], ctx, frame) + _frontier_clause(
+        at_the_stop.get("frontier", ()), frame.snap if frame is not None else None
     )
 
 
@@ -578,6 +581,7 @@ def _search_events(
         watch_tags=[],
     )
     at_the_stop["state"] = state
+    memo_of(plc).work_left = lambda: state.budget.remaining(ctx.max_scans)
     invocation_snapshot = dict(state.work.state.tags)
     state.invocation_checkpoint = _CausalCheckpoint(
         key=(
