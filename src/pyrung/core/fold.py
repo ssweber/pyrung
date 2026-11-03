@@ -2760,14 +2760,16 @@ def _build_fold_context(
     # Likewise ``sys.dt`` and ``sys.scan_time_current_ms`` read mid-scan: the
     # landing scan runs with the aggregate dt, so a rung reading either would
     # see it.  Plant rungs read ``sys.dt`` on purpose (a ramp advances by the
-    # elapsed time); any other reader disables the fold.
+    # elapsed time); any other reader disables the fold.  So does a plant with no
+    # harness, as on a replay or a sealed epoch's runner: _analog_feedback reads the
+    # harness, so nothing would bound the plant's value or step it at each scan's dt.
     landing_inflated = frozenset(
         {_sys_points.sys.dt.name, _sys_points.sys.scan_time_current_ms.name}
     )
     syn_rungs = getattr(plc, "_synthesis", None)
     plant_ids = (
         {id(rung) for rung in syn_rungs.all_rungs()}
-        if syn_rungs is not None and not syn_rungs.is_empty()
+        if syn_rungs is not None and not syn_rungs.is_empty() and plc._harness is not None
         else set()
     )
     node_derived: set[str] = set()
@@ -5053,7 +5055,9 @@ def fold_run_until(
     return runner._state
 
 
-def _stepped_scans_until(start: float, target: float, dt: float) -> int | None:
+def _stepped_scans_until(
+    start: float, target: float, dt: float, *, max_scans: int = 5_000_000
+) -> int | None:
     """Scans an unfolded ``run_for`` takes from *start* to reach *target*.
 
     Stepping advances the timestamp by repeated ``+ dt``; a fold lands at
@@ -5063,7 +5067,7 @@ def _stepped_scans_until(start: float, target: float, dt: float) -> int | None:
     gives the exact scan count instead.  ``None`` for an unusable *dt* or an
     implausibly long span.
     """
-    if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > 5_000_000:
+    if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > max_scans:
         return None
     t = start
     n = 0

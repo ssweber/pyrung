@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import socket
 import sys
 import threading
@@ -259,6 +260,48 @@ runner = PLC(prog, dt=0.010)
     assert body["scanId"] >= 5
     _request(adapter, out_stream, "pause")
     _wait_for(adapter, out_stream, "stopped")
+    _shutdown(adapter, out_stream)
+
+
+def test_frames_show_no_change_when_an_equal_value_is_written(tmp_path: Path):
+    """``False`` over ``0`` and ``-0.0`` over ``0.0`` replace the value, and are no change."""
+    source = """from pyrung.core import Bool, Int, PLC, Program, Real, Rung, calc, out
+
+Coiled = Int("Coiled")
+Gained = Real("Gained")
+Never = Bool("Never")
+Ticks = Int("Ticks")
+
+with Program(strict=False) as prog:
+    with Rung(Never):
+        out(Coiled)
+    with Rung():
+        calc(0.0 * -1.0, Gained)
+    with Rung():
+        calc(Ticks + 1, Ticks)
+
+runner = PLC(prog, dt=0.010)
+"""
+    adapter, out_stream = _launch(tmp_path, source, speed=0)
+    runner = adapter._runner
+    assert runner is not None
+    assert type(runner.current_state.tags["Coiled"]) is int
+    assert type(runner.current_state.tags["Gained"]) is float
+    assert math.copysign(1.0, runner.current_state.tags["Gained"]) == 1.0
+
+    _request(adapter, out_stream, "continue")
+    _body, seen = _wait_for(
+        adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] and b["scanId"] >= 5
+    )
+    _request(adapter, out_stream, "pause")
+    _body, tail = _wait_for(adapter, out_stream, "stopped")
+
+    assert runner.current_state.tags["Coiled"] is False
+    assert math.copysign(1.0, runner.current_state.tags["Gained"]) == -1.0
+    frames = _events(seen + tail, "pyrungScanFrame")
+    changed = {change["tag"] for frame in frames for change in frame["changes"]}
+    assert "Ticks" in changed
+    assert changed.isdisjoint({"Coiled", "Gained"})
     _shutdown(adapter, out_stream)
 
 

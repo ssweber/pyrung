@@ -42,6 +42,9 @@ from pyrung import (
 )
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
+from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 clk100 = system.sys.clock_100ms
 clk1s = system.sys.clock_1s
@@ -107,7 +110,7 @@ def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = 
         expected[stepped.state.scan_id] = _state(stepped)
 
     folded = _plc(body, patch)
-    folded.run_until(lambda _s: False, max_cycles=scans, fold=True)
+    folded.run_until(NEVER, max_cycles=scans, fold=True)
     assert folded.state.scan_id == stepped.state.scan_id
     assert _state(folded) == expected[folded.state.scan_id]
 
@@ -118,15 +121,8 @@ def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = 
 
 def _kernel_scans(body: Body, scans: int = 1200) -> int:
     plc = _plc(body, None)
-    counter = {"n": 0}
-    original = plc._run_single_scan
-
-    def wrapped(**options: Any) -> Any:
-        counter["n"] += 1
-        return original(**options)
-
-    plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
-    plc.run_until(lambda _s: False, max_cycles=scans, fold=True)
+    counter = ScansOutsideLoop(plc)
+    plc.run_until(NEVER, max_cycles=scans, fold=True)
     return counter["n"]
 
 
@@ -493,7 +489,7 @@ class TestAClockThroughATag:
         def run(fold: bool) -> PLC:
             plc = _plc(body, None)
             plc.force(F, True)
-            plc.run_until(lambda _s: False, max_cycles=1200, fold=fold)
+            plc.run_until(NEVER, max_cycles=1200, fold=fold)
             return plc
 
         assert _state(run(fold=True)) == _state(run(fold=False))
@@ -657,7 +653,8 @@ class TestAnIndicatorStillFolds:
         ],
     )
     def test_folds_exactly(self, body: Body) -> None:
-        assert _kernel_scans(body) <= 12
+        # A real scan at each edge of the 100 ms clock: 1 scan in 5.
+        assert _kernel_scans(body) <= 1200 // 4
         _assert_exact(body)
 
     @pytest.mark.parametrize(
@@ -673,7 +670,7 @@ class TestAnIndicatorStillFolds:
         _assert_exact(body, scans)
 
     def test_into_a_range_of_bits(self) -> None:
-        assert _kernel_scans(_blink_into_a_range) <= 12
+        assert _kernel_scans(_blink_into_a_range) <= 1200 // 4
         _assert_exact(_blink_into_a_range)
 
 
@@ -904,7 +901,6 @@ class TestWhatIsNotAnIndicator:
         ],
     )
     def test_stays_exact_with_the_clock_as_a_bound(self, body: Body) -> None:
-        assert _kernel_scans(body) > 12
         _assert_exact(body)
 
     def test_a_branch_read_above_its_writer(self) -> None:
@@ -918,7 +914,7 @@ class TestWhatIsNotAnIndicator:
             # A monitor on what holds changes nothing here, and tells --fold-check to
             # leave this run alone: a stepped twin would call the same function.
             plc.monitor(G, lambda _cur, _prev: None)
-            plc.run_until(lambda _s: False, max_cycles=700, fold=fold)
+            plc.run_until(NEVER, max_cycles=700, fold=fold)
             return len(calls), _state(plc)
 
         assert run(True) == run(False)

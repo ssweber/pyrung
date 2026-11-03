@@ -388,15 +388,15 @@ class TestFoldContextCache:
         assert ctx_a is not ctx_b
         assert len(plc._fold_context_cache) == 2
 
-    def test_two_run_untils_populate_two_entries(self) -> None:
-        # Driving two distinct conditions through run_until leaves two cache keys.
+    def test_two_conditions_populate_two_entries(self) -> None:
+        # Two distinct stop conditions, as fold_run_until keys them: two cache keys.
         prog, done = _bool_flip_program(200)
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
         plc._fold_context_cache = None
-        plc.run_until(Bool("Enable"), max_cycles=10, fold=True)
-        plc.run_until(done, max_cycles=10, fold=True)
+        plc._ensure_fold_context(frozenset({"Enable"}))
+        plc._ensure_fold_context(frozenset({done.name}))
         assert len(plc._fold_context_cache) >= 2
 
     def test_external_invalidation_rebuilds_without_error(self) -> None:

@@ -4170,7 +4170,7 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     assert response["success"] is True
     assert adapter._runner.forces["Counter"] == 99
 
-    # Force with float
+    # Force with float: Counter is an Int, so it holds what a copy() of 3.14 stores
     messages = _send_request(
         adapter,
         out_stream,
@@ -4180,7 +4180,31 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is True
-    assert adapter._runner.forces["Counter"] == 3.14
+    assert adapter._runner.forces["Counter"] == 3
+    assert type(adapter._runner.forces["Counter"]) is int
+
+    # A word is nothing an Int can hold, and the session says so
+    for seq, command in ((6, "pyrungForce"), (7, "pyrungPatch")):
+        messages = _send_request(
+            adapter,
+            out_stream,
+            seq=seq,
+            command=command,
+            arguments={"tag": "Counter", "value": "hello"},
+        )
+        response = _single_response(messages)
+        assert response["success"] is False
+        assert "INT holds a number" in response["message"]
+    assert adapter._runner.forces["Counter"] == 3
+
+    # The console's patch and force take the same road, zero of another type included
+    for seq, line in ((8, "patch Counter 0.0"), (9, "force Counter 0.0")):
+        messages = _send_request(
+            adapter, out_stream, seq=seq, command="evaluate", arguments={"expression": line}
+        )
+        assert _single_response(messages)["success"] is True
+    assert type(adapter._runner.forces["Counter"]) is int
+    assert type(adapter._runner._input_overrides.pending_patches["Counter"]) is int
 
 
 # ------------------------------------------------------------------

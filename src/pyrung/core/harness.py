@@ -229,7 +229,9 @@ class Harness:
         self._installed = True
         self._discover_couplings()
         self._rebuild_couplings()
+        self._plc._note_plant_change()
         self._refresh_synthesis()
+        self._seed_plant_defaults()
         self._seed_bool_state()
         self._install_monitors()
         self._plc._harness = self
@@ -274,6 +276,7 @@ class Harness:
         if self._plc._harness is self:
             self._plc._harness = None
         if self._plc._synthesis is not None:
+            self._plc._note_plant_change()
             self._plc._synthesis.plant = []
             self._plc._fold_context_cache = None
             self._plc._compiled_replay_kernel = None
@@ -319,7 +322,9 @@ class Harness:
         if self._installed:
             # Rebuild the overlay and monitors so changed couplings take
             # effect from the next scan (cut ones stop synthesizing).
+            self._plc._note_plant_change()
             self._refresh_synthesis()
+            self._seed_plant_defaults()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
@@ -703,6 +708,17 @@ class Harness:
         self._plc._soft_exec_program_cache = None
         self._plc._causal_lineage.invalidate_current_epoch()
 
+    def _seed_plant_defaults(self) -> None:
+        """Put each tag the plant uses in the state, at its default."""
+        current = self._plc._state.tags
+        seed = {
+            name: default
+            for name, default in self._plc._plant_tag_defaults().items()
+            if name not in current
+        }
+        if seed:
+            self._plc._edit_tip_tags(seed)
+
     def _seed_bool_state(self) -> None:
         """Seed each bool timer to the steady state implied by its current enable.
 
@@ -727,10 +743,7 @@ class Harness:
                 seed[c.ton_done_name] = True
                 seed[c.fb_name] = True
         if seed:
-            self._plc._state = self._plc._state.with_tags(seed)
-            self._plc._reset_cache(self._plc._state)
-            if self._plc._state.scan_id == 0:
-                self._plc._initial_state = self._plc._state
+            self._plc._edit_tip_tags(seed)
 
     def _install_monitors(self) -> None:
         # Analog couplings are declarative specs lowered to plant rungs (their
