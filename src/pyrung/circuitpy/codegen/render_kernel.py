@@ -27,6 +27,7 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
+from pyrung.core.function_source import KERNEL_COMPILE_FLAGS
 from pyrung.core.kernel import BlockSpec, CompiledKernel
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
@@ -135,7 +136,8 @@ def compile_kernel(
     source = _render_kernel_source(ctx, split_after=split_after)
 
     namespace: dict[str, Any] = {}
-    exec(compile(source, "<kernel>", "exec"), namespace)  # noqa: S102
+    code = compile(source, "<kernel>", "exec", flags=KERNEL_COMPILE_FLAGS, dont_inherit=True)
+    exec(code, namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
     pre_step_fn = namespace.get("_kernel_step_pre")
 

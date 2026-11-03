@@ -16,7 +16,6 @@ import dis
 import inspect
 import logging
 import math
-import textwrap
 import time
 import warnings
 from collections import OrderedDict
@@ -47,6 +46,11 @@ from pyrung.core.executor import (
     execute_program,
 )
 from pyrung.core.expression import RandIntExpr, randint_sites
+from pyrung.core.function_source import (
+    KERNEL_COMPILE_FLAGS,
+    embedded_source,
+    is_the_function,
+)
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -570,8 +574,7 @@ def _copies_its_defaults(fn: Any) -> bool:
     if not positional and not keyword:
         return True
     try:
-        source = textwrap.dedent(inspect.getsource(fn))
-        definition = ast.parse(source).body[0]
+        definition = ast.parse(embedded_source(fn)).body[0]
     except (IndexError, OSError, SyntaxError, TypeError):
         return False
     if not isinstance(definition, ast.FunctionDef):
@@ -620,7 +623,16 @@ def _means_the_same_in_a_kernel(fn: Any) -> bool:
             continue  # Every kernel imports it.
         if name in function_globals or not _is_self_contained_builtin(name):
             return False
-    return True
+    return _kernel_embeds_the_function(fn)
+
+
+def _kernel_embeds_the_function(fn: Any) -> bool:
+    """Whether the text a kernel embeds is what *fn* runs: a file changes, a function doesn't."""
+    try:
+        text = embedded_source(fn)
+    except (OSError, TypeError):
+        return False
+    return is_the_function(text, fn, flags=KERNEL_COMPILE_FLAGS)
 
 
 def _program_calls_what_a_kernel_cannot_copy(program: Any) -> bool:
@@ -653,6 +665,8 @@ def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
             "requires generate_circuitpy",
             "Could not inspect source for callable",
             "Callable source is not inspectable",
+            "Callable source is not the function",
+            "Callable name would shadow",
             "Unsupported",
         )
     )
