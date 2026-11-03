@@ -301,20 +301,11 @@ class RungFiringTimelines(Generic[K]):
 
     def replace_range(self, settled: RungFiringTimelines[K], first: int, last: int) -> None:
         """Take scans *first*..*last* from *settled*, an index of them made later."""
-        tables: tuple[tuple[dict[Any, Any], dict[Any, Any], Any], ...] = (
-            (self._fired_ranges, settled._fired_ranges, _trim_scan_ranges),
-            (self._value_timelines, settled._value_timelines, _trim_value_ranges),
-            (self._varied_ranges, settled._varied_ranges, _trim_scan_ranges),
+        _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
+        _replace_ranges(
+            self._value_timelines, settled._value_timelines, _trim_value_ranges, first, last
         )
-        for mine, theirs, trim in tables:
-            for key in set(mine) | set(theirs):
-                ranges = mine.get(key, [])
-                middle = trim(theirs.get(key, []), first, last)
-                merged = [*trim(ranges, None, first - 1), *middle, *trim(ranges, last + 1, None)]
-                if merged:
-                    mine[key] = _coalesced(merged)
-                else:
-                    mine.pop(key, None)
+        _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
         self._unknown_keys |= settled._unknown_keys
         self._partly_unknown |= settled._partly_unknown
         # Worked out again from the columns if one fragments.
@@ -666,6 +657,7 @@ def _coalesced(ranges: list[Any]) -> list[Any]:
         elif (
             touching
             and isinstance(range_, ValueRange)
+            and isinstance(last, ValueRange)
             and isinstance(range_.payload, (Constant, Unknown))
             and type(range_.payload) is type(last.payload)
             and _equal(_value_at(last, last.end_scan_id), _value_at(range_, range_.start_scan_id))
@@ -864,6 +856,18 @@ def _known_distinct_values(timeline: Sequence[ValueRange]) -> list[Any]:
             if not any(_equal(value, prior) for prior in distinct):
                 distinct.append(value)
     return distinct
+
+
+def _replace_ranges(mine: Any, theirs: Any, trim: Any, first: int, last: int) -> None:
+    """One table's scans *first*..*last* taken from *theirs*."""
+    for key in set(mine) | set(theirs):
+        ranges = mine.get(key, [])
+        middle = trim(theirs.get(key, []), first, last)
+        merged = [*trim(ranges, None, first - 1), *middle, *trim(ranges, last + 1, None)]
+        if merged:
+            mine[key] = _coalesced(merged)
+        else:
+            mine.pop(key, None)
 
 
 def _trim_scan_ranges(

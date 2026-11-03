@@ -315,7 +315,7 @@ class KernelSource:
         self.scalar_writes, self.opaque_tag_writes = _scalar_writes(tree)
         # A kernel global loaded from a tag at the top of a scan is its working copy.
         self.working_copies: dict[str, str] = {
-            statement.targets[0].id: statement.value.slice.value
+            statement.targets[0].id: cast("str", statement.value.slice.value)
             for function in self.step_functions
             for statement in function.node.body
             if isinstance(statement, ast.Assign)
@@ -783,7 +783,7 @@ class _Tracer:
         self._expressions = {}
         self._source = cast("Any", None)
         self._replay = cast("Any", None)
-        self._kernel = None
+        self._kernel = cast("Any", None)
 
     def _is_moving(self, key: tuple[Any, ...]) -> bool:
         return key[0] == "tags" and key[1] in MOVING_SYSTEM_TAGS

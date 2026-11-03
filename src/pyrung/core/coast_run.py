@@ -49,7 +49,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core import compiled_run, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
@@ -201,7 +201,7 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
     if cached is False:
         return None
     if cached is not None:
-        return cached  # type: ignore[return-value]
+        return cast("CompiledKernel", cached)
     synthesis = plc._synthesis
     plant = () if synthesis is None else tuple(synthesis.plant)
     holds = () if synthesis is None else tuple(synthesis.holds)
@@ -666,9 +666,9 @@ class _Seen(dict[str, Any]):
         if name not in self._reads:
             raise _NotDeclared(name)
 
-    def get(self, name: str, default: Any = None) -> Any:
-        self._allowed(name)
-        return super().get(name, default)
+    def get(self, key: object, default: Any = None, /) -> Any:
+        self._allowed(str(key))
+        return super().get(key, default)
 
     def __getitem__(self, name: str) -> Any:
         self._allowed(name)

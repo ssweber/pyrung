@@ -2373,13 +2373,17 @@ class PLC:
                 owners.append(lineage._query_for(epoch)._runner())
         if not owners:
             return
-        low = -math.inf if first is None else first
-        high = math.inf if last is None else last
         asked = [
-            (owner, (max(start, low), min(end, high)))
+            (
+                owner,
+                (
+                    start if first is None else max(start, first),
+                    end if last is None else min(end, last),
+                ),
+            )
             for owner in owners
             for start, end in owner._fold_windows
-            if start <= high and end >= low
+            if (last is None or start <= last) and (first is None or end >= first)
         ]
         if not asked:
             return
@@ -2395,12 +2399,9 @@ class PLC:
         for scan_id in range(anchor_scan_id + 1, last + 1):
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             replay.step()
-        for mine, theirs in (
-            (self._rung_firing_timelines, replay._rung_firing_timelines),
-            (self._committed_tag_timelines, replay._committed_tag_timelines),
-            (self._node_firing_timelines, replay._node_firing_timelines),
-        ):
-            mine.replace_range(theirs, first, last)
+        self._rung_firing_timelines.replace_range(replay._rung_firing_timelines, first, last)
+        self._committed_tag_timelines.replace_range(replay._committed_tag_timelines, first, last)
+        self._node_firing_timelines.replace_range(replay._node_firing_timelines, first, last)
         self._causal_lineage.invalidate_current_epoch()
         remaining: list[tuple[int, int]] = []
         for start, end in self._fold_windows:
