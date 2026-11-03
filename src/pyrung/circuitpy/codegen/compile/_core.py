@@ -672,11 +672,15 @@ def _in_f_string(text: str) -> str:
 def _compile_function_kwargs(ins: dict[str, Any], ctx: CodegenContext) -> str:
     """A function call's keyword arguments, in the order stepping passes them.
 
-    A name that is no Python keyword argument (``class``, ``a b``) goes through ``**``, and
-    so does one outside ASCII, which the compiler would normalize.
+    A name that is no Python keyword argument (``class``, ``a b``, ``__debug__``, the one
+    identifier the compiler won't take as a keyword and ``iskeyword`` doesn't list) goes
+    through ``**``, and so does one outside ASCII, which the compiler would normalize.
     """
     compiled = [(name, _compile_function_arg(value, ctx)) for name, value in ins.items()]
-    if all(name.isascii() and name.isidentifier() and not iskeyword(name) for name in ins):
+    if all(
+        name.isascii() and name.isidentifier() and not iskeyword(name) and name != "__debug__"
+        for name in ins
+    ):
         return ", ".join(f"{name}={expr}" for name, expr in compiled)
     return "**{" + ", ".join(f"{name!r}: {expr}" for name, expr in compiled) + "}"
 

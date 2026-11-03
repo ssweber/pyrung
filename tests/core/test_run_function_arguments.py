@@ -569,7 +569,16 @@ class TestNames:
 
     @pytest.mark.parametrize(
         "name, length",
-        [("class", 5), ("a b", 3), ("not", 3), ("1a", 2), ("a-b", 3), ("'", 1), ('"', 1)],
+        [
+            ("class", 5),
+            ("a b", 3),
+            ("not", 3),
+            ("1a", 2),
+            ("a-b", 3),
+            ("'", 1),
+            ('"', 1),
+            ("__debug__", 9),
+        ],
     )
     @pytest.mark.parametrize("engine", ENGINES)
     def test_a_name_no_keyword_could_spell_arrives(self, engine, name, length, monkeypatch):
@@ -586,7 +595,7 @@ class TestNames:
         program = _always_called(has_the_angstrom_sign, ins={"Å": A})
         assert _run_on(program, engine, (B,), monkeypatch) == (1,)
 
-    @pytest.mark.parametrize("name", ["class", "a b"])
+    @pytest.mark.parametrize("name", ["class", "a b", "__debug__"])
     def test_a_run_goes_on_where_stepping_does(self, name):
         def make():
             return _called(names_it_got, ins={name: A})
