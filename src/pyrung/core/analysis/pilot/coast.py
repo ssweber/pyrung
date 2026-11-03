@@ -102,7 +102,8 @@ class CoastReceipt:
     ``stop_reason``: ``"reached"`` (a target trigger fired), ``"departed"`` (a
     departure fired without a target), ``"quiescent"`` (a quiescence trigger or
     cone fixpoint), ``"timeout"`` (budget/ceiling exhausted, nothing fired),
-    ``"paused"`` (an external pause stopped the coast early), ``"dwell"``
+    ``"paused"`` (an external pause stopped the coast early), ``"stopped"``
+    (the program stopped itself, and the next scan would restart it), ``"dwell"``
     (a fixed dwell completed).
     ``fired`` names every terminal trigger true at the landing scan —
     simultaneous firings are all present.  ``trajectory`` is populated only
@@ -430,7 +431,10 @@ class CoastSession:
                 now_fired = [trigger for trigger in armed if trigger.predicate(state)]
                 if not now_fired:
                     elapsed = state.scan_id - start_scan
-                    stop_reason = "timeout" if elapsed >= budget else "paused"
+                    if stats.get("stopped"):
+                        stop_reason = "stopped"
+                    else:
+                        stop_reason = "timeout" if elapsed >= budget else "paused"
                     break
 
             scan = state.scan_id

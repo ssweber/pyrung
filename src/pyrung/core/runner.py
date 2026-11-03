@@ -935,6 +935,18 @@ def _new_epoch_ref() -> EpochRef:
     return EpochRef(next(_EPOCH_REFERENCE_VALUES))
 
 
+class SearchStopped(Exception):
+    """A how() world stopped itself, and its next scan would restart it.
+
+    A restart is a new recording with scan ids from 0.  A plan is scans of one
+    recording, so how() ends here rather than step over it.
+    """
+
+    def __init__(self, scan_id: int) -> None:
+        super().__init__(f"the program stopped itself at scan {scan_id}")
+        self.scan_id = scan_id
+
+
 @dataclass(frozen=True)
 class Epoch:
     """One immutable executed interval and the evidence needed to replay it."""
@@ -1634,6 +1646,7 @@ class PLC:
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # What coasts keep for later coasts: a search's, shared with its forks.
         self._coast_memo: CoastMemo | None = None
+        self._search_refuses_restart = False
         # Constant-size instrumentation for the most recent sparse point seek.
         # This is deliberately not a per-scan trace: replay folding must not
         # trade CPU savings for memory proportional to the skipped interval.
@@ -2643,6 +2656,7 @@ class PLC:
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         fork._coast_memo = self._coast_memo
+        fork._search_refuses_restart = self._search_refuses_restart
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         if self._harness is not None:
@@ -4315,6 +4329,8 @@ class PLC:
         # A replay walks one recording, and a restart ends a recording: a stop inside
         # it scanned on until a later call, which is past the end of this log.
         if not self._running and not self._replay_mode:
+            if self._search_refuses_restart:
+                raise SearchStopped(self._state.scan_id)
             self._stop_to_run_transition()
 
     def _sync_runtime_flags_from_state(self) -> None:

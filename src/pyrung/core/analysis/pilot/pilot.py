@@ -83,6 +83,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
 from pyrung.core.analysis.pilot.requirements import RequirementStatus
 from pyrung.core.analysis.pilot.route_judgment import route_forced_names
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
+from pyrung.core.runner import SearchStopped
 from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_boundary_from_checkpoint,
     _theory_requirement_snapshot,
@@ -486,6 +487,36 @@ def _pilot_loop_events(
 
     # What a search costs must not depend on the searches before it.
     plc._coast_memo = CoastMemo()
+    plc._search_refuses_restart = True
+    at_the_stop: dict[str, Any] = {}
+    try:
+        yield from _search_events(plc, ctx, at_the_stop)
+    except SearchStopped as stopped:
+        state = at_the_stop["state"]
+        reason = (
+            f"the program stopped itself at scan {stopped.scan_id} and its next scan would "
+            "restart it; how() does not plan across a restart"
+        )
+        _theory_recording._run_optional_theory_hook(
+            _theory_recording._record_optional_theory_abandoned, state, TheoryTermination.STUCK
+        )
+        yield from _stopped_events(
+            state,
+            ctx,
+            at_the_stop.get("frame"),
+            reason,
+            at_the_stop["channels"],
+            at_the_stop["accumulators"],
+            candidate_count=0,
+        )
+
+
+def _search_events(
+    plc: PLC,
+    ctx: _PilotContext,
+    at_the_stop: dict[str, Any],
+) -> Iterator[PilotEvent]:
+    """The search itself, leaving in *at_the_stop* what a terminal for a stop needs."""
 
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
@@ -501,6 +532,7 @@ def _pilot_loop_events(
         for owner in iter_advance_owners(ctx.program, harness=getattr(plc, "_harness", None))
         if owner.profile.accumulator is not None
     )
+    at_the_stop.update(channels=journal_channel_tags, accumulators=journal_acc_names)
     state = _PilotState(
         world=_World(
             work=plc,
@@ -514,6 +546,7 @@ def _pilot_loop_events(
         checkpoints=[],
         watch_tags=[],
     )
+    at_the_stop["state"] = state
     invocation_snapshot = dict(state.work.state.tags)
     state.invocation_checkpoint = _CausalCheckpoint(
         key=(
@@ -759,6 +792,7 @@ def _pilot_loop_events(
             else None
         )
         last_frame = frame
+        at_the_stop["frame"] = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
         # Finish observing the preceding execution even at the limit. The

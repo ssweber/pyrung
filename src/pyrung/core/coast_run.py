@@ -759,6 +759,12 @@ def coast_until(
         plc._run_single_scan(consume_pause_request=False)
         note(plc._state.scan_id)
         since += 1
+        if not plc._running:
+            # The program stopped itself.  The next scan would be a restart, a new recording
+            # with scan ids from 0, and that is for a caller to choose.
+            if stats is not None:
+                stats["stopped"] = 1
+            return finish(bool(predicate(plc.state)))
         if learned is not None:
             assert kernel is not None
             if learned.capture is None:
