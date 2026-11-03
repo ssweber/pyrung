@@ -274,8 +274,7 @@ class TestAgainstStepping:
         assert plc.current_state.scan_id - 1 == SCANS
         observe(plc, plc.current_state)
         assert stats["logical_scans"] == SCANS
-        # A stretch's landing is the one scan both count.
-        assert SCANS <= stats["kernel_scans"] + stats["stretched_scans"] <= SCANS + 1
+        assert stats["kernel_scans"] + stats["stretched_scans"] == SCANS
 
     def test_leaves_the_records_stepping_leaves(self, strict, name: str) -> None:
         plc = _runner(CASES[name], 0.3)
