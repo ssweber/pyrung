@@ -482,7 +482,6 @@ _SELF_CONTAINED_BUILTINS = frozenset(
         "enumerate",
         "filter",
         "float",
-        "format",
         "frozenset",
         "hex",
         "int",
@@ -512,8 +511,12 @@ _SELF_CONTAINED_BUILTINS = frozenset(
 )
 
 #: Attributes that hand a function a frame, and through it the globals of its module.
-_FRAME_ATTRIBUTES = frozenset(
+#: ``format`` and ``format_map`` are here for the same reason: they walk attributes named
+#: in a text that can be built while the function runs, so no constant can clear them.
+_ATTRIBUTES_PAST_ITS_SCOPE = frozenset(
     {
+        "format",
+        "format_map",
         "ag_frame",
         "cr_frame",
         "f_back",
@@ -537,18 +540,16 @@ def _reaches_past_its_scope(code: CodeType) -> bool:
     """Whether *code* imports, or asks an object for a dunder or a frame.
 
     An import shares a module's state with every other caller of it, and a dunder
-    (``__globals__``, ``__defaults__``, ``__traceback__``) or a frame hands over the
-    function's own module, by a route no global name shows.
+    (``__globals__``, ``__defaults__``, ``__traceback__``), a frame or ``str.format``
+    (``"{0.__globals__}"``) hands over the function's own module, by a route no global
+    name shows.
     """
     for instruction in dis.get_instructions(code):
         if instruction.opname == "IMPORT_NAME":
             return True
     for name in code.co_names:
-        if name.startswith("__") or name in _FRAME_ATTRIBUTES:
+        if name.startswith("__") or name in _ATTRIBUTES_PAST_ITS_SCOPE:
             return True
-    # str.format walks attributes named in its text: "{0.__class__}".
-    if any(isinstance(constant, str) and "__" in constant for constant in code.co_consts):
-        return True
     return any(
         _reaches_past_its_scope(constant)
         for constant in code.co_consts

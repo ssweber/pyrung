@@ -167,6 +167,38 @@ def test_a_closure_is_refused_for_code_py():
         _from_code_py(closes_over, "closes_over")
 
 
+def _walks_a_format_in_a_loop(v):
+    total = 0
+    for spec in ("{0.__module__}",):
+        total = len(spec.format(_walks_a_format_in_a_loop))
+    return {"out": total}
+
+
+def _walks_a_format_map(v):
+    return {"out": len("{f.__module__}".format_map({"f": _walks_a_format_map}))}
+
+
+def _builds_the_format_at_run_time(v):
+    spec = "{0." + "_" * 2 + "name" + "_" * 2 + "}"
+    return {"out": len(spec.format(len))}
+
+
+@pytest.mark.parametrize(
+    "fn", [_walks_a_format_in_a_loop, _walks_a_format_map, _builds_the_format_at_run_time]
+)
+def test_a_format_method_is_a_route_past_the_functions_scope(fn):
+    program = _program(fn)
+    assert not _has_a_kernel(program)
+    assert _seeks_as_it_ran(program) == fn(0)["out"]
+
+
+def test_the_format_builtin_stays_with_the_original():
+    def reads_format(v):
+        return {"out": len(format(v))}
+
+    assert not _has_a_kernel(_program(reads_format))
+
+
 def test_the_comparison_sees_each_part_of_a_function():
     def source_of(text):
         namespace: dict = {}
