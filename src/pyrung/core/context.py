@@ -853,5 +853,4 @@ class ScanContext:
         new_memory = _commit_changed(self._state_memory, self._memory_pending)
 
         # Create new state with updated tags/memory and advance scan
-        new_state = self._state.set(tags=new_tags, memory=new_memory)
-        return new_state.next_scan(dt=dt)
+        return self._state.committed(new_tags, new_memory, dt)
