@@ -35,6 +35,8 @@ jobs:
         # Same selection and options as local `make test` (markers, --ignore,
         # --runner-backend=both); edit the Makefile target, not this step.
         run: make test
+        env:
+          PYTEST_WORKERS: auto
 
       - name: Build package
         run: uv build

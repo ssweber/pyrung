@@ -18,7 +18,8 @@ pytest_plugins = ["pytester"]
 
 # ---------------------------------------------------------------------------
 # Hard memory cap — kills the process before it OOMs the machine.
-# Override with PYTEST_MEMORY_CAP_MB env var (default 4096).
+# Override with PYTEST_MEMORY_CAP_MB env var (default 4096).  Per process: each xdist
+# worker has its own, and a worker it kills fails the run, naming the test.
 # ---------------------------------------------------------------------------
 
 _MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "4096"))
@@ -629,9 +630,26 @@ def _a_fold_mismatch_fails_its_test(request: pytest.FixtureRequest) -> Any:
         pytest.fail(f"a fold mismatch was caught and hidden: {found[0][1]}", pytrace=False)
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node: Any, error: Any) -> None:
+    """An xdist worker's record of the check, for the controller to judge with the rest."""
+    record = getattr(node, "workeroutput", {}).get("fold_check")
+    if record is not None:
+        from tests import fold_check
+
+        fold_check.absorb(record)
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     fold_check = sys.modules.get("tests.fold_check")
-    if fold_check is None or exitstatus != 0:
+    if fold_check is None:
+        return
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        # The controller sets the exit code, and a worker has only part of the session.
+        workeroutput["fold_check"] = fold_check.export()
+        return
+    if exitstatus != 0:
         return
     vacuous = session.config.getoption("fold_check", default=False) and fold_check.vacuous()
     if fold_check.undeclared() or vacuous:

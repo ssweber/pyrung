@@ -53,6 +53,7 @@ dev = [
     "hypothesis>=6.0",
     "psutil>=5.9",
     "pytest>=8.3.5",
+    "pytest-xdist>=3.6",
     "ruff>=0.16.0",
     "ty>=0.0.65",
 ]

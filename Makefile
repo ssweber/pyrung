@@ -5,6 +5,11 @@
 
 .DEFAULT_GOAL := default
 DOCS_ADDR ?= localhost:8000
+# Workers for the long pytest targets. 6 of 8 cores leaves room for builders; 0 is one process.
+# loadfile keeps a file's tests together, on one worker and in order. No worker restarts: xdist
+# would otherwise rerun the test that killed one (by the memory cap, say) up to 4 times per worker.
+PYTEST_WORKERS ?= 6
+PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
 .PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-conformance conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
@@ -17,10 +22,10 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
 
 test-fold:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q

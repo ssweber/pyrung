@@ -1443,6 +1443,34 @@ def install() -> None:
     setattr(pilot_coast, "coast_until", coast_until)  # noqa: B010
 
 
+def export() -> dict[str, Any]:
+    """This process's record, in plain types: what an xdist worker sends its controller."""
+    return {
+        "stats": dict(STATS),
+        "totals": dict(scan_trace.TOTALS),
+        "skips": SKIPS,
+        "mismatches": MISMATCHES,
+        "self_check_mismatches": SELF_CHECK_MISMATCHES,
+        "declared": DECLARED,
+        "long_runs_by_file": LONG_RUNS_BY_FILE,
+    }
+
+
+def absorb(record: dict[str, Any]) -> None:
+    """Add a worker's export() here, so the session is judged on all of its runs."""
+    STATS.update(record["stats"])
+    scan_trace.TOTALS.update(record["totals"])
+    for reason, tests in record["skips"].items():
+        SKIPS.setdefault(reason, []).extend(tests)
+    MISMATCHES.extend(tuple(m) for m in record["mismatches"])
+    SELF_CHECK_MISMATCHES.extend(tuple(m) for m in record["self_check_mismatches"])
+    DECLARED.extend(tuple(m) for m in record["declared"])
+    for name, (runs, in_loop) in record["long_runs_by_file"].items():
+        by_file = LONG_RUNS_BY_FILE.setdefault(name, [0, 0])
+        by_file[0] += runs
+        by_file[1] += in_loop
+
+
 def wall_budget(seconds: float) -> float:
     """A wall-clock test budget, widened while the check steps a twin of every run."""
     return seconds * 10 if getattr(compiled_run, "_fold_check_installed", False) else seconds

@@ -58,12 +58,13 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
 
 ## Machine budget
 
-- Memory is the constraint (prover/fold/pilot suites are heavy). One heavy job machine-wide
-  (the queue's lock); up to ~5 builders iterating on targeted tests in parallel.
+- One heavy job machine-wide (the queue's lock); up to ~5 builders iterating on targeted tests in
+  parallel. `test` and `fold` take 6 of the 8 cores (`PYTEST_WORKERS`, peak 2.4 GB). Pilot-heavy suites
+  (`tumbler`, `prove`, `pilot`, `soundness`) stay in one process: user, 2026-11-03, pilot is intensive.
 - Stage commands, timeouts and presets are in `devtools/mergeq/mergeq.toml`; measured
-  durations are in each job's `done/<id>.json` (a full train has run ~45 min).
+  durations are in each job's `done/<id>.json` (a full train should now take ~39 min, was 96).
 - A branch touching `scan_trace.py`, `compiled_run.py` or `coast_run.py` gates on
-  `lint,prove,pilot,tumbler,fold`, not `fast`: `fast` has no tumbler, and a change to the run's
+  `lint,tumbler,fold`, not `fast` (`fold` includes the prove and pilot tests): `fast` has no tumbler, and a change to the run's
   fast path broke a pilot golden past READY once.
 - A branch landing outside a train still gates on the `test` stage if it changes anything under
   `src/`: a codegen fix gated on lint, prove, pilot, tumbler and conf-cp turned two `tests/core`
