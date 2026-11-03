@@ -17,7 +17,16 @@ from typing import Any
 import pytest
 
 import pyrung.cli as cli
-from pyrung.core import Bool, Program, Rung, run_function
+from pyrung.core import (
+    Block,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    TagType,
+    run_enabled_function,
+    run_function,
+)
 from pyrung.core.analysis import prove
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -302,6 +311,55 @@ def test_a_lock_of_a_function_the_gate_passes_is_written(
     code, _, lock = _lock(tmp_path, PLAIN_FN, capsys, monkeypatch)
     assert code == 0
     assert lock.exists()
+
+
+def _unread_output() -> tuple[Program, Any, dict[str, Any], str, Any]:
+    run, alarm = Bool("Run", external=True), Bool("Alarm")
+
+    def passes(enabled, v):
+        return {"out": v}
+
+    with Program(strict=False) as program:
+        with Rung():
+            run_enabled_function(passes, ins={"v": run}, outs={"out": alarm})
+    return program, ~alarm, {"Run": True}, "Alarm", True
+
+
+def _output_through_a_pointer() -> tuple[Program, Any, dict[str, Any], str, Any]:
+    idx = Int("Idx", external=True, default=1, choices={1: "a", 2: "b"})
+    slots = Block("Dq", TagType.INT, 1, 3)
+
+    def one(v):
+        return {"out": 1 if v else 0}
+
+    with Program(strict=False) as program:
+        with Rung():
+            run_function(one, ins={"v": In1}, outs={"out": slots[idx]})
+    return program, slots[2] == 0, {"In1": True, "Idx": 2}, "Dq2", 1
+
+
+_LEFT_OUT_OF_THE_SEARCH = pytest.mark.parametrize(
+    "row", [_unread_output, _output_through_a_pointer], ids=["unread", "through a pointer"]
+)
+
+
+@_LEFT_OUT_OF_THE_SEARCH
+def test_a_function_left_out_of_the_search_writes_when_stepped(row) -> None:
+    program, _, patch, name, written = row()
+    plc = PLC(program, dt=0.01)
+    plc.patch(patch)
+    plc.step()
+    assert plc.current_state.tags[name] == written
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the search leaves this function's write out, so always() is a false Proven",
+)
+@_LEFT_OUT_OF_THE_SEARCH
+def test_a_function_left_out_of_the_search_is_not_proven(row) -> None:
+    program, prop, *_ = row()
+    assert not isinstance(always(program, prop), Proven)
 
 
 def test_check_lock_of_a_function_the_gate_refuses_raises_the_reason(
