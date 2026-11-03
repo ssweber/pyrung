@@ -3018,6 +3018,26 @@ class PLC:
                 _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
                 self._recent_state_cache_bytes -= evicted_est
 
+    def _thin_checkpoints(self, keep: int) -> None:
+        """Drop every other checkpoint once more than *keep* are held.
+
+        A checkpoint only shortens a replay, since the scan log says the rest: one
+        dropped costs run-up and never a value.  A checkpoint at a plant change stays,
+        because no replay crosses one.  Its force record goes with it unless the forces
+        changed on that scan.
+        """
+        if len(self._checkpoints) <= keep:
+            return
+        plant_changes = {changed_at for changed_at, _plant in self._plant_changes}
+        dropped = {
+            scan_id
+            for position, scan_id in enumerate(sorted(self._checkpoints))
+            if position % 2 == 1 and scan_id not in plant_changes
+        }
+        for scan_id in dropped:
+            del self._checkpoints[scan_id]
+        self._scan_log.drop_force_records_unchanged_at(dropped)
+
     def _bind_logic_sites(self) -> Any:
         """The site table of the logic this runner scans (binding it if never bound)."""
 
@@ -4643,6 +4663,14 @@ class PLC:
             return
         registration.enabled = False
 
+    def _note_unrecorded_scans(self, first: int, last: int) -> None:
+        """These scans ran and left no records: a question that reaches them settles them."""
+        windows = self._fold_windows
+        if windows and windows[-1][1] == first - 1:
+            windows[-1] = (windows[-1][0], last)
+        else:
+            windows.append((first, last))
+
     def _record_fold_landing(self, first_scan_id: int | None = None, *, exact: bool = True) -> None:
         """Cache the tip a fold landing moved to its scan, and checkpoint it there.
 
@@ -4656,11 +4684,7 @@ class PLC:
         state = self._state
         scan_id = state.scan_id
         if first_scan_id is not None and first_scan_id <= scan_id:
-            windows = self._fold_windows
-            if windows and windows[-1][1] == first_scan_id - 1:
-                windows[-1] = (windows[-1][0], scan_id)
-            else:
-                windows.append((first_scan_id, scan_id))
+            self._note_unrecorded_scans(first_scan_id, scan_id)
         if not exact:
             return
         self._cache_state(state)

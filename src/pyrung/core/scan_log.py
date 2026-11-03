@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import array
 import bisect
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -156,6 +156,17 @@ class ScanLog:
         """
         self._force_changes_by_scan[scan_id] = dict(forces)
         self._effective_input_cache.clear()
+
+    def drop_force_records_unchanged_at(self, scan_ids: Collection[int]) -> None:
+        """Forget the records at *scan_ids* that repeat the record before them."""
+        records = self._force_changes_by_scan
+        previous: str | None = None
+        for scan_id in sorted(records):
+            # By repr, so a force from True to 1 still counts as a change.
+            current = repr(records[scan_id])
+            if scan_id in scan_ids and current == previous:
+                del records[scan_id]
+            previous = current
 
     def record_rtc_base_change(
         self,

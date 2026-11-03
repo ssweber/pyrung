@@ -24,6 +24,7 @@ from pyrung.core import (
     TagType,
     Timer,
     calc,
+    coast_run,
     compiled_run,
     copy,
     latch,
@@ -31,11 +32,12 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    runner,
     scan_trace,
     system,
 )
 from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
-from pyrung.core.rung_firings import _UNKNOWN_VALUE, RungFiringTimelines
+from pyrung.core.rung_firings import _UNKNOWN_VALUE, RungFiringTimelines, UnrecordedScansError
 from pyrung.core.tag import Dint
 from tests.fold_check import compare_records
 
@@ -329,6 +331,11 @@ def _ramp() -> None:
         out(BX)
 
 
+def _count_while_forced() -> None:
+    with Rung(A):
+        calc(X + 1, X)
+
+
 InsideT = Timer.clone("InsideT")
 
 
@@ -572,10 +579,182 @@ def test_a_saturated_timer_is_a_path_of_its_own() -> None:
 
 
 def test_kernel_and_path_caps_hold(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pyrung.core import coast_run
-
     monkeypatch.setattr(coast_run, "MAX_PATHS", 2)
     plc = _runner(CASES["staircase_mirror"], 0.3)
     coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
     memo = memo_of(plc)
     assert all(len(held.paths) <= 2 for held in memo.paths.values())
+
+
+def test_the_kernel_held_longest_unused_goes_first() -> None:
+    memo = coast_run.CoastMemo()
+    program = object()
+
+    def runner_of(hold: object) -> Any:
+        return SimpleNamespace(
+            _compiled_replay_kernel=None,
+            _synthesis=SimpleNamespace(plant=(), holds=(hold,)),
+            _program=program,
+            _compiled_replay_supported_kernel=object,
+        )
+
+    first, second, third = object(), object(), object()
+    kept = coast_run._kernel_for(runner_of(first), memo)
+    coast_run._kernel_for(runner_of(second), memo)
+    assert coast_run._kernel_for(runner_of(first), memo) is kept
+    coast_run._kernel_for(runner_of(third), memo)
+    assert coast_run._kernel_for(runner_of(first), memo) is kept
+    assert memo.compiles == 3
+    assert len(memo.kernels) == coast_run.MAX_KERNELS == 2
+
+
+@pytest.fixture
+def _not_under_fold_check() -> None:
+    # Lockstep compares every checkpoint and record with a stepped twin's, so a coast keeps
+    # all of them there.  These read what a coast leaves out against stepping themselves.
+    if getattr(compiled_run, "_fold_check_installed", False):
+        pytest.skip("--fold-check coasts keep what stepping keeps")
+
+
+class TestCheckpointsInAStretch:
+    SCANS = 12_000
+
+    pytestmark = pytest.mark.usefixtures("_not_under_fold_check")
+
+    def _coasted(self, **kwargs: Any) -> PLC:
+        plc = PLC(_program(_ramp), dt=0.01, **kwargs)
+        plc.patch({A: False})
+        plc.step()
+        coast_until(plc, lambda _s: False, budget=self.SCANS, predicate_reads=frozenset())
+        return plc
+
+    def _stepped(self) -> PLC:
+        plc = PLC(_program(_ramp), dt=0.01)
+        plc.patch({A: False})
+        for _ in range(self.SCANS + 1):
+            plc.step()
+        return plc
+
+    def test_they_are_wider_than_stepping_leaves(self) -> None:
+        plc = self._coasted()
+        assert plc.state.scan_id > self.SCANS
+        interval = plc._checkpoint_interval * coast_run.STRETCH_CHECKPOINT_INTERVALS
+        assert len(plc._checkpoints) <= self.SCANS // interval + 3
+
+    def test_a_thinned_history_reads_the_same(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(coast_run, "MAX_CHECKPOINTS", 3)
+        plc = self._coasted()
+        assert len(plc._checkpoints) <= 3
+        stepped = self._stepped()
+        for scan in (1, 150, 2500, 6001, 9999, self.SCANS):
+            plc._recent_state_cache.clear()
+            plc._replay_slabs.clear()
+            _same_tags(dict(plc.history.at(scan).tags), dict(stepped.history.at(scan).tags))
+        fork, twin = plc.fork_from(6001), stepped.fork_from(6001)
+        for _ in range(5):
+            fork.step()
+            twin.step()
+        _same_tags(dict(fork.state.tags), dict(twin.state.tags))
+
+    def test_retention_holds_inside_a_stretch(self) -> None:
+        plc = self._coasted(history=4000)
+        assert plc.history.oldest_scan_id >= self.SCANS - 4000 - 2000
+        assert len(plc._checkpoints) <= 4
+        with pytest.raises(KeyError):
+            plc.history.at(1)
+
+
+class TestThinningCheckpoints:
+    @staticmethod
+    def _counting() -> Any:
+        return _program(_count_while_forced)
+
+    def test_a_force_changed_on_a_dropped_scan_is_still_known(self) -> None:
+        plc, whole = (PLC(self._counting(), dt=0.1, checkpoint_interval=10) for _ in range(2))
+        for each in (plc, whole):
+            each.step()
+            for scan in range(1, 80):
+                # The change lands on checkpoint scans, the records a thinning weighs.
+                if scan % 20 == 0:
+                    each.force(A, scan % 40 == 0)
+                each.step()
+        forced_records = dict(plc._scan_log._force_changes_by_scan)
+        assert len(plc._checkpoints) > 4
+        plc._thin_checkpoints(4)
+        assert len(plc._checkpoints) < len(whole._checkpoints)
+        kept = plc._scan_log._force_changes_by_scan
+        assert len(kept) < len(forced_records)
+        for scan in range(1, plc.state.scan_id + 1):
+            plc._recent_state_cache.clear()
+            plc._replay_slabs.clear()
+            whole._recent_state_cache.clear()
+            whole._replay_slabs.clear()
+            _same_tags(dict(plc.history.at(scan).tags), dict(whole.history.at(scan).tags))
+
+    def test_a_record_that_only_changes_a_value_type_stays(self) -> None:
+        plc = PLC(self._counting(), dt=0.1, checkpoint_interval=10)
+        log = plc._scan_log
+        log.record_force_changes(10, {"X": True})
+        log.record_force_changes(20, {"X": 1})
+        log.record_force_changes(30, {"X": 1})
+        log.drop_force_records_unchanged_at({20, 30})
+        assert sorted(log._force_changes_by_scan) == [10, 20]
+
+    def test_a_plant_change_keeps_its_checkpoint(self) -> None:
+        plc = PLC(self._counting(), dt=0.1, checkpoint_interval=10)
+        for _ in range(81):
+            plc.step()
+        plc._plant_changes = [(20, [])]
+        plc._thin_checkpoints(2)
+        assert 20 in plc._checkpoints
+        assert 40 not in plc._checkpoints or 60 not in plc._checkpoints
+
+
+Toggle = Bool("AdvToggle")
+
+
+def _fires_every_other_scan() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        calc(X + 1, X)
+    with Rung():
+        on_delay(T, 30000)
+
+
+class TestRecordsPastTheirCap:
+    pytestmark = pytest.mark.usefixtures("_not_under_fold_check")
+
+    SCANS = 12_000
+
+    def _coasted(self, monkeypatch: pytest.MonkeyPatch, runs: int) -> PLC:
+        monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", runs)
+        plc = _runner(_fires_every_other_scan, 0.01)
+        coast_until(plc, lambda _s: False, budget=self.SCANS, predicate_reads=frozenset())
+        return plc
+
+    def _stepped(self, plc: PLC) -> PLC:
+        stepped = _runner(_fires_every_other_scan, 0.01)
+        while stepped.state.scan_id < plc.state.scan_id:
+            stepped.step()
+        return stepped
+
+    def test_they_stop_growing_and_read_the_same(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        plc = self._coasted(monkeypatch, 200)
+        held = plc._rung_firing_timelines.run_count()
+        assert held < self.SCANS / 3
+        assert plc._fold_windows
+        stepped = self._stepped(plc)
+        tip = plc.state.scan_id
+        assert plc.query.cold_rungs() == stepped.query.cold_rungs()
+        assert plc.query.hot_rungs() == stepped.query.hot_rungs()
+        for scan in (tip - 7, tip - 1, tip):
+            assert str(plc.cause(Toggle, scan)) == str(stepped.cause(Toggle, scan))
+        assert not plc._fold_windows
+        compare_records("records past the cap", plc, stepped, 0)
+
+    def test_too_far_to_settle_is_a_named_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        plc = self._coasted(monkeypatch, 200)
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
+        with pytest.raises(UnrecordedScansError):
+            plc.query.cold_rungs()

@@ -79,8 +79,20 @@ if TYPE_CHECKING:
     from pyrung.core.kernel import CompiledKernel
     from pyrung.core.runner import PLC
 
-# Kernels a memo keeps with their paths.  Each is a compiled module and a parsed source.
-MAX_KERNELS = 12
+# A stretch checkpoints this many intervals apart.  What a checkpoint saves is run-up through
+# the compiled kernel, about 60 us a scan, and what it costs is a state and a force map kept.
+STRETCH_CHECKPOINT_INTERVALS = 10
+# Checkpoints a coasting runner keeps, thinned when it passes this.  The budgets that call a
+# coast bound its scans; this bounds what they leave, however long the seek was allowed to be.
+MAX_CHECKPOINTS = 512
+# Record runs a runner holds before its stretches leave their scans to be settled when asked.
+# A rung that fires every other scan costs a run each time, about 140 bytes.  The longest route
+# in the tumbler reaches 78,000.
+MAX_RECORD_RUNS = 1_000_000
+# Kernels a memo keeps with their paths, least recently asked for out first.  Each is a
+# compiled module and a parsed source, about 23 MB on a large program.  12 peaked at 1,000 MB
+# on the tumbler and 2 at 677 MB, with no more time spent compiling than it saves.
+MAX_KERNELS = 2
 # Paths a kernel keeps, least recently fired out first.  A path holds its trace's
 # operations and each loop written from them.
 MAX_PATHS = 256
@@ -194,8 +206,9 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
     plant = () if synthesis is None else tuple(synthesis.plant)
     holds = () if synthesis is None else tuple(synthesis.holds)
     key = (id(plc._program), tuple(map(id, plant)), tuple(map(id, holds)))
-    entry = memo.kernels.get(key)
+    entry = memo.kernels.pop(key, None)
     if entry is not None:
+        memo.kernels[key] = entry
         plc._compiled_replay_kernel = entry[0]
         return entry[0]
     kernel = plc._compiled_replay_supported_kernel()
@@ -404,6 +417,14 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
         return
     start = segments[0].first
     total = sum(segment.count for segment in segments)
+    timelines_held = (
+        plc._rung_firing_timelines,
+        plc._node_firing_timelines,
+        plc._committed_tag_timelines,
+    )
+    if sum(timelines.run_count() for timelines in timelines_held) >= MAX_RECORD_RUNS:
+        plc._note_unrecorded_scans(start, start + total - 1)
+        return
     # A stretch that ran through several paths without a gap: a rung they all repeat
     # goes in once, which is most of them under a bang-bang hold.
     common = _common_columns(segments, kernel_paths)
@@ -752,7 +773,7 @@ def _try_stretch(
         return asked_to_stop
 
     state_kernel = replay._kernel
-    interval = plc._checkpoint_interval
+    interval = _stretch_checkpoint_interval(plc)
     loops: dict[int, _Loop | None] = {}
     total = 0
     previous: _Path | None = None
@@ -850,6 +871,7 @@ def _try_stretch(
                 _record_segments(plc, segments, paths)
                 segments = []
                 _install(plc, replay, state)
+                plc._thin_checkpoints(MAX_CHECKPOINTS)
             for observer in compiled_run.LOOP_OBSERVERS:
                 observer(plc, state)
     loop.finish()
@@ -857,6 +879,10 @@ def _try_stretch(
         _record_segments(plc, segments, paths)
         _land(plc, replay)
     return total, None
+
+
+def _stretch_checkpoint_interval(plc: PLC) -> int:
+    return plc._checkpoint_interval * STRETCH_CHECKPOINT_INTERVALS
 
 
 def _land(plc: PLC, replay: CompiledPLC) -> None:
@@ -991,7 +1017,7 @@ def coast_until(
             hit = bool(predicate(plc.state))
             if hit or paused:
                 return finish(hit)
-            if used >= PAYING_STRETCH or plc.state.scan_id % plc._checkpoint_interval == 0:
+            if used >= PAYING_STRETCH or plc.state.scan_id % _stretch_checkpoint_interval(plc) == 0:
                 fails = 0
                 wait = ENTRY_WAIT
             else:

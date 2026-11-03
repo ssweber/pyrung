@@ -79,6 +79,7 @@
 
 ### Fixes
 
+- A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.
 - `how()` and `never()` try only what a tag can hold: a literal it cannot (`"AB"` on a Char, `"x"` or `3.5` on an Int) no longer raises, reports a state no scan reaches, or misses the values either side of a fraction (`In > 2.5, In < 3.5` is met at 3).
 - `never()` no longer proves a `Char` compared by order out of reach, and `how()` no longer gives up on one: `C > "A"` is met at `"B"`.

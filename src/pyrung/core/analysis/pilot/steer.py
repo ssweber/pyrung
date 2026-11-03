@@ -1331,8 +1331,7 @@ def _try_program_continuation_seek(
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
     # Confirmed conditional holds animate during the coast as oscillating rungs
-    # in the holds overlay (cyclefold dispatch inside the coast session); they
-    # are never forced steady.
+    # in the holds overlay; they are never forced steady.
 
     # A relational target (Temp >= 5.0) is reached when its predicate holds, not
     # when the register hits an exact value — coast on the predicate so a sensor

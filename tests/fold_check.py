@@ -51,6 +51,7 @@ prints every mismatch of the session with its test and the differing fields.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import warnings
 from collections import Counter
@@ -831,9 +832,13 @@ def _judge_a_raised_run(
     place the run's landing goes uncompared otherwise.  The raise is either the stop
     predicate's, on the landing itself, or the next scan's.
     """
+    from pyrung.core.analysis.pilot.budget import SearchOutOfTime
+
     global _depth
     end = plc._state.scan_id
-    if stop_raised is not type(raised):
+    # how()'s wall clock is no scan's doing and stepping has none to run out of, so it
+    # isn't asked to raise.  What the run left is compared below like any other.
+    if stop_raised is not type(raised) and not isinstance(raised, SearchOutOfTime):
         _depth += 1
         try:
             on_twin = _one_scan(twin)
@@ -1175,6 +1180,12 @@ def install() -> None:
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
     # A coast asks for the loop at its second scan, so a short one reaches it.
     setattr(coast_run, "ENTRY_WAIT", 1)  # noqa: B010
+    # And keeps the checkpoints and records stepping keeps, for the compares to hold them all
+    # to the twin's.  What it leaves out for real is read against stepping in test_coast_run.py
+    # (TestCheckpointsInAStretch, TestRecordsPastTheirCap).
+    setattr(coast_run, "STRETCH_CHECKPOINT_INTERVALS", 1)  # noqa: B010
+    setattr(coast_run, "MAX_CHECKPOINTS", sys.maxsize)  # noqa: B010
+    setattr(coast_run, "MAX_RECORD_RUNS", sys.maxsize)  # noqa: B010
     if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
         scan_trace.SELF_CHECK_OBSERVERS.append(_note_self_check_mismatch)
 

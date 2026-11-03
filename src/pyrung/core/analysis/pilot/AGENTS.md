@@ -207,16 +207,24 @@ parallel fields.
 Pulse execution may distinguish the source scan, productive assertion scan,
 and a retained look-ahead or exact consumer boundary. A productive scan does
 not imply that the landing still owns its progress; `ScanProgressReceipt`
-records that distinction. Logical coast folding is an execution optimization,
-not permission to invent physical occurrences.
+records that distinction. A coast runs every scan, its long stretches in the guarded
+scan loop (`core/coast_run.py`); a span owns all the scans of its range, whichever
+engine ran them. The loop is an execution optimization, not permission to invent
+physical occurrences.
 
 Invocation search work and productive simulated dwell are separate quantities.
 `SearchBudget` is shared by disposable experiments and lives outside `_World`:
 discarding an attempt or restoring a checkpoint never refunds work. Receipted
-kernel scans are charged once by epoch ownership; folded logical time is not a
-kernel evaluation. Research requests consume at least one work unit and retain
-their local caps. The allowance is not a wall-clock deadline. The assignment
-survey and frontier probes check the remaining allowance before scans.
+interpreted scans are charged once by epoch ownership, a work unit each, and loop
+scans one unit per `STRETCH_SCANS_PER_UNIT`. Research requests consume at least one
+work unit and retain their local caps. The allowance is not a wall-clock deadline;
+`WallClock` is one, on by default in `how()` and off in tests that assert answers. The
+assignment survey and frontier probes check the remaining allowance before scans.
+
+What a coast leaves behind has its cap in `coast_run.py`: kernels and paths in the memo,
+checkpoints on the runner (spaced wider inside a stretch, thinned past `MAX_CHECKPOINTS`),
+record runs (past `MAX_RECORD_RUNS` a stretch's scans settle when asked, or a named error
+past `SETTLE_SCAN_LIMIT`).
 
 ## Attempt transaction
 

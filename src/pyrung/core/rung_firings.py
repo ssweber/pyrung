@@ -194,6 +194,12 @@ class RungFiringTimelines(Generic[K]):
         for tag in varied:
             _extend_scan_range(self._varied_ranges[(rung_index, tag)], last)
 
+    def run_count(self) -> int:
+        """The ranges held, which is what these timelines cost."""
+        return sum(map(len, self._fired_ranges.values())) + sum(
+            map(len, self._value_timelines.values())
+        )
+
     def tags_of(self, rung_index: K) -> Iterable[str]:
         """Every tag this rung has written."""
         return self._tags_by_rung.get(rung_index, ())
