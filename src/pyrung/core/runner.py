@@ -2400,7 +2400,9 @@ class PLC:
             node_runs_fn=self._replay_rung_runs_at,
         )
 
-    def _settle_compiled_ranges(self, first: int | None = None, last: int | None = None) -> None:
+    def _settle_compiled_ranges(
+        self, first: int | None = None, last: int | None = None, *, at_any_cost: bool = False
+    ) -> None:
         """Give the scans in *first*..*last* that ran without records their records.
 
         A plain compiled run commits states and no index, which is its whole speed.  The
@@ -2431,7 +2433,7 @@ class PLC:
             return
         # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
         scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
-        if scans > SETTLE_SCAN_LIMIT:
+        if scans > SETTLE_SCAN_LIMIT and not at_any_cost:
             raise self._refusal(asked[0][1][0], asked[-1][1][1], scans)
         for owner, (start, end) in asked:
             owner._settle_window(start, end, self._search_limits())
@@ -3168,10 +3170,17 @@ class PLC:
         try:
             kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
         except Exception as exc:
-            if _looks_like_compiled_replay_gap(exc):
-                self._compiled_replay_kernel = False
-                return None
-            raise
+            # A gap is expected.  Anything else is pyrung's own bug and is said, but the kernel
+            # is only speed: what the scans would answer, an interpreted scan answers too.
+            if not _looks_like_compiled_replay_gap(exc):
+                warnings.warn(
+                    f"compiling the kernel failed ({type(exc).__name__}: {exc}); "
+                    "these scans run interpreted, slower and with the same answers",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            self._compiled_replay_kernel = False
+            return None
         if kernel.has_io_gaps:
             self._compiled_replay_kernel = False
             return None

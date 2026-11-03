@@ -36,6 +36,7 @@ from pyrung.core import (
     scan_trace,
     system,
 )
+from pyrung.circuitpy import codegen
 from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
 from pyrung.core.rung_firings import _UNKNOWN_VALUE, RungFiringTimelines, UnrecordedScansError
 from pyrung.core.tag import Dint
@@ -662,6 +663,43 @@ def test_columns_kept_by_content_have_their_cap(monkeypatch: pytest.MonkeyPatch)
     for _ in range(plc.state.scan_id - twin.state.scan_id):
         twin.step()
     compare_records("capped columns", plc, twin, 0)
+
+
+class TestAKernelThatWillNotCompile:
+    """Not a gap: pyrung's own bug.  It is said, and the scans still answer."""
+
+    @pytest.fixture(autouse=True)
+    def _broken(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def broken(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("a codegen bug")
+
+        monkeypatch.setattr(codegen, "compile_kernel", broken)
+
+    def _stepped(self, scans: int = SCANS) -> PLC:
+        plc = _runner(CASES["staircase_mirror"], 0.3)
+        for _ in range(scans):
+            plc.step()
+        return plc
+
+    def test_a_coast_runs_interpreted(self) -> None:
+        plc = _runner(CASES["staircase_mirror"], 0.3)
+        with pytest.warns(RuntimeWarning, match="a codegen bug"):
+            coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
+        assert plc._compiled_replay_kernel is False
+        assert plc.state.tags == self._stepped().state.tags
+
+    def test_a_run_runs_interpreted(self) -> None:
+        plc = _runner(CASES["staircase_mirror"], 0.3)
+        with pytest.warns(RuntimeWarning, match=r"compiling the kernel failed \(RuntimeError"):
+            plc.run_for(900.0)  # the first thousand scans are interpreted anyway
+        assert plc.state.tags == self._stepped(plc.state.scan_id - 1).state.tags
+
+    def test_a_replay_seeks_interpreted(self) -> None:
+        plc = self._stepped()
+        with pytest.warns(RuntimeWarning, match="a codegen bug"):
+            kernel = plc._compiled_replay_supported_kernel()
+        assert kernel is None
+        assert plc.replay_to(SCANS // 2).state.tags == plc.history.at(SCANS // 2).tags
 
 
 def test_the_kernel_held_longest_unused_goes_first() -> None:

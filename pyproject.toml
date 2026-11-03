@@ -210,4 +210,5 @@ testpaths = [
 norecursedirs = ["tests/fuzz/reproducers", "tests/conformance/workspace"]
 filterwarnings = [
     "error:copy\\(.*writes a bool literal to a BOOL tag:UserWarning",
+    "error:compiling the kernel failed:RuntimeWarning",
 ]

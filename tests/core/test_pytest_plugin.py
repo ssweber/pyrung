@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from pyrung.core import PLC, And, Bool, Program, Rung, latch, out, reset
+from pyrung.core import PLC, And, Bool, Program, Rung, Timer, latch, on_delay, out, reset, runner
 from pyrung.core.analysis.query import CoverageReport
+from pyrung.core.rung_firings import UnrecordedScansError
 from pyrung.pytest_plugin import (
     CoverageCollector,
     Whitelist,
@@ -80,6 +81,43 @@ class TestCoverageCollector:
         collector.collect(runner)
         assert len(collector.reports) == 1
         assert isinstance(collector.reports[0], CoverageReport)
+
+    def test_collect_covers_a_long_compiled_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A rung that fires only in the compiled middle of a run is not cold.
+        def long_run(*, stepped: bool) -> PLC:
+            Slow = Timer.clone("Slow")
+            Once = Bool("Once")
+            Never = Bool("Never")
+            with Program() as logic:
+                with Rung():
+                    on_delay(Slow, 5000)
+                with Rung(Slow.Acc == 3000):
+                    latch(Once)
+                with Rung(Slow.Acc == 9000):
+                    latch(Never)
+            plc = PLC(logic, dt=0.001)
+            if stepped:
+                for _ in range(4000):
+                    plc.step()
+            else:
+                plc.run_for(4.0)
+            return plc
+
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
+        plc = long_run(stepped=False)
+        assert plc._fold_windows
+        with pytest.raises(UnrecordedScansError):
+            plc.query.cold_rungs()  # a question has its limit
+
+        collector = CoverageCollector()
+        collector.collect(plc)
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 250_000)
+        report = collector.merge()
+        assert report is not None
+        assert report.cold_rungs == long_run(stepped=True).query.report().cold_rungs == {"3"}
+
+        new_cold, _new_stranded = check_whitelist(report, Whitelist(cold_rungs=frozenset({"3"})))
+        assert new_cold == set()
 
     def test_collect_report_directly(self) -> None:
         report = CoverageReport(cold_rungs=frozenset({"0"}))
