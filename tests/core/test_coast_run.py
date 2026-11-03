@@ -38,7 +38,12 @@ from pyrung.core import (
     system,
 )
 from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
-from pyrung.core.rung_firings import _UNKNOWN_VALUE, RungFiringTimelines, UnrecordedScansError
+from pyrung.core.rung_firings import (
+    _UNKNOWN_VALUE,
+    RungFiringTimelines,
+    SearchQuestionRefused,
+    UnrecordedScansError,
+)
 from pyrung.core.tag import Dint
 from tests.fold_check import compare_records
 
@@ -586,6 +591,14 @@ class TestRungFiringsAlwaysHaveTheirValues:
         assert anchor is not None and 777 - anchor > 10
         with pytest.raises(UnrecordedScansError, match=r"scans 777\.\.777 include"):
             plc.rung_firings(777)
+
+    def test_a_search_asking_about_its_parent_gets_its_own_refusal(self, monkeypatch) -> None:
+        # The scans are the parent's, and the parent is no search.
+        fork = self._stepped(_writes_too_many_values).fork()
+        fork._search_refuses_restart = True
+        monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
+        with pytest.raises(SearchQuestionRefused, match=r"scans 777\.\.777 include"):
+            fork.rung_firings(777)
 
 
 def test_a_long_wait_runs_in_the_loop() -> None:

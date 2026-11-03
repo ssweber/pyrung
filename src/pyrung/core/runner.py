@@ -1947,7 +1947,9 @@ class PLC:
         if any(value is _UNKNOWN_VALUE for writes in firings.values() for value in writes.values()):
             owner = self._causal_lineage.owner_at(target)
             assert owner is not None
-            return owner._runner()._rung_firings_stepped_again(target, self._search_limits())
+            return owner._runner()._rung_firings_stepped_again(
+                target, self._search_limits(), self._refusal
+            )
         return firings
 
     def _recorded_rung_firings(self, target: int) -> PMap:
@@ -1962,11 +1964,14 @@ class PLC:
         return SearchQuestionRefused(refusal) if self._search_refuses_restart else refusal
 
     def _rung_firings_stepped_again(
-        self, target: int, check_limits: Callable[[], None] | None
+        self,
+        target: int,
+        check_limits: Callable[[], None] | None,
+        refusal: Callable[[int, int, int], BaseException],
     ) -> PMap:
         steps = target - self._replay_anchor_scan(target - 1)
         if steps > SETTLE_SCAN_LIMIT:
-            raise self._refusal(target, target, steps)
+            raise refusal(target, target, steps)
         anchor = self._nearest_checkpoint_at_or_before(target - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for scan_id in range(anchor_scan_id + 1, target + 1):
@@ -2544,7 +2549,8 @@ class PLC:
                 explicitly — ``avoid=And(A, B)`` avoids only the combined state,
                 not A or B alone.
             max_scans: Work budget for the search, in interpreted scans.  A scan run in
-                the guarded loop costs a hundredth of one.
+                the guarded loop costs a hundredth of one, charged when its seek returns:
+                a seek in the loop is not stopped partway, however long.
             wall_clock_s: Seconds of real time before the search stops and says so, or
                 ``None`` for no limit.  A search this ends may have reached on a faster
                 machine.

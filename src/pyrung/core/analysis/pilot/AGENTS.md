@@ -216,7 +216,9 @@ Invocation search work and productive simulated dwell are separate quantities.
 `SearchBudget` is shared by disposable experiments and lives outside `_World`:
 discarding an attempt or restoring a checkpoint never refunds work. Receipted
 interpreted scans are charged once by epoch ownership, a work unit each, and loop
-scans one unit per `STRETCH_SCANS_PER_UNIT`. Research requests consume at least one
+scans one unit per `STRETCH_SCANS_PER_UNIT`. Loop scans are charged when their seek
+returns and never stop it (charging them by the scan would turn right answers into
+declines); a seek's interpreted scans stop at what the ledger has left. Research requests consume at least one
 work unit and retain their local caps. The allowance is not a wall-clock deadline;
 `WallClock` is one, on by default in `how()` and off in tests that assert answers. The
 assignment survey and frontier probes check the remaining allowance before scans.
