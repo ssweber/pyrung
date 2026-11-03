@@ -10,11 +10,13 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from __future__ import annotations
 
+import ast
 import builtins
 import dis
 import inspect
 import logging
 import math
+import textwrap
 import time
 import warnings
 from collections import OrderedDict
@@ -456,6 +458,131 @@ def _global_names(code: CodeType) -> tuple[set[str], set[str]]:
             read |= inner_read
             bound |= inner_bound
     return read, bound
+
+
+#: Builtins whose answer depends only on what they are handed, in any module.  Anything
+#: else (``globals``, ``eval``, ``vars``, ``getattr``, ``open``, ``print``...) can reach
+#: the function's module or the world, or is simply not worth the proof.
+_SELF_CONTAINED_BUILTINS = frozenset(
+    {
+        "abs",
+        "all",
+        "any",
+        "bin",
+        "bool",
+        "bytes",
+        "chr",
+        "complex",
+        "dict",
+        "divmod",
+        "enumerate",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "hex",
+        "int",
+        "isinstance",
+        "iter",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "next",
+        "oct",
+        "ord",
+        "pow",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "slice",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+    }
+)
+
+#: Attributes that hand a function a frame, and through it the globals of its module.
+_FRAME_ATTRIBUTES = frozenset(
+    {"ag_frame", "cr_frame", "f_back", "f_builtins", "f_globals", "f_locals", "gi_frame", "tb_frame"}
+)
+
+
+def _is_self_contained_builtin(name: str) -> bool:
+    if name in _SELF_CONTAINED_BUILTINS:
+        return True
+    builtin = getattr(builtins, name, None)
+    return isinstance(builtin, type) and issubclass(builtin, BaseException)
+
+
+def _reaches_past_its_scope(code: CodeType) -> bool:
+    """Whether *code* imports, or asks an object for a dunder or a frame.
+
+    An import shares a module's state with every other caller of it, and a dunder
+    (``__globals__``, ``__defaults__``, ``__traceback__``) or a frame hands over the
+    function's own module, by a route no global name shows.
+    """
+    for instruction in dis.get_instructions(code):
+        if instruction.opname == "IMPORT_NAME":
+            return True
+    for name in code.co_names:
+        if name.startswith("__") or name in _FRAME_ATTRIBUTES:
+            return True
+    # str.format walks attributes named in its text: "{0.__class__}".
+    if any(isinstance(constant, str) and "__" in constant for constant in code.co_consts):
+        return True
+    return any(
+        _reaches_past_its_scope(constant)
+        for constant in code.co_consts
+        if isinstance(constant, CodeType)
+    )
+
+
+def _is_immutable_constant(value: Any) -> bool:
+    if isinstance(value, tuple | frozenset):
+        return all(_is_immutable_constant(item) for item in value)
+    return value is None or isinstance(value, bool | int | float | complex | str | bytes)
+
+
+def _copies_its_defaults(fn: Any) -> bool:
+    """Whether a copy of *fn* gets the defaults *fn* has, and neither can change them.
+
+    The copy evaluates each default's source once, in the kernel's module.  So the
+    source must be a literal, and the value one that stepping holds in no other way: a
+    ``memo=[]`` would run as two lists, the function's and the copy's.
+    """
+    positional = fn.__defaults__ or ()
+    keyword = fn.__kwdefaults__ or {}
+    if not positional and not keyword:
+        return True
+    try:
+        source = textwrap.dedent(inspect.getsource(fn))
+        arguments = ast.parse(source).body[0].args  # type: ignore[attr-defined]
+    except (AttributeError, IndexError, OSError, SyntaxError, TypeError):
+        return False
+    named = [
+        *zip(arguments.defaults, positional, strict=False),
+        *(
+            (node, keyword.get(argument.arg))
+            for argument, node in zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True)
+            if node is not None
+        ),
+    ]
+    if len(named) != len(positional) + len(keyword):
+        return False
+    for node, value in named:
+        try:
+            literal = ast.literal_eval(node)
+        except (TypeError, ValueError):
+            return False
+        if not _is_immutable_constant(value) or repr(literal) != repr(value):
+            return False
+    return True
 
 
 def _means_the_same_in_a_kernel(fn: Any) -> bool:
@@ -3882,6 +4009,7 @@ class PLC:
         """
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
+        self._plant_changes = []
         self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = {}
         self._this_scan_drained_patches = {}
@@ -3901,7 +4029,6 @@ class PLC:
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
         self._checkpoints = {}
-        self._plant_changes = []
         self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = dict(self._input_overrides.forces)
 

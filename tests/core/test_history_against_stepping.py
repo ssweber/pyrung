@@ -382,6 +382,87 @@ def _default_names_a_global(value: int, offset: int = GLOBAL_OFFSET) -> dict[str
     return {"out": value + offset}
 
 
+def _default_is_an_expression(value: int, offset: int = len("abc")) -> dict[str, int]:
+    """The copy evaluates this again: here a constant, but nothing has to be."""
+    return {"out": value + offset}
+
+
+Counted = Int("HsCounted")
+Never = Bool("HsNever")
+
+
+def _keeps_state_in_a_default(value: int, memo: list[int] = []) -> dict[str, int]:  # noqa: B006
+    memo.append(value)
+    return {"out": len(memo)}
+
+
+def _keeps_state_in_a_keyword_default(
+    value: int,
+    *,
+    memo: list[int] = [],  # noqa: B006
+) -> dict[str, int]:
+    memo.append(value)
+    return {"out": len(memo)}
+
+
+def _asks_for_its_globals(value: int) -> dict[str, int]:
+    return {"out": value + globals().get("GLOBAL_OFFSET", -1)}
+
+
+def _evaluates_a_global(value: int) -> dict[str, int]:
+    return {"out": value + eval("GLOBAL_OFFSET")}
+
+
+def _lists_its_scope(value: int) -> dict[str, int]:
+    return {"out": value + len(dir())}
+
+
+def _imports_a_module(value: int) -> dict[str, int]:
+    import operator
+
+    return {"out": operator.add(value, 1)}
+
+
+def _reads_a_dunder(value: int) -> dict[str, int]:
+    return {"out": value + len(value.__class__.__name__)}
+
+
+def _names_a_dunder_in_a_format(value: int) -> dict[str, int]:
+    return {"out": value + len("{0.__class__}".format(value))}
+
+
+def _walks_a_frame(value: int) -> dict[str, int]:
+    try:
+        raise ValueError
+    except ValueError as caught:
+        frame = caught.__traceback__.tb_frame  # type: ignore[union-attr]
+        return {"out": value + frame.f_globals["GLOBAL_OFFSET"]}
+
+
+def _imports_in_a_nested_function(value: int) -> dict[str, int]:
+    def inner() -> int:
+        import operator
+
+        return operator.add(value, 1)
+
+    return {"out": inner()}
+
+
+def _literal_defaults(
+    value: int, offset: int = 1, *, label: str = "x", pair: tuple[int, ...] = (1, 2)
+) -> dict[str, int]:
+    return {"out": value + offset + len(label) - len(pair)}
+
+
+def _uses_builtins_that_answer_from_their_arguments(value: int) -> dict[str, int]:
+    try:
+        if not isinstance(value, int):
+            raise ValueError(value)
+    except ValueError:
+        return {"out": 0}
+    return {"out": max(min(sum(sorted(range(3))), 9), abs(value) + 1, len(str(value)))}
+
+
 def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
     def build() -> Program:
         with Program(strict=False) as program:
@@ -404,16 +485,80 @@ def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
         _reads_a_global,
         _decorated,
         _default_names_a_global,
+        _default_is_an_expression,
+        _asks_for_its_globals,
+        _evaluates_a_global,
+        _lists_its_scope,
+        _imports_a_module,
+        _imports_in_a_nested_function,
+        _reads_a_dunder,
+        _names_a_dunder_in_a_format,
+        _walks_a_frame,
         lambda value: {"out": value + 1},
         _closes_over()[0],
     ],
-    ids=["reads a global", "decorated", "default", "lambda", "closure"],
+    ids=[
+        "reads a global",
+        "decorated",
+        "default",
+        "default expression",
+        "globals()",
+        "eval",
+        "dir",
+        "import",
+        "nested import",
+        "dunder",
+        "dunder in a format",
+        "frame",
+        "lambda",
+        "closure",
+    ],
 )
 def test_a_function_a_kernel_cannot_copy_runs_itself(
     fn: Callable[..., Any], fine_loop: None
 ) -> None:
     """Copied into the kernel's module these lose what they name, or raise."""
     plc, _twin, _truth = _lockstep_function(fn)
+    assert plc._compiled_replay_supported_kernel() is None
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [_keeps_state_in_a_default, _keeps_state_in_a_keyword_default],
+    ids=["positional", "keyword-only"],
+)
+def test_a_mutable_default_is_the_function_s_own_list(
+    fn: Callable[..., Any], fine_loop: None
+) -> None:
+    """A kernel's copy would keep its count in a second list, from its first scan on."""
+
+    def memo() -> list[int]:
+        return fn.__defaults__[0] if fn.__defaults__ else fn.__kwdefaults__["memo"]
+
+    def build() -> PLC:
+        with Program(strict=False) as program:
+            with Rung():
+                calc(N + 1, N)
+            with Rung(Lamp):
+                run_function(fn, ins={"value": N}, outs={"out": Counted})
+        plc = PLC(program, dt=0.01)
+        plc.patch({Lamp: True})
+        return plc
+
+    memo().clear()
+    plc = build()
+    plc.run_until(Never, max_cycles=3000)
+    counted = plc.state.tags[Counted.name]
+    assert plc.state.scan_id == 3000
+    assert counted == 3000
+    assert len(memo()) == 3000
+
+    memo().clear()
+    twin = build()
+    for _ in range(3000):
+        twin.step()
+    assert twin.state.tags[Counted.name] == counted
+    fold_check._compare("compiled", plc.state.scan_id, plc.state, twin.state)
     assert plc._compiled_replay_supported_kernel() is None
 
 
@@ -455,7 +600,15 @@ def test_a_plant_function_a_kernel_cannot_copy_runs_itself(fine_loop: None) -> N
     fold_check._compare("compiled", plc.state.scan_id, plc.state, twin.state)
 
 
-@pytest.mark.parametrize("fn", [_pure, _annotated_with_a_user_type])
+@pytest.mark.parametrize(
+    "fn",
+    [
+        _pure,
+        _annotated_with_a_user_type,
+        _literal_defaults,
+        _uses_builtins_that_answer_from_their_arguments,
+    ],
+)
 def test_a_function_that_means_the_same_keeps_the_kernel(
     fn: Callable[..., Any], fine_loop: None
 ) -> None:
