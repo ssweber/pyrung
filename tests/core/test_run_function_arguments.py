@@ -79,7 +79,7 @@ def _run(plc: PLC, scans: int = SCANS) -> None:
 
 def _step(plc: PLC, scans: int = SCANS) -> None:
     for _ in range(scans):
-        plc.run_until(NEVER, max_cycles=1, fold=False)
+        plc.run_until(NEVER, max_cycles=1, jit=False)
 
 
 def _lands(program, go, *tags) -> tuple:

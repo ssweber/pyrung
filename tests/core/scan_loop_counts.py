@@ -14,7 +14,7 @@ NEVER = Bool("ScanLoopTestNever")
 
 class ScansOutsideLoop:
     """Counts the scans of a runner that did not run in the loop: interpreted or real
-    compiled scans.  ``counter["n"]``, as the fold's rate tests read it."""
+    compiled scans.  ``counter["n"]``, as the rate tests read it."""
 
     def __init__(self, plc: Any) -> None:
         self._interpreted = 0

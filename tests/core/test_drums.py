@@ -791,7 +791,7 @@ def _long_run_event_program() -> Program:
 
 @pytest.mark.parametrize("kind", ["time", "time_event"])
 def test_time_drums_complete_pause_and_reset_over_long_runs(kind: str) -> None:
-    """Long ``run_for`` windows, which fold: ``make test-fold`` checks them scan by scan."""
+    """Long ``run_for`` windows, in the loop: ``make test-fold`` checks them scan by scan."""
     plc = PLC(_long_run_time_program(kind), dt=0.01)
     plc.patch({"Enable": True, "E3": True})
     plc.run_for(0.4)

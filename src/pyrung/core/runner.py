@@ -5137,12 +5137,12 @@ class PLC:
                 break
         return self._state
 
-    def run_for(self, seconds: float, *, fold: bool = True) -> SystemState:
+    def run_for(self, seconds: float, *, jit: bool = True) -> SystemState:
         """Run until simulation time advances by N seconds or a pause breakpoint fires.
 
         Args:
             seconds: Minimum simulation time to advance.
-            fold: When True (default), a long run goes through the compiled kernel
+            jit: When True (default), a long run goes through the compiled kernel
                 and its guarded loop, which run every scan without recording
                 causal timelines. False steps every scan interpreted.
 
@@ -5150,7 +5150,7 @@ class PLC:
             The final SystemState after reaching the target time.
         """
         self._ensure_running()
-        if fold and self._logic and self._time_mode == TimeMode.FIXED_STEP:
+        if jit and self._logic and self._time_mode == TimeMode.FIXED_STEP:
             from pyrung.core.compiled_run import _stepped_scans_until, run_scans
 
             scans = _stepped_scans_until(
@@ -5177,7 +5177,7 @@ class PLC:
         | tuple[Condition | Tag, ...]
         | list[Condition | Tag],
         max_cycles: int = 10000,
-        fold: bool = True,
+        jit: bool = True,
     ) -> SystemState:
         """Run until condition is true, pause breakpoint fires, or max_cycles reached.
 
@@ -5187,7 +5187,7 @@ class PLC:
         Args:
             conditions: Condition expressions or a single callable predicate.
             max_cycles: Maximum scans before giving up (default 10000).
-            fold: When True (default), a long run goes through the compiled kernel
+            jit: When True (default), a long run goes through the compiled kernel
                 and its guarded loop, which run every scan without recording
                 causal timelines. False, or a callable predicate, steps every scan
                 interpreted.
@@ -5201,7 +5201,7 @@ class PLC:
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
         self._ensure_running()
-        if fold and self._logic and self._time_mode == TimeMode.FIXED_STEP:
+        if jit and self._logic and self._time_mode == TimeMode.FIXED_STEP:
             from pyrung.core.compiled_run import run_scans
 
             if max_cycles <= 0:

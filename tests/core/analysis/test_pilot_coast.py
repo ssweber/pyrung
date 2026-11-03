@@ -255,7 +255,7 @@ def _static_channel_long_timer_program():
 
 
 def _step_until(plc: PLC, pred, cap: int = 20_000) -> int:
-    """Drive a fold=False fork scan-by-scan; return the first scan pred holds."""
+    """Drive a jit=False fork scan-by-scan; return the first scan pred holds."""
     start = plc.state.scan_id
     while not pred(plc.state):
         plc.step()
@@ -264,7 +264,7 @@ def _step_until(plc: PLC, pred, cap: int = 20_000) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1. Receipt basics + fold/no-fold parity
+# 1. Receipt basics + loop/stepped parity
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +274,7 @@ class TestReceiptBasics:
         plc.patch({"Enable": True})
         plc.step()
 
-        manual = plc.fork()  # fold=False reference
+        manual = plc.fork()  # jit=False reference
         target = value_trigger(plc, "target", TARGET, "Done", True)
         receipt = CoastSession(plc, kind="bearing_coast").seek([target], budget=500)
 
@@ -892,7 +892,7 @@ class TestCoastUnderPilotRungs:
 
         reference = PLC(program, dt=0.010)
         install(reference)
-        reference.run_until(Tmr.Done, max_cycles=500, fold=False)
+        reference.run_until(Tmr.Done, max_cycles=500, jit=False)
 
         folded = PLC(program, dt=0.010)
         install(folded)

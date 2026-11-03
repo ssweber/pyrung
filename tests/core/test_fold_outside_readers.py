@@ -187,17 +187,17 @@ class TestAProbeThatLeftMemoryBehind:
     )
     def test_a_one_shot_that_rearms_on_a_timer(self, body: Body) -> None:
         stepped = _plc(body)
-        stepped.run_until(NEVER, max_cycles=1000, fold=False)
+        stepped.run_until(NEVER, max_cycles=1000, jit=False)
         folded = _plc(body)
-        folded.run_until(NEVER, max_cycles=1000, fold=True)
+        folded.run_until(NEVER, max_cycles=1000, jit=True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
     def test_a_count_lands_on_its_scan(self) -> None:
         stepped = _plc(_one_shot_copy)
-        stepped.run_until(N >= 500, max_cycles=3000, fold=False)
+        stepped.run_until(N >= 500, max_cycles=3000, jit=False)
         folded = _plc(_one_shot_copy)
-        folded.run_until(N >= 500, max_cycles=3000, fold=True)
+        folded.run_until(N >= 500, max_cycles=3000, jit=True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
@@ -212,11 +212,11 @@ class TestAProbeThatLeftMemoryBehind:
         ],
     )
     def test_an_edge_raised_from_below(self, body: Body) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = _plc(body)
-            plc.run_until(NEVER, max_cycles=20, fold=False)
+            plc.run_until(NEVER, max_cycles=20, jit=False)
             plc.patch({"G": True})
-            plc.run_until(NEVER, max_cycles=1000, fold=fold)
+            plc.run_until(NEVER, max_cycles=1000, jit=jit)
             return plc
 
         stepped, folded = run(False), run(True)
@@ -226,7 +226,7 @@ class TestAProbeThatLeftMemoryBehind:
     def test_a_timer_alone_stays_in_the_loop(self) -> None:
         plc = _plc(_timer)
         counter = _count_kernel_scans(plc)
-        plc.run_until(NEVER, max_cycles=700, fold=True)
+        plc.run_until(NEVER, max_cycles=700, jit=True)
         assert counter["n"] < 60
 
 
@@ -290,9 +290,9 @@ class TestPrograms:
     )
     def test_each_runs_as_stepped(self, body: Body, patch: dict[str, Any] | None) -> None:
         stepped = _plc(body, patch)
-        stepped.run_until(NEVER, max_cycles=1000, fold=False)
+        stepped.run_until(NEVER, max_cycles=1000, jit=False)
         folded = _plc(body, patch)
-        folded.run_until(NEVER, max_cycles=1000, fold=True)
+        folded.run_until(NEVER, max_cycles=1000, jit=True)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
@@ -311,14 +311,14 @@ class TestAMonitor:
         body: Body,
         tag: Any,
         *,
-        fold: bool,
+        jit: bool,
         patch: dict[str, Any] | None = None,
         scans: int = 1000,
     ) -> tuple[list[tuple[int, Any, Any]], PLC]:
         plc = _plc(body, patch)
         fired: list[tuple[int, Any, Any]] = []
         plc.monitor(tag, lambda cur, prev: fired.append((plc.state.scan_id, prev, cur)))
-        plc.run_until(NEVER, max_cycles=scans, fold=fold)
+        plc.run_until(NEVER, max_cycles=scans, jit=jit)
         return fired, plc
 
     @pytest.mark.parametrize(
@@ -333,20 +333,20 @@ class TestAMonitor:
     def test_on_what_moves_fires_as_stepped(
         self, body: Body, tag: Any, patch: dict[str, Any] | None
     ) -> None:
-        folded, folded_plc = self._firings(body, tag, fold=True, patch=patch)
-        stepped, stepped_plc = self._firings(body, tag, fold=False, patch=patch)
+        folded, folded_plc = self._firings(body, tag, jit=True, patch=patch)
+        stepped, stepped_plc = self._firings(body, tag, jit=False, patch=patch)
         assert folded == stepped
         assert stepped
         assert _state(folded_plc) == _state(stepped_plc)
 
     @pytest.mark.parametrize("tag", [F, T.Acc], ids=["oscillator", "accumulator"])
     def test_on_a_cycle_fires_as_stepped(self, tag: Any) -> None:
-        def run(fold: bool) -> tuple[list[tuple[int, Any, Any]], PLC, dict[str, int]]:
+        def run(jit: bool) -> tuple[list[tuple[int, Any, Any]], PLC, dict[str, int]]:
             plc = _plc(_timer_beside_an_oscillator)
             fired: list[tuple[int, Any, Any]] = []
             plc.monitor(tag, lambda cur, prev: fired.append((plc.state.scan_id, prev, cur)))
             stats: dict[str, int] = {}
-            if fold:
+            if jit:
                 coast_until(plc, lambda _s: False, budget=600, stats=stats)
             else:
                 for _ in range(600):
@@ -360,10 +360,10 @@ class TestAMonitor:
         assert _state(folded_plc) == _state(stepped_plc)
 
     def test_a_callback_counting_into_a_tag_counts_as_stepped(self) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = _plc(_rebuilt_seconds, {"A": True})
             plc.monitor(Secs, lambda _c, _p: plc.patch({"N": plc.state.tags.get("N", 0) + 1}))
-            plc.run_until(NEVER, max_cycles=1000, fold=fold)
+            plc.run_until(NEVER, max_cycles=1000, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -379,12 +379,12 @@ class TestAMonitor:
             with Rung(Hit):
                 out(Y)
 
-        def run(fold: bool) -> tuple[list[int], int]:
+        def run(jit: bool) -> tuple[list[int], int]:
             plc = _plc(latched)
             fired: list[int] = []
             plc.monitor(Hit, lambda _c, _p: fired.append(plc.state.scan_id))
             counter = _count_kernel_scans(plc)
-            plc.run_until(NEVER, max_cycles=700, fold=fold)
+            plc.run_until(NEVER, max_cycles=700, jit=jit)
             return fired, counter["n"]
 
         folded, kernel_scans = run(True)
@@ -524,7 +524,7 @@ class TestWhenDo:
 
     @staticmethod
     def _run(
-        body: Body, condition: Any, patch: dict[str, Any] | None, *, fold: bool, scans: int = 1000
+        body: Body, condition: Any, patch: dict[str, Any] | None, *, jit: bool, scans: int = 1000
     ) -> tuple[list[int], PLC, dict[str, int]]:
         plc = _plc(body)
         fired: list[int] = []
@@ -536,7 +536,7 @@ class TestWhenDo:
 
         plc.when(condition).do(act)
         stats: dict[str, int] = {}
-        if fold:
+        if jit:
             coast_until(plc, lambda _s: False, budget=scans, stats=stats)
         else:
             for _ in range(scans):
@@ -557,8 +557,8 @@ class TestWhenDo:
     def test_fires_as_stepped(
         self, body: Body, condition: Any, patch: dict[str, Any] | None
     ) -> None:
-        folded, folded_plc, _stats = self._run(body, condition, patch, fold=True)
-        stepped, stepped_plc, _ = self._run(body, condition, patch, fold=False)
+        folded, folded_plc, _stats = self._run(body, condition, patch, jit=True)
+        stepped, stepped_plc, _ = self._run(body, condition, patch, jit=False)
         assert folded == stepped
         assert folded_plc.state.scan_id == stepped_plc.state.scan_id
         assert _state(folded_plc) == _state(stepped_plc)

@@ -423,7 +423,7 @@ class TestEdgeOutsideProgram:
         plc.patch({"Button": True})
         plc.step()
         plc.patch({"Button": False})
-        state = plc.run_until(fall(light), max_cycles=5, fold=False)
+        state = plc.run_until(fall(light), max_cycles=5, jit=False)
         assert state.scan_id == 2
         assert state.tags["Light"] is False
 
@@ -493,7 +493,7 @@ class TestEdgeOutsideProgram:
         assert state.tags["Light"] is True
 
     def test_run_until_edge_folded_matches_stepped(self):
-        """A fold past a timer's run stops on the same scan as stepping."""
+        """A run past a timer's run stops on the same scan as stepping."""
         from pyrung.core import PLC, Timer, on_delay
 
         tmr = Timer.clone("Tmr")
@@ -505,14 +505,14 @@ class TestEdgeOutsideProgram:
             with Rung(tmr.Done):
                 out(lamp)
 
-        def run(edge, fold):
+        def run(edge, jit):
             plc = PLC(logic, dt=0.010)
             plc.patch({"Go": True})
             plc.step()
             if edge is fall:
-                plc.run_until(tmr.Done, max_cycles=1000, fold=fold)
+                plc.run_until(tmr.Done, max_cycles=1000, jit=jit)
                 plc.patch({"Go": False})
-            state = plc.run_until(edge(lamp), max_cycles=1000, fold=fold)
+            state = plc.run_until(edge(lamp), max_cycles=1000, jit=jit)
             return state.scan_id, state.tags["Lamp"]
 
         assert run(rise, True) == run(rise, False) == (500, True)

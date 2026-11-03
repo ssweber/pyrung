@@ -110,7 +110,7 @@ def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = 
         expected[stepped.state.scan_id] = _state(stepped)
 
     folded = _plc(body, patch)
-    folded.run_until(NEVER, max_cycles=scans, fold=True)
+    folded.run_until(NEVER, max_cycles=scans, jit=True)
     assert folded.state.scan_id == stepped.state.scan_id
     assert _state(folded) == expected[folded.state.scan_id]
 
@@ -122,7 +122,7 @@ def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = 
 def _kernel_scans(body: Body, scans: int = 1200) -> int:
     plc = _plc(body, None)
     counter = ScansOutsideLoop(plc)
-    plc.run_until(NEVER, max_cycles=scans, fold=True)
+    plc.run_until(NEVER, max_cycles=scans, jit=True)
     return counter["n"]
 
 
@@ -130,8 +130,8 @@ def _assert_lands_as_stepped(body: Body, *conditions: Any) -> None:
     """``run_until`` stops on one scan with one state, folded or stepped, for each."""
     for condition in conditions:
         folded, stepped = _plc(body, None), _plc(body, None)
-        folded.run_until(condition, max_cycles=2000, fold=True)
-        stepped.run_until(condition, max_cycles=2000, fold=False)
+        folded.run_until(condition, max_cycles=2000, jit=True)
+        stepped.run_until(condition, max_cycles=2000, jit=False)
         assert folded.state.scan_id == stepped.state.scan_id
         assert _state(folded) == _state(stepped)
 
@@ -486,13 +486,13 @@ class TestAClockThroughATag:
         def body() -> None:
             _two_blinks(lambda: calc(N + 1, N))()
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = _plc(body, None)
             plc.force(F, True)
-            plc.run_until(NEVER, max_cycles=1200, fold=fold)
+            plc.run_until(NEVER, max_cycles=1200, jit=jit)
             return plc
 
-        assert _state(run(fold=True)) == _state(run(fold=False))
+        assert _state(run(jit=True)) == _state(run(jit=False))
 
     @pytest.mark.parametrize(
         "body",
@@ -908,13 +908,13 @@ class TestWhatIsNotAnIndicator:
 
     def test_a_second_writer_stays_in_the_guard(self) -> None:
         # Its moves are not a function of the clock, and a probe scan shows them.
-        def run(fold: bool) -> tuple[int, dict[str, Any]]:
+        def run(jit: bool) -> tuple[int, dict[str, Any]]:
             calls: list[int] = []
             plc = _plc(_function_over_a_gated_blink(calls), None)
             # A monitor on what holds changes nothing here, and tells --fold-check to
             # leave this run alone: a stepped twin would call the same function.
             plc.monitor(G, lambda _cur, _prev: None)
-            plc.run_until(NEVER, max_cycles=700, fold=fold)
+            plc.run_until(NEVER, max_cycles=700, jit=jit)
             return len(calls), _state(plc)
 
         assert run(True) == run(False)

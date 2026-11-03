@@ -38,7 +38,7 @@ def _run(program, *, stepped: bool) -> PLC:
     plc.patch({"Run": True})
     if stepped:
         for _ in range(SCANS):
-            plc.run_until(NEVER, max_cycles=1, fold=False)
+            plc.run_until(NEVER, max_cycles=1, jit=False)
     else:
         plc.run_until(NEVER, max_cycles=SCANS)
     return plc

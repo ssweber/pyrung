@@ -64,7 +64,7 @@ def test_scan_tip_recovery_does_not_use_folded_program_continuation(
     monkeypatch,
 ) -> None:
     def reject_legacy_continuation(*_args, **_kwargs):
-        raise AssertionError("scan-tip recovery must not fold a logical gap")
+        raise AssertionError("scan-tip recovery must not coast a logical gap")
 
     monkeypatch.setattr(
         recovery_continuation,

@@ -1,7 +1,7 @@
 """Benchmark and profile the history-bearing interpreted scan loop.
 
 The default case reuses one PackML runner.  ``--pilot`` repeatedly forks a
-warm runner and drives each child through ``run_until(..., fold=False)``, which
+warm runner and drives each child through ``run_until(..., jit=False)``, which
 models pilot's short-lived trial forks while keeping the measurement focused on
 real interpreted scans rather than the guarded loop.
 
@@ -111,7 +111,7 @@ def _time_pilot(scans: int, forks: int) -> float:
         start = time.perf_counter()
         for _ in range(forks):
             child = root.fork(history_budget=math.inf, inherit_log=False)
-            child.run_until(lambda _state: False, max_cycles=scans, fold=False)
+            child.run_until(lambda _state: False, max_cycles=scans, jit=False)
         return (time.perf_counter() - start) * 1_000_000 / (scans * forks)
     finally:
         gc.enable()

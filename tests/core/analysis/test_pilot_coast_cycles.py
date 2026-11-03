@@ -97,7 +97,7 @@ class TestBitEqual:
 
         ref = PLC(program)
         ref.step()
-        ref.run_until(Done, max_cycles=10_000, fold=False)
+        ref.run_until(Done, max_cycles=10_000, jit=False)
         folded = PLC(program)
         folded.step()
         stats: dict[str, int] = {}
@@ -125,7 +125,7 @@ class TestBitEqual:
                 out(SoakDone)
 
         ref = PLC(program)
-        ref.run_until(SoakDone, max_cycles=5000, fold=False)
+        ref.run_until(SoakDone, max_cycles=5000, jit=False)
         plc = PLC(program)
         reached = coast_until(
             plc,
@@ -138,10 +138,10 @@ class TestBitEqual:
         assert plc.state.tags == ref.state.tags
 
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
-        # Reference: pure scan-by-scan (fold=False), oscillation running.
+        # Reference: pure scan-by-scan (jit=False), oscillation running.
         ref = PLC(_active_hold_soak())
         ref.step()
-        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=20000, fold=False)
+        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=20000, jit=False)
         assert ref.state.tags.get("Done") is True
 
         # In the loop, from the same setup.
@@ -191,7 +191,7 @@ class TestBitEqual:
 
         ref = PLC(program, dt=0.010)
         ref.step()
-        ref.run_until(lambda s: s.tags.get(Done.name) is True, max_cycles=1_000, fold=False)
+        ref.run_until(lambda s: s.tags.get(Done.name) is True, max_cycles=1_000, jit=False)
 
         cf = PLC(program, dt=0.010)
         cf.step()
@@ -226,7 +226,7 @@ class TestBitEqual:
 
         ref = PLC(program, dt=0.010)
         ref.step()
-        ref.run_until(Done, max_cycles=20_000, fold=False)
+        ref.run_until(Done, max_cycles=20_000, jit=False)
 
         folded = PLC(program, dt=0.010)
         folded.step()
@@ -280,7 +280,7 @@ class TestBitEqual:
 
         ref = PLC(program, dt=0.007)
         ref.step()
-        ref.run_until(done, max_cycles=300, fold=False)
+        ref.run_until(done, max_cycles=300, jit=False)
         folded = PLC(program, dt=0.007)
         folded.step()
         coast_until(folded, done, budget=300)
@@ -313,12 +313,12 @@ class TestBitEqual:
             with Rung(~Osc):
                 out(Osc)
 
-        def run(*, fold: bool) -> tuple[PLC, dict[str, int]]:
+        def run(*, jit: bool) -> tuple[PLC, dict[str, int]]:
             plc = PLC(program, dt=0.010)
             plc.patch({Auto.name: True})
             plc.step()
             stats: dict[str, int] = {}
-            if fold:
+            if jit:
                 coast_until(
                     plc,
                     lambda state: state.tags.get(Done.name) is True,
@@ -330,12 +330,12 @@ class TestBitEqual:
                 plc.run_until(
                     lambda state: state.tags.get(Done.name) is True,
                     max_cycles=1_000,
-                    fold=False,
+                    jit=False,
                 )
             return plc, stats
 
-        ref, _ = run(fold=False)
-        folded, stats = run(fold=True)
+        ref, _ = run(jit=False)
+        folded, stats = run(jit=True)
 
         assert folded.state.tags == ref.state.tags
         assert folded.state.scan_id == ref.state.scan_id
@@ -440,7 +440,7 @@ class TestAcrossClocks:
     def test_bit_equal_across_a_read_system_clock(self) -> None:
         ref = PLC(_clocked_active_hold_soak())
         ref.step()
-        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=200000, fold=False)
+        ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=200000, jit=False)
         assert ref.state.tags.get("Done") is True
 
         cf = PLC(_clocked_active_hold_soak())

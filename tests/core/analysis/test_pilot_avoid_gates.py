@@ -17,7 +17,7 @@ Three internal gates enforce it:
 * **Scan gate** (``coast.CoastSession`` -> ``verify.verify_gates``) —
   condition-like members ride folded coasts as named triggers, while settle
   trajectories preserve every real snapshot. Opaque callables observe only
-  endpoints, retained real snapshots, and kernel scans a fold executes.
+  endpoints, retained real snapshots, and kernel scans a coast executes.
 
 Arity: ``avoid=`` accepts one condition or a tuple/list = **union** of
 exclusions (each avoided independently); ``avoid=And(A, B)`` avoids only the
@@ -230,7 +230,7 @@ def test_condition_avoid_rejects_wink_inside_folded_coast() -> None:
 
 
 def test_opaque_avoid_is_endpoint_and_real_observed_scan_only() -> None:
-    """An opaque callable has no fold metadata, so skipped logical scans stay narrow."""
+    """An opaque callable has no compiled form, so scans in the loop stay narrow."""
     Start = Bool("Start", external=True)
     Run = Bool("Run")
     Tmr = Timer.clone("OpaqueTmr")

@@ -44,7 +44,7 @@ timed instruction compiled without the oracle.
 abstraction refinement** (Clarke, Grumberg, Jha, Lu, Veith, 2000 —
 "Counterexample-Guided Abstraction Refinement"), without the refinement:
 an abstract trace is replayed on the concrete PLC at the search's fixed
-`dt`, waits folded, input changes slid to the scan the state changes on.
+`dt`, waits condensed, input changes slid to the scan the state changes on.
 A trace the PLC follows is reported with the concrete steps; one it does
 not is spurious *or* needs a timing the fixed `dt` does not give, and is
 reported as unconfirmed (`Intractable` of kind `"timing"` or

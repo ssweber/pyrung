@@ -279,14 +279,14 @@ def test_do_breakpoint_oscillation_survives_fold() -> None:
     # A do() oscillator flips the sensor every scan; folding cannot skip past it
     # because the flip changes visible state each scan (the window degrades to
     # scan-by-scan exactly during the oscillation).  So both watchdogs stay reset
-    # and the 1 s RunDelay reaches Running with no fault, even under fold=True.
+    # and the 1 s RunDelay reaches Running with no fault, even under jit=True.
     plc = PLC(_watchdog_delay_program(), dt=0.010)
     plc.step()
     plc.when(lambda state: True).do(
         lambda state: plc.patch({"Sensor": state.tags.get("Sensor") is not True})
     )
 
-    plc.run_until(lambda state: state.tags.get("Running") is True, fold=True, max_cycles=3000)
+    plc.run_until(lambda state: state.tags.get("Running") is True, jit=True, max_cycles=3000)
 
     assert plc.current_state.tags["Running"] is True
     assert plc.current_state.tags["Fault"] is False

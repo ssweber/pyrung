@@ -474,11 +474,11 @@ def test_a_real_that_overflows_in_the_loop_matches_stepping(start):
         return program, r
 
     states = []
-    for fold in (True, False):
+    for jit in (True, False):
         program, r = build()
         plc = PLC(program, dt=0.01)
         plc.patch({r: start})
-        plc.run_for(20.0, fold=fold)
+        plc.run_for(20.0, jit=jit)
         states.append(plc.current_state)
     folded, stepped = states
     assert folded.scan_id == stepped.scan_id

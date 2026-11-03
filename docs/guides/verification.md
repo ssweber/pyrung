@@ -72,7 +72,7 @@ elif isinstance(result, Intractable):
 - `"property"` — the property's own `rise()`/`fall()`, which the search counts as possibly true on every scan, gave a counterexample the concrete PLC did not reproduce. Latch or one-shot the edge in the program and name that coil in the property instead.
 - `"function"` — a `run_function` whose answer may not follow from its inputs, because it keeps something between calls or reads something past its arguments. The search explores a function by calling it, so it leaves this one uncalled. `result.hints` names each function and why; a plain `def` of what `ins=` hands it gets past this, or test it with `run_for()`.
 
-Every `Counterexample` is confirmed the same way before it is reported: its trace is the one the concrete PLC followed to the violation, waits folded into multi-scan steps. The one exception is a trace that only drives free system tags (see [System tags](#system-tags)), which keeps its caveat instead.
+Every `Counterexample` is confirmed the same way before it is reported: its trace is the one the concrete PLC followed to the violation, waits condensed into multi-scan steps. The one exception is a trace that only drives free system tags (see [System tags](#system-tags)), which keeps its caveat instead.
 
 ### Scoping
 

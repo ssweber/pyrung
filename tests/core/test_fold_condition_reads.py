@@ -55,8 +55,8 @@ def _fold_nofold(
 
     folded = base.fork()
     stepped = base.fork()
-    folded.run_until(condition, max_cycles=max_cycles, fold=True)
-    stepped.run_until(condition, max_cycles=max_cycles, fold=False)
+    folded.run_until(condition, max_cycles=max_cycles, jit=True)
+    stepped.run_until(condition, max_cycles=max_cycles, jit=False)
     return folded, stepped
 
 

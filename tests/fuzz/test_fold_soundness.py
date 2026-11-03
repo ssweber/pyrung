@@ -98,11 +98,11 @@ def _build(spec: dict):
     return prog, src.Done
 
 
-def _run(spec: dict, *, fold: bool) -> dict:
+def _run(spec: dict, *, jit: bool) -> dict:
     prog, done = _build(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
-    plc.run_until(done, max_cycles=40_000, fold=fold)
+    plc.run_until(done, max_cycles=40_000, jit=jit)
     # Every tag, the scan-time diagnostics included: a landing records the
     # normal dt of the scan it stands for.
     return dict(plc.state.tags)
@@ -147,8 +147,8 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run(spec, fold=True)
-        stepped = _run(spec, fold=False)
+        folded = _run(spec, jit=True)
+        stepped = _run(spec, jit=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -246,11 +246,11 @@ def _build_stable(spec: dict):
     return prog, src.Done, frozenset(stable_tags)
 
 
-def _run_stable(spec: dict, *, fold: bool) -> dict:
+def _run_stable(spec: dict, *, jit: bool) -> dict:
     prog, done, _stable = _build_stable(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
-    plc.run_until(done, max_cycles=40_000, fold=fold)
+    plc.run_until(done, max_cycles=40_000, jit=jit)
     return dict(plc.state.tags)
 
 
@@ -274,8 +274,8 @@ def test_stable_input_rungs_are_bit_equal() -> None:
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run_stable(spec, fold=True)
-        stepped = _run_stable(spec, fold=False)
+        folded = _run_stable(spec, jit=True)
+        stepped = _run_stable(spec, jit=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -405,10 +405,10 @@ def _reader_body(j: int, r: dict, cond) -> None:
             latch(Bool(f"Hit{j}"))
 
 
-def _run_composite(spec: dict, *, fold: bool) -> tuple[int, dict]:
+def _run_composite(spec: dict, *, jit: bool) -> tuple[int, dict]:
     plc = PLC(_build_composite(spec), dt=spec["dt"])
     plc.step()
-    plc.run_for(spec["seconds"], fold=fold)
+    plc.run_for(spec["seconds"], jit=jit)
     image = dict(plc.state.tags)
     image.update({f"mem:{k}": v for k, v in plc.state.memory.items()})
     return plc.state.scan_id, image
@@ -433,8 +433,8 @@ def test_composite_readers_fold_is_bit_equal() -> None:
     @example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
     @example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
     def inner(spec: dict) -> None:
-        f_scan, folded = _run_composite(spec, fold=True)
-        s_scan, stepped = _run_composite(spec, fold=False)
+        f_scan, folded = _run_composite(spec, jit=True)
+        s_scan, stepped = _run_composite(spec, jit=False)
         if (f_scan, folded) != (s_scan, stepped):
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))

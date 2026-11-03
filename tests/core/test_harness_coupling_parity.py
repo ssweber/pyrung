@@ -172,7 +172,7 @@ def _bool_dwell_plc(dt: float = 0.010):
 def test_bool_dwell_lands_on_the_feedback() -> None:
     plc = _bool_dwell_plc()
     plc.force("Enable", True)
-    plc.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, fold=True)
+    plc.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, jit=True)
 
     assert plc.state.tags["Fb"] is True
     assert plc.state.scan_id >= 200  # the dwell really was ~200 scans long
@@ -183,11 +183,11 @@ def test_bool_dwell_matches_stepping() -> None:
     # i.e. one scan after Fb commits — the program-visible event.
     folded = _bool_dwell_plc()
     folded.force("Enable", True)
-    folded.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=True)
+    folded.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, jit=True)
 
     stepped = _bool_dwell_plc()
     stepped.force("Enable", True)
-    stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=False)
+    stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, jit=False)
 
     # Same scan the program latched the feedback.
     assert folded.state.scan_id == stepped.state.scan_id

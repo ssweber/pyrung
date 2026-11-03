@@ -452,7 +452,7 @@ class TestReplay:
         folded = PLC(logic, dt=0.01)
         folded.run_for(10.0)
         stepped = PLC(logic, dt=0.01)
-        stepped.run_for(10.0, fold=False)
+        stepped.run_for(10.0, jit=False)
         assert folded.state.tags == stepped.state.tags
         assert folded.state.scan_id == stepped.state.scan_id
 

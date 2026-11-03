@@ -949,7 +949,7 @@ def test_stop_predicate_lands_on_the_stepped_scan(name: str, fine_loop: None) ->
     twin.patch({Preset: 270, M: 5})
     before = scan_trace.TOTALS["loop scans"]
     plc.run_until(*conditions, max_cycles=400)
-    twin.run_until(*conditions, max_cycles=400, fold=False)
+    twin.run_until(*conditions, max_cycles=400, jit=False)
     assert plc.state.scan_id == twin.state.scan_id
     _assert_equal(plc.state, twin.state)
     # The last judgement is the real one: on the scan the guard refused.
@@ -965,7 +965,7 @@ def test_stop_predicate_holds_on_every_scan_it_would_on_stepping(fine_loop: None
     twin.patch({M: 5})
     for _ in range(6):
         plc.run_until(rise(Lamp), max_cycles=300)
-        twin.run_until(rise(Lamp), max_cycles=300, fold=False)
+        twin.run_until(rise(Lamp), max_cycles=300, jit=False)
         assert plc.state.scan_id == twin.state.scan_id
         _assert_equal(plc.state, twin.state)
 
@@ -976,7 +976,7 @@ def test_stop_on_a_derived_system_tag_declines_to_plain_stepping(fine_loop: None
     twin = _plc(program, 0.01)
     before = Counter(scan_trace.TOTALS)
     plc.run_until(system.sys.clock_1s, max_cycles=200)
-    twin.run_until(system.sys.clock_1s, max_cycles=200, fold=False)
+    twin.run_until(system.sys.clock_1s, max_cycles=200, jit=False)
     assert plc.state.scan_id == twin.state.scan_id
     assert scan_trace.TOTALS["loop scans"] == before["loop scans"]
     assert (

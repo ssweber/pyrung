@@ -75,7 +75,7 @@ def _state(plc: PLC) -> dict[str, Any]:
 
 def _run(
     body: Body,
-    fold: bool,
+    jit: bool,
     scans: int,
     *,
     dt: float = 0.01,
@@ -91,7 +91,7 @@ def _run(
     plc.step()
     if then:
         plc.patch(then)
-    plc.run_until(NEVER, max_cycles=scans, fold=fold)
+    plc.run_until(NEVER, max_cycles=scans, jit=jit)
     return plc
 
 
@@ -113,7 +113,7 @@ def _kernel_scans(
         plc.patch(patch)
     plc.step()
     counter = ScansOutsideLoop(plc)
-    plc.run_until(NEVER, max_cycles=scans, fold=True)
+    plc.run_until(NEVER, max_cycles=scans, jit=True)
     assert plc.state.scan_id >= scans
     return counter["n"]
 
@@ -388,7 +388,7 @@ class TestReplaySeek:
             if patch:
                 plc.patch(patch)
             plc.step()
-            plc.run_until(NEVER, max_cycles=scans, fold=False)
+            plc.run_until(NEVER, max_cycles=scans, jit=False)
             return plc
 
         return run(self.TOTAL).replay_to(self.TARGET), run(self.TARGET - 1)
@@ -411,9 +411,9 @@ class TestReplaySeek:
         def run(scans: int) -> PLC:
             plc = PLC(_program(body)(), dt=0.01)
             plc.step()
-            plc.run_until(NEVER, max_cycles=5, fold=False)
+            plc.run_until(NEVER, max_cycles=5, jit=False)
             plc.patch({"Mode": True})
-            plc.run_until(NEVER, max_cycles=scans, fold=False)
+            plc.run_until(NEVER, max_cycles=scans, jit=False)
             return plc
 
         seek = run(self.TOTAL).replay_to(self.TARGET)
@@ -535,10 +535,10 @@ class TestHoldAboveTheProgram:
 
     def test_a_held_operand_with_a_writer_below_the_reader(self) -> None:
         def stepped(plc: PLC) -> None:
-            plc.run_until(NEVER, max_cycles=700, fold=False)
+            plc.run_until(NEVER, max_cycles=700, jit=False)
 
         def folded(plc: PLC) -> None:
-            plc.run_until(NEVER, max_cycles=700, fold=True)
+            plc.run_until(NEVER, max_cycles=700, jit=True)
 
         def coast(plc: PLC) -> None:
             coast_until(plc, lambda _s: False, budget=700)
@@ -614,12 +614,12 @@ class TestRebuiltOnTheClock:
             with Rung(T.Acc >= P * (1 if shape == "ticks" else 500)):
                 latch(Hit)
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = PLC(_program(body)(), dt=0.01)
             plc.set_rtc(datetime(2026, 1, 1))
             plc.patch({"P": 20_000})
             plc.step()
-            plc.run_until(NEVER, max_cycles=800, fold=fold)
+            plc.run_until(NEVER, max_cycles=800, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -674,12 +674,12 @@ class TestAClockWakesAWriter:
             with Rung():
                 copy(30_000, P)
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             plc = PLC(_program(body)(), dt=0.01)
             plc.set_rtc(datetime(2026, 1, 1))
             plc.patch({"P": 30_000})
             plc.step()
-            plc.run_until(NEVER, max_cycles=800, fold=fold)
+            plc.run_until(NEVER, max_cycles=800, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)

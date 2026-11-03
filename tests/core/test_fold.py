@@ -105,7 +105,7 @@ def _empty_program() -> Program:
 
 
 class TestTimerFold:
-    """run_until with fold=True skips timer plateaus."""
+    """run_until with jit=True skips timer plateaus."""
 
     def test_timer_fold_reaches_done(self) -> None:
         prog, tmr = _timer_program(500)
@@ -125,7 +125,7 @@ class TestTimerFold:
         plc_fold.patch({"Enable": True})
         plc_fold.step()
         scan_before = plc_fold.state.scan_id
-        plc_fold.run_until(tmr.Done, max_cycles=5000, fold=True)
+        plc_fold.run_until(tmr.Done, max_cycles=5000, jit=True)
         fold_scans = plc_fold.state.scan_id - scan_before
 
         # Without fold: should need ~50 scans (500ms / 10ms)
@@ -143,13 +143,13 @@ class TestTimerFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_until(tmr.Done, max_cycles=5000, fold=True)
+        plc_fold.run_until(tmr.Done, max_cycles=5000, jit=True)
 
         prog2, tmr2 = _timer_program(200)
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_until(tmr2.Done, max_cycles=5000, fold=False)
+        plc_nofold.run_until(tmr2.Done, max_cycles=5000, jit=False)
 
         assert plc_fold.state.tags["Done"] == plc_nofold.state.tags["Done"]
         assert plc_fold.state.tags["Tmr_Acc"] == plc_nofold.state.tags["Tmr_Acc"]
@@ -170,7 +170,7 @@ class TestCounterFold:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
 
-        plc.run_until(ctr.Done, max_cycles=500, fold=True)
+        plc.run_until(ctr.Done, max_cycles=500, jit=True)
 
         assert plc.state.scan_id == 500
         assert plc.state.tags["Ctr_Acc"] == 1
@@ -191,12 +191,12 @@ class TestCounterFold:
         prog, ctr = _counter_program(50)
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
-        plc_fold.run_until(ctr.Done, max_cycles=500, fold=True)
+        plc_fold.run_until(ctr.Done, max_cycles=500, jit=True)
 
         prog2, ctr2 = _counter_program(50)
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
-        plc_nofold.run_until(ctr2.Done, max_cycles=500, fold=False)
+        plc_nofold.run_until(ctr2.Done, max_cycles=500, jit=False)
 
         assert plc_fold.state.scan_id == plc_nofold.state.scan_id
         assert plc_fold.state.tags == plc_nofold.state.tags
@@ -218,7 +218,7 @@ class TestFoldPauseBreakpoint:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
 
-        plc.run_until(tmr.Done, max_cycles=10, fold=True)
+        plc.run_until(tmr.Done, max_cycles=10, jit=True)
 
         assert plc.state.scan_id <= 11
         assert plc.state.tags.get("Done") is not True
@@ -229,7 +229,7 @@ class TestFoldPauseBreakpoint:
         plc = PLC(logic=[], dt=0.1)
         plc.when(lambda state: state.scan_id >= 3).pause()
 
-        plc.run_for(seconds=10.0, fold=True)
+        plc.run_for(seconds=10.0, jit=True)
 
         assert plc.state.scan_id == 3
 
@@ -249,7 +249,7 @@ class TestFoldPauseBreakpoint:
 
         stall = plc.when(~Enable).pause()
         plc.force("Enable", False)
-        plc.run_until(Tmr.Done, max_cycles=50000, fold=True)
+        plc.run_until(Tmr.Done, max_cycles=50000, jit=True)
         stall.remove()
 
         assert plc.state.tags.get("Tmr.Done") is not True
@@ -261,7 +261,7 @@ class TestFoldPauseBreakpoint:
 
 
 class TestRunForFold:
-    """run_for with fold=True matches unfold behavior."""
+    """run_for with jit=True matches unfold behavior."""
 
     def test_run_for_fold_advances_time(self) -> None:
         prog, tmr = _timer_program(200)
@@ -270,7 +270,7 @@ class TestRunForFold:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
 
-        plc.run_for(0.5, fold=True)
+        plc.run_for(0.5, jit=True)
 
         assert plc.simulation_time >= 0.5
         assert plc.state.tags["Done"] is True
@@ -279,10 +279,10 @@ class TestRunForFold:
         from pyrung.core.runner import PLC
 
         plc_fold = PLC(logic=[], dt=0.1)
-        plc_fold.run_for(seconds=1.0, fold=True)
+        plc_fold.run_for(seconds=1.0, jit=True)
 
         plc_nofold = PLC(logic=[], dt=0.1)
-        plc_nofold.run_for(seconds=1.0, fold=False)
+        plc_nofold.run_for(seconds=1.0, jit=False)
 
         assert plc_fold.simulation_time == pytest.approx(plc_nofold.simulation_time)
         assert plc_fold.state.scan_id == plc_nofold.state.scan_id
@@ -310,7 +310,7 @@ class TestNoSourceProgram:
 
         plc = PLC(logic=[], dt=0.1)
 
-        plc.run_for(seconds=1.0, fold=True)
+        plc.run_for(seconds=1.0, jit=True)
 
         assert plc.simulation_time >= 1.0
 
@@ -330,7 +330,7 @@ class TestChurnExclusion:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
 
-        plc.run_until(tmr.Done, max_cycles=5000, fold=True)
+        plc.run_until(tmr.Done, max_cycles=5000, jit=True)
 
         assert plc.state.tags["Done"] is True
 
@@ -341,13 +341,13 @@ class TestChurnExclusion:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_until(tmr.Done, max_cycles=5000, fold=True)
+        plc_fold.run_until(tmr.Done, max_cycles=5000, jit=True)
 
         prog2, tmr2 = _churn_timer_program(200)
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_until(tmr2.Done, max_cycles=5000, fold=False)
+        plc_nofold.run_until(tmr2.Done, max_cycles=5000, jit=False)
 
         assert plc_fold.state.scan_id == plc_nofold.state.scan_id
         assert plc_fold.state.tags["Done"] == plc_nofold.state.tags["Done"]
@@ -374,7 +374,7 @@ class TestCallablePredicate:
         result = plc.run_until(
             lambda state: state.tags.get("Done") is True,
             max_cycles=5000,
-            fold=True,
+            jit=True,
         )
 
         assert result.tags["Done"] is True
@@ -410,12 +410,12 @@ class TestSystemClockFold:
         plc_fold = PLC(self._clock_tick_program(), dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_for(3.0, fold=True)
+        plc_fold.run_for(3.0, jit=True)
 
         plc_nofold = PLC(self._clock_tick_program(), dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_for(3.0, fold=False)
+        plc_nofold.run_for(3.0, jit=False)
 
         assert plc_nofold.state.tags["Ticks"] == 3  # rises at 0.5, 1.5, 2.5 s
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
@@ -440,12 +440,12 @@ class TestSystemClockFold:
         plc_fold = PLC(self._scan_counter_program(), dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_for(0.5, fold=True)
+        plc_fold.run_for(0.5, jit=True)
 
         plc_nofold = PLC(self._scan_counter_program(), dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_for(0.5, fold=False)
+        plc_nofold.run_for(0.5, jit=False)
 
         assert plc_nofold.state.tags["Ticks"] == 1  # crossing actually fires
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
@@ -468,12 +468,12 @@ class TestSystemClockFold:
         plc_fold = PLC(self._toggle_program(), dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_for(0.3, fold=True)
+        plc_fold.run_for(0.3, jit=True)
 
         plc_nofold = PLC(self._toggle_program(), dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_for(0.3, fold=False)
+        plc_nofold.run_for(0.3, jit=False)
 
         assert plc_nofold.state.tags["Ticks"] >= 5  # toggles really fire
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
@@ -527,13 +527,13 @@ class TestResolvedOnReadSignalFold:
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
         plc_fold.step()
         counter = _count_kernel_scans(plc_fold)
-        plc_fold.run_for(30.0, fold=True)
+        plc_fold.run_for(30.0, jit=True)
 
         prog2 = self._clock_heartbeat_program()
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True, "A": 3, "B": 4})
         plc_nofold.step()
-        plc_nofold.run_for(30.0, fold=False)
+        plc_nofold.run_for(30.0, jit=False)
 
         # The heartbeat settles Extent to A + B.
         assert plc_fold.state.tags["Extent"] == 7
@@ -548,11 +548,11 @@ class TestResolvedOnReadSignalFold:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True, "A": 3, "B": 4})
         plc.step()
-        plc.run_for(5.0, fold=True)
+        plc.run_for(5.0, jit=True)
         assert plc.state.tags["Extent"] == 7
 
         plc.patch({"A": 10})  # inputs change → pending recompute
-        plc.run_for(5.0, fold=True)
+        plc.run_for(5.0, jit=True)
         assert plc.state.tags["Extent"] == 14
 
     @staticmethod
@@ -579,13 +579,13 @@ class TestResolvedOnReadSignalFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
         plc_fold.step()
-        plc_fold.run_for(3.0, fold=True)
+        plc_fold.run_for(3.0, jit=True)
 
         prog2 = self._mixed_clock_program()
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True, "A": 3, "B": 4})
         plc_nofold.step()
-        plc_nofold.run_for(3.0, fold=False)
+        plc_nofold.run_for(3.0, jit=False)
 
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"]
         assert plc_fold.state.tags["Extent"] == 7
@@ -621,13 +621,13 @@ class TestClockBesideAComparison:
         _assert_fold_is_exact(build, _scans(400), patch={"Enable": True})
 
     def test_the_clock_still_bounds_the_window_past_the_threshold(self) -> None:
-        def first_pulse_after_settling(fold: bool) -> int:
+        def first_pulse_after_settling(jit: bool) -> int:
             Beat = Bool("Beat")
             plc = PLC(self._heartbeat(lambda tmr: tmr.Acc > 100)(), dt=0.010)
             plc.patch({"Enable": True})
             plc.step()
-            plc.run_for(5.0, fold=fold)
-            plc.run_until(Beat, max_cycles=1000, fold=fold)
+            plc.run_for(5.0, jit=jit)
+            plc.run_until(Beat, max_cycles=1000, jit=jit)
             return plc.state.scan_id
 
         assert first_pulse_after_settling(True) == first_pulse_after_settling(False)
@@ -664,13 +664,13 @@ class TestClockSaturationFold:
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
         plc_fold.step()
         counter = _count_kernel_scans(plc_fold)
-        plc_fold.run_for(30.0, fold=True)
+        plc_fold.run_for(30.0, jit=True)
 
         prog2 = self._stable_saturated_program()
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True, "A": 3, "B": 4})
         plc_nofold.step()
-        plc_nofold.run_for(30.0, fold=False)
+        plc_nofold.run_for(30.0, jit=False)
 
         # Extent is bit-equal to scan-by-scan.  Tmr_Acc folds to a *time* boundary
         # (run_for), so it drifts up to one dt from the scan-by-scan accumulation,
@@ -688,11 +688,11 @@ class TestClockSaturationFold:
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True, "A": 3, "B": 4})
         plc.step()
-        plc.run_for(5.0, fold=True)
+        plc.run_for(5.0, jit=True)
         assert plc.state.tags["Extent"] == 7
 
         plc.patch({"A": 10})
-        plc.run_for(5.0, fold=True)
+        plc.run_for(5.0, jit=True)
         assert plc.state.tags["Extent"] == 14
 
     @staticmethod
@@ -716,13 +716,13 @@ class TestClockSaturationFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_for(3.0, fold=True)
+        plc_fold.run_for(3.0, jit=True)
 
         prog2 = self._live_before_saturation_program()
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_for(3.0, fold=False)
+        plc_nofold.run_for(3.0, jit=False)
 
         assert plc_fold.state.tags["Bucket"] == plc_nofold.state.tags["Bucket"]
 
@@ -763,11 +763,11 @@ class TestClockPulseFoldRegression:
         self, src: str, preset: int, threshold: int, clock: str, dt: float
     ) -> tuple[bool, bool]:
         out = []
-        for fold in (True, False):
+        for jit in (True, False):
             prog, done = self._pulse_program(src, preset, threshold, clock)
             plc = PLC(prog, dt=dt)
             plc.patch({"Enable": True})
-            plc.run_until(done, max_cycles=40_000, fold=fold)
+            plc.run_until(done, max_cycles=40_000, jit=jit)
             out.append(plc.state.tags["Beat"])
         return out[0], out[1]
 
@@ -811,13 +811,13 @@ class TestUnreadAccumulatorFold:
         plc_fold.patch({"Enable": True})
         plc_fold.step()
         counter = _count_kernel_scans(plc_fold)
-        plc_fold.run_for(5.0, fold=True)  # 500 scans; timer never completes (100 s)
+        plc_fold.run_for(5.0, jit=True)  # 500 scans; timer never completes (100 s)
 
         prog2, _ = self._unread_timer_program(preset_ms=100_000)
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_for(5.0, fold=False)
+        plc_nofold.run_for(5.0, jit=False)
 
         # The preset is a (far) visible crossing clamped to the run window, so
         # the churn collapses instead of stepping all 500 scans.
@@ -838,13 +838,13 @@ class TestUnreadAccumulatorFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        plc_fold.run_until(tmr.Acc > 500, max_cycles=20_000, fold=True)
+        plc_fold.run_until(tmr.Acc > 500, max_cycles=20_000, jit=True)
 
         prog2, tmr2 = self._unread_timer_program(preset_ms=100_000)
         plc_nofold = PLC(prog2, dt=0.010)
         plc_nofold.patch({"Enable": True})
         plc_nofold.step()
-        plc_nofold.run_until(tmr2.Acc > 500, max_cycles=20_000, fold=False)
+        plc_nofold.run_until(tmr2.Acc > 500, max_cycles=20_000, jit=False)
 
         # The fold must land on the predicate's threshold, not skip to the
         # preset: bit-equal to scan-by-scan, and just past 500 (not ~100000).
@@ -888,8 +888,8 @@ def _run_until_exact(
 ) -> PLC:
     """Fold and step to *condition*; both land on one scan with one state."""
 
-    def run(plc: PLC, fold: bool) -> None:
-        plc.run_until(condition(), max_cycles=20_000, fold=fold)
+    def run(plc: PLC, jit: bool) -> None:
+        plc.run_until(condition(), max_cycles=20_000, jit=jit)
 
     return _assert_fold_is_exact(build, run, patch=patch)
 
@@ -919,7 +919,7 @@ class TestRungsAcrossAWindow:
         plc.patch(patch)
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(NEVER, max_cycles=3000, fold=True)
+        plc.run_until(NEVER, max_cycles=3000, jit=True)
         assert counter["n"] <= 250
 
     def test_rung_reading_a_timer_bit_lands_on_its_crossing(self) -> None:
@@ -975,7 +975,7 @@ class TestRungsAcrossAWindow:
         plc.patch(patch)
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(NEVER, max_cycles=2000, fold=True)
+        plc.run_until(NEVER, max_cycles=2000, jit=True)
         assert counter["n"] <= 12
 
     def test_clock_gated_rungs_end_each_window_and_still_fold(self) -> None:
@@ -1004,7 +1004,7 @@ class TestRungsAcrossAWindow:
         plc.patch({"Enable": True, "Sensor": True})
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(Tmr.Done, max_cycles=20_000, fold=True)
+        plc.run_until(Tmr.Done, max_cycles=20_000, jit=True)
 
         assert plc.state.tags["Done"] is True
         assert plc.state.tags["Tmr_Acc"] == 5000
@@ -1026,16 +1026,16 @@ class TestRungsAcrossAWindow:
                     on_delay(Timer.clone("Tmr"), 100_000, "ms")
             return prog
 
-        def run(fold: bool, start: int) -> PLC:
+        def run(jit: bool, start: int) -> PLC:
             plc = PLC(build(), dt=0.010)
             for _ in range(start):
                 plc.step()
             if form == "tag":
-                plc.run_until(Lamp, max_cycles=1000, fold=fold)
+                plc.run_until(Lamp, max_cycles=1000, jit=jit)
             elif form == "negated":
-                plc.run_until(~Lamp, max_cycles=1000, fold=fold)
+                plc.run_until(~Lamp, max_cycles=1000, jit=jit)
             else:
-                plc.run_until(lambda s: not s.tags.get("Lamp2"), max_cycles=1000, fold=fold)
+                plc.run_until(lambda s: not s.tags.get("Lamp2"), max_cycles=1000, jit=jit)
             return plc
 
         for start in (3, 7, 12, 14):
@@ -1165,9 +1165,9 @@ class TestScanVaryingValuesAreExact:
     @pytest.mark.parametrize("shape", _SCAN_VARYING_SHAPES)
     def test_run_until_matches_stepped(self, shape: Callable[[], Any]) -> None:
         folded, hit, _tmr = _started(shape)
-        folded.run_until(hit, max_cycles=10_000, fold=True)
+        folded.run_until(hit, max_cycles=10_000, jit=True)
         stepped, hit2, _tmr2 = _started(shape)
-        stepped.run_until(hit2, max_cycles=10_000, fold=False)
+        stepped.run_until(hit2, max_cycles=10_000, jit=False)
 
         assert stepped.state.tags["Hit"] is True
         assert folded.state.scan_id == stepped.state.scan_id
@@ -1176,9 +1176,9 @@ class TestScanVaryingValuesAreExact:
     @pytest.mark.parametrize("shape", _SCAN_VARYING_SHAPES)
     def test_run_for_matches_stepped(self, shape: Callable[[], Any]) -> None:
         folded, _hit, _tmr = _started(shape)
-        folded.run_for(2.0, fold=True)
+        folded.run_for(2.0, jit=True)
         stepped, _hit2, _tmr2 = _started(shape)
-        stepped.run_for(2.0, fold=False)
+        stepped.run_for(2.0, jit=False)
 
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
@@ -1197,9 +1197,9 @@ class TestScanVaryingValuesAreExact:
     def test_scan_varying_write_lands_as_stepped(self, shape: Callable[[], Any], tag: str) -> None:
         for scans in (37, 38, 601):
             folded, _hit, _tmr = _started(shape)
-            folded.run_until(NEVER, max_cycles=scans, fold=True)
+            folded.run_until(NEVER, max_cycles=scans, jit=True)
             stepped, _hit2, _tmr2 = _started(shape)
-            stepped.run_until(NEVER, max_cycles=scans, fold=False)
+            stepped.run_until(NEVER, max_cycles=scans, jit=False)
 
             assert folded.state.scan_id == stepped.state.scan_id
             assert folded.state.tags[tag] == stepped.state.tags[tag]
@@ -1282,12 +1282,12 @@ class TestFirstScanWindowConstant:
 
     @pytest.mark.parametrize("warm", [False, True], ids=["from_scan_0", "after_step"])
     def test_first_scan_init_folded_matches_stepped(self, warm: bool) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             prog, hit = _first_scan_init_program()
             plc = PLC(prog, dt=0.010)
             if warm:
                 plc.step()
-            plc.run_until(hit, max_cycles=10_000, fold=fold)
+            plc.run_until(hit, max_cycles=10_000, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -1316,7 +1316,7 @@ class TestFirstScanWindowConstant:
         plc = PLC(build(), dt=0.010)
         plc.step()
         counter = _count_kernel_scans(plc)
-        plc.run_until(NEVER, max_cycles=2000, fold=True)
+        plc.run_until(NEVER, max_cycles=2000, jit=True)
         # A real scan at each edge of the clock the rung reads: 40 in 20 s.
         assert counter["n"] <= 50
 
@@ -1332,10 +1332,10 @@ class TestFirstScanWindowConstant:
         tags = dict(seed.state.tags)
         tags.update({"Z": False, "N": 0, "Tmr_Acc": 0})
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             prog, hit = _not_first_scan_counter_program()
             plc = PLC(prog, dt=0.010, initial_state=SystemState().with_tags(tags))
-            plc.run_until(hit, max_cycles=10_000, fold=fold)
+            plc.run_until(hit, max_cycles=10_000, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -1409,8 +1409,8 @@ def _rtc_mirror_only_program() -> tuple[Program, Bool]:
     return prog, Hit
 
 
-def _run_scans(plc: PLC, n: int, *, fold: bool) -> None:
-    plc.run_until(NEVER, max_cycles=n, fold=fold)
+def _run_scans(plc: PLC, n: int, *, jit: bool) -> None:
+    plc.run_until(NEVER, max_cycles=n, jit=jit)
 
 
 class TestRtcTickBound:
@@ -1420,11 +1420,11 @@ class TestRtcTickBound:
     def test_rtc_condition_rung_does_not_skip_its_second(self) -> None:
         prog, _x = _rtc_latch_program()
         stepped = _rtc_plc(prog)
-        _run_scans(stepped, 4_000, fold=False)
+        _run_scans(stepped, 4_000, jit=False)
         prog, _x = _rtc_latch_program()
         folded = _rtc_plc(prog)
         counter = _count_kernel_scans(folded)
-        _run_scans(folded, 4_000, fold=True)
+        _run_scans(folded, 4_000, jit=True)
 
         assert stepped.state.tags["X"] is True
         assert folded.state.scan_id == stepped.state.scan_id
@@ -1432,10 +1432,10 @@ class TestRtcTickBound:
         assert counter["n"] < 400  # still folds within each second
 
     def test_run_until_rtc_condition_stops_on_its_scan(self) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             prog, _x = _rtc_latch_program()
             plc = _rtc_plc(prog)
-            plc.run_until(system.rtc.second == 30, max_cycles=6_000, fold=fold)
+            plc.run_until(system.rtc.second == 30, max_cycles=6_000, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -1455,10 +1455,10 @@ class TestRtcTickBound:
     def test_rtc_gated_counter_matches_stepped(self, dt: float) -> None:
         prog = _rtc_gated_counter_program()
         stepped = _rtc_plc(prog, dt=dt)
-        _run_scans(stepped, int(70 / dt), fold=False)
+        _run_scans(stepped, int(70 / dt), jit=False)
         prog = _rtc_gated_counter_program()
         folded = _rtc_plc(prog, dt=dt)
-        _run_scans(folded, int(70 / dt), fold=True)
+        _run_scans(folded, int(70 / dt), jit=True)
 
         assert folded.state.scan_id == stepped.state.scan_id
         assert _plain_tags(folded) == _plain_tags(stepped)
@@ -1488,10 +1488,10 @@ class TestFoldLandingTime:
     def test_landing_resolves_rtc_at_the_last_folded_scan(self) -> None:
         prog, _hit = _rtc_mirror_only_program()
         stepped = _rtc_plc(prog)
-        _run_scans(stepped, 4_000, fold=False)
+        _run_scans(stepped, 4_000, jit=False)
         prog, _hit = _rtc_mirror_only_program()
         folded = _rtc_plc(prog)
-        _run_scans(folded, 4_000, fold=True)
+        _run_scans(folded, 4_000, jit=True)
 
         assert folded.state.timestamp == stepped.state.timestamp
         assert folded.state.scan_id == stepped.state.scan_id
@@ -1509,7 +1509,7 @@ class TestFoldLandingTime:
         scan saw, which the landing now reads directly."""
         from pyrung import latch
 
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             X = Bool("EdgeSeen")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
@@ -1519,7 +1519,7 @@ class TestFoldLandingTime:
                     on_delay(Tmr, 10_000)
             plc = PLC(prog, dt=0.010)
             plc.step()
-            _run_scans(plc, 1_234, fold=fold)
+            _run_scans(plc, 1_234, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -1538,7 +1538,7 @@ class TestAClockEdgeAfterTheProbe:
     """
 
     def test_an_edge_after_the_probe_still_fires(self) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             Enable = Bool("Enable", external=True)
             A, B, Extent = Int("A", external=True), Int("B", external=True), Int("Extent")
             Tmr = Timer.clone("Tmr")
@@ -1549,7 +1549,7 @@ class TestAClockEdgeAfterTheProbe:
                     calc(A + B, Extent)
             plc = PLC(prog, dt=0.005)
             plc.patch({"Enable": True, "A": 0, "B": 1})
-            plc.run_until(Tmr.Done, max_cycles=40_000, fold=fold)
+            plc.run_until(Tmr.Done, max_cycles=40_000, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -1630,20 +1630,20 @@ def _folded_and_stepped(
     from datetime import datetime
 
     out = []
-    for fold in (True, False):
+    for jit in (True, False):
         plc = PLC(build(), dt=dt)
         plc.set_rtc(datetime(*start))
         if patch:
             plc.patch(patch)
         plc.step()
-        run(plc, fold)
+        run(plc, jit)
         out.append(plc)
     return out[0], out[1]
 
 
 def _until_hit(max_cycles: int) -> Callable[[PLC, bool], None]:
-    def run(plc: PLC, fold: bool) -> None:
-        plc.run_until(Bool("Hit"), max_cycles=max_cycles, fold=fold)
+    def run(plc: PLC, jit: bool) -> None:
+        plc.run_until(Bool("Hit"), max_cycles=max_cycles, jit=jit)
 
     return run
 
@@ -1661,11 +1661,11 @@ class TestSoftRtcTicks:
         only ever shortens a window, never creates one."""
         target = seconds * 100
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             if mode == "run_for":
-                plc.run_for(float(seconds), fold=fold)
+                plc.run_for(float(seconds), jit=jit)
             else:
-                plc.run_until(lambda s: s.scan_id >= target, max_cycles=target + 10, fold=fold)
+                plc.run_until(lambda s: s.scan_id >= target, max_cycles=target + 10, jit=jit)
 
         for us in (250_000, 500_000, 750_000, 990_000):
             start = (2026, 3, 1, 12, 59, 57, us)
@@ -1714,7 +1714,7 @@ class TestSoftRtcTicks:
         # A budget run: with no target, StopSec is not target-disjoint churn.
         folded, stepped = _folded_and_stepped(
             lambda: _rtc_mirror_program(live_stamp=True)[0],
-            lambda plc, fold: _run_scans(plc, 1_000, fold=fold),
+            lambda plc, jit: _run_scans(plc, 1_000, jit=jit),
             patch={"Stopped": True},
         )
         assert folded.state.scan_id == stepped.state.scan_id
@@ -1871,7 +1871,7 @@ class TestSoftRtcRefusals:
 
         folded, stepped = _folded_and_stepped(
             build,
-            lambda plc, fold: plc.run_until(Int("Sec") == 30, max_cycles=2_000, fold=fold),
+            lambda plc, jit: plc.run_until(Int("Sec") == 30, max_cycles=2_000, jit=jit),
             dt=0.05,
             start=self._START,
         )
@@ -1967,10 +1967,10 @@ class TestRunForScanCount:
 
     @pytest.mark.parametrize(("dt", "seconds"), [(0.010, 40.0), (0.3, 12.0), (0.7, 33.0)])
     def test_folded_run_for_matches_stepped(self, dt: float, seconds: float) -> None:
-        def run(fold: bool) -> PLC:
+        def run(jit: bool) -> PLC:
             prog, _x = _rtc_latch_program()
             plc = _rtc_plc(prog, dt=dt)
-            plc.run_for(seconds, fold=fold)
+            plc.run_for(seconds, jit=jit)
             return plc
 
         folded, stepped = run(True), run(False)
@@ -2042,9 +2042,9 @@ class TestSoftRtcForcedTags:
     def test_forced_gate_folded_matches_stepped(self, edge: bool) -> None:
         dt = 0.01
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.force("G", edge)
-            plc.run_until(Bool("Hit"), max_cycles=int(70 / dt) + 10, fold=fold)
+            plc.run_until(Bool("Hit"), max_cycles=int(70 / dt) + 10, jit=jit)
 
         folded, stepped = _folded_and_stepped(
             lambda: _forced_gate_program(edge), run, dt=dt, start=self._START
@@ -2087,11 +2087,11 @@ class TestSoftRtcCallablePredicate:
                     out(Hit)
             return prog
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.run_until(
                 lambda s: s.tags.get("Sec") == 30 or bool(s.tags.get("Hit")),
                 max_cycles=8_000,
-                fold=fold,
+                jit=jit,
             )
 
         folded, stepped = _folded_and_stepped(
@@ -2116,7 +2116,7 @@ class TestRtcNearDatetimeMax:
 
         folded, stepped = _folded_and_stepped(
             build,
-            lambda plc, fold: _run_scans(plc, 500, fold=fold),
+            lambda plc, jit: _run_scans(plc, 500, jit=jit),
             start=(9999, 12, 31, 12, 0, 0, 0),
         )
         assert folded.state.scan_id == stepped.state.scan_id
@@ -2143,11 +2143,11 @@ class TestLandingScanRaises:
             return prog
 
         tips = []
-        for fold in (False, True):
+        for jit in (False, True):
             plc = PLC(build(), dt=0.01)
             plc.step()
             with pytest.raises(RuntimeError):
-                plc.run_until(Bool("Never"), max_cycles=2_000, fold=fold)
+                plc.run_until(Bool("Never"), max_cycles=2_000, jit=jit)
             tips.append(plc.state)
         stepped, folded = tips
         assert folded.timestamp == pytest.approx(folded.scan_id * 0.01)
@@ -2190,8 +2190,8 @@ def _assert_fold_is_exact(
 
 
 def _scans(n: int) -> Callable[[PLC, bool], None]:
-    def run(plc: PLC, fold: bool) -> None:
-        _run_scans(plc, n, fold=fold)
+    def run(plc: PLC, jit: bool) -> None:
+        _run_scans(plc, n, jit=jit)
 
     return run
 
@@ -2503,7 +2503,7 @@ class TestSelfFeedingChurnExact:
         build = self._view_of_a_moving_tag(store, reader, step=step, store_first=store_first)
         plc = _assert_fold_is_exact(
             build,
-            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            lambda plc, jit: plc.run_until(Bool("End"), max_cycles=10_000, jit=jit),
             patch={"Wide": start},
         )
         assert plc.state.tags["N"] > 2
@@ -2549,7 +2549,7 @@ class TestSelfFeedingChurnExact:
     ) -> None:
         plc = _assert_fold_is_exact(
             self._view_of_a_moving_tag(store, lambda _view: None),
-            lambda plc, fold: plc.run_until(stop, max_cycles=10_000, fold=fold),
+            lambda plc, jit: plc.run_until(stop, max_cycles=10_000, jit=jit),
             patch={"Wide": 32_000},
         )
         assert plc.state.tags["Wide"] == 32_770
@@ -2607,7 +2607,7 @@ class TestSelfFeedingChurnExact:
         build = self._view_of_a_moving_tag(store, reader)
         _assert_fold_is_exact(
             build,
-            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            lambda plc, jit: plc.run_until(Bool("End"), max_cycles=10_000, jit=jit),
             patch={"Wide": 32_000},
         )
 
@@ -2660,7 +2660,7 @@ class TestSelfFeedingChurnExact:
 
         _assert_fold_is_exact(
             self._copy_into_a_word(step, reader),
-            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            lambda plc, jit: plc.run_until(Bool("End"), max_cycles=10_000, jit=jit),
             patch={"Wide": start},
         )
 
@@ -2685,7 +2685,7 @@ class TestSelfFeedingChurnExact:
         build = self._copy_into_a_word(1, reader)
         _assert_fold_is_exact(
             build,
-            lambda plc, fold: plc.run_until(Bool("End"), max_cycles=10_000, fold=fold),
+            lambda plc, jit: plc.run_until(Bool("End"), max_cycles=10_000, jit=jit),
         )
         plc = PLC(build(), dt=0.010)
         ran = 0
@@ -2697,7 +2697,7 @@ class TestSelfFeedingChurnExact:
             return prepare(*args, **kwargs)
 
         setattr(plc, "_prepare_scan", counted)  # noqa: B010
-        plc.run_until(Bool("End"), max_cycles=10_000, fold=True)
+        plc.run_until(Bool("End"), max_cycles=10_000, jit=True)
         assert plc.state.scan_id == 500
         assert plc.state.tags["View"] == 500
         assert ran < 20
@@ -2745,7 +2745,7 @@ class TestSelfFeedingChurnExact:
             return prepare(*args, **kwargs)
 
         setattr(plc, "_prepare_scan", counted)  # noqa: B010
-        plc.run_until(Bool("Hit"), max_cycles=5_000, fold=True)
+        plc.run_until(Bool("Hit"), max_cycles=5_000, jit=True)
         assert plc.state.scan_id == 3_000
         assert ran < 50
 
@@ -2789,11 +2789,11 @@ class TestSelfFeedingChurnExact:
             return bool(state.tags.get("FaultNow"))
 
         runs = []
-        for fold in (True, False):
+        for jit in (True, False):
             plc = PLC(build(), dt=0.010)
             plc.patch({"Tot": 32_000})
             plc.step()
-            plc.run_until(faulted, max_cycles=3_000, fold=fold)
+            plc.run_until(faulted, max_cycles=3_000, jit=jit)
             runs.append(plc)
         folded, stepped = runs
         assert folded.state.scan_id == stepped.state.scan_id
@@ -2965,8 +2965,8 @@ class TestFlagsFollowInsideAWindow:
         )
 
     @staticmethod
-    def _until_end(plc: PLC, fold: bool) -> None:
-        plc.run_until(Bool("End"), max_cycles=10_000, fold=fold)
+    def _until_end(plc: PLC, jit: bool) -> None:
+        plc.run_until(Bool("End"), max_cycles=10_000, jit=jit)
 
     @pytest.mark.parametrize(
         "raises, settles, flag, after",
@@ -3233,7 +3233,7 @@ class TestFlagsFollowInsideAWindow:
                 lambda a, b: copy(a, b),
                 lambda _view: copy_rung(Int("Plain")),
             ),
-            lambda plc, fold: plc.run_until(stop, max_cycles=1_000, fold=fold),
+            lambda plc, jit: plc.run_until(stop, max_cycles=1_000, jit=jit),
             patch={"Wide": 32_000},
         )
         assert plc.state.tags[self.SC43.name] is False
@@ -3363,8 +3363,8 @@ class TestUnseenStopsStayExact:
     def test_callable_stop_on_an_unread_self_calc(self, step_tag: bool) -> None:
         folded = _assert_fold_is_exact(
             self._counter(step_tag),
-            lambda plc, fold: plc.run_until(
-                lambda s: s.tags.get("T", 0) >= 500, max_cycles=5_000, fold=fold
+            lambda plc, jit: plc.run_until(
+                lambda s: s.tags.get("T", 0) >= 500, max_cycles=5_000, jit=jit
             ),
             patch={"K": 1},
         )
@@ -3373,12 +3373,12 @@ class TestUnseenStopsStayExact:
     @pytest.mark.parametrize("timer", [False, True])
     @pytest.mark.parametrize("run", ["until", "for"])
     def test_pause_breakpoint_is_judged_every_scan(self, timer: bool, run: str) -> None:
-        def go(plc: PLC, fold: bool) -> None:
+        def go(plc: PLC, jit: bool) -> None:
             plc.when(Int("T") == 500).pause()
             if run == "until":
-                plc.run_until(Bool("Never"), max_cycles=5_000, fold=fold)
+                plc.run_until(Bool("Never"), max_cycles=5_000, jit=jit)
             else:
-                plc.run_for(50.0, fold=fold)
+                plc.run_for(50.0, jit=jit)
 
         folded = _assert_fold_is_exact(self._counter(timer=timer), go)
         assert folded.state.tags["T"] == 500
@@ -3386,9 +3386,9 @@ class TestUnseenStopsStayExact:
     def test_monitor_sees_every_change(self) -> None:
         seen: dict[bool, list[Any]] = {True: [], False: []}
 
-        def go(plc: PLC, fold: bool) -> None:
-            plc.monitor("T", lambda new, old: seen[fold].append((plc.state.scan_id, new)))
-            plc.run_for(5.0, fold=fold)
+        def go(plc: PLC, jit: bool) -> None:
+            plc.monitor("T", lambda new, old: seen[jit].append((plc.state.scan_id, new)))
+            plc.run_for(5.0, jit=jit)
 
         _assert_fold_is_exact(self._counter(timer=True), go)
         assert seen[True] == seen[False] != []
@@ -3411,16 +3411,16 @@ class TestUnseenStopsStayExact:
         seen: dict[bool, list[Any]] = {True: [], False: []}
         kernel = {True: 0, False: 0}
 
-        def go(plc: PLC, fold: bool) -> None:
+        def go(plc: PLC, jit: bool) -> None:
             orig = plc._run_single_scan
 
             def counted(**kw: Any) -> Any:
-                kernel[fold] += 1
+                kernel[jit] += 1
                 return orig(**kw)
 
             plc._run_single_scan = counted  # ty: ignore[invalid-assignment]
-            plc.monitor(tag, lambda new, old: seen[fold].append((plc.state.scan_id, new, old)))
-            plc.run_until(Bool("Hit"), max_cycles=5_000, fold=fold)
+            plc.monitor(tag, lambda new, old: seen[jit].append((plc.state.scan_id, new, old)))
+            plc.run_until(Bool("Hit"), max_cycles=5_000, jit=jit)
 
         _assert_fold_is_exact(build, go)
         assert seen[True] == seen[False] != []
@@ -3438,11 +3438,11 @@ class TestUnseenStopsStayExact:
             return prog
 
         runs = []
-        for fold in (True, False):
+        for jit in (True, False):
             plc = PLC(build(), dt=0.010)
             plc.step()
             plc.when(Int("Tmr_Acc") >= 5_000).pause()
-            plc.run_until(Bool("Never"), max_cycles=3_000, fold=fold)
+            plc.run_until(Bool("Never"), max_cycles=3_000, jit=jit)
             runs.append(plc)
         assert runs[0].state.scan_id == runs[1].state.scan_id
         assert _full_state(runs[0]) == _full_state(runs[1])
@@ -3748,9 +3748,9 @@ class TestTimedDrumCorrectedEveryScan:
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
     def test_forced_bad_matches_stepping(self, kind: str) -> None:
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.force("Step", 0)
-            _run_scans(plc, 300, fold=fold)
+            _run_scans(plc, 300, jit=jit)
 
         folded, stepped = _folded_and_stepped(self._build(kind, "none"), run, patch={"En": True})
         assert _full_state(folded) == _full_state(stepped)
@@ -3772,10 +3772,10 @@ class TestTimedDrumCorrectedEveryScan:
 
         kernel_scans: dict[bool, int] = {}
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             counter = _count_kernel_scans(plc)
-            _run_scans(plc, 30, fold=fold)
-            kernel_scans[fold] = counter["n"]
+            _run_scans(plc, 30, jit=jit)
+            kernel_scans[jit] = counter["n"]
 
         folded, stepped = _folded_and_stepped(build, run, patch={"En": True})
         assert _full_state(folded) == _full_state(stepped)
@@ -3863,8 +3863,8 @@ class TestTimedDrumReadsAnotherStep:
         assert _full_state(folded) == _full_state(stepped)
         self._assert_replay_matches(folded, stepped)
 
-        def until_moved(plc: PLC, fold: bool) -> None:
-            plc.run_until(Or(Bool("O2"), Bool("DDone")), max_cycles=600, fold=fold)
+        def until_moved(plc: PLC, jit: bool) -> None:
+            plc.run_until(Or(Bool("O2"), Bool("DDone")), max_cycles=600, jit=jit)
 
         _assert_fold_is_exact(build, until_moved, patch=patch)
 
@@ -3878,10 +3878,10 @@ class TestTimedDrumReadsAnotherStep:
         build = self._build(kind, above, below, (5000, 5000, 5000), reader=False)
         kernel_scans: dict[bool, int] = {}
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             counter = _count_kernel_scans(plc)
-            _run_scans(plc, 400, fold=fold)
-            kernel_scans[fold] = counter["n"]
+            _run_scans(plc, 400, jit=jit)
+            kernel_scans[jit] = counter["n"]
 
         folded, stepped = _folded_and_stepped(build, run, patch={"En": True, "Stage": True})
         assert _full_state(folded) == _full_state(stepped)
@@ -3900,12 +3900,12 @@ class TestTimedDrumReadsAnotherStep:
     ) -> None:
         """The drum finishes the step the writer holds, including within one scan."""
 
-        def run(plc: PLC, fold: bool) -> None:
-            _run_scans(plc, 80, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            _run_scans(plc, 80, jit=jit)
             plc.patch({"Stage": False})
-            _run_scans(plc, 80, fold=fold)
+            _run_scans(plc, 80, jit=jit)
             plc.patch({"Stage": True})
-            _run_scans(plc, 200, fold=fold)
+            _run_scans(plc, 200, jit=jit)
 
         folded, stepped = _folded_and_stepped(
             self._build(kind, above, below, presets), run, patch={"En": True, "Stage": True}
@@ -4034,10 +4034,10 @@ class TestDrumOneTimeScans:
 
     @pytest.mark.parametrize("kind", ["event", "time"])
     def test_correction_after_a_held_scan_matches_stepping(self, kind: str) -> None:
-        def run(plc: PLC, fold: bool) -> None:
-            _run_scans(plc, 5, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            _run_scans(plc, 5, jit=jit)
             plc.patch({"Go": True})
-            _run_scans(plc, 2_000, fold=fold)
+            _run_scans(plc, 2_000, jit=jit)
 
         folded = _assert_fold_is_exact(self._build(kind), run)
         assert folded.state.tags["Step"] == 1
@@ -4060,24 +4060,24 @@ class TestDrumOneTimeScans:
                     latch(Bool("En"))
             return prog
 
-        def run(plc: PLC, fold: bool) -> None:
-            _run_scans(plc, 5, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            _run_scans(plc, 5, jit=jit)
             plc.patch({"Go": True})
-            _run_scans(plc, 2_000, fold=fold)
+            _run_scans(plc, 2_000, jit=jit)
 
         folded = _assert_fold_is_exact(build, run)
         assert folded.state.tags[reader.Acc.name] == 0
 
     @pytest.mark.parametrize("kind", ["event", "time"])
     def test_jog_completion_matches_stepping(self, kind: str) -> None:
-        def run(plc: PLC, fold: bool) -> None:
-            _run_scans(plc, 5, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            _run_scans(plc, 5, jit=jit)
             plc.patch({"J": True})
-            _run_scans(plc, 3, fold=fold)
+            _run_scans(plc, 3, jit=jit)
             plc.patch({"J": False})
-            _run_scans(plc, 3, fold=fold)
+            _run_scans(plc, 3, jit=jit)
             plc.patch({"J": True})
-            _run_scans(plc, 6_000, fold=fold)
+            _run_scans(plc, 6_000, jit=jit)
 
         folded = _assert_fold_is_exact(self._build(kind), run)
         assert folded.state.tags["DDone"] is True
@@ -4167,11 +4167,11 @@ class TestReadsOutsideTheCrossings:
         ],
     )
     def test_matches_stepping(self, shape: str, patch: dict[str, int]) -> None:
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             if "preset" in shape:
-                plc.run_until(Bool("Done"), max_cycles=5_000, fold=fold)
+                plc.run_until(Bool("Done"), max_cycles=5_000, jit=jit)
             else:
-                _run_scans(plc, 2_500, fold=fold)
+                _run_scans(plc, 2_500, jit=jit)
 
         _assert_fold_is_exact(lambda: self._program(shape), run, patch=patch)
 
@@ -4202,8 +4202,8 @@ class TestReadsOutsideTheCrossings:
             ),
         }[stop]
 
-        def run(plc: PLC, fold: bool) -> None:
-            plc.run_until(until, max_cycles=5_000, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            plc.run_until(until, max_cycles=5_000, jit=jit)
 
         folded = _assert_fold_is_exact(self._timer_only, run)
         assert folded.state.scan_id < 5_000
@@ -4211,14 +4211,14 @@ class TestReadsOutsideTheCrossings:
     def test_a_coast_traces_an_undeclared_predicate(self) -> None:
         from pyrung.core.coast_run import coast_until
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             def pred(s: Any) -> bool:
                 return s.tags.get("Tmr_Acc", 0) >= 5_000
 
-            if fold:
+            if jit:
                 coast_until(plc, pred, budget=5_000)
             else:
-                plc.run_until(pred, max_cycles=5_000, fold=False)
+                plc.run_until(pred, max_cycles=5_000, jit=False)
 
         _assert_fold_is_exact(self._timer_only, run)
 
@@ -4248,8 +4248,8 @@ class TestReadsOutsideTheCrossings:
     def test_reads_the_landing_reproduces_still_fold(self, shape: str) -> None:
         kernel = {"n": 0}
 
-        def run(plc: PLC, fold: bool) -> None:
-            if fold:
+        def run(plc: PLC, jit: bool) -> None:
+            if jit:
                 scan = plc._run_single_scan
 
                 def counted(**kw: Any) -> Any:
@@ -4257,7 +4257,7 @@ class TestReadsOutsideTheCrossings:
                     return scan(**kw)
 
                 setattr(plc, "_run_single_scan", counted)  # noqa: B010
-            _run_scans(plc, 1_500, fold=fold)
+            _run_scans(plc, 1_500, jit=jit)
 
         _assert_fold_is_exact(lambda: self._folding_kept(shape), run)
         assert kernel["n"] < 50
@@ -4292,8 +4292,8 @@ class TestIndexedDisplays:
 
     @pytest.mark.parametrize("reader", ["contact", "copy"])
     def test_program_index_reads_the_display(self, reader: str) -> None:
-        def run(plc: PLC, fold: bool) -> None:
-            _run_scans(plc, 3_000, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            _run_scans(plc, 3_000, jit=jit)
 
         folded = _assert_fold_is_exact(lambda: self._program(reader), run)
         assert folded.state.tags["Hit"]
@@ -4303,8 +4303,8 @@ class TestIndexedDisplays:
 
         DS = Block("DS", TagType.INT, 1, 100)
 
-        def run(plc: PLC, fold: bool) -> None:
-            plc.run_until(DS[Int("Idx", default=5)] == 3, max_cycles=3_000, fold=fold)
+        def run(plc: PLC, jit: bool) -> None:
+            plc.run_until(DS[Int("Idx", default=5)] == 3, max_cycles=3_000, jit=jit)
 
         folded = _assert_fold_is_exact(lambda: self._program("none"), run)
         assert folded.state.tags["DS5"] == 3
@@ -4318,10 +4318,8 @@ class TestCallableReadsThePlc:
                     on_delay(Timer.clone("Tmr"), 5_000)
             return prog
 
-        def run(plc: PLC, fold: bool) -> None:
-            plc.run_until(
-                lambda _s: plc.state.tags["Tmr_Acc"] >= 1_234, max_cycles=3_000, fold=fold
-            )
+        def run(plc: PLC, jit: bool) -> None:
+            plc.run_until(lambda _s: plc.state.tags["Tmr_Acc"] >= 1_234, max_cycles=3_000, jit=jit)
 
         folded = _assert_fold_is_exact(build, run)
         assert folded.state.tags["Tmr_Acc"] < 1_300
@@ -4574,13 +4572,13 @@ class TestOutVariants:
     def test_rung_dropping_mid_phase_matches_stepping(self, verb: str) -> None:
         reader = "off_done" if verb in ("debounce", "flasher") else "coil"
 
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.patch({"In": True})
-            _run_scans(plc, 150, fold=fold)
+            _run_scans(plc, 150, jit=jit)
             plc.patch({"In": False})
-            _run_scans(plc, 400, fold=fold)
+            _run_scans(plc, 400, jit=jit)
             plc.patch({"In": True})
-            _run_scans(plc, 333, fold=fold)
+            _run_scans(plc, 333, jit=jit)
 
         _assert_fold_is_exact(self._shape(verb, reader), run, dt=0.01)
 
@@ -4663,19 +4661,19 @@ class TestContestedTimer:
         _assert_fold_is_exact(self._shape(kind), _scans(500), patch={"B": True, "Btn": btn})
 
     def test_reset_writer_released_mid_run(self) -> None:
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.patch({"B": True, "Btn": True})
-            _run_scans(plc, 120, fold=fold)
+            _run_scans(plc, 120, jit=jit)
             plc.patch({"Btn": False})
-            _run_scans(plc, 400, fold=fold)
+            _run_scans(plc, 400, jit=jit)
 
         folded = _assert_fold_is_exact(self._shape("copy_before"), run)
         assert folded.state.tags["Tmr_Done"]
 
     def test_forced_accumulator_matches_stepping(self) -> None:
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.force("Tmr_Acc", 50)
-            _run_scans(plc, 500, fold=fold)
+            _run_scans(plc, 500, jit=jit)
 
         folded = _assert_fold_is_exact(self._shape("copy_before"), run, patch={"B": True})
         assert not folded.state.tags["Tmr_Done"]
@@ -4685,16 +4683,16 @@ class TestContestedTimer:
         plc.patch({"B": True, "Btn": False})
         plc.step()
         counter = _count_kernel_scans(plc)
-        _run_scans(plc, 2_000, fold=True)
+        _run_scans(plc, 2_000, jit=True)
         assert counter["n"] < 100
 
     @pytest.mark.parametrize("kind", ["two_on_delays", "copy_before", "copy_after", "sub_twice"])
     def test_history_replay_matches_stepping(self, kind: str) -> None:
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.patch({"B": True, "Btn": True})
-            _run_scans(plc, 150, fold=fold)
+            _run_scans(plc, 150, jit=jit)
             plc.patch({"Btn": False})
-            _run_scans(plc, 300, fold=fold)
+            _run_scans(plc, 300, jit=jit)
 
         folded, stepped = _folded_and_stepped(self._shape(kind), run)
         tip = folded.state.scan_id
@@ -4703,9 +4701,20 @@ class TestContestedTimer:
             assert _full_state(folded.replay_to(target)) == want
 
     def test_reset_writer_held_on_steps(self) -> None:
-        def run(plc: PLC, fold: bool) -> None:
+        def run(plc: PLC, jit: bool) -> None:
             plc.patch({"B": True, "Btn": True})
-            _run_scans(plc, 200, fold=fold)
+            _run_scans(plc, 200, jit=jit)
 
         folded, stepped = _folded_and_stepped(self._shape("copy_before"), run)
         assert _full_state(folded) == _full_state(stepped)
+
+
+def test_the_argument_is_jit_and_the_old_name_is_gone() -> None:
+    prog, tmr = _timer_program()
+    plc = PLC(prog, dt=0.010)
+    plc.run_for(0.05, jit=True)
+    plc.run_until(tmr.Done, max_cycles=5, jit=False)
+    with pytest.raises(TypeError, match="fold"):
+        plc.run_for(0.05, fold=True)  # ty: ignore[unknown-argument]
+    with pytest.raises(TypeError, match="fold"):
+        plc.run_until(tmr.Done, max_cycles=5, fold=False)  # ty: ignore[unknown-argument]
