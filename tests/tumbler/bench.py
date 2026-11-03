@@ -1,8 +1,7 @@
 """Shared test bench for driving the tumbler fixture like a commissioning rig.
 
-Ported from ``scratchpad/burner/reconstitute_*.py``.  The bench holds the
-physical permissives true, keeps the rotate sensor oscillating (the rotate
-watchdogs fault a stalled sensor once Rotate_CurStep >= 3: SensorOn WD 2 s,
+The bench holds the physical permissives true, keeps the rotate sensor
+oscillating (the rotate watchdogs fault a stalled sensor once Rotate_CurStep >= 3: SensorOn WD 2 s,
 SensorOff WD 10 s; a 50-scan / 0.5 s half period keeps both fed), and offers
 ``step_until`` staging primitives.
 """
