@@ -51,11 +51,14 @@ def same_stored_value(old: Any, new: Any) -> bool:
     return type(new) is not float or new != 0.0 or copysign(1.0, old) == copysign(1.0, new)
 
 
-def _commit_changed(base: PMap, pending: Mapping[str, Any]) -> PMap:
-    """Publish only final values that differ from the immutable scan base."""
+def _commit_changed(base: PMap, pending: Mapping[str, Any], read: Mapping[str, Any]) -> PMap:
+    """Publish only final values that differ from the immutable scan base.
+
+    *read* is what the scan read *base* through: the base itself, or a plain dict of it.
+    """
     evolver = None
     for key, value in pending.items():
-        if same_stored_value(base.get(key, _MISSING), value):
+        if same_stored_value(read.get(key, _MISSING), value):
             continue
         if evolver is None:
             evolver = base.evolver()
@@ -849,8 +852,8 @@ class ScanContext:
         # the final value of each key is known.  Avoid touching the PMap for
         # writes that finish equal to the immutable scan base; otherwise apply
         # all genuinely changed values through one deferred evolver.
-        new_tags = _commit_changed(self._state_tags, self._tags_pending)
-        new_memory = _commit_changed(self._state_memory, self._memory_pending)
+        new_tags = _commit_changed(self._state_tags, self._tags_pending, self._state_tags_read)
+        new_memory = _commit_changed(self._state_memory, self._memory_pending, self._state_memory)
 
         # Create new state with updated tags/memory and advance scan
         return self._state.committed(new_tags, new_memory, dt)
