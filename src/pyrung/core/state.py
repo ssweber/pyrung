@@ -48,9 +48,13 @@ class SystemState(PRecord):
 
     def committed(self, tags: PMap, memory: PMap, dt: float) -> SystemState:
         """Return the state after a scan: these tags and memory, on the next scan."""
+        return self.scanned(self.scan_id + 1, self.timestamp + dt, tags, memory)
+
+    def scanned(self, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> SystemState:
+        """Return this state with every field replaced, cheaper than building a new one."""
         e = self.evolver()
-        e.set("scan_id", self.scan_id + 1)
-        e.set("timestamp", self.timestamp + dt)
+        e.set("scan_id", scan_id)
+        e.set("timestamp", timestamp)
         e.set("tags", tags)
         e.set("memory", memory)
         return cast(SystemState, e.persistent())

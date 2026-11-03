@@ -575,11 +575,8 @@ class CompiledPLC:
             self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
-        next_state = SystemState(
-            scan_id=scan_id + 1,
-            timestamp=timestamp + self._dt,
-            tags=self._commit_tags(),
-            memory=self._commit_memory(),
+        next_state = self._state.scanned(
+            scan_id + 1, timestamp + self._dt, self._commit_tags(), self._commit_memory()
         )
         self._kernel.scan_id = next_state.scan_id
         self._kernel.timestamp = next_state.timestamp
@@ -639,11 +636,11 @@ class CompiledPLC:
     def _materialize_replay_state(self) -> SystemState:
         """Build SystemState from current kernel state (replay fast path)."""
         self._flush_blocks_tracked(cast("dict[str, _TrackedList]", self._kernel.blocks))
-        state = SystemState(
-            scan_id=self._kernel.scan_id,
-            timestamp=self._kernel.timestamp,
-            tags=self._commit_tags(),
-            memory=self._commit_memory(),
+        state = self._state.scanned(
+            self._kernel.scan_id,
+            self._kernel.timestamp,
+            self._commit_tags(),
+            self._commit_memory(),
         )
         self._state = state
         return state
