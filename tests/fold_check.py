@@ -65,6 +65,7 @@ import pyrung.core.compiled_run as compiled_run
 import pyrung.core.rung_firings as rung_firings
 import pyrung.core.scan_trace as scan_trace
 from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime
+from pyrung.core.coast_run import work_charged
 from pyrung.core.rung_firings import SearchQuestionRefused
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
@@ -1078,6 +1079,28 @@ def _hold_to_the_scans_asked(
         )
 
 
+def _budget_in_scans(
+    kind: str, start: int, end: int, budget: int | None, loop_scans: int, per_unit: int
+) -> int | None:
+    """*budget* as scans, for a run paying a unit per *per_unit* of its loop scans.
+
+    What it charged has to fit *budget*, by the coast's own ``work_charged`` on the loop scans
+    counted as they ran, and all of it spent is a run that stopped on its budget.  Whatever
+    is left would have paid for that many more loop scans, so stopping there is a short
+    landing, judged as any other.
+    """
+    if budget is None or per_unit == 1:
+        return budget
+    n = end - start
+    charged = work_charged(n, n - loop_scans, per_unit)
+    if charged > budget:
+        raise _mismatch(
+            f"fold-check ({kind}): asked for {budget} units at {per_unit} loop scans a unit "
+            f"from scan {start}, landed at {end} having charged {charged}"
+        )
+    return n + (budget - charged) * per_unit
+
+
 def _judge_a_short_landing_on_its_last_scan(
     kind: str, plc: Any, twin: Any, ask: Any, budget: int | None, n: int
 ) -> None:
@@ -1137,8 +1160,11 @@ def _checked(
     compiled_predicate: bool = False,
     budget: int | None = None,
     out_of_work: Callable[[], bool] | None = None,
+    loop_scans_per_unit: int = 1,
 ) -> Any:
     """Run *call* and check it against a stepped twin; *budget* is the scans asked of it.
+
+    *loop_scans_per_unit* is what a unit of *budget* buys of them in the loop.
 
     *out_of_work* says how() stopped the run for its ledger: as with its clock that is no
     scan's doing, so it isn't held to its budget.  The coast asks its predicate first, so the
@@ -1150,15 +1176,25 @@ def _checked(
     block = next((b for b in reversed(_own_twin_blocks) if b.plc is plc), None)
     if block is not None:
         start = plc._state.scan_id
+        loop_scans_before = scan_trace.TOTALS["loop scans"]
         try:
             result = call()
         finally:
             block.landed = plc._state.scan_id
-        n = plc._state.scan_id - start
+        end = plc._state.scan_id
+        n = end - start
+        budget = _budget_in_scans(
+            kind,
+            start,
+            end,
+            budget,
+            scan_trace.TOTALS["loop scans"] - loop_scans_before,
+            loop_scans_per_unit,
+        )
         _hold_to_the_scans_asked(
             kind,
             start,
-            plc._state.scan_id,
+            end,
             n if out_of_work is not None and out_of_work() else budget,
             predicate,
         )
@@ -1202,6 +1238,7 @@ def _checked(
     end = plc._state.scan_id
     n = end - start
     ledger_stop = out_of_work is not None and out_of_work()
+    budget = _budget_in_scans(kind, start, end, budget, loop_scans, loop_scans_per_unit)
     if ledger_stop:
         budget = n
     # A raise is a run stopped early, by whatever raised: that is judged below.
@@ -1397,6 +1434,7 @@ def install() -> None:
             predicate,
             budget=budget,
             out_of_work=lambda: "out_of_work" in said,
+            loop_scans_per_unit=kwargs.get("loop_scans_per_unit", 1),
         )
         _hold_to_the_ledger("coast", left, said)
         return result

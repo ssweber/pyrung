@@ -385,6 +385,46 @@ def test_a_run_of_no_scans_when_some_were_asked_is_caught() -> None:
         fold_check._checked("compiled", plc, lambda: None, budget=5)
 
 
+def test_a_run_charging_past_the_units_asked_is_caught() -> None:
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="asked for 5 units .* landed at 9 having charged 9"),
+    ):
+        fold_check._checked("coast", plc, _stepper(plc, 9), budget=5, loop_scans_per_unit=100)
+
+
+def test_a_run_short_of_the_units_asked_is_caught() -> None:
+    """A unit left over would have paid for 100 more scans, however few were run."""
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="100 of 104 scans left and the stop predicate false"),
+    ):
+        fold_check._checked(
+            "coast", plc, _stepper(plc, 4), lambda _s: False, budget=5, loop_scans_per_unit=100
+        )
+
+
+def test_a_run_spending_every_unit_stopped_on_its_budget() -> None:
+    plc = _plc()
+    fold_check._checked(
+        "coast", plc, _stepper(plc, 5), lambda _s: False, budget=5, loop_scans_per_unit=100
+    )
+    assert plc.state.scan_id == 5
+
+
+def test_a_coast_in_units_through_install_is_held_to_the_coast_own_charge(installed) -> None:
+    """The loop's scans come at their price, the rest a unit each, and every scan is compared."""
+    coast_run = installed
+    fold_check.install()
+    plc = _timed()
+    coast_run.coast_until(
+        plc, lambda _s: False, budget=7, predicate_reads=frozenset(), loop_scans_per_unit=100
+    )
+    assert plc.state.scan_id > 7
+
+
 def test_a_short_landing_a_predicate_cannot_judge_is_counted() -> None:
     plc = _plc()
     before = fold_check.STATS["short landing not judged: no answer from the predicate"]
