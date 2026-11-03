@@ -146,6 +146,7 @@ class _OwnTwin:
     plc: Any
     start: int
     rtc_at_the_start: Any
+    log_at_the_start: Any
     landed: int | None = None
     compared: int | None = None
 
@@ -176,7 +177,7 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
     lists them.
     """
     start = plc._state.scan_id
-    block = _OwnTwin(plc, start, _rtc_at_the_start(plc, start))
+    block = _OwnTwin(plc, start, _rtc_at_the_start(plc, start), plc._scan_log)
 
     def compare(stepped: Any) -> None:
         if stepped is plc:
@@ -376,10 +377,17 @@ def _set_the_same_rtc(plc: Any, twin: Any, scan: int) -> bool:
 
 
 def _compare_rtc_as_own_twins(
-    plc: Any, twin: Any, a: dict[str, Any], b: dict[str, Any], started_on: Any
+    plc: Any, twin: Any, a: dict[str, Any], b: dict[str, Any], block: _OwnTwin
 ) -> None:
-    """Rewrite the two images so an RTC base each came by on its own compares equal."""
+    """Rewrite the two images so an RTC base each came by on its own compares equal.
+
+    A reset in the block starts a fresh log on a base of its own, on each runner, so what
+    the run started on is what that log answers, as the twin's is.
+    """
     at_the_start = "as it started"
+    started_on = block.rtc_at_the_start
+    if plc._scan_log is not block.log_at_the_start:
+        started_on = a["log: rtc base at the start"]
     twin_start = b["log: rtc base at the start"]
     if a["log: rtc base at the start"] == started_on:
         a["log: rtc base at the start"] = at_the_start
@@ -464,7 +472,7 @@ def compare_runners(
     end = plc._state.scan_id
     a, b = _runner_image(plc, start, end), _runner_image(twin, start, end)
     if own_twin_of is not None:
-        _compare_rtc_as_own_twins(plc, twin, a, b, own_twin_of.rtc_at_the_start)
+        _compare_rtc_as_own_twins(plc, twin, a, b, own_twin_of)
     a["playhead"], b["playhead"] = plc._playhead, twin._playhead
     stale = _stale_in_the_read_mirror(plc)
     if stale:
