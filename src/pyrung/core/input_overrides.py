@@ -103,6 +103,15 @@ def _slot_is_retentive(block: Any, addr: int) -> bool:
     return block._slot_field(addr, "retentive", block.retentive)
 
 
+def _refusal(block: Any, addr: int) -> Exception | None:
+    if block._slot_asks_factory(addr):
+        try:
+            block._factory_default(addr)
+        except Exception as refusal:
+            return refusal
+    return None
+
+
 def _addresses_that_declare(block: Any) -> list[int]:
     of_the_field = (
         block._pyrung_field_min is not None
@@ -176,8 +185,52 @@ class TagsRungsReach:
     def names(self) -> set[str]:
         return {*self._slots_by_name(), *self._named()}
 
-    def has(self, name: str) -> bool:
-        return name in self._slots_by_name() or name in self._named()
+    def refusal_of(self, name: str) -> Exception | None:
+        """What a slot's factory raises for it, if *name* is a slot its factory refuses."""
+        slot = self._slots_by_name().get(name)
+        return None if slot is None else _refusal(*slot)
+
+    def holds(self, name: str) -> bool:
+        """Whether *name* is reached, and not a slot its factory refuses.
+
+        Only the factory can say.  It is asked in address order, up to this slot, so a factory
+        that counts gives the slots what reading them in order gives, and no tag is made.
+        """
+        slot = self._slots_by_name().get(name)
+        if slot is None:
+            return name in self._named()
+        block, addr = slot
+        if block.default_factory is None:
+            return True
+        refusal = None
+        for earlier in sorted(self._addresses_of(block)):
+            if earlier <= addr:
+                refusal = _refusal(block, earlier)
+        return refusal is None
+
+    def refused(self) -> set[str]:
+        """The slots reached that their factories refuse, every factory asked as ``holds`` asks."""
+        self._slots_by_name()
+        found: set[str] = set()
+        for block, addresses in self._reached or ():
+            if block.default_factory is not None:
+                for addr in sorted(addresses):
+                    if _refusal(block, addr) is not None:
+                        found.add(block._effective_slot_name(addr))
+        return found
+
+    def made(self, name: str) -> Tag | None:
+        """The tag for *name* if there already is one.  Asks nothing."""
+        slot = self._slots_by_name().get(name)
+        if slot is not None:
+            return slot[0]._tag_cache.get(slot[1])
+        return self._named().get(name)
+
+    def _addresses_of(self, block: Any) -> set[int]:
+        for reached, addresses in self._reached or ():
+            if reached is block:
+                return addresses
+        return set()
 
     def declared(self) -> dict[str, Tag]:
         """The slots reached that declare limits, choices or a plant.
@@ -284,7 +337,13 @@ class TagsRungsReach:
 
 
 class TagsKnownOrReached(Mapping[str, "Tag"]):
-    """``plc.tags``: the tags a runner knows, and what its rungs reach, read as asked."""
+    """``plc.tags``: the tags a runner knows, and what its rungs reach, read as asked.
+
+    A slot its block's factory refuses is not in it.  Reading a slot makes it a tag, and so
+    does what asks for the tags themselves (``copy()``, ``|``, ``values()``, ``items()``).
+    Names alone (``in``, iterating, ``len()``, ``reversed()``) make none, and ``repr()`` asks
+    no factory either.
+    """
 
     __slots__ = ("_known", "_reach")
 
@@ -295,20 +354,47 @@ class TagsKnownOrReached(Mapping[str, "Tag"]):
     def __getitem__(self, name: str) -> Tag:
         tag = self._known.get(name)
         if tag is None:
+            refusal = self._reach.refusal_of(name)
+            if refusal is not None:
+                raise KeyError(name) from refusal
             tag = self._reach.get(name)
         if tag is None:
             raise KeyError(name)
         return tag
 
     def __contains__(self, name: object) -> bool:
-        return isinstance(name, str) and (name in self._known or self._reach.has(name))
+        return isinstance(name, str) and (name in self._known or self._reach.holds(name))
 
     def __iter__(self) -> Iterator[str]:
+        refused = self._reach.refused()
         yield from self._known
-        yield from sorted(self._reach.names() - self._known.keys())
+        yield from sorted(self._reach.names() - self._known.keys() - refused)
 
     def __len__(self) -> int:
-        return len(self._reach.names() | self._known.keys())
+        return len((self._reach.names() - self._reach.refused()) | self._known.keys())
+
+    def __reversed__(self) -> Iterator[str]:
+        return reversed(list(self))
+
+    def __or__(self, other: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return {**self, **other}
+
+    def __ror__(self, other: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return {**other, **self}
+
+    def copy(self) -> dict[str, Tag]:
+        return dict(self)
+
+    def __repr__(self) -> str:
+        shown = [f"{name!r}: {tag!r}" for name, tag in self._known.items()]
+        for name in sorted(self._reach.names() - self._known.keys()):
+            tag = self._reach.made(name)
+            shown.append(f"{name!r}: {'<not read yet>' if tag is None else repr(tag)}")
+        return "{" + ", ".join(shown) + "}"
 
 
 class InputOverrideManager:

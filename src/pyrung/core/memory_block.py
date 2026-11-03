@@ -219,6 +219,7 @@ class SlotView:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
         self._block._slot_config.pop(self._addr, None)
+        self._block._slot_names_changed += 1
 
     def __repr__(self) -> str:
         return (
@@ -248,6 +249,7 @@ class RangeSlotView:
             self._block._assert_not_materialized(addr, action="reset slot")
         for addr in addresses:
             self._block._slot_config.pop(addr, None)
+        self._block._slot_names_changed += 1
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -336,6 +338,9 @@ class Block:
     _hw_alias: dict[int, tuple[Block, int]] = field(default_factory=dict, repr=False)
     # Bumped whenever a slot's name can have changed, for whatever indexes slots by name.
     _slot_names_changed: int = field(default=0, init=False, repr=False, compare=False)
+    _factory_given: dict[int, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
     _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
         default=None, init=False, repr=False
@@ -534,10 +539,26 @@ class Block:
             if mapped is not None and not retentive:
                 default = mapped.default
             elif self.default_factory is not None:
-                default = self.default_factory(addr)
+                default = self._factory_default(addr)
             else:
                 default = self._type_default()
         return retentive, default
+
+    def _factory_default(self, addr: int) -> Any:
+        """What the factory gives a slot, asked once however often the answer is wanted."""
+        if addr not in self._factory_given:
+            assert self.default_factory is not None
+            self._factory_given[addr] = self.default_factory(addr)
+        return self._factory_given[addr]
+
+    def _slot_asks_factory(self, addr: int) -> bool:
+        """Whether making this slot into a tag would ask the factory for its default."""
+        return (
+            self.default_factory is not None
+            and addr not in self._tag_cache
+            and addr not in self._mapped_tags
+            and self._slot_field(addr, "default", UNSET) is UNSET
+        )
 
     def _effective_slot_comment(self, addr: int) -> str:
         comment = self._slot_field(addr, "comment", UNSET)
@@ -616,6 +637,7 @@ class Block:
         self._slot_config.clear()
         self._mapped_tags.clear()
         self._hw_alias.clear()
+        self._factory_given.clear()
         self._slot_names_changed += 1
 
     @overload

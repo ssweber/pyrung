@@ -34,6 +34,7 @@ from pyrung.core import (
     copy,
     fill,
     out,
+    unpack_to_bits,
 )
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always, never
 from pyrung.core.compiled_plc import CompiledPLC
@@ -488,6 +489,64 @@ def test_a_carried_set_no_edge_answered_for_is_not_proven(build, source, value) 
     assert not isinstance(verdict, Proven)
     if isinstance(verdict, Counterexample):
         assert _witness_fires(program, verdict, _HIT)
+
+
+def _a_square_squared() -> Program:
+    """The calc's target is not compared and nothing is carried back to it, only to what it feeds."""
+    squared = Dint("Squared")
+    return _rungs(
+        (lambda: copy(_I, _DI),),
+        (lambda: calc(_I * _I, _DD),),
+        (lambda: calc(_DD * _DD, squared),),
+        (_hit, _DI > 0, squared == 2401),
+    )
+
+
+def _unpacked_too() -> Program:
+    bits = Block("Bits", TagType.BOOL, 1, 16)
+    return _rungs(
+        (lambda: copy(_I, _DI),),
+        (lambda: unpack_to_bits(_I, bits.select(1, 16)),),
+        (_hit, _DI > 0, bits[4]),
+    )
+
+
+def _a_pointer_too() -> Program:
+    table = Block("Arr", TagType.INT, 1, 5)
+    return _rungs(
+        (lambda: copy(42, table[3]),),
+        (lambda: copy(_I, _DI),),
+        (lambda: copy(table[_I], _DD),),
+        (_hit, _DI > 0, _DD == 42),
+    )
+
+
+# False Provens for the prover sweep: a carried source's other way to the comparison goes
+# through something the carried set does not look at.
+STILL_FALSE_PROVEN = pytest.mark.parametrize(
+    ("build", "value"),
+    [
+        pytest.param(_a_square_squared, 7, id="a-calc-of-a-calc"),
+        pytest.param(_unpacked_too, 8, id="unpack-to-bits"),
+        pytest.param(_a_pointer_too, 3, id="a-pointer"),
+    ],
+)
+
+
+@STILL_FALSE_PROVEN
+def test_the_scans_the_open_false_provens_miss_do_fire(build, value) -> None:
+    assert _fires_at(build(), "I", value, _HIT)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="the carried set misses this source's other way to the comparison: a false Proven",
+)
+@STILL_FALSE_PROVEN
+def test_a_carried_source_with_another_way_to_the_comparison_is_not_proven(build, value) -> None:
+    verdict = never(build(), _HIT, max_states=3000, depth_budget=6)
+    assert not isinstance(verdict, Proven)
 
 
 def _unread_by_the_rungs() -> Program:

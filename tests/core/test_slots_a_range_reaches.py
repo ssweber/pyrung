@@ -349,6 +349,106 @@ def test_plc_tags_follows_a_slot_named_after_it_was_asked() -> None:
     assert plc.pending_patches["Late"] == 32767
 
 
+@pytest.mark.parametrize(
+    "forget",
+    [
+        pytest.param(lambda rc: rc.slot(2).reset(), id="slot"),
+        pytest.param(lambda rc: rc.slot(1, 3).reset(), id="range"),
+    ],
+)
+def test_plc_tags_follows_a_slot_whose_name_was_taken_back(forget) -> None:
+    rc, sink = _blocks()
+    rc.slot(2, name="Late")
+    plc = PLC(_through_a_range(rc, sink), dt=0.01)
+    assert "Late" in plc.tags
+    forget(rc)
+    assert "Late" not in plc.tags and "Rc2" in plc.tags
+    assert plc.tags["Rc2"] is rc[2]
+
+
+@RESETS
+def test_asking_for_a_name_later_taken_back_keeps_what_not_asking_keeps(reset) -> None:
+    def kept(asked: bool) -> Any:
+        rc, sink = _blocks()
+        rc.slot(2, name="Late")
+        plc = PLC(_through_a_range(rc, sink), dt=0.01)
+        if asked:
+            assert "Late" in plc.tags
+        rc.slot(2).reset()
+        plc.patch({"Rc2": 7})
+        plc.step()
+        reset(plc)
+        return plc.current_state.tags.get("Rc2")
+
+    assert kept(asked=True) == kept(asked=False) == 7
+
+
+def test_a_slot_its_factory_refuses_is_not_in_plc_tags_however_it_is_asked() -> None:
+    program, _slots, _seen = _pointing_at(2, _refuses_three)
+    tags = PLC(program, dt=0.01).tags
+    assert "Sq3" not in tags
+    assert tags.get("Sq3", "gone") == "gone"
+    with pytest.raises(KeyError) as refused:
+        tags["Sq3"]
+    assert "no slot 3" in str(refused.value.__cause__)
+
+    as_a_dict = dict(tags)
+    assert "Sq3" not in as_a_dict and as_a_dict["Sq2"].name == "Sq2"
+    assert "Sq3" not in set(tags) and "Sq3" not in dict(tags.items())
+    assert "Sq3" not in tags.keys() and "Sq3" not in tags.copy()
+    assert len(tags) == len(as_a_dict) == len(list(tags.values()))
+
+
+def test_a_factory_says_whether_a_slot_is_there_and_no_tag_is_made_for_it() -> None:
+    calls = count(101)
+    program, slots, seen = _pointing_at(1, lambda addr: next(calls))
+    plc = PLC(program, dt=0.01)
+    assert "Sq2" in plc.tags
+    assert not slots._tag_cache
+    slots.slot(2).reset()
+    assert {"Sq1", "Sq5"} <= set(plc.tags)
+    assert not slots._tag_cache
+    plc.step()
+    assert plc.current_state.tags[seen.name] == 101
+    assert slots[2].default == 102
+    assert slots[5].default == 105
+
+
+def test_a_block_reset_asks_its_factory_again() -> None:
+    calls = count(101)
+    slots = Block("Sq", TagType.INT, 1, 5, default_factory=lambda addr: next(calls))
+    assert slots[1].default == 101
+    slots.reset()
+    assert slots[1].default == 102
+
+
+def test_plc_tags_reads_as_the_proxy_over_a_dict_did() -> None:
+    rc, sink = _blocks()
+    tags: Any = PLC(_through_a_range(rc, sink), dt=0.01).tags
+
+    assert list(reversed(tags)) == list(tags)[::-1]
+    assert not rc._tag_cache, "names alone make no tag"
+
+    text = repr(tags)
+    assert text.startswith("mappingproxy({") and "'Rc2': <not read yet>" in text
+    assert f"'Go': {Go!r}" in text
+    assert text.isascii()
+    assert not rc._tag_cache, "a repr makes no tag"
+
+    copied = tags.copy()
+    assert type(copied) is dict and copied["Rc2"] is rc[2]
+    assert "'Rc2': <not read yet>" not in repr(tags) and f"'Rc2': {rc[2]!r}" in repr(tags)
+
+    assert (tags | {"Mine": 1})["Mine"] == 1 and (tags | {"Mine": 1})["Rc2"] is rc[2]
+    assert ({"Mine": 1} | tags)["Rc2"] is rc[2]
+    assert ({"Rc2": 1} | tags)["Rc2"] is rc[2] and (tags | {"Rc2": 1})["Rc2"] == 1
+    assert type(tags | tags) is dict
+    with pytest.raises(TypeError):
+        tags | 1
+    with pytest.raises(TypeError):
+        tags["Mine"] = 1
+
+
 def test_plc_tags_holds_both_ends_of_a_plant_on_a_slot() -> None:
     enables = Block("En", TagType.BOOL, 1, 3)
     bank, dst = Block("Bank", TagType.REAL, 1, 8), Block("Dst", TagType.REAL, 1, 8)
