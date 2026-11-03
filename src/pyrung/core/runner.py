@@ -358,9 +358,20 @@ class _BreakpointBuilder:
 
 def _iter_tags_and_edge_names(
     roots: Iterable[Any],
+    *,
+    block_uses: list[Any] | None = None,
 ) -> tuple[tuple[Tag, ...], frozenset[str]]:
-    """Single-pass graph walk collecting both Tag objects and edge tag names."""
+    """Single-pass graph walk collecting both Tag objects and edge tag names.
+
+    *block_uses*, when given, also collects each range and pointer into a block.
+    """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+    from pyrung.core.memory_block import (
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
     from pyrung.core.tag import Tag as TagClass
 
     found_by_name: dict[str, TagClass] = {}
@@ -392,6 +403,11 @@ def _iter_tags_and_edge_names(
         if current_id in visited:
             continue
         visited.add(current_id)
+
+        if block_uses is not None and isinstance(
+            current, BlockRange | IndirectRef | IndirectExprRef | IndirectBlockRange
+        ):
+            block_uses.append(current)
 
         if isinstance(current, Mapping):
             queue.extend(current.keys())
@@ -650,6 +666,49 @@ def _program_calls_what_a_kernel_cannot_copy(program: Any) -> bool:
         and not _means_the_same_in_a_kernel(instruction._fn)
         for instruction in walk_instructions(program)
     )
+
+
+class _SlotsRungsReach:
+    """The block slots a range or a pointer in a rung reaches, by name.
+
+    A runner knows the tags a rung names, and a ``select()`` or a ``Block[Pointer]`` names
+    only its block: its slots stay lazy until something asks for one.  A kernel lists them
+    as it binds the block, so these are the same slots, and a slot patched by name holds
+    its type on both engines and whatever else was patched first.  Built the first time a
+    name is not a known tag, and shared with forks, which skip the walk.
+    """
+
+    __slots__ = ("_logic", "_program", "_by_name")
+
+    def __init__(self, logic: Iterable[Any], program: Any) -> None:
+        self._logic = logic
+        self._program = program
+        self._by_name: dict[str, Tag] | None = None
+
+    def get(self, name: str) -> Tag | None:
+        if self._by_name is None:
+            self._by_name = self._build()
+        return self._by_name.get(name)
+
+    def _build(self) -> dict[str, Tag]:
+        from pyrung.core.memory_block import BlockRange
+
+        roots: list[Any] = list(self._logic)
+        if self._program is not None:
+            for subroutine_rungs in self._program.subroutines.values():
+                roots.extend(subroutine_rungs)
+        uses: list[Any] = []
+        _iter_tags_and_edge_names(roots, block_uses=uses)
+        slots: list[Tag] = []
+        for use in uses:
+            if isinstance(use, BlockRange):
+                slots.extend(use.tags())
+            else:
+                block = use.block
+                slots.extend(
+                    block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)
+                )
+        return {tag.name: tag for tag in slots}
 
 
 def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
@@ -1683,8 +1742,9 @@ class PLC:
         )
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
-            known_tag=lambda name: self._known_tags_by_name.get(name),
+            known_tag=self._tag_a_name_means,
         )
+        self._slots_rungs_reach = _SlotsRungsReach(self._logic, self._program)
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
@@ -2605,6 +2665,7 @@ class PLC:
                 self._constrained_tags,
             ),
         )
+        fork._slots_rungs_reach = self._slots_rungs_reach
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
@@ -3089,6 +3150,7 @@ class PLC:
                 self._constrained_tags,
             ),
         )
+        fork._slots_rungs_reach = self._slots_rungs_reach
         fork._state = state
         fork._reset_cache(state)
         fork._initial_scan_id = state.scan_id
@@ -4086,6 +4148,10 @@ class PLC:
         for tag in tags:
             self._register_known_tag(tag)
         return edge_names - _DERIVED_EDGE_TAGS.keys()
+
+    def _tag_a_name_means(self, name: str) -> Tag | None:
+        known = self._known_tags_by_name.get(name)
+        return known if known is not None else self._slots_rungs_reach.get(name)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
