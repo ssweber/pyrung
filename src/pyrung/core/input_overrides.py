@@ -7,7 +7,10 @@ from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from pyrung.core.storage import store_char
+from pyrung.core.instruction.conversions import copy_store_transform
+from pyrung.core.storage import check_real_value, store_char, store_value
+from pyrung.core.tag import Tag as TagClass
+from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -16,6 +19,29 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.expression import RandIntExpr
     from pyrung.core.tag import Tag
+
+
+def _value_a_tag_holds(tag: Tag, value: Any, what: str) -> Any:
+    """What *tag* holds when a patch or force writes *value*.
+
+    The value is stored as a ``copy()`` stores it: a tag holds its own type, so it can
+    always serve it (a Modbus read packs by the tag's type, and a float into an INT
+    raises there).  A value no store of that type can make sense of is refused rather
+    than guessed at, as is a finite REAL no float32 holds.
+    """
+    if tag.type is TagType.CHAR:
+        held = store_char(value)
+        if not isinstance(held, str) or len(held) != 1:
+            raise ValueError(f"{what}: a CHAR holds one character, not {value!r}")
+        return held
+    if not isinstance(value, bool | int | float):
+        raise ValueError(f"{what}: {tag.type.name} holds a number, not {value!r}")
+    if tag.type is TagType.REAL:
+        # +/-Inf and NaN are accepted: a REAL holds them (a Math overflow stores
+        # +/-Inf), so a patch or force can put one back.
+        check_real_value(value, what, allow_non_finite=True)
+    transform = copy_store_transform(tag.type)
+    return value if transform is None else store_value(value, transform)
 
 
 class InputOverrideManager:
@@ -41,18 +67,11 @@ class InputOverrideManager:
         return self._forces
 
     def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
-        from pyrung.core.tag import Tag as TagClass
-
         if isinstance(tag, TagClass):
             return tag.name
         if isinstance(tag, str):
             return tag
         raise TypeError(f"{method}() keys must be str or Tag, got {type(tag).__name__}")
-
-    @staticmethod
-    def _normalize_char_value(value: bool | int | float | str) -> bool | int | float | str:
-        # Only a CHAR can be written "": patch/force of a blank stores NUL.
-        return store_char(value)
 
     def _normalize_tag_updates(
         self,
@@ -67,27 +86,20 @@ class InputOverrideManager:
             name = self._normalize_tag_name(key, method=method)
             if self._is_read_only(name):
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-            self._check_range(key, name, value, method=method)
-            normalized[name] = self._normalize_char_value(value)
+            normalized[name] = self._held(key, name, value, method=method)
         return normalized
 
-    def _check_range(
+    def _held(
         self, key: str | Tag, name: str, value: bool | int | float | str, *, method: str
-    ) -> None:
-        """A REAL never holds a finite value outside CLICK's range: refuse one.
-
-        +/-Inf and NaN are accepted: a REAL holds them (a Math overflow stores
-        +/-Inf), so a patch or force can put one back.
-        """
-        from pyrung.core.storage import check_real_value
-        from pyrung.core.tag import Tag as TagClass
-        from pyrung.core.tag import TagType
-
+    ) -> bool | int | float | str:
         tag = key if isinstance(key, TagClass) else None
         if tag is None and self._known_tag is not None:
             tag = self._known_tag(name)
-        if tag is not None and tag.type is TagType.REAL:
-            check_real_value(value, f"{method}() of {name}", allow_non_finite=True)
+        if tag is None:
+            # A name no rung reads has no type here.  Only a CHAR can be written "":
+            # a blank stores NUL.
+            return store_char(value)
+        return _value_a_tag_holds(tag, value, f"{method}() of {name}")
 
     def patch(
         self,
@@ -101,8 +113,7 @@ class InputOverrideManager:
         name = self._normalize_tag_name(tag, method="add_force")
         if self._is_read_only(name):
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-        self._check_range(tag, name, value, method="force")
-        self._forces[name] = self._normalize_char_value(value)
+        self._forces[name] = self._held(tag, name, value, method="force")
 
     def remove_force(self, tag: str | Tag) -> None:
         name = self._normalize_tag_name(tag, method="remove_force")
