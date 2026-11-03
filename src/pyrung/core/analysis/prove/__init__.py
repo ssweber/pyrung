@@ -129,6 +129,7 @@ from .classify import (
 )
 from .elision import _elide_scan_local_stateful_dims as _elide_scan_local_stateful_dims
 from .independence import FreeInputFactoring, IndependenceRelation
+from .lockfile import LockIntractable as LockIntractable
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,

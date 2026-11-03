@@ -18,6 +18,7 @@ import pytest
 
 import pyrung.cli as cli
 from pyrung.core import Bool, Program, Rung, run_function
+from pyrung.core.analysis import prove
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
@@ -266,12 +267,16 @@ def fn(v):
 """
 
 
-def _lock(tmp_path: Path, fn_text: str, capsys: Any, monkeypatch: Any) -> tuple[int, str, Path]:
+def _lock(
+    tmp_path: Path, fn_text: str, capsys: Any, monkeypatch: Any, *args: str
+) -> tuple[int, str, Path]:
     (tmp_path / "gate_row.py").write_text(LOCKED_MODULE.format(fn=fn_text), encoding="utf-8")
     lock = tmp_path / "pyrung.lock"
     monkeypatch.chdir(tmp_path)
     monkeypatch.delitem(sys.modules, "gate_row", raising=False)
-    monkeypatch.setattr(sys, "argv", ["pyrung", "lock", "gate_row:logic", "-o", str(lock)])
+    monkeypatch.setattr(
+        sys, "argv", ["pyrung", "lock", "gate_row:logic", "-o", str(lock), *args]
+    )
     try:
         cli.main()
         code = 0
@@ -305,3 +310,31 @@ def test_check_lock_of_a_function_the_gate_refuses_raises_the_reason(
     _, _, lock = _lock(tmp_path, PLAIN_FN, capsys, monkeypatch)
     with pytest.raises(RuntimeError, match="counts"):
         check_lock(_program(_closure()), lock)
+
+
+def test_lock_check_names_a_function_the_gate_refuses_as_lock_does(
+    tmp_path: Path, capsys: Any, monkeypatch: Any
+) -> None:
+    _lock(tmp_path, PLAIN_FN, capsys, monkeypatch)
+    code, err, _ = _lock(tmp_path, CLOSURE_FN, capsys, monkeypatch, "--check")
+    assert code == 1
+    assert "Intractable: " in err
+    assert "counts" in err
+    assert "plain def" in err
+
+
+def test_lock_check_names_any_other_intractable(
+    tmp_path: Path, capsys: Any, monkeypatch: Any
+) -> None:
+    _lock(tmp_path, PLAIN_FN, capsys, monkeypatch)
+    monkeypatch.setattr(
+        prove,
+        "reachable_states",
+        lambda *args, **kwargs: Intractable(
+            reason="too many", dimensions=1, estimated_space=1, hints=["  narrow something"]
+        ),
+    )
+    code, err, _ = _lock(tmp_path, PLAIN_FN, capsys, monkeypatch, "--check")
+    assert code == 1
+    assert "Intractable: too many" in err
+    assert "narrow something" in err
