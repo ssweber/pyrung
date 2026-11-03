@@ -82,7 +82,7 @@
 
 ### Fixes
 
-- `how(avoid=...)` no longer goes through a state because its check raised there, which read as clear: a check that raises on a state raises `AvoidCheckError`, with the check's own exception as its cause.
+- `how(avoid=...)` no longer reads a check that raises as a state that is clear, which let it plan through the avoided state: it raises `AvoidCheckError`, with the check's own exception as its cause.
 - A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - A kernel that fails to compile for a reason pyrung does not expect gives a `RuntimeWarning` and the scans run interpreted, rather than raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.
