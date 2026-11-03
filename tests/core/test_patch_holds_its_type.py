@@ -293,6 +293,74 @@ def test_a_slot_outside_what_rungs_reach_stays_as_given_on_both_engines() -> Non
         assert plc.current_state.tags["DS5"] == 0.5
 
 
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+@pytest.mark.parametrize(
+    "value,by_name,by_tag", [(99999, 99999, 32767), (3.9, 3.9, 3)], ids=["past an int", "fraction"]
+)
+@pytest.mark.parametrize(
+    "order",
+    [("name", "tag", "name"), ("tag", "name", "tag"), ("tag", "tag", "name")],
+    ids="-".join,
+)
+def test_a_slot_nothing_reaches_means_the_same_whichever_came_first(
+    engine, value, by_name, by_tag, order
+) -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
+    plc = engine(program, dt=0.01)
+    held = []
+    for how_named in order:
+        plc.patch({"DS5" if how_named == "name" else slots[5]: value})
+        plc.step()
+        held.append(plc.current_state.tags["DS5"])
+    assert held == [by_name if how_named == "name" else by_tag for how_named in order]
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_force_by_tag_does_not_change_what_a_name_means_after_it(engine) -> None:
+    spare = Int("Spare")
+    with Program(strict=False) as program:
+        with Rung():
+            out(Bool("Lit"))
+    plc = engine(program, dt=0.01)
+    plc.force(spare, 99999)
+    plc.step()
+    assert plc.current_state.tags["Spare"] == 32767
+    plc.unforce("Spare")
+    plc.force("Spare", 99999)
+    plc.step()
+    assert plc.current_state.tags["Spare"] == 99999
+
+
+def test_a_fork_keeps_what_a_name_means() -> None:
+    slots = Block("DS", TagType.INT, 1, 5)
+    with Program(strict=False) as program:
+        with Rung():
+            blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
+    plc = PLC(program, dt=0.01)
+    plc.patch({slots[5]: 99999})
+    plc.step()
+    forked = plc.fork()
+    forked.patch({"DS5": 99999})
+    forked.step()
+    assert forked.state.tags["DS5"] == 99999
+
+
+def test_a_tag_a_harness_registers_is_known_by_name_after_an_override_named_it() -> None:
+    spare = Int("Spare2")
+    with Program(strict=False) as program:
+        with Rung():
+            out(Bool("Lit2"))
+    plc = PLC(program, dt=0.01)
+    plc.patch({spare: 1})
+    plc._register_known_tag(spare)
+    plc.patch({"Spare2": 99999})
+    plc.step()
+    assert plc.state.tags["Spare2"] == 32767
+
+
 def test_a_replay_gives_a_slot_named_by_string_what_the_scan_gave_it() -> None:
     """What a log recorded is what the scan was given, whatever the runner would type now."""
     program, _ = _slots_only_a_range_uses()

@@ -1726,6 +1726,9 @@ class PLC:
             known_tag=self._tag_a_name_means,
         )
         self._slots_rungs_reach = _SlotsRungsReach(self._logic, self._program)
+        # Known only because a patch or a force named them by Tag: a name means no more than
+        # it did, so a string's answer doesn't depend on which came first.
+        self._names_only_an_override_gave: set[str] = set()
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
@@ -2647,6 +2650,7 @@ class PLC:
             ),
         )
         fork._slots_rungs_reach = self._slots_rungs_reach
+        fork._names_only_an_override_gave = set(self._names_only_an_override_gave)
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
@@ -3132,6 +3136,7 @@ class PLC:
             ),
         )
         fork._slots_rungs_reach = self._slots_rungs_reach
+        fork._names_only_an_override_gave = set(self._names_only_an_override_gave)
         fork._state = state
         fork._reset_cache(state)
         fork._initial_scan_id = state.scan_id
@@ -4132,11 +4137,23 @@ class PLC:
 
     def _tag_a_name_means(self, name: str) -> Tag | None:
         known = self._known_tags_by_name.get(name)
-        return known if known is not None else self._slots_rungs_reach.get(name)
+        if known is None or name in self._names_only_an_override_gave:
+            return self._slots_rungs_reach.get(name)
+        return known
+
+    def _register_tag_an_override_names(self, tag: Tag) -> None:
+        only_an_override = (
+            tag.name not in self._known_tags_by_name
+            or tag.name in self._names_only_an_override_gave
+        )
+        self._register_known_tag(tag)
+        if only_an_override and tag.name not in SYSTEM_TAGS_BY_NAME:
+            self._names_only_an_override_gave.add(tag.name)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
             return
+        self._names_only_an_override_gave.discard(tag.name)
         existing = self._known_tags_by_name.get(tag.name)
         if existing is None:
             self._known_tags_by_name[tag.name] = tag
@@ -4163,7 +4180,7 @@ class PLC:
 
         for key in tags:
             if isinstance(key, TagClass):
-                self._register_known_tag(key)
+                self._register_tag_an_override_names(key)
 
     def _rebuild_tags_for_reset(
         self,
@@ -4386,7 +4403,7 @@ class PLC:
         from pyrung.core.tag import Tag as TagClass
 
         if isinstance(tag, TagClass):
-            self._register_known_tag(tag)
+            self._register_tag_an_override_names(tag)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
