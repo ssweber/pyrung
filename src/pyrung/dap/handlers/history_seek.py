@@ -18,6 +18,8 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 # What one panel request may spend stepping unrecorded scans again.  The scans it reads stay
 # read, so the next request goes on from there.
 _SETTLE_CLOCK_S = 3.0
+# And reading the changes: a tag whose record gave up costs state reads per change.
+_READ_CLOCK_S = 3.0
 # Scans to step at a time, so the clock is looked at often: the first stretch, then what a
 # quarter of a second buys at the speed measured.
 _SETTLE_FIRST_STRETCH = 500
@@ -175,6 +177,9 @@ def _read_changes(
     A refresh that ran out of allowance leaves the next refreshes to read only what is recorded,
     so each stop of a stepping session does not pay for it again: a page asked for by its
     *before* goes on reading.
+
+    Reading has an allowance of its own, the time spent reading and not settling, and what it
+    doesn't reach is the window too.
     """
     history = runner.history
     newest = history.newest_scan_id
@@ -185,6 +190,7 @@ def _read_changes(
         before is not None or adapter._tag_changes_ran_out_on is not runner
     )
     deadline = time.monotonic() + _SETTLE_CLOCK_S
+    read_allowance = _READ_CLOCK_S
     stretch = _SETTLE_FIRST_STRETCH
     while cursor - 1 > lower and len(entries) < count:
         unread = runner._unrecorded_in(lower + 1, cursor - 1)
@@ -206,7 +212,11 @@ def _read_changes(
             took = time.monotonic() - began
             stretch = int((cursor - first) / max(took, 1e-3) * _SETTLE_STRETCH_S)
             stretch = max(_SETTLE_MIN_STRETCH, min(_SETTLE_MAX_STRETCH, stretch))
-        found = _changes_within(runner, names, first, cursor, count - len(entries))
+        began = time.monotonic()
+        found, whole_to = _changes_within(
+            runner, names, first, cursor, count - len(entries), began + read_allowance
+        )
+        read_allowance -= time.monotonic() - began
         for scan_id in sorted(found, reverse=True)[: count - len(entries)]:
             entries.append(
                 {
@@ -222,29 +232,51 @@ def _read_changes(
                     },
                 }
             )
-        cursor = first
+        cursor = whole_to
+        if whole_to > first:
+            break
     if len(entries) < count and cursor - 1 > lower:
         entries.append(_window_entry(adapter, history, names, lower, cursor - 1))
     return entries
 
 
 def _changes_within(
-    runner: Any, names: list[str], first: int, before: int, most: int
-) -> dict[int, dict[str, Any]]:
+    runner: Any, names: list[str], first: int, before: int, most: int, deadline: float
+) -> tuple[dict[int, dict[str, Any]], int]:
     """Scans in *first*..*before*-1 and what changed on them, each tag's newest *most* changes.
 
     A tag cut short has *most* newer scans of its own, so the newest *most* scans here are whole.
+
+    A tag whose record gave up costs state reads for each change, so the tags take turns one
+    change at a time and *deadline* can stop them, though not before each has had a first turn,
+    or a page would never get anywhere.  Stopped, or asked for what history can't answer, only
+    the scans down to the highest tag still unread are whole: the second value says how far
+    down this read everything, and *first* means all of it.
     """
     found: dict[int, dict[str, Any]] = {}
-    for name in names:
-        cursor = before
-        for _ in range(most):
-            transition = runner._causal_last_committed_transition_before(name, cursor)
-            if transition is None or transition.scan_id < first:
+    cursors = dict.fromkeys(names, before)
+    stopped = False
+    for turn in range(most):
+        for name in list(cursors):
+            if turn and time.monotonic() >= deadline:
+                stopped = True
                 break
+            try:
+                transition = runner._causal_last_committed_transition_before(name, cursors[name])
+            except KeyError:
+                stopped = True
+                break
+            if transition is None or transition.scan_id < first:
+                del cursors[name]
+                continue
             found.setdefault(transition.scan_id, {})[name] = transition
-            cursor = transition.scan_id
-    return found
+            cursors[name] = transition.scan_id
+        if stopped or not cursors:
+            break
+    if not stopped:
+        return found, first
+    whole_to = max(cursors.values())
+    return {scan_id: found[scan_id] for scan_id in found if scan_id >= whole_to}, whole_to
 
 
 def _window_entry(

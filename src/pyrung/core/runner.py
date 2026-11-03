@@ -1920,10 +1920,16 @@ class PLC:
         return self._committed_transition(tag_name, latest[0], latest[1])
 
     def _committed_transition(self, tag_name: str, scan_id: int, after: Any) -> Transition:
-        """The two sides of a change, a side no column can say read from its state."""
+        """The two sides of a change, a side no column can say read from its state.
+
+        The column says what the last write it has wrote, which is the old value only if no
+        scan since then ran without records: one of those may have moved the tag.
+        """
         prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
         before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
-        if before is _UNKNOWN_VALUE:
+        if before is _UNKNOWN_VALUE or self._unrecorded_in(
+            None if prior is None else prior[0] + 1, scan_id - 1
+        ):
             before = self.history.at(scan_id - 1).tags.get(tag_name)
         if after is _UNKNOWN_VALUE:
             after = self.history.at(scan_id).tags.get(tag_name)

@@ -48,15 +48,52 @@ runner.run_for(20.0, jit=JIT)
 """
 
 
+# Alarm latches inside the stretch and resets on the first scan after it, and Count moves on
+# both sides of every seam the panel's settling leaves.
+SEAM_WATCHED = ["Alarm", "Count", "T1_Done", "T2_Done"]
+
+_SEAM_SCRIPT = """
+from pyrung.core import PLC, Bool, Int, Program, Rung, Timer, calc, latch, on_delay, reset, rise
+
+Enable = Bool("Enable")
+Alarm = Bool("Alarm")
+Ack = Bool("Ack")
+Count = Int("Count")
+T1 = Timer.clone("T1")
+T2 = Timer.clone("T2")
+
+with Program(strict=False) as prog:
+    with Rung(Enable, ~T2.Done):
+        on_delay(T2, preset=1000)
+    with Rung(rise(T2.Done)):
+        calc(Count + 1, Count)
+    with Rung(Enable):
+        on_delay(T1, preset=15000)
+    with Rung(T1.Done):
+        latch(Alarm)
+    with Rung(Ack):
+        reset(Alarm)
+
+runner = PLC(prog, dt=0.01)
+runner.patch({"Enable": True})
+runner.run_for(30.0, jit=JIT)
+runner.patch({"Ack": True})
+runner.step()
+runner.step()
+runner.patch({"Ack": False})
+runner.step()
+"""
+
+
 class Session:
-    def __init__(self, tmp_path: Path, *, jit: bool) -> None:
+    def __init__(self, tmp_path: Path, *, jit: bool, script: str = _SCRIPT) -> None:
         self._out = io.BytesIO()
         self.adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=self._out)
         self._seq = 0
         name = "compiled.py" if jit else "stepped.py"
-        script = tmp_path / name
-        script.write_text(f"JIT = {jit}\n{_SCRIPT}", encoding="utf-8")
-        self._request("launch", {"program": str(script)})
+        path = tmp_path / name
+        path.write_text(f"JIT = {jit}\n{script}", encoding="utf-8")
+        self._request("launch", {"program": str(path)})
 
     @property
     def runner(self) -> Any:
@@ -275,6 +312,167 @@ def test_a_fork_reads_its_parents_timestamps() -> None:
     fork.run(cycles=5)
     assert fork._timestamp_at(250) == runner.history.at(250).timestamp
     assert fork._timestamp_at(305) == fork.history.at(305).timestamp
+
+
+@pytest.fixture(scope="module")
+def seam_stepped(tmp_path_factory: pytest.TempPathFactory) -> Session:
+    return Session(tmp_path_factory.mktemp("seam_stepped"), jit=False, script=_SEAM_SCRIPT)
+
+
+@pytest.fixture
+def seam_compiled(tmp_path: Path) -> Session:
+    return Session(tmp_path, jit=True, script=_SEAM_SCRIPT)
+
+
+def _seam_changes(session: Session, **arguments: Any) -> list[dict[str, Any]]:
+    return session.changes(tags=SEAM_WATCHED, **arguments)
+
+
+def test_a_stretch_has_what_the_seam_tests_are_for(seam_stepped: Session) -> None:
+    changes = {entry["scanId"]: entry["changes"] for entry in _seam_changes(seam_stepped)}
+    assert changes[1500]["Alarm"] == ["False", "True"]
+    assert changes[3001]["Alarm"] == ["True", "False"]
+    assert sum("Count" in change for change in changes.values()) > 10
+
+
+@pytest.mark.parametrize("count", [1, 7, 50, 500])
+def test_each_entry_of_a_first_refresh_is_the_stepped_entry(
+    seam_stepped: Session, seam_compiled: Session, count: int
+) -> None:
+    assert seam_compiled.runner._unrecorded_scans
+    assert _seam_changes(seam_compiled, count=count) == _seam_changes(seam_stepped, count=count)
+
+
+@pytest.mark.parametrize("count", [1, 3, 7])
+def test_each_entry_of_every_page_is_the_stepped_entry(
+    seam_stepped: Session, seam_compiled: Session, count: int
+) -> None:
+    pages: list[dict[str, Any]] = []
+    while True:
+        arguments = {"beforeScan": pages[-1]["scanId"]} if pages else {}
+        page = _seam_changes(seam_compiled, count=count, **arguments)
+        pages.extend(page)
+        if len(page) < count:
+            break
+    assert pages == _seam_changes(seam_stepped)
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        {"afterScan": 1100, "beforeScan": 1111},
+        {"afterScan": 1499, "beforeScan": 1501},
+        {"afterScan": 1000, "beforeScan": 3002},
+        {"afterScan": 2422, "beforeScan": 2424},
+    ],
+)
+def test_a_page_inside_a_stretch_starts_from_the_stepped_value(
+    seam_stepped: Session, seam_compiled: Session, bounds: dict[str, int]
+) -> None:
+    assert _seam_changes(seam_compiled, **bounds) == _seam_changes(seam_stepped, **bounds)
+
+
+def test_the_entry_above_a_window_stays_the_stepped_entry_on_every_refresh(
+    seam_stepped: Session, seam_compiled: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = {entry["scanId"]: entry for entry in _seam_changes(seam_stepped)}
+    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 0.0)
+    first = _seam_changes(seam_compiled)
+    monkeypatch.undo()
+
+    *read, window = first
+    assert window["window"] is True
+    assert read, "an entry above the window is what this is about"
+    assert 3001 in {entry["scanId"] for entry in read}
+    for entry in read:
+        assert entry == expected[entry["scanId"]]
+    # Out of clock, the next refreshes read only what is recorded, and say the same.
+    assert _seam_changes(seam_compiled) == first
+    assert _seam_changes(seam_compiled) == first
+
+
+@pytest.mark.parametrize("at", [3000, 1600, 1200])
+def test_the_first_read_after_a_fork_is_the_stepped_entry(tmp_path: Path, at: int) -> None:
+    sessions = []
+    for jit in (False, True):
+        session = Session(tmp_path, jit=jit, script=_SEAM_SCRIPT)
+        session._request("pyrungForkAt", {"scanId": at})
+        session.runner.patch({"Ack": True})
+        session.runner.step()
+        sessions.append(session)
+    twin, compiled = sessions
+    assert compiled.runner._unrecorded_in()
+    assert twin.runner.current_state.scan_id == compiled.runner.current_state.scan_id == at + 1
+    for count in (1, 7, 500):
+        assert _seam_changes(compiled, count=count) == _seam_changes(twin, count=count)
+
+
+def test_a_transition_read_above_unrecorded_scans_has_the_scans_own_old_value(
+    seam_stepped: Session, seam_compiled: Session
+) -> None:
+    """Below the panel, as any reader of a committed transition has it."""
+    assert seam_compiled.runner._unrecorded_in(1001, 3000)
+    got = seam_compiled.runner._causal_committed_transition_at("Alarm", 3001)
+    assert got == seam_stepped.runner._causal_committed_transition_at("Alarm", 3001)
+    assert (got.from_value, got.to_value) == (True, False)
+
+
+def _pages_down(session: Session, *, count: int) -> list[dict[str, Any]]:
+    """Every change, a page at a time from the newest, the way Load older walks a window."""
+    read: list[dict[str, Any]] = []
+    before = None
+    for _ in range(1000):
+        arguments = {} if before is None else {"beforeScan": before}
+        page = _seam_changes(session, count=count, **arguments)
+        entries = [entry for entry in page if not entry.get("window")]
+        read.extend(entries)
+        windows = [entry for entry in page if entry.get("window")]
+        if not entries and not windows:
+            return read
+        if windows:
+            next_before = windows[0]["scanId"] + 1
+        elif len(page) < count:
+            return read
+        else:
+            next_before = entries[-1]["scanId"]
+        assert before is None or next_before < before, "a page has to get somewhere"
+        before = next_before
+    raise AssertionError("paging did not end")
+
+
+def test_reading_out_of_clock_shows_a_window_and_paging_gets_the_rest(
+    seam_stepped: Session, seam_compiled: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = _seam_changes(seam_stepped)
+    monkeypatch.setattr(history_seek, "_READ_CLOCK_S", 0.0)
+
+    page = _seam_changes(seam_stepped)
+    assert page[-1]["window"] is True
+    assert page[:-1] == expected[: len(page) - 1]
+    assert page[:-1], "each tag gets a first turn, however little clock there is"
+    assert page[-1]["scanId"] < page[-2]["scanId"]
+    assert _pages_down(seam_stepped, count=500) == expected
+    assert _pages_down(seam_compiled, count=500) == expected
+
+
+def test_a_read_history_cannot_answer_shows_a_window(
+    seam_stepped: Session, seam_compiled: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = _seam_changes(seam_stepped)
+    runner = seam_stepped.runner
+    real = runner._causal_last_committed_transition_before
+    below = expected[3]["scanId"]
+
+    def refuse(name: str, before: int) -> Any:
+        if before <= below:
+            raise KeyError(before)
+        return real(name, before)
+
+    monkeypatch.setattr(runner, "_causal_last_committed_transition_before", refuse)
+    page = _seam_changes(seam_stepped)
+    assert page[-1]["window"] is True
+    for entry in page[:-1]:
+        assert entry in expected
 
 
 ADVICE = "ask first about a scan nearer the start of that range for cause"
