@@ -78,6 +78,7 @@ from pyrung.core.analysis.reverse_edges import (
 )
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
 from pyrung.core.expression import is_randint_tag, randint_sites
+from pyrung.core.input_overrides import held_candidates
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
@@ -2709,10 +2710,11 @@ def _extract_value_domain(
             and all(atom.form in {"eq", "ne"} and _is_literal_operand(atom) for atom in atoms)
             and not _has_non_condition_data_read(tag_name, graph)
         ):
+            held = held_candidates(tag, eq_ne_literals)
             if base_domain is not None:
-                return tuple(sorted(set(base_domain) | eq_ne_literals))
-            other = _eq_ne_other_value(tag, eq_ne_literals)
-            return tuple(sorted(eq_ne_literals | {other}))
+                return tuple(sorted(set(base_domain) | held))
+            other = _eq_ne_other_value(tag, held)
+            return tuple(sorted(held | {other}))
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
     literals: set[Any] = set()
@@ -2746,10 +2748,10 @@ def _extract_value_domain(
     if base_domain is not None:
         # Merge comparison literals into the write domain — if the program
         # tests for a value, it belongs in the domain even if never written.
-        merged = set(base_domain) | literals
+        merged = set(literals)
         if real_gap_points and tag.type == TagType.REAL:
             merged |= _real_gap_points(literals)
-        return tuple(sorted(merged))
+        return tuple(sorted(set(base_domain) | held_candidates(tag, merged)))
 
     if tag.choices is not None:
         return tuple(sorted(tag.choices.keys()))
@@ -2783,6 +2785,7 @@ def _extract_value_domain(
         partitioned |= _real_gap_points(literals)
     if isinstance(tag.default, (int, float)) and not isinstance(tag.default, bool):
         partitioned.add(tag.default)
+    partitioned = held_candidates(tag, partitioned)
     if tag.min is not None:
         partitioned = {v for v in partitioned if v >= tag.min}
     if tag.max is not None:
@@ -3734,6 +3737,12 @@ def _classify_dimensions_from_graph(
                     default_valid = False
                 if default_valid:
                     domain = tuple(sorted(set(domain) | {tag.default}))
+            # A confirmation replays these through patch(), and a choices= or a value
+            # carried back through a copy may be nothing this tag can hold.
+            domain = tuple(sorted(held_candidates(tag, domain)))
+            if not domain:
+                infeasible_tags.append(tag_name)
+                continue
             nondeterministic[tag_name] = domain
             continue
 
