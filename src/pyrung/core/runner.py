@@ -3136,6 +3136,10 @@ class PLC:
 
                 replay._synthesis = Synthesis()
             replay._synthesis.plant = list(earlier_plant)
+            if replay._harness is not None:
+                # Today's couplings do not describe these rungs, and the fold bounds a
+                # plant by what its harness says.  A replay with no harness says nothing.
+                replay._harness._detach()
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
