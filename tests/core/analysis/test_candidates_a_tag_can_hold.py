@@ -14,7 +14,6 @@ from pyrung.core import PLC
 from pyrung.core.analysis.pilot.skiff import _declared_domain
 from pyrung.core.analysis.prove import Counterexample, Proven, never
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
-from pyrung.core.analysis.pilot.skiff import _declared_domain
 from pyrung.core.input_overrides import held_candidates, refuses_value
 
 Y = Bool("Y")
