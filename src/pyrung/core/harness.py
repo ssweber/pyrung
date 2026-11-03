@@ -493,7 +493,8 @@ class Harness:
 
     def _discover_couplings(self) -> None:
         seen_runtimes: set[int] = set()
-        for tag in list(self._plc._known_tags_by_name.values()):
+        reached = {**self._plc._tags_rungs_reach.declared(), **self._plc._known_tags_by_name}
+        for tag in reached.values():
             runtime = getattr(tag, "_pyrung_structure_runtime", None)
             if runtime is None:
                 self._try_add_flat_coupling(tag)
@@ -508,11 +509,13 @@ class Harness:
         if tag.link is None or tag.physical is None:
             return
         en_name, trigger_raw = _parse_link_spec(tag.link)
-        if en_name not in self._plc._known_tags_by_name:
+        en_tag = self._plc._tag_known_or_reached(en_name)
+        if en_tag is None:
             return
+        self._plc._register_known_tag(en_tag)
+        self._plc._register_known_tag(tag)
         trigger_value = None
         if trigger_raw is not None:
-            en_tag = self._plc._known_tags_by_name[en_name]
             trigger_value = _resolve_trigger_value(trigger_raw, en_tag)
         self._declared.append(Coupling(en_name, tag.name, tag.physical, trigger_value))
 

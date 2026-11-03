@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from pyrung.core.instruction.conversions import copy_store_transform
 from pyrung.core.storage import check_real_value, store_char, store_real, store_value
@@ -77,49 +77,126 @@ def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
     return held
 
 
+class _RungsWalked(NamedTuple):
+    named: tuple[Tag, ...]
+    edge_names: frozenset[str]
+    block_uses: list[Any]
+
+
+def _addresses_reached(use: Any) -> range | tuple[int, ...]:
+    from pyrung.core.memory_block import BlockRange
+
+    if isinstance(use, BlockRange):
+        return use.addresses
+    return use.block._window_addresses(use.block.start, use.block.end)
+
+
+def _addresses_that_declare(block: Any) -> list[int]:
+    of_the_field = (
+        block._pyrung_field_min is not None
+        or block._pyrung_field_max is not None
+        or block._pyrung_field_choices is not None
+        or block._pyrung_field_physical is not None
+    )
+    found = []
+    for addr in (
+        block._window_addresses(block.start, block.end) if of_the_field else block._slot_config
+    ):
+        hints = block._effective_slot_hints(addr)
+        if (
+            hints.min is not None
+            or hints.max is not None
+            or hints.choices is not None
+            or hints.physical is not None
+        ):
+            found.append(addr)
+    return found
+
+
 class TagsRungsReach:
     """The tags a program's rungs name, and the block slots a range or pointer reaches.
 
-    What a tag patched by name holds comes from here, on either engine.  It is read off the
-    rungs alone: a ``select()`` or a ``Block[Pointer]`` names only its block, whose slots stay
-    lazy until something asks for one, and something having asked says nothing about this
-    program.  Built the first time a name is looked up, and shared with forks, which skip
-    the walk.
+    What a tag patched by name holds comes from here, on either engine, and so does what a
+    reset keeps and whose limits and plants count.  It is read off the rungs alone: a
+    ``select()`` or a ``Block[Pointer]`` names only its block, whose slots stay lazy until
+    something asks for one, and something having asked says nothing about this program.
+    Walked the first time it is asked, and shared with forks, which skip the walk.
     """
 
-    __slots__ = ("_logic", "_program", "_by_name")
+    __slots__ = ("_logic", "_program", "_walked", "_by_name")
 
     def __init__(self, logic: Iterable[Any], program: Any) -> None:
         self._logic = logic
         self._program = program
+        self._walked: _RungsWalked | None = None
         self._by_name: dict[str, Tag] | None = None
 
     def get(self, name: str) -> Tag | None:
+        return self.every_tag().get(name)
+
+    def declared(self) -> dict[str, Tag]:
+        """The slots reached that declare limits, choices or a plant.
+
+        Only these become tags here: the rest of a block stays lazy, and a slot can be
+        configured until something asks for it.
+        """
+        found: dict[str, Tag] = {}
+        declaring_by_block: dict[int, list[int]] = {}
+        for use in self.walk().block_uses:
+            block = use.block
+            declaring = declaring_by_block.get(id(block))
+            if declaring is None:
+                declaring = declaring_by_block[id(block)] = _addresses_that_declare(block)
+            if declaring:
+                reached = _addresses_reached(use)
+                for addr in declaring:
+                    if addr in reached:
+                        tag = block._get_tag(addr)
+                        found[tag.name] = tag
+        return found
+
+    def kept_through_a_reset(
+        self,
+        current: Mapping[str, Any],
+        rebuilt: dict[str, Any],
+        *,
+        preserve_all: bool,
+        preserve_retentive: bool,
+    ) -> None:
+        """Add to *rebuilt* the reached slots a reset keeps the value of.
+
+        One it does not keep is left out: it holds its default, and stays lazy.
+        """
+        for tag in self.every_tag().values():
+            name = tag.name
+            if name in rebuilt or name not in current:
+                continue
+            if preserve_all or (preserve_retentive and tag.retentive):
+                rebuilt[name] = current[name]
+
+    def walk(self) -> _RungsWalked:
+        if self._walked is None:
+            from pyrung.core.runner import _iter_tags_and_edge_names
+
+            roots: list[Any] = list(self._logic)
+            if self._program is not None:
+                for subroutine_rungs in self._program.subroutines.values():
+                    roots.extend(subroutine_rungs)
+            uses: list[Any] = []
+            named, edges = _iter_tags_and_edge_names(roots, block_uses=uses)
+            self._walked = _RungsWalked(named, edges, uses)
+        return self._walked
+
+    def every_tag(self) -> dict[str, Tag]:
         if self._by_name is None:
-            self._by_name = self._build()
-        return self._by_name.get(name)
+            from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
-    def _build(self) -> dict[str, Tag]:
-        from pyrung.core.memory_block import BlockRange
-        from pyrung.core.runner import _iter_tags_and_edge_names
-        from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-
-        roots: list[Any] = list(self._logic)
-        if self._program is not None:
-            for subroutine_rungs in self._program.subroutines.values():
-                roots.extend(subroutine_rungs)
-        uses: list[Any] = []
-        named, _edges = _iter_tags_and_edge_names(roots, block_uses=uses)
-        tags = list(named)
-        for use in uses:
-            if isinstance(use, BlockRange):
-                tags.extend(use.tags())
-            else:
-                block = use.block
-                tags.extend(
-                    block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)
-                )
-        return {tag.name: tag for tag in tags if tag.name not in SYSTEM_TAGS_BY_NAME}
+            walked = self.walk()
+            tags = list(walked.named)
+            for use in walked.block_uses:
+                tags.extend(use.block._get_tag(addr) for addr in _addresses_reached(use))
+            self._by_name = {tag.name: tag for tag in tags if tag.name not in SYSTEM_TAGS_BY_NAME}
+        return self._by_name
 
 
 class InputOverrideManager:

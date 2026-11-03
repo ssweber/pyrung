@@ -1113,7 +1113,7 @@ def _format_prove_result(result: Any) -> str:
 def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:
     tags = []
     for name in names:
-        tag = runner._known_tags_by_name.get(name)
+        tag = runner._tag_known_or_reached(name)
         if tag is None:
             raise ValueError(f"{verb}: unknown tag '{name}'")
         tags.append(tag)

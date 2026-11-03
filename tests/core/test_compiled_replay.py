@@ -162,7 +162,11 @@ def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    assert not {"ResetRange1", "ResetRange2"} & set(compiled.current_state.tags)
+    if transition == "reboot":
+        # A battery keeps what a slot the rungs reach holds, named or not.
+        assert compiled.current_state.tags["ResetRange2"] == 7
+    else:
+        assert not {"ResetRange1", "ResetRange2"} & set(compiled.current_state.tags)
 
 
 def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
@@ -281,10 +285,8 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     compiled.reboot()
 
     _assert_states_equivalent(plc, compiled)
-    if key_kind == "tag":
-        assert compiled.current_state.tags["PatchedRange1"] == 31
-    else:
-        assert "PatchedRange1" not in compiled.current_state.tags
+    # The rungs reach it, so a battery keeps it, whichever way the patch spelled it.
+    assert compiled.current_state.tags["PatchedRange1"] == 31
 
 
 @pytest.mark.parametrize("compiled_step", ["step", "step_replay"])

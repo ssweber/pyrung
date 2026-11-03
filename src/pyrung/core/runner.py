@@ -367,6 +367,7 @@ def _iter_tags_and_edge_names(
         IndirectExprRef,
         IndirectRef,
     )
+    from pyrung.core.program import Program
     from pyrung.core.tag import Tag as TagClass
 
     found_by_name: dict[str, TagClass] = {}
@@ -403,6 +404,13 @@ def _iter_tags_and_edge_names(
         if current_id in visited:
             continue
         visited.add(current_id)
+
+        if isinstance(current, Program):
+            # A call holds its program, as does whatever bound an instruction's sites.  Its
+            # rungs are the program; the rest of it is what has run and been asked of it.
+            queue.extend(current.rungs)
+            queue.extend(current.subroutines.values())
+            continue
 
         if block_uses is not None and isinstance(
             current, BlockRange | IndirectRef | IndirectExprRef | IndirectBlockRange
@@ -1727,7 +1735,9 @@ class PLC:
             return
         self._known_tags_by_name = {}
         self._edge_tag_names = self._refresh_known_tags_and_edges()
-        self._constrained_tags = build_constraint_index(self._known_tags_by_name)
+        self._constrained_tags = build_constraint_index(
+            {**self._tags_rungs_reach.declared(), **self._known_tags_by_name}
+        )
         # Seed initial state with tag defaults (skip tags already in state).
         # One pmap iteration + C-level set difference; per-key pmap
         # ``in`` probes cost ~2 bucket walks per known tag.
@@ -1758,8 +1768,8 @@ class PLC:
 
     @property
     def tags(self) -> MappingProxyType[str, Tag]:
-        """Read-only mapping of tag name → Tag object."""
-        return MappingProxyType(self._known_tags_by_name)
+        """Read-only mapping of tag name → Tag object, for what the program has and reaches."""
+        return MappingProxyType({**self._tags_rungs_reach.every_tag(), **self._known_tags_by_name})
 
     @property
     def bounds_violations(self) -> dict[str, BoundsViolation]:
@@ -4089,20 +4099,20 @@ class PLC:
     def _refresh_known_tags_and_edges(self) -> frozenset[str]:
         from pyrung.core.system_points import _DERIVED_EDGE_TAGS
 
-        roots: list[Any] = list(self._logic)
-        if self._program is not None:
-            for subroutine_rungs in self._program.subroutines.values():
-                roots.extend(subroutine_rungs)
-        tags, edge_names = _iter_tags_and_edge_names(roots)
-        for tag in tags:
+        walked = self._tags_rungs_reach.walk()
+        for tag in walked.named:
             self._register_known_tag(tag)
-        return edge_names - _DERIVED_EDGE_TAGS.keys()
+        return walked.edge_names - _DERIVED_EDGE_TAGS.keys()
 
     def _tag_a_name_means(self, name: str) -> Tag | None:
         known = self._known_tags_by_name.get(name)
         if known is None or name in self._names_only_an_override_gave:
             return self._tags_rungs_reach.get(name)
         return known
+
+    def _tag_known_or_reached(self, name: str) -> Tag | None:
+        known = self._known_tags_by_name.get(name)
+        return known if known is not None else self._tags_rungs_reach.get(name)
 
     def _register_tag_an_override_names(self, tag: Tag) -> None:
         only_an_override = (
@@ -4161,6 +4171,12 @@ class PLC:
                 rebuilt[tag.name] = current_tags[tag.name]
                 continue
             rebuilt[tag.name] = tag.default
+        self._tags_rungs_reach.kept_through_a_reset(
+            current_tags,
+            rebuilt,
+            preserve_all=preserve_all,
+            preserve_retentive=preserve_retentive,
+        )
         # A plant is the machine's physics, not the controller's memory: nothing of it
         # survives a reset but the tags themselves, which start over at their defaults.
         return {**self._plant_tag_defaults(), **rebuilt}

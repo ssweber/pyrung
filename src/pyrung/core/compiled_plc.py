@@ -252,9 +252,10 @@ class CompiledPLC:
             rtc_now_getter=self._rtc_at_sim_time,
             rtc_setter=self._apply_rtc,
         )
+        self._tags_rungs_reach = TagsRungsReach(program.rungs, program)
         self._input_overrides = InputOverrideManager(
             is_read_only=self._system_runtime.is_read_only,
-            known_tag=TagsRungsReach(program.rungs, program).get,
+            known_tag=self._tags_rungs_reach.get,
         )
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
@@ -915,6 +916,12 @@ class CompiledPLC:
                 rebuilt[tag.name] = current_tags[tag.name]
                 continue
             rebuilt[tag.name] = tag.default
+        self._tags_rungs_reach.kept_through_a_reset(
+            current_tags,
+            rebuilt,
+            preserve_all=preserve_all,
+            preserve_retentive=preserve_retentive,
+        )
         return rebuilt
 
     def _reset_runtime_scope(
