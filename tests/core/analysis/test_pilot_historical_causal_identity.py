@@ -354,7 +354,7 @@ def test_noninherited_fork_uses_its_boundary_as_causal_initial_state() -> None:
     )
 
 
-@pytest.mark.parametrize("mutation", ["reboot", "trim"])
+@pytest.mark.parametrize("mutation", ["reboot", "restart", "trim"])
 def test_child_causal_history_is_independent_of_later_parent_mutation(mutation: str) -> None:
     program, command, seen = _branching_history_program()
     parent = PLC(program)
@@ -368,6 +368,9 @@ def test_child_causal_history_is_independent_of_later_parent_mutation(mutation: 
 
     if mutation == "reboot":
         parent.reboot()
+    elif mutation == "restart":
+        parent.stop()
+        parent.step()
     else:
         parent._trim_history_before(parent.state.scan_id)
 

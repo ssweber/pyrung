@@ -76,7 +76,7 @@
 
 ### Fixes
 
-- A STOP->RUN restart starts a new recording, so `history.at()` and `fork_from()` no longer replay the previous run's patches over the new one, and a replay walks past a rung-driven stop without restarting.
+- A STOP->RUN restart starts a new recording, so `history.at()` and `fork_from()` no longer replay the previous run's patches over the new one or return a state the previous run cached under the same scan id, and a replay walks past a rung-driven stop without restarting.
 - `history.at()`, `fork_from()` and `rtc_at()` of a scan before a later RTC change, by `set_rtc()` or a rung's apply, keep the clock that scan ran under.
 - A `run_function()` a generated kernel cannot copy faithfully (one that reads its module's globals, a closure, a decorator or a default) runs itself, in a run and in a seek: a seek raised `NameError`, and a `global` store landed in the kernel's module.
 - A tag holds what was last written, exact to its type and the sign of zero: a coil on an `Int` reads `False` from its first scan rather than `0` until it first turned on, and `calc(0.0 * -1.0, x)` stores `-0.0`, so a `Real` serves `0x80000000` over Modbus from that write rather than from the first write after a nonzero value. An equal value is still no change: monitors, breakpoints, edges, diffs and causal records do not see it.

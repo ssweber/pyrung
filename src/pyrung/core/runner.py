@@ -708,9 +708,10 @@ class EpochCaches:
     """Invalidation registry for history-derived epoch caches.
 
     The matrix deliberately preserves the lifecycle asymmetry.  Trimming
-    prunes surviving recent states separately, while a runtime-scope reset and
-    recording reset are distinct because STOP-to-RUN keeps replay slabs and a
-    reboot does not.
+    prunes surviving recent states separately.  A runtime-scope reset and a
+    recording reset are distinct events: a fork's time-mode setup starts a log
+    with no runtime reset.  Reboot and STOP-to-RUN compose both, because each
+    returns scan ids to 0 and a slab from before would answer for a new scan.
     """
 
     INVALIDATION_MATRIX: Mapping[_EpochCacheEvent, tuple[_EpochCacheName, ...]] = MappingProxyType(
@@ -3790,7 +3791,8 @@ class PLC:
         """Start a fresh recording rooted at scan 0, which a reset has just returned to.
 
         The scan ids to come would alias every sparse channel of the old log (patches,
-        forces, rtc_base_changes, dts), so history replayed the old run's entries.
+        forces, rtc_base_changes, dts), so history replayed the old run's entries, and
+        every state in a replay slab, so a seek returned the old run's state outright.
         """
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
