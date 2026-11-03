@@ -4822,15 +4822,25 @@ class PLC:
                 warnings.warn(str(v), stacklevel=2)
         else:
             self._bounds_violations = {}
-        self._state = ctx.commit(dt=dt)
+        new_state = self._state = ctx.commit(dt=dt)
+        new_scan_id = new_state.scan_id
+        # Record the actual committed boundary, not attempted rung writes. This
+        # is the cheap exactness index consumed by cause(): later same-scan
+        # writers, synthesis, and forces have already won before this point.
+        # A commit stores each pending value or keeps one it stores identically
+        # (same_stored_value), so the pending dict says what the state holds.
+        pending = ctx._tags_pending
+        entry_tags = ctx._state_tags_read if ctx._state is previous_state else previous_state.tags
+        for name, after in pending.items():
+            if entry_tags.get(name) != after:
+                self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None
             and ctx._state_tags_read is self._state_tags_read_cache
         ):
-            self._state_tags_read_cache.update(ctx._tags_pending)
-            self._state_tags_read_cache_state = self._state
+            self._state_tags_read_cache.update(pending)
+            self._state_tags_read_cache_state = new_state
         # Replay recorder: capture nondeterminism for this scan.
-        new_scan_id = self._state.scan_id
         # Checkpoint bypass: the force-map write at checkpoint boundaries
         # is unconditional — replay reads force state from the checkpoint
         # scan's log entry, so diff-eliding it would strand reconstruction.
@@ -4852,14 +4862,6 @@ class PLC:
         if ctx._io_drain_staging:
             for key, record in ctx._io_drain_staging.items():
                 self._scan_log.record_io_drain(new_scan_id, key, record)
-        # Record the actual committed boundary, not attempted rung writes. This
-        # is the cheap exactness index consumed by cause(): later same-scan
-        # writers, synthesis, and forces have already won before this point.
-        for name in ctx._tags_pending:
-            before = previous_state.tags.get(name)
-            after = self._state.tags.get(name)
-            if before != after:
-                self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         # Only firing rungs append. Their value columns independently extend
         # stable, alternating, or arithmetic ranges; varied=true is sparse.
         new_firings = ctx._rung_firings
