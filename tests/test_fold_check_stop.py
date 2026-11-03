@@ -709,6 +709,131 @@ def test_own_twin_sees_two_bases_set_apart() -> None:
         compare(twin)
 
 
+def test_own_twin_holds_a_base_both_were_set_to_before_the_block() -> None:
+    plc = _plc()
+    twin = _plc()
+    twin._rtc_base = plc._rtc_base + timedelta(days=1)
+    for runner in (plc, twin):
+        runner.run(1)
+        runner.set_rtc(datetime(2030, 1, 2, 3, 4, 5))
+    with fold_check.own_twin(plc) as compare:
+        plc.run(2)
+        twin.run(2)
+        compare(twin)
+
+
+def test_own_twin_sees_two_bases_set_apart_before_the_block() -> None:
+    plc = _plc()
+    twin = _plc()
+    for runner, hour in ((plc, 3), (twin, 4)):
+        runner.run(1)
+        runner.set_rtc(datetime(2030, 1, 2, hour, 4, 5))
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: "),
+        fold_check.own_twin(plc) as compare,
+    ):
+        plc.run(2)
+        twin.run(2)
+        compare(twin)
+
+
+def _applies_the_time() -> PLC:
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy(10, system.rtc.new_second)
+            copy(5, system.rtc.new_minute)
+            copy(1, system.rtc.new_hour)
+            out(system.rtc.apply_time)
+    return PLC(program)
+
+
+def _applies_the_date() -> PLC:
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy(2031, system.rtc.new_year4)
+            copy(4, system.rtc.new_month)
+            copy(2, system.rtc.new_day)
+            out(system.rtc.apply_date)
+    return PLC(program)
+
+
+def _applies_both() -> PLC:
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy(2031, system.rtc.new_year4)
+            copy(4, system.rtc.new_month)
+            copy(2, system.rtc.new_day)
+            out(system.rtc.apply_date)
+        with Rung(Go):
+            copy(10, system.rtc.new_second)
+            copy(5, system.rtc.new_minute)
+            copy(1, system.rtc.new_hour)
+            out(system.rtc.apply_time)
+    return PLC(program)
+
+
+_ON_EITHER_BASE = pytest.mark.parametrize(
+    "applies", [_applies_the_time, _applies_the_date, _applies_both], ids=["time", "date", "both"]
+)
+
+
+def _two_bases_apart(applies) -> tuple[PLC, PLC]:
+    """Two runners, each base with its own date, time of day and microsecond."""
+    plc, twin = applies(), applies()
+    plc._rtc_base = datetime(2030, 1, 2, 3, 4, 5, 111)
+    twin._rtc_base = datetime(2030, 2, 3, 13, 14, 15, 222)
+    return plc, twin
+
+
+def _apply_on_both(plc: PLC, twin: PLC) -> None:
+    for runner in (plc, twin):
+        runner.run(1)
+        runner.patch({"Go": True})
+        runner.run(2)
+
+
+@_ON_EITHER_BASE
+def test_own_twin_holds_what_a_rung_applied_on_each_base(applies) -> None:
+    plc, twin = _two_bases_apart(applies)
+    with fold_check.own_twin(plc) as compare:
+        _apply_on_both(plc, twin)
+        compare(twin)
+    assert plc._rtc_base != twin._rtc_base
+
+
+@pytest.mark.parametrize(
+    "off", [timedelta(hours=1), timedelta(days=1), timedelta(microseconds=1)], ids=str
+)
+@_ON_EITHER_BASE
+def test_own_twin_sees_an_apply_that_set_something_else(applies, off) -> None:
+    """The rung ran the same on both, so only the log and the base can show it."""
+    plc, twin = _two_bases_apart(applies)
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: .*log: rtc: "),
+        fold_check.own_twin(plc) as compare,
+    ):
+        _apply_on_both(plc, twin)
+        log = plc._scan_log._rtc_base_changes
+        scan = max(log)
+        log[scan] = (log[scan][0] + off, log[scan][1])
+        plc._rtc_base += off
+        compare(twin)
+
+
+def test_own_twin_sees_a_base_the_run_left_off_after_an_apply() -> None:
+    plc, twin = _two_bases_apart(_applies_the_time)
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="the runner differs at scan 3: .*rtc base: folded="),
+        fold_check.own_twin(plc) as compare,
+    ):
+        _apply_on_both(plc, twin)
+        plc._rtc_base += timedelta(hours=1)
+        compare(twin)
+
+
 def test_own_twin_compare_sees_another_scan() -> None:
     plc = _plc()
     twin = _plc()
@@ -883,6 +1008,11 @@ def test_the_tests_using_own_twin_are_these() -> None:
                 "test_own_twin_lets_two_runners_start_at_their_own_times",
                 "test_own_twin_holds_a_base_both_were_set_to",
                 "test_own_twin_sees_two_bases_set_apart",
+                "test_own_twin_holds_a_base_both_were_set_to_before_the_block",
+                "test_own_twin_sees_two_bases_set_apart_before_the_block",
+                "test_own_twin_holds_what_a_rung_applied_on_each_base",
+                "test_own_twin_sees_an_apply_that_set_something_else",
+                "test_own_twin_sees_a_base_the_run_left_off_after_an_apply",
                 "test_own_twin_is_listed_in_the_summary",
                 "test_own_twin_refuses_the_run_itself",
                 "test_own_twin_refuses_a_compare_from_before_the_run",
