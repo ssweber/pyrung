@@ -34,7 +34,7 @@ always(logic, ~Running, EstopOK)          # implicit AND (same property, always 
 always(logic, lambda s: s["X"] + s["Y"] < 100)  # callable fallback
 ```
 
-A callable names no comparison for the verifier to work back from, so it is only `Proven` over inputs whose every value was tried: Bools, `choices=`, and small `min=`/`max=` integers nothing else narrows. Over any other input, finding no violation answers `Intractable`.
+A callable names no comparison for the verifier to work back from, so it is only `Proven` over inputs whose every value was tried: Bools, `choices=`, and `min=`/`max=` integers of at most 1000 values no comparison narrows. The inputs it may read are every input, or with `scope=` the inputs in scope and those a tag in scope takes its value from. Over any other input, finding no violation answers `Intractable`.
 
 Condition expressions are preferred — the verifier extracts referenced tags and automatically restricts input enumeration to the upstream cone. A callable names no tags, so the verifier can't tell what it reads: without `scope=` it explores every input on every scan, which is slower. Pass `scope=` with the tags the callable reads and the verifier treats that list as its read set, exploring every input upstream of those tags. A callable that reads a tag outside its `scope=` can miss a violation.
 

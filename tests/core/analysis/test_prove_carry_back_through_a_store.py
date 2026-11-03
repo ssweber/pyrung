@@ -372,7 +372,94 @@ def _a_sum_and_a_copy() -> Program:
     )
 
 
+def _a_copy_and(calc_of: Callable[[Any], Any], source: Any, compared: Any) -> Program:
+    """A hop gives the source its domain, and the other edge has no way back."""
+    return _rungs(
+        (lambda: copy(source, _DI),),
+        (lambda: calc(calc_of(source), _DD),),
+        (_hit, _DI > 0, _DD == compared),
+    )
+
+
+def _a_real_copied_to_two_tags(source: Any, whole: Any, other: Any) -> Program:
+    """5.5 is 5 on the INT and still 5.5 on the REAL, and nothing compares it there."""
+    return _rungs(
+        (lambda: copy(source, whole),),
+        (lambda: copy(source, other),),
+        (_hit, other > 5, whole == 5),
+    )
+
+
+def _a_real_copied_to_two_tags_across_rungs() -> Program:
+    z = Bool("Z")
+    return _rungs(
+        (lambda: copy(_RB, _DI),),
+        (lambda: copy(_RB, _DB),),
+        (lambda: out(z), _DB > 10),
+        (_hit, z, _DI <= 10),
+    )
+
+
+def _a_square_compared_a_hop_later(source: Any, then: Callable[[Any, Any], None]) -> Program:
+    """The tag the calc writes is compared by way of another, and so was carried back to."""
+    later = Dint("Later")
+    return _rungs(
+        (lambda: copy(source, _DI),),
+        (lambda: calc(source * source, _DD),),
+        (lambda: then(_DD, later),),
+        (_hit, _DI > 0, later == 49),
+    )
+
+
+def _a_square_through_a_chain() -> Program:
+    return _rungs(
+        (lambda: copy(_I, _A),),
+        (lambda: copy(_A, _DI),),
+        (lambda: calc(_A * _A, _DD),),
+        (_hit, _DI > 0, _DD == 49),
+    )
+
+
 UNEVALUATED = [
+    pytest.param(lambda: _a_copy_and(lambda s: s * s, _I, 49), "I", 7, id="copy-and-square"),
+    pytest.param(
+        lambda: _a_copy_and(lambda s: s * s + s * s, _I, 98), "I", 7, id="copy-and-no-tag-on-a-side"
+    ),
+    pytest.param(
+        lambda: _a_copy_and(lambda s: (s + 1) * (s + 1), _I, 64), "I", 7, id="copy-and-nested"
+    ),
+    pytest.param(
+        lambda: _a_copy_and(lambda s: s * s, Int("Ib2", external=True, min=0, max=100), 49),
+        "Ib2",
+        7,
+        id="copy-and-square-declared",
+    ),
+    pytest.param(
+        lambda: _rungs(
+            (lambda: copy(_R, _DI),),
+            (lambda: calc(_R * _R, _DD),),
+            (_hit, _DD > 30, _DI == 5),
+        ),
+        "R",
+        5.7,
+        id="copy-and-square-real",
+    ),
+    pytest.param(_a_square_through_a_chain, "I", 7, id="square-through-a-chain"),
+    pytest.param(lambda: _a_square_compared_a_hop_later(_I, copy), "I", 7, id="square-then-copy"),
+    pytest.param(
+        lambda: _a_square_compared_a_hop_later(_I, lambda s, d: calc(s + 0, d)),
+        "I",
+        7,
+        id="square-then-sum",
+    ),
+    pytest.param(
+        lambda: _a_square_compared_a_hop_later(Int("Ib2", external=True, min=0, max=100), copy),
+        "Ib2",
+        7,
+        id="square-then-copy-declared",
+    ),
+    pytest.param(lambda: _a_real_copied_to_two_tags(_R, _DI, _DB), "R", 5.5, id="real-two-tags"),
+    pytest.param(_a_real_copied_to_two_tags_across_rungs, "Rb", 10.5, id="real-two-tags-rungs"),
     pytest.param(_scale_select, "I", 50, id="scale-select"),
     pytest.param(_copy_then_calc, "I", 4900, id="copy-then-calc"),
     pytest.param(_calc_then_copy, "I", 5000, id="calc-then-copy"),
@@ -418,6 +505,61 @@ def _a_real_it_has_only_tried_whole_numbers_of() -> Program:
     return _rungs((lambda: out(Bool("Y")), _RB > 100))
 
 
+def _copied_above_a_comparison() -> Program:
+    return _rungs((lambda: copy(_I, _DI), _I > 100))
+
+
+def _copied_and_compared() -> Program:
+    return _rungs((lambda: copy(_I, _DI),), (lambda: out(Bool("Z")), _DI > 5))
+
+
+def _copied_through_a_tag() -> Program:
+    return _rungs((lambda: copy(_I, _A),), (lambda: copy(_A, _DI),))
+
+
+SCOPED = [
+    pytest.param(_copied_above_a_comparison, 150, ["DI"], lambda s: s["DI"] != 150, id="guarded"),
+    pytest.param(_copied_and_compared, 7, ["DI", "Z"], lambda s: s["DI"] != 7, id="compared"),
+    pytest.param(_copied_through_a_tag, 7, ["DI"], lambda s: s["DI"] != 7, id="chain"),
+]
+
+
+@pytest.mark.parametrize(("build", "value", "scope", "holds"), SCOPED)
+def test_a_scoped_callable_answers_for_the_inputs_a_tag_in_it_is_given(
+    build, value, scope, holds
+) -> None:
+    """``scope=["DI"]`` reads no input by name, and ``s["DI"]`` tells I apart all the same."""
+    program = build()
+    for engine in ENGINES:
+        plc = engine(program, dt=0.01)
+        plc.patch({"I": value})
+        plc.step()
+        plc.patch({"I": value})
+        plc.step()
+        assert not holds(dict(plc.current_state.tags))
+    verdict = always(program, holds, scope=scope, max_states=3000, depth_budget=6)
+    assert not isinstance(verdict, Proven)
+
+
+def test_a_scoped_callable_on_a_bool_a_comparison_decides_still_proves() -> None:
+    """A comparison decides it, and comparisons are carried back: what is tried answers."""
+    z = Bool("Z")
+    direct = _rungs((lambda: out(z), _I > 100))
+    through_a_copy = _rungs((lambda: copy(_I, _DI),), (lambda: out(z), _DI > 5))
+    for program in (direct, through_a_copy):
+        verdict = always(
+            program, lambda s: s.get("Z") in (True, False), scope=["Z"], max_states=3000
+        )
+        assert isinstance(verdict, Proven)
+
+
+def test_a_scoped_callable_on_a_tag_given_a_declared_input_still_proves() -> None:
+    small = Int("Small", external=True, min=0, max=20)
+    program = _rungs((lambda: copy(small, _DI),))
+    verdict = always(program, lambda s: s.get("DI", 0) <= 20, scope=["DI"], max_states=3000)
+    assert isinstance(verdict, Proven)
+
+
 OPAQUE = [
     pytest.param(_unread_by_the_rungs, "I", 7, lambda s: s["I"] != 7, id="direct"),
     pytest.param(_read_after_the_store, "I", -1, lambda s: s.get("DW") != 65535, id="stored"),
@@ -450,6 +592,29 @@ def test_the_reason_a_callable_is_declined_names_the_input_and_what_to_do() -> N
     assert "callable property" in verdict.reason
     assert verdict.tags == ["I"]
     assert "choices=" in verdict.hints[0]
+
+
+def test_what_the_hint_says_narrowing_does_is_what_it_does() -> None:
+    """Every value is tried under choices=, or under min=/max= no comparison narrows."""
+    hint = always(_unread_by_the_rungs(), lambda s: s["I"] != 7, max_states=3000).hints[0]
+    assert "at most 1000 values" in hint
+    assert "no comparison narrows" in hint
+
+    within = Int("Within", external=True, min=0, max=999)
+    over_the_cap = Int("Over", external=True, min=0, max=1000)
+    chosen = Int("Chosen", external=True, choices={0: "a", 5: "b", 20: "c"})
+    assert isinstance(
+        always(_rungs((lambda: copy(within, _DI),)), lambda s: s["Within"] != 7, max_states=3000),
+        Counterexample,
+    )
+    assert isinstance(
+        always(_rungs((lambda: copy(over_the_cap, _DI),)), lambda s: s["Over"] != 7),
+        Intractable,
+    )
+    assert isinstance(
+        always(_rungs((_hit, chosen > 5)), lambda s: s["Chosen"] != 20, max_states=3000),
+        Counterexample,
+    )
 
 
 def test_a_callable_is_still_answered_for_where_every_value_was_tried() -> None:

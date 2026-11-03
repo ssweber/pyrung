@@ -311,10 +311,7 @@ class _PassContext:
         value.
         """
         assert self.nondeterministic_dims is not None and self.graph is not None
-        if self.opaque_reads_all:
-            read: Iterable[str] = self.nondeterministic_dims
-        else:
-            read = (name for name in self.opaque_reads if name in self.nondeterministic_dims)
+        read = self.nondeterministic_dims if self.opaque_reads_all else self._inputs_in_scope()
         unbounded = []
         for name in read:
             tag = self.graph.tags.get(name)
@@ -327,6 +324,33 @@ class _PassContext:
             ):
                 unbounded.append(name)
         return tuple(sorted(unbounded))
+
+    def _inputs_in_scope(self) -> set[str]:
+        """The inputs in a callable's scope, and those a tag in scope takes its value from.
+
+        ``s["D"] != 7`` tells apart the values of what ``copy(I, D)`` wrote D from.  A rung's
+        conditions don't count: their comparisons are carried back, which is why a Bool in
+        scope has nothing to answer for here.
+        """
+        assert self.nondeterministic_dims is not None and self.graph is not None
+        inputs = self.nondeterministic_dims
+        graph = self.graph
+        read = {name for name in self.opaque_reads if name in inputs}
+        following = []
+        for name in self.opaque_reads:
+            tag = graph.tags.get(name)
+            if name not in inputs and tag is not None and tag.type != TagType.BOOL:
+                following.append(name)
+        seen = set(following)
+        while following:
+            for rung in graph.writers_of.get(following.pop(), ()):
+                for source in graph.rung_nodes[rung].data_reads:
+                    if source in inputs:
+                        read.add(source)
+                    elif source not in seen:
+                        seen.add(source)
+                        following.append(source)
+        return read
 
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None

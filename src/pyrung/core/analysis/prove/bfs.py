@@ -176,8 +176,9 @@ def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intrac
             estimated_space=visited,
             tags=list(unbounded),
             hints=[
-                f"  {name}: write the property as a condition, which names its comparisons,"
-                " or narrow an integer with choices= or min=/max="
+                f"  {name}: write the property as a condition, which names its comparisons."
+                " Every value is tried only with choices=, or on an integer whose min=/max="
+                " spans at most 1000 values and no comparison narrows it"
                 for name in unbounded
             ],
             journal=context.journal,
@@ -195,8 +196,9 @@ def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intrac
         estimated_space=visited,
         tags=names,
         hints=[
-            f"  {name}: {target} is stored from it through more than a plain sum or copy;"
-            " narrow an integer with choices= or min=/max=, or test it with run_for()"
+            f"  {name}: the way it reaches {target} can't be worked back from a comparison;"
+            " give an integer choices= or a min=/max= of at most 1000 values, or test it"
+            " with run_for()"
             for name, target in sorted(unanswered.items())
         ],
         journal=context.journal,
