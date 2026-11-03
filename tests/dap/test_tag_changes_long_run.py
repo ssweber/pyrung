@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out
+from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out, runner as runner_module
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.handlers import history_seek
 from pyrung.dap.protocol import read_message
@@ -61,7 +61,9 @@ class Session:
     def runner(self) -> Any:
         return self.adapter._runner
 
-    def _request(self, command: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _request(
+        self, command: str, arguments: dict[str, Any], *, expect_success: bool = True
+    ) -> dict[str, Any]:
         self._seq += 1
         self.adapter.handle_request(
             {"seq": self._seq, "type": "request", "command": command, "arguments": arguments}
@@ -73,13 +75,23 @@ class Session:
         while (message := read_message(reader)) is not None:
             messages.append(message)
         [response] = [message for message in messages if message.get("type") == "response"]
-        assert response["success"] is True, response
+        assert response["success"] is True or not expect_success, response
         return response
 
     def changes(self, **arguments: Any) -> list[dict[str, Any]]:
         arguments.setdefault("tags", WATCHED)
         arguments.setdefault("count", 500)
         return self._request("pyrungTagChanges", arguments)["body"]["entries"]
+
+
+    def chain(self, query: str) -> dict[str, Any]:
+        return self._request("pyrungCausal", {"query": query}, expect_success=False)
+
+    def console(self, line: str) -> str:
+        response = self._request(
+            "evaluate", {"expression": line, "context": "repl"}, expect_success=False
+        )
+        return response["body"]["result"] if response["success"] else response["message"]
 
 
 @pytest.fixture(scope="module")
@@ -261,3 +273,33 @@ def test_a_fork_reads_its_parents_timestamps() -> None:
     fork.run(cycles=5)
     assert fork._timestamp_at(250) == runner.history.at(250).timestamp
     assert fork._timestamp_at(305) == fork.history.at(305).timestamp
+
+
+ADVICE = "ask first about a scan nearer the start of that range for cause"
+
+
+def test_the_refusal_says_what_works_from_the_console(
+    stepped: Session, compiled: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 800)
+
+    assert ADVICE in compiled.console("cause Lamp@3005")
+    # An earlier scan first, as it says.  What that one steps stays read.
+    compiled.console("cause Lamp@1400")
+    assert compiled.console("cause Lamp@3005") == stepped.console("cause Lamp@3005")
+
+
+def test_the_refusal_says_what_works_from_the_chain_panel(
+    stepped: Session, compiled: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 500)
+
+    refused = compiled.chain("effect:T1_Done@3005")
+    assert "nearer its end for effect" in str(refused)
+    # A later scan first, and on towards the one asked about.
+    compiled.chain("effect:T1_Done@3700")
+    compiled.chain("effect:T1_Done@3300")
+    answered = compiled.chain("effect:T1_Done@3005")
+    expected = stepped.chain("effect:T1_Done@3005")
+    assert answered["success"] is True
+    assert answered["body"] == expected["body"]

@@ -34,8 +34,10 @@ class UnrecordedScansError(ValueError):
         super().__init__(
             f"scans {first}..{last} include some that ran compiled and have no records yet, "
             f"and getting them means stepping {scans} again from the nearest checkpoint, where "
-            f"a question may step at most {SETTLE_SCAN_LIMIT}; "
-            "ask over a shorter range (since=, or an earlier scan) or run them stepped"
+            f"a question may step at most {SETTLE_SCAN_LIMIT}. "
+            "What a question steps stays read, so ask first about a scan nearer the start of "
+            "that range for cause, or nearer its end for effect, then ask again; from Python, "
+            "cause() also takes since=, and jit=False records a run as it goes"
         )
         self.first = first
         self.last = last

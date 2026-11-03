@@ -271,8 +271,10 @@ History still serves each of those scans, replaying them on demand, and the
 first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
 them again for their records, so the answer is the one stepping gives.  A question
 that would step more than 250,000 scans raises `UnrecordedScansError` and names
-the range: ask over less (`since=`, or an earlier scan), or pass `jit=False` to
-record the run as it goes.
+the range. What a question steps stays read, so ask first about a scan nearer the
+start of that range for `cause`, or nearer its end for `effect`, then ask again,
+from Python or the debugger. From Python, `cause()` also takes `since=`, and
+`jit=False` records the run as it goes.
 
 `previous_transition()` returns the latest matching recorded transition, or
 `None`. It uses compressed history indexes where available, independent of
