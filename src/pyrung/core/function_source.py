@@ -44,7 +44,7 @@ def _lines_inside_a_literal(source: str) -> set[int]:
     literal_types = (ast.Constant, ast.JoinedStr, *_template_string_types())
     inside: set[int] = set()
     for node in ast.walk(ast.parse("if 1:\n" + source)):
-        if not isinstance(node, literal_types):
+        if not isinstance(node, ast.expr) or not isinstance(node, literal_types):
             continue
         if isinstance(node, ast.Constant) and not isinstance(node.value, str | bytes):
             continue

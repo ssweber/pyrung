@@ -462,7 +462,9 @@ def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
     """The plant it runs is not the one today's harness describes: its seek runs each scan."""
     enable, over, shown = Bool("Enable"), Bool("Over"), Real("Shown")
     timer = Timer.clone("Tm")
-    temp = Real("Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable")
+    temp = Real(
+        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+    )
     with Program(strict=False) as program:
         with Rung(enable):
             on_delay(timer, preset=800_000)
@@ -500,7 +502,9 @@ def test_a_replay_before_a_coupling_change_has_no_harness_to_fold_by() -> None:
 
 def test_a_replay_with_no_change_keeps_its_harness() -> None:
     enable = Bool("Enable")
-    temp = Real("Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable")
+    temp = Real(
+        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+    )
     with Program(strict=False) as program:
         with Rung():
             copy(temp, Real("Shown"))
