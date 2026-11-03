@@ -124,7 +124,7 @@ class TestASearchWithNoLoop:
     def test_it_stops_at_what_it_may_hold(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The bound on memory, for when max_scans is no bound at all.
         monkeypatch.setattr(budget, "MAX_SEARCH_BLOCKS", 1_000)
-        monkeypatch.setattr(budget, "_POLLS_PER_BLOCK_COUNT", 1)
+        monkeypatch.setattr(budget, "_MOST_POLLS_PER_COUNT", 1)
         plc, _function = _no_loop(1_000_000)
         plan = plc.how(Lamp, max_scans=10**9, wall_clock_s=None)
         assert plan.status is PlanStatus.STOPPED
@@ -170,6 +170,97 @@ class TestAStopIsNotAVerdict:
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
         assert "physical link" not in plan.reason
+
+
+class TestTheMemoryPoll:
+    def _polls_until_it_raises(self, monkeypatch: pytest.MonkeyPatch, rate: int) -> tuple[int, int]:
+        """The polls and the blocks held when a search adding *rate* blocks a poll is stopped."""
+        monkeypatch.setattr(budget, "MAX_SEARCH_BLOCKS", 1_000_000)
+        counts = 0
+        held = 0
+
+        def blocks() -> int:
+            nonlocal counts
+            counts += 1
+            return held
+
+        monkeypatch.setattr(budget.sys, "getallocatedblocks", blocks)
+        check = budget.search_limits(None)
+        counts = 0
+        with pytest.raises(budget.SearchOutOfMemory):
+            for _ in range(10_000_000):
+                held += rate
+                check()
+        return counts, held
+
+    @pytest.mark.parametrize("rate", [20_000, 200_000, 2_000_000])
+    def test_a_wide_program_is_stopped_at_the_cap(
+        self, monkeypatch: pytest.MonkeyPatch, rate: int
+    ) -> None:
+        _counts, held = self._polls_until_it_raises(monkeypatch, rate)
+        assert held <= 1_000_000 + rate
+
+    def test_a_narrow_program_counts_rarely(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        counts, held = self._polls_until_it_raises(monkeypatch, 23)
+        assert held <= 1_000_000 + 23
+        polls = held // 23
+        # Every 64th poll, and every poll only for the last stretch before the cap.
+        assert counts < polls / 50
+
+    def test_a_rate_that_jumps_shows_within_the_most_polls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(budget, "MAX_SEARCH_BLOCKS", 1_000_000)
+        held = 0
+        monkeypatch.setattr(budget.sys, "getallocatedblocks", lambda: held)
+        check = budget.search_limits(None)
+        for _ in range(1000):
+            held += 1
+            check()
+        with pytest.raises(budget.SearchOutOfMemory):
+            for _ in range(1000):
+                held += 20_000
+                check()
+        assert held <= 1_000_000 + 64 * 20_000
+
+
+class TestATerminal:
+    # What a terminal reads is no search's: a limit there would end the search a second time.
+
+    @pytest.mark.parametrize(
+        ("max_scans", "reason"),
+        [(0, "budget exhausted"), (3000, None)],
+        ids=["the budget's terminal", "reaching the target"],
+    )
+    def test_a_limit_cannot_fire_inside_one(
+        self, monkeypatch: pytest.MonkeyPatch, max_scans: int, reason: str | None
+    ) -> None:
+        stuck = 0
+        real_stuck = pilot_module._stuck_event
+        real_payload = pilot_module._knowledge_payload
+
+        def counting(*args: Any, **kwargs: Any) -> Any:
+            nonlocal stuck
+            stuck += 1
+            return real_stuck(*args, **kwargs)
+
+        def payload(state: Any, *args: Any, **kwargs: Any) -> Any:
+            # Stands for any read here that polls the limits, a settle for one.
+            memo = state.work._coast_memo
+            if memo is not None and memo.check_limits is not None:
+                raise budget.SearchOutOfMemory
+            return real_payload(state, *args, **kwargs)
+
+        monkeypatch.setattr(pilot_module, "_stuck_event", counting)
+        monkeypatch.setattr(pilot_module, "_knowledge_payload", payload)
+        plan = _slow_lamp(50).how(Lamp, max_scans=max_scans, wall_clock_s=None)
+        if reason is None:
+            assert plan.status is PlanStatus.REACHED
+            assert stuck == 0
+        else:
+            assert plan.status is PlanStatus.STOPPED
+            assert plan.reason.startswith(reason)
+            assert stuck == 1
 
 
 class TestARefusedQuestion:

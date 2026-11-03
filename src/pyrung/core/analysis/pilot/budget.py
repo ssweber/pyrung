@@ -23,7 +23,9 @@ WALL_CLOCK_ENABLED = True
 # holds depends on how many tags change per scan, so scans would not bound it: 23 blocks and
 # 1.6 KB a scan on a small program with no loop, much more when more changes.
 MAX_SEARCH_BLOCKS = 16_000_000
-_POLLS_PER_BLOCK_COUNT = 1024
+# The count walks the allocator's pools: 14 us at 1M blocks, 322 us at 16M, on a scan of about
+# 200 us at the least.  So it runs every few polls, sooner as what is held nears the cap.
+_MOST_POLLS_PER_COUNT = 64
 
 
 class SearchOutOfTime(BaseException):
@@ -60,16 +62,27 @@ class WallClock:
 def search_limits(clock: WallClock | None) -> Callable[[], None]:
     """What a running search polls: its clock, and what it holds since this call."""
     start = sys.getallocatedblocks()
+    held = 0
     polls = 0
+    next_count = 1  # The first scan of a wide program may be most of the cap.
 
     def check() -> None:
-        nonlocal polls
+        nonlocal held, polls, next_count
         if clock is not None:
             clock.check()
         polls += 1
-        if polls % _POLLS_PER_BLOCK_COUNT == 0:  # it walks the allocator's pools
-            if sys.getallocatedblocks() - start > MAX_SEARCH_BLOCKS:
-                raise SearchOutOfMemory
+        if polls < next_count:
+            return
+        now = sys.getallocatedblocks() - start
+        if now > MAX_SEARCH_BLOCKS:
+            raise SearchOutOfMemory
+        # At this rate, half way to the cap; a rate that jumps has up to the most polls to show.
+        grown = max(1, now - held) / polls
+        next_count = max(
+            1, min(_MOST_POLLS_PER_COUNT, int((MAX_SEARCH_BLOCKS - now) / (2 * grown)))
+        )
+        held = now
+        polls = 0
 
     return check
 

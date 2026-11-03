@@ -405,6 +405,7 @@ def _finished_event(
 ) -> PilotEvent:
     """Build the single terminal recording shape for every loop exit."""
 
+    _no_longer_searching(state)
     event = PilotEvent(
         "finished",
         state.work.state.scan_id,
@@ -425,13 +426,20 @@ def _finished_event(
             ),
         },
     )
-    # The caller gets this fork to run.  The search's clock, memo and refusal to restart
-    # end with the search.
+    # The caller gets this fork to run, with no memo of the search's.
+    state.work._coast_memo = None
+    return event
+
+
+def _no_longer_searching(state: _PilotState) -> None:
+    """What a terminal reads is no search's: a limit there would end the search a second time.
+
+    The clock, the memory cap and the refusals to restart or to read end here, on the fork the
+    caller gets.  A checkpoint's world brings another fork, so each terminal step says it again.
+    """
     if state.work._coast_memo is not None:
         state.work._coast_memo.check_limits = None
-    state.work._coast_memo = None
     state.work._search_refuses_restart = False
-    return event
 
 
 def _stuck_event(
@@ -473,6 +481,7 @@ def _stopped_events(
 ) -> Iterator[PilotEvent]:
     """Emit one failed terminal sequence and restore its checkpoint world."""
 
+    _no_longer_searching(state)
     yield _stuck_event(
         state,
         ctx,
@@ -511,10 +520,9 @@ def _pilot_loop_events(
         return
     except (SearchStopped, SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused) as ended:
         stop = ended
-    # What the terminal itself reads is no search's, and has nothing left to run out of.
     state = at_the_stop["state"]
     memo.check_limits = None
-    state.work._search_refuses_restart = False
+    _no_longer_searching(state)
     if isinstance(stop, SearchStopped):
         termination = TheoryTermination.STUCK
         reason = (
