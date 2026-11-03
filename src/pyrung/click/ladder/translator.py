@@ -55,7 +55,6 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
-    from pyrung.click.tag_map._types import _BlockEntry
 
 # Pre-built Click bank names that can be used directly as hardware prefixes
 # in indirect addressing without an explicit TagMap block entry.
@@ -301,18 +300,6 @@ class _TranslatorMixin:
             message=f"Unsupported condition type: {type(condition).__name__}.",
             source=condition,
         )
-
-    def _explicit_count(
-        self,
-        *,
-        operand: Any,
-        configured_count: int | None,
-        path: str,
-        source: Any,
-    ) -> int:
-        if configured_count is not None:
-            return int(configured_count)
-        return self._operand_length(operand, path=path, source=source)
 
     def _operand_length(self, operand: Any, *, path: str, source: Any) -> int:
         if isinstance(operand, Tag):
@@ -742,16 +729,6 @@ class _TranslatorMixin:
             return f"{bank}[{pointer}]"
         sign = "+" if offset > 0 else "-"
         return f"{bank}[{pointer}{sign}{abs(offset)}]"
-
-    def _require_block_entry(self, block_name: str, *, path: str, source: Any) -> _BlockEntry:
-        entry: _BlockEntry | None = self._tag_map._block_entry_by_name(block_name)
-        if entry is None:
-            self._raise_issue(
-                path=path,
-                message=f"Indirect block {block_name!r} is not mapped in TagMap.",
-                source=source,
-            )
-        return entry
 
     def _require_compact_range(
         self,

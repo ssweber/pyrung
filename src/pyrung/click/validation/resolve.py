@@ -226,10 +226,6 @@ def _unique_slots(slots: list[_ResolvedSlot]) -> tuple[_ResolvedSlot, ...]:
     return tuple(ordered)
 
 
-def _resolve_operand_slots(value: Any, tag_map: TagMap) -> _OperandResolution:
-    return _ResolutionCache(tag_map).resolve_operand_slots(value)
-
-
 def _bank_label(slot: _ResolvedSlot) -> str:
     if slot.address is None:
         return slot.memory_type

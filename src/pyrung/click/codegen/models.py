@@ -175,7 +175,6 @@ class _RangeDecl:
     prefix: str  # operand prefix (e.g. "DS")
     start: int
     end: int
-    operand_str: str  # e.g. "DS100..DS102"
 
 
 @dataclass
