@@ -705,6 +705,23 @@ class _SeenState:
         self.tags = tags
 
 
+def _moves_a_watched_tag(path: _Path, watched: frozenset[str]) -> bool:
+    """Whether this path's records say a scan moves a tag its watched loop holds still.
+
+    A watched tag's loop leaves before the tag changes, so every scan it runs holds the tag,
+    and the path's records (``path.moves``, the capture) are of a scan that moved it.  A path
+    of a scan that holds the tag covers those scans, and records them as they ran.
+    """
+    if not watched:
+        return False
+    moves = path.moves
+    return (
+        any(name in watched for name, _delta in moves.moved)
+        or any(name in watched for name in moves.free)
+        or any(name in watched for name, _before, _after in moves.flips)
+    )
+
+
 def _loop_of(
     path: _Path,
     replay: CompiledPLC,
@@ -790,8 +807,14 @@ def _try_stretch(
         nonlocal total, burst
         looped = loops.get(id(path), False)
         if looped is False:
-            looped = _loop_of(path, replay, watched, declared)
-            if any(name not in start.tags for name in looped.must_be_present):
+            looped = (
+                None
+                if _moves_a_watched_tag(path, watched)
+                else _loop_of(path, replay, watched, declared)
+            )
+            if looped is not None and any(
+                name not in start.tags for name in looped.must_be_present
+            ):
                 # A tag becomes visible on this scan, and a reader sees that as a change.
                 looped = None
             loops[id(path)] = looped

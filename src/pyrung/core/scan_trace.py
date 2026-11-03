@@ -1772,10 +1772,12 @@ def coast_loop(
 ) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str]:
     """This trace's loop, kept to :class:`CoastMoves`.
 
-    It leaves before the scan that would change a *watched* tag.  After each scan
-    it hands the moving tags in *seen* to its ``seen`` argument and asks ``stop``.
-    These are only further reasons to leave, so a scan it does run is one the plain
-    loop would also run.
+    It leaves before the scan that would change a *watched* tag, which is the only
+    thing it asks of that tag: where this trace moved it, the scans the loop runs are
+    not the trace's own, and the moves it returns and :func:`coast_moves` differ on the
+    tag.  A coast does not fire such a loop.  After each scan it hands the moving tags
+    in *seen* to its ``seen`` argument and asks ``stop``, and those are only further
+    reasons to leave.
     """
     guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
     loop, source, _body = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
