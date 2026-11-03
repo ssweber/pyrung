@@ -978,6 +978,23 @@ def _new_epoch_ref() -> EpochRef:
     return EpochRef(next(_EPOCH_REFERENCE_VALUES))
 
 
+class AvoidCheckError(Exception):
+    """An ``avoid=`` check raised while a how() was judging a state.
+
+    A check that raised did not say the state is clear, so how() does not go through it,
+    and it proved nothing about the target.  So there is no plan to return, and the check's
+    own exception is the ``__cause__``.
+    """
+
+    def __init__(self, check: str, error: Exception) -> None:
+        super().__init__(
+            f"avoid check {check!r} raised {type(error).__name__}: {error}. "
+            "how() cannot tell whether that state is avoided, so it stopped without a plan. "
+            "To read a tag a state may not have yet, use snapshot.get(name, default)."
+        )
+        self.check = check
+
+
 class SearchStopped(Exception):
     """A how() world stopped itself, and its next scan would restart it.
 
@@ -2537,7 +2554,8 @@ class PLC:
         settles back to rest).  A path is excluded if it depends on the avoided
         condition at *any* of these three gates, and if every path is excluded
         the returned Path is unreachable with a reason that names the violated
-        avoid condition(s).
+        avoid condition(s).  A check that raises on a state raises ``AvoidCheckError``
+        here, since it has not said that state is clear.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a

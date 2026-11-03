@@ -2,7 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
+
+_BARE_CHECK = "avoided condition"
+
+
+class _AvoidCheckRaised(BaseException):
+    """An avoid check raised, on its way out of the search to the caller.
+
+    A BaseException, as ``SearchOutOfTime`` is: the search reads its causes under many
+    ``except Exception`` that mean "no evidence", and a check that raised has not said a
+    state is clear.  ``pilot_how`` and ``pilot_events`` turn it into the public
+    ``AvoidCheckError``.
+    """
+
+    def __init__(self, check: str, error: Exception) -> None:
+        super().__init__(check, error)
+        self.check = check
+        self.error = error
+
+
+def _avoid_member_true(check: str, pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
+    """Whether *pred* holds on *state*.  A *pred* that raises gave no answer to read."""
+    try:
+        return bool(pred(state))
+    except Exception as error:
+        raise _AvoidCheckRaised(check, error) from error
 
 
 def _avoid_snap_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
@@ -15,14 +41,8 @@ def _avoid_snap_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
         return ()
     violated = getattr(avoid, "violated", None)
     if violated is not None:
-        try:
-            return tuple(violated(snap))
-        except Exception:
-            return ()
-    try:
-        return ("avoided condition",) if bool(avoid(snap)) else ()
-    except Exception:
-        return ()
+        return tuple(violated(snap))
+    return (_BARE_CHECK,) if _avoid_member_true(_BARE_CHECK, avoid, snap) else ()
 
 
 def _avoid_violations(
@@ -36,6 +56,11 @@ def _avoid_violations(
     baseline when no snapshot is given — the neutral world a hold asserts its
     tag against) and evaluates the avoid predicate. This is the action gate's
     primitive (a candidate/hold whose overlay trips avoid depends on it).
+
+    The resting baseline has the steerable inputs and nothing else, so a check may raise
+    on it for a tag it reads and a real state has.  That says nothing against the check,
+    and nothing clear about the hold: the hold is refused, as it is for a condition that
+    reads a tag the baseline lacks.  A check raising on a real snapshot raises from here.
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:
@@ -43,7 +68,12 @@ def _avoid_violations(
     base = dict(snapshot) if snapshot is not None else dict(getattr(ctx, "resting", {}) or {})
     for tag, value in pairs:
         base[tag] = value
-    return _avoid_snap_names(avoid, base)
+    try:
+        return _avoid_snap_names(avoid, base)
+    except _AvoidCheckRaised as raised:
+        if snapshot is not None:
+            raise
+        return (raised.check,)
 
 
 def _avoid_forces(

@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import Any
 
-from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
+from pyrung.core.analysis.pilot.avoid import _BARE_CHECK, _avoid_member_true, _avoid_snap_names
 from pyrung.core.analysis.pilot.coast import _has_pending_effects
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Reachable
 from pyrung.core.analysis.pilot.earned_work import (
@@ -88,7 +88,9 @@ def _avoid_names_after_clear(
     violated_after_clear = getattr(avoid, "violated_after_clear", None)
     if violated_after_clear is not None:
         return tuple(violated_after_clear(start, observed))
-    return () if bool(avoid(start)) else _avoid_snap_names(avoid, observed)
+    if _avoid_member_true(_BARE_CHECK, avoid, start):
+        return ()
+    return _avoid_snap_names(avoid, observed)
 
 
 def _record_gate(

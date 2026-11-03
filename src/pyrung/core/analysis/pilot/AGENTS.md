@@ -232,6 +232,11 @@ record runs (past `MAX_RECORD_RUNS` a stretch's scans settle when asked, or a na
 past `SETTLE_SCAN_LIMIT`). What ends a search from under a question is a BaseException
 (`SearchOutOfTime`, `SearchOutOfMemory`, `SearchQuestionRefused`), so the `except Exception`
 around causal reads means only "no evidence" and cannot turn one of those into a verdict.
+An avoid check that raises travels the same way (`_AvoidCheckRaised`, from `avoid.py`), and
+`api.py` names it `AvoidCheckError` for the caller: a check that raised has not said a state
+is clear, so no gate may read it as a pass. Evaluate avoid through `avoid.py`, not by calling
+it. The one exception is the resting baseline, which has only the steerable inputs: a raise
+there refuses the hold being judged, as a condition reading a tag the baseline lacks does.
 
 ## Attempt transaction
 
