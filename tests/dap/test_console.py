@@ -224,6 +224,18 @@ class TestForceVerbs:
         assert resp["success"] is True
         assert dict(adapter._runner.forces) == {}
 
+    def test_force_says_what_the_tag_holds(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "force Counter 99999", seq=10)
+        assert resp["body"]["result"] == "Forced Counter=32767"
+        resp, _ = _repl(adapter, out, "force Counter 3.7", seq=11)
+        assert resp["body"]["result"] == "Forced Counter=3"
+        resp, _ = _repl(adapter, out, "force Button 1", seq=12)
+        assert resp["body"]["result"] == "Forced Button=True"
+        resp, _ = _repl(adapter, out, "force Counter abc", seq=13)
+        assert resp["success"] is False
+        assert "INT holds a number" in resp["message"]
+
 
 # ---------------------------------------------------------------------------
 # Patch
@@ -236,6 +248,13 @@ class TestPatch:
         resp, _ = _repl(adapter, out, "patch Button true")
         assert resp["success"] is True
         assert "Patched" in resp["body"]["result"]
+
+    def test_patch_says_what_the_tag_will_hold(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "patch Counter 99999", seq=10)
+        assert resp["body"]["result"] == "Patched Counter=32767"
+        resp, _ = _repl(adapter, out, "patch Button 0", seq=11)
+        assert resp["body"]["result"] == "Patched Button=False"
 
     def test_patch_missing_args(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
