@@ -464,10 +464,13 @@ def _means_the_same_in_a_kernel(fn: Any) -> bool:
     A kernel embeds the source, not the function, and its names resolve in the kernel's
     module.  Closure cells and the function's module are not there: reading one raises,
     which is the lucky case, while a ``global`` store lands in the kernel's module and
-    nobody ever knows.  A wrapper's source is not even what runs.  Stepping calls the
-    function itself, so a function that is not self-contained steps.
+    nobody ever knows.  A wrapper's source is not even what runs, and a mutable default
+    is a second object that starts over empty.  Stepping calls the function itself, so
+    a function that is not self-contained steps.
     """
     if not inspect.isfunction(fn) or fn.__closure__ or hasattr(fn, "__wrapped__"):
+        return False
+    if fn.__dict__ or _reaches_past_its_scope(fn.__code__) or not _copies_its_defaults(fn):
         return False
     read, bound = _global_names(fn.__code__)
     if bound:
@@ -476,7 +479,7 @@ def _means_the_same_in_a_kernel(fn: Any) -> bool:
     for name in read:
         if name == "math" and function_globals.get(name) is math:
             continue  # Every kernel imports it.
-        if name in function_globals or not hasattr(builtins, name):
+        if name in function_globals or not _is_self_contained_builtin(name):
             return False
     return True
 
@@ -797,6 +800,7 @@ class Epoch:
     # the interval: recorded cause()/effect() refuse scans inside them.
     fold_windows: tuple[tuple[int, int], ...]
     synthesis: Any | None
+    plant_changes: tuple[tuple[int, list[Any]], ...]
     program: Any | None
     logic: tuple[Any, ...]
     time_mode: TimeMode
@@ -867,6 +871,7 @@ class Epoch:
                 if first <= last_scan and last >= first_scan
             ),
             synthesis=synthesis,
+            plant_changes=tuple(plc._plant_changes),
             program=plc._program,
             logic=tuple(plc._logic),
             time_mode=plc._time_mode,
@@ -931,6 +936,7 @@ class EpochQuery:
         runner._playhead = epoch.last_scan
         runner._scan_log = epoch.scan_log.clone(up_to=epoch.last_scan)
         runner._checkpoints = dict(epoch.checkpoints)
+        runner._plant_changes = list(epoch.plant_changes)
         runner._recent_state_cache = OrderedDict(epoch.state_cache)
         runner._recent_state_cache_bytes = sum(
             estimate for _state, estimate in runner._recent_state_cache.values()
@@ -1542,6 +1548,9 @@ class PLC:
         # ``plant`` post-scan (feedback).  ``None`` ⇒ no overlay (the common
         # case; deploy/prove never set it).  See ``core/synthesis.py``.
         self._synthesis: Any | None = None
+        # ``(scan_id, plant)``: the plant that ran the scans up to *scan_id*, each
+        # kept when a coupling change replaced it there (:meth:`_note_plant_change`).
+        self._plant_changes: list[tuple[int, list[Any]]] = []
         self._fold_context_cache: Any | None = None
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
@@ -2680,6 +2689,67 @@ class PLC:
         self._epoch_caches.on_replay_anchor_replaced()
         self._cache_state(state)
 
+    def _edit_tip_tags(self, tags: Mapping[str, Any]) -> None:
+        """Put *tags* in the state the next scan starts from, between scans.
+
+        The scans before the tip ran without them and stay as they ran.  The tip's
+        own entries follow it, so it reads the same before and after the next scan,
+        and a causal transition's first ``before`` is the value set here.
+        """
+        state = self._state.with_tags(dict(tags))
+        self._state = state
+        scan_id = state.scan_id
+        replaced = self._recent_state_cache.pop(scan_id, None)
+        if replaced is not None:
+            self._recent_state_cache_bytes -= replaced[1]
+        self._cache_state(state)
+        if scan_id in self._checkpoints:
+            self._checkpoints[scan_id] = state
+        at_initial = scan_id == self._initial_scan_id
+        if at_initial:
+            self._initial_state = state
+        for name, value in tags.items():
+            if at_initial or name not in self._causal_initial_tags:
+                self._causal_initial_tags[name] = value
+
+    def _note_plant_change(self) -> None:
+        """Keep the plant that ran the scans so far: it is about to be replaced.
+
+        Replay runs a scan under the plant that ran it.  A checkpoint here starts any
+        later scan's replay on this side of the change, so no replay crosses it.
+        """
+        scan_id = self._state.scan_id
+        if scan_id == self._initial_scan_id:
+            return
+        if self._plant_changes and self._plant_changes[-1][0] == scan_id:
+            return
+        plant = [] if self._synthesis is None else list(self._synthesis.plant)
+        self._plant_changes.append((scan_id, plant))
+        self._scan_log.record_force_changes(scan_id, self._forces_last_recorded)
+        self._checkpoints[scan_id] = self._state
+
+    def _earlier_plant_at(self, scan_id: int) -> list[Any] | None:
+        """The plant the scans after *scan_id* ran under, when it is not the current one."""
+        for changed_at, plant in self._plant_changes:
+            if scan_id < changed_at:
+                return plant
+        return None
+
+    def _plant_tag_defaults(self) -> dict[str, Any]:
+        """Each tag the synthesis plant uses, at its default.
+
+        A plant stores its timers' zeros from its first scan, into tags no rung has
+        written.  A kernel holds an absent tag at its default and notices a write only
+        by the value leaving it, so it could not say when such a tag joined the state.
+        Present from the start of a recording, they read and commit the same in every
+        engine.
+        """
+        synthesis = self._synthesis
+        if synthesis is None:
+            return {}
+        tags, _edge_names = _iter_tags_and_edge_names(synthesis.plant)
+        return {tag.name: tag.default for tag in tags if tag.name not in SYSTEM_TAGS_BY_NAME}
+
     def _state_in_cache(self, scan_id: int) -> bool:
         """True if *scan_id* is in the recent-state cache."""
         return scan_id in self._recent_state_cache
@@ -2718,6 +2788,7 @@ class PLC:
         self._fold_windows = [w for w in self._fold_windows if w[1] >= scan_id]
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
+        self._plant_changes = [c for c in self._plant_changes if c[0] >= scan_id]
         if scan_id > self._initial_scan_id:
             self._initial_scan_id = scan_id
             self._initial_state = new_floor_state
@@ -2904,6 +2975,13 @@ class PLC:
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
         replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
         self._copy_current_synthesis_onto(replay)
+        earlier_plant = self._earlier_plant_at(anchor_scan_id)
+        if earlier_plant is not None:
+            if replay._synthesis is None:
+                from pyrung.core.synthesis import Synthesis
+
+                replay._synthesis = Synthesis()
+            replay._synthesis.plant = list(earlier_plant)
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
@@ -3016,6 +3094,8 @@ class PLC:
         return replay
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
+        if self._earlier_plant_at(scan_id) is not None:
+            return None  # The kernel is compiled from the current plant.
         """The kernel, if it can rebuild every key of the scans after *scan_id*'s checkpoint.
 
         Stepping adds a tag to the state on its first write.  A kernel holds an absent
@@ -3675,6 +3755,12 @@ class PLC:
         return results
 
     def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
+        for changed_at, _plant in self._plant_changes:
+            if start_scan_id < changed_at <= end_scan_id:
+                return [
+                    *self._replay_range(start_scan_id, changed_at - 1),
+                    *self._replay_range(changed_at, end_scan_id),
+                ]
         kernel = self._replay_kernel_from(start_scan_id)
         if kernel is None:
             return self._replay_range_interpreted(start_scan_id, end_scan_id)
@@ -3815,6 +3901,7 @@ class PLC:
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
         self._checkpoints = {}
+        self._plant_changes = []
         self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = dict(self._input_overrides.forces)
 
@@ -3889,7 +3976,9 @@ class PLC:
                 rebuilt[tag.name] = current_tags[tag.name]
                 continue
             rebuilt[tag.name] = tag.default
-        return rebuilt
+        # A plant is the machine's physics, not the controller's memory: nothing of it
+        # survives a reset but the tags themselves, which start over at their defaults.
+        return {**self._plant_tag_defaults(), **rebuilt}
 
     def _clear_retained_debug_trace_state(self) -> None:
         self._current_rung_traces = {}

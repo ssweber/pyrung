@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, copy
+from pyrung import Bool, Int, Program, Real, Rung, copy, latch, out
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.compiled_plc import CompiledPLC
-from pyrung.core.harness import Harness
-from pyrung.core.physical import Physical
+from pyrung.core.harness import Coupling, Harness
+from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
 
 _SWITCH = Physical("Switch", on_delay="200ms", off_delay="100ms")
@@ -239,3 +239,210 @@ def test_a_kernel_holds_the_plant_tags_stepping_does(exact_anchor: bool, enable:
         replay.step_replay()
         twin.step()
         assert _exact(replay._materialize_replay_state().tags) == _exact(twin.state.tags)
+
+
+def test_the_plant_tags_first_transition_starts_at_the_default() -> None:
+    plc = PLC(_coupling_program(), dt=0.01)
+    Harness(plc).install()
+    plc.patch({"Enable": True})
+    plc.run(5)
+
+    transition = plc._causal_last_committed_transition_before("__cpl_on__Fb", 3)
+
+    assert transition is not None
+    assert (transition.from_value, transition.to_value) == (0, 10)
+
+
+# â”€â”€ A plant joining a run leaves the scans that ran without it â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _late_link_program() -> Program:
+    Enable = Bool("Enable", external=True)
+    Fb = Bool("Fb")
+    Stage = Int("Stage")
+    with Program(strict=False) as prog:
+        with Rung(Enable, Fb):
+            copy(1, Stage)
+    return prog
+
+
+def _late_coupling() -> dict[str, Coupling]:
+    return {"Fb": Coupling(en_name="Enable", fb_name="Fb", physical=_SWITCH)}
+
+
+def _run_recording(plc: PLC, scans: int) -> dict[int, Any]:
+    states = {}
+    for _ in range(scans):
+        plc.step()
+        states[plc.state.scan_id] = plc.state
+    return states
+
+
+def test_a_coupling_change_leaves_earlier_scans_as_they_ran() -> None:
+    plc = PLC(_late_link_program(), dt=0.01)
+    harness = Harness(plc)
+    harness.install()
+    plc.patch({"Enable": True})
+    ran = _run_recording(plc, 20)
+
+    harness.set_overrides(_late_coupling())
+    tip = plc.state
+    assert "__cpl_on__Fb" in tip.tags
+    assert len(plc._recent_state_cache) == 21
+    ran.update(_run_recording(plc, 25))
+    assert plc.state.tags["Stage"] == 1
+
+    for scan_id, state in ran.items():
+        if scan_id != tip.scan_id:
+            assert _exact(plc.history.at(scan_id).tags) == _exact(state.tags), scan_id
+    assert _exact(plc.history.at(tip.scan_id).tags) == _exact(tip.tags)
+    assert _exact(plc.fork_from(15).state.tags) == _exact(ran[15].tags)
+    assert plc._recent_state_cache_bytes == sum(
+        estimate for _, estimate in plc._recent_state_cache.values()
+    )
+
+
+def test_a_coupling_change_on_a_checkpoint_edits_the_checkpoint() -> None:
+    plc = PLC(_late_link_program(), dt=0.01)
+    harness = Harness(plc)
+    harness.install()
+    plc.patch({"Enable": True})
+    plc.step()
+    while plc.state.scan_id not in plc._checkpoints:
+        plc.step()
+
+    harness.set_overrides(_late_coupling())
+
+    assert plc._checkpoints[plc.state.scan_id] is plc.state
+
+
+def test_a_late_install_leaves_earlier_scans_as_they_ran() -> None:
+    plc = PLC(_coupling_program(), dt=0.01)
+    plc.patch({"Enable": True})
+    ran = _run_recording(plc, 40)
+
+    Harness(plc).install()
+
+    for scan_id, state in ran.items():
+        if scan_id != plc.state.scan_id:
+            assert _exact(plc.history.at(scan_id).tags) == _exact(state.tags), scan_id
+    assert _exact(plc.fork_from(30).state.tags) == _exact(ran[30].tags)
+    assert plc.history.at(plc.state.scan_id) is plc.state
+
+
+# â”€â”€ A reset keeps a plant's tags in the state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _reboot(plc: PLC) -> None:
+    plc.reboot()
+
+
+def _reboot_without_battery(plc: PLC) -> None:
+    plc.battery_present = False
+    plc.reboot()
+
+
+def _stop_and_run(plc: PLC) -> None:
+    plc.stop()
+    plc.start()
+
+
+_RESETS = [_reboot, _reboot_without_battery, _stop_and_run]
+_PLANT_AT_DEFAULTS = {"__cpl_ond__Fb": False, "__cpl_on__Fb": 0, "__cpl_off__Fb": 0}
+
+
+def _mid_dwell(plc: PLC) -> PLC:
+    Harness(plc).install()
+    plc.patch({"Enable": True})
+    plc.run(5)
+    assert plc.state.tags["__cpl_on__Fb"] > 0
+    return plc
+
+
+@pytest.mark.parametrize("reset", _RESETS)
+def test_a_reset_starts_each_plant_tag_over_at_its_default(reset: Any) -> None:
+    plc = _mid_dwell(PLC(_coupling_program(), dt=0.01))
+
+    reset(plc)
+
+    assert {k: v for k, v in plc.state.tags.items() if k in _PLANT_AT_DEFAULTS} == (
+        _PLANT_AT_DEFAULTS
+    )
+    assert plc._causal_initial_tags["__cpl_on__Fb"] == 0
+
+
+@pytest.mark.parametrize("exact_anchor", [False, True], ids=["preview", "anchor"])
+@pytest.mark.parametrize("reset", _RESETS)
+def test_a_kernel_holds_the_plant_tags_stepping_does_after_a_reset(
+    reset: Any, exact_anchor: bool
+) -> None:
+    plc = _mid_dwell(PLC(_coupling_program(), dt=0.01))
+    reset(plc)
+    twin = plc.fork()
+    kernel = plc._compiled_replay_supported_kernel()
+    assert kernel is not None
+    replay = CompiledPLC(
+        plc._soft_exec_program(),
+        initial_state=plc.state,
+        dt=plc._dt,
+        compiled=kernel,
+        exact_anchor=exact_anchor,
+    )
+    replay._set_rtc_internal(plc._system_runtime._rtc_now(plc.state), plc.state.timestamp)
+
+    for _ in range(40):
+        replay.step_replay()
+        twin.step()
+        assert _exact(replay._materialize_replay_state().tags) == _exact(twin.state.tags)
+
+
+# ── Replay runs a scan under the plant that ran it ────────────────────────────
+
+
+def _late_ramp_recording() -> tuple[PLC, dict[int, Any]]:
+    Temp = Real("Temp", physical=Physical("Therm", profile=Ramp(up=1.0, down=-0.5)), link="Enable")
+    Enable, Lamp, Hit = Bool("Enable"), Bool("Lamp"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung(Enable):
+            out(Lamp)
+        with Rung(Temp >= 3.0):
+            latch(Hit)
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"Enable": True})
+    ran = _run_recording(plc, 700)
+    Harness(plc).install()
+    ran.update(_run_recording(plc, 400))
+    assert plc.state.tags["Hit"] is True and plc.state.tags["Temp"] > 3.0
+    plc._reset_cache(plc.state)  # Anything older now takes a replay.
+    return plc, ran
+
+
+@pytest.mark.parametrize("scan_id", [5, 199, 201, 401, 650, 699, 701, 900, 1099])
+def test_replay_runs_each_scan_under_the_plant_that_ran_it(scan_id: int) -> None:
+    plc, ran = _late_ramp_recording()
+
+    assert _exact(plc.history.at(scan_id).tags) == _exact(ran[scan_id].tags)
+    assert _exact(plc.replay_to(scan_id).state.tags) == _exact(ran[scan_id].tags)
+    assert _exact(plc._replay_seek(scan_id).state.tags) == _exact(ran[scan_id].tags)
+
+
+def test_a_replayed_range_across_a_late_install_keeps_each_side() -> None:
+    plc, ran = _late_ramp_recording()
+
+    across = plc.history.range(690, 711)
+
+    assert [state.scan_id for state in across] == list(range(690, 711))
+    for state in across:
+        if state.scan_id != 700:  # The install edited this one.
+            assert _exact(state.tags) == _exact(ran[state.scan_id].tags), state.scan_id
+    assert across[0].tags["Temp"] == 0.0
+    assert _exact(plc.history.at(700).tags) == _exact(across[10].tags)
+
+
+def test_a_reset_forgets_the_earlier_plants() -> None:
+    plc, _ran = _late_ramp_recording()
+    assert plc._plant_changes
+
+    plc.reboot()
+
+    assert plc._plant_changes == []
