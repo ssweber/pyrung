@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+import pyrung.core.analysis.pilot.budget as _budget
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.target_route as _target_route
@@ -168,6 +169,7 @@ def pilot_events(
     max_scans: int = 3000,
     avoid_pred: Any = None,
     unlink: list[str] | None = None,
+    wall_clock_s: float | None = _budget.DEFAULT_WALL_CLOCK_S,
 ) -> Iterator[PilotEvent]:
     """PILOT on a fork, yielding structured diagnostic events.
 
@@ -175,6 +177,7 @@ def pilot_events(
     :func:`pilot_how`). ``avoid_pred`` excludes routes, actions, and observed
     states the same way ``how(avoid=...)`` does.
     """
+    clock = _budget.WallClock.starting_now(wall_clock_s)
     target_tag, target_value, target_predicate = _parse_target(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
     ctx, _route_taken = _drive_setup.prepare_target_context(
@@ -185,7 +188,7 @@ def pilot_events(
         max_scans=max_scans,
         avoid_pred=avoid_pred,
     )
-    yield from _engine._pilot_loop_events(setup.work, ctx)
+    yield from _engine._pilot_loop_events(setup.work, replace(ctx, wall_clock=clock))
 
 
 def pilot_how(
@@ -195,6 +198,7 @@ def pilot_how(
     avoid_pred: Any = None,
     unlink: list[str] | None = None,
     on_event: Callable[[PilotEvent], None] | None = None,
+    wall_clock_s: float | None = _budget.DEFAULT_WALL_CLOCK_S,
 ) -> Plan:
     """PILOT on a fork — drive to the target and return the recording. Nothing changes.
 
@@ -210,13 +214,19 @@ def pilot_how(
 
     ``max_scans`` bounds invocation search work, including discarded attempts,
     probe scans, and bounded research requests; restoring a checkpoint never
-    refunds it. Folded simulated dwell is reported separately. Research tools
-    also keep their local caps; this is not a wall-clock deadline.
+    refunds it. Work is in interpreted scans: a scan that ran in the guarded
+    loop costs a hundredth of one, and traces and kernel compiles are charged
+    too. Research tools also keep their local caps.
+
+    ``wall_clock_s`` is a backstop on real time, since most of a search's time
+    is work the ledger does not charge. A how() that runs out of it stops and
+    says so. ``None`` turns it off.
 
     When ordinary steering lacks evidence, a bounded survey tries single and
     paired input assignments for one scan from the same current source. Only
     confirmed observations return to a fresh Compass read.
     """
+    clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
@@ -247,7 +257,7 @@ def pilot_how(
         max_scans=max_scans,
         avoid_pred=avoid_pred,
     )
-    ctx = replace(ctx, target=goal)
+    ctx = replace(ctx, target=goal, wall_clock=clock)
     outcome = _engine._pilot_loop(
         setup.work,
         ctx,

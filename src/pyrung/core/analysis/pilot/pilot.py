@@ -26,6 +26,7 @@ from pyrung.core.analysis.graph import (
     PlanStep,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
+from pyrung.core.analysis.pilot.budget import SearchOutOfTime
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     ProbeExhaustedObservation,
@@ -83,7 +84,6 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
 from pyrung.core.analysis.pilot.requirements import RequirementStatus
 from pyrung.core.analysis.pilot.route_judgment import route_forced_names
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
-from pyrung.core.runner import SearchStopped
 from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_boundary_from_checkpoint,
     _theory_requirement_snapshot,
@@ -129,6 +129,7 @@ from pyrung.core.analysis.pilot.world_key import (
 )
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.coast_run import CoastMemo
+from pyrung.core.runner import SearchStopped
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -486,29 +487,48 @@ def _pilot_loop_events(
     """Run the PILOT loop as a structured event stream."""
 
     # What a search costs must not depend on the searches before it.
-    plc._coast_memo = CoastMemo()
+    memo = plc._coast_memo = CoastMemo()
     plc._search_refuses_restart = True
+    clock = ctx.wall_clock
+    if clock is not None:
+        memo.check_time = clock.check
     at_the_stop: dict[str, Any] = {}
     try:
         yield from _search_events(plc, ctx, at_the_stop)
     except SearchStopped as stopped:
-        state = at_the_stop["state"]
+        termination = TheoryTermination.STUCK
         reason = (
             f"the program stopped itself at scan {stopped.scan_id} and its next scan would "
             "restart it; how() does not plan across a restart"
         )
-        _theory_recording._run_optional_theory_hook(
-            _theory_recording._record_optional_theory_abandoned, state, TheoryTermination.STUCK
-        )
-        yield from _stopped_events(
-            state,
+    except SearchOutOfTime:
+        termination = TheoryTermination.WALL_CLOCK
+        assert clock is not None
+        frame = at_the_stop.get("frame")
+        reason = _with_avoid_reason(
+            f"wall-clock budget exhausted ({clock.limit_s:g} s, "
+            f"{at_the_stop['state'].budget.scans_run} scans run)",
+            at_the_stop["state"],
             ctx,
-            at_the_stop.get("frame"),
-            reason,
-            at_the_stop["channels"],
-            at_the_stop["accumulators"],
-            candidate_count=0,
+            frame,
+        ) + _frontier_clause(
+            at_the_stop.get("frontier", ()), frame.snap if frame is not None else None
         )
+    else:
+        return
+    state = at_the_stop["state"]
+    _theory_recording._run_optional_theory_hook(
+        _theory_recording._record_optional_theory_abandoned, state, termination
+    )
+    yield from _stopped_events(
+        state,
+        ctx,
+        at_the_stop.get("frame"),
+        reason,
+        at_the_stop["channels"],
+        at_the_stop["accumulators"],
+        candidate_count=0,
+    )
 
 
 def _search_events(
@@ -795,10 +815,13 @@ def _search_events(
         at_the_stop["frame"] = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
+        at_the_stop["frontier"] = frontier
         # Finish observing the preceding execution even at the limit. The
         # next fork-consuming act, rather than its bookkeeping, is bounded.
         if state.search_scans >= ctx.max_scans:
             break
+        if ctx.wall_clock is not None:
+            ctx.wall_clock.check()
         if not isinstance(result, (Bearing, Stuck, GuidanceRequest)):
             state.budget.charge()
         _attempt_transition.prepare_oriented_result(state, result, orientation_world, frame)

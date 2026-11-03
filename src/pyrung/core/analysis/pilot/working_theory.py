@@ -66,6 +66,7 @@ class TheoryAttemptDisposition(StrEnum):
 class TheoryTermination(StrEnum):
     STUCK = "stuck"
     BUDGET = "budget"
+    WALL_CLOCK = "wall-clock"
     CONFLICT = "conflict"
     PROVED_IMPOSSIBLE = "proved-impossible"
 

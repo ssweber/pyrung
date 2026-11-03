@@ -62,6 +62,14 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_wall_clock_in_how(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An answer a test asserts must not depend on how busy the machine is."""
+    from pyrung.core.analysis.pilot import budget
+
+    monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     global _current_test
     _current_test = request.node.nodeid

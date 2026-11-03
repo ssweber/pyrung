@@ -296,6 +296,27 @@ def _corpus_real_accumulates() -> None:
         latch(Hit)
 
 
+def _median_of(*addresses: int) -> None:
+    values = Block("TraceMedianValues", TagType.INT, 1, 3)
+    level = Int("TrMedianLevel")
+    with Rung(Run):
+        copy(7, values[1])
+    with Rung(Rst):
+        copy(9, values[2])
+    with Rung():
+        calc(values.select(addresses[0], addresses[-1]).median(), level)
+    with Rung(level >= 8):
+        latch(Hit)
+
+
+def _corpus_median_of_an_even_count() -> None:
+    _median_of(1, 2)
+
+
+def _corpus_median_of_an_odd_count() -> None:
+    _median_of(1, 3)
+
+
 def _corpus_real_overflows() -> None:
     with Rung():
         copy(1.5e30, Temp, oneshot=True)
@@ -534,6 +555,16 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     ),
     "counter_down": (_corpus_counter_down, 0.01, [(5.0, {})]),
     "calc_wraps": (_corpus_calc_wraps, 0.01, [(60.0, {})]),
+    "median_of_an_even_count": (
+        _corpus_median_of_an_even_count,
+        0.01,
+        [(2.0, {}), (2.0, {Run: True}), (2.0, {Rst: True})],
+    ),
+    "median_of_an_odd_count": (
+        _corpus_median_of_an_odd_count,
+        0.01,
+        [(2.0, {}), (2.0, {Run: True}), (2.0, {Rst: True})],
+    ),
     "calc_gated_by_clock": (_corpus_calc_gated_by_clock, 0.01, [(9.0, {})]),
     "real_accumulates": (
         _corpus_real_accumulates,
@@ -1217,7 +1248,9 @@ def _step_source(*body: str) -> str:
     ("body", "reason"),
     [
         (["while tags['A']:", "    pass"], "statement While"),
-        (["x = (lambda: 1)()"], "call of an expression"),
+        (["x = [abs][0](1)"], "call of an expression"),
+        (["x = (lambda *v: 1)()"], "lambda with more than plain parameters"),
+        (["x = (lambda v=1: v)()"], "lambda with more than plain parameters"),
         (["x = (lambda v: v)"], "expression Lambda"),
         (["x = open('f')"], "call open"),
         (["x = tags.get('A')"], "method get"),

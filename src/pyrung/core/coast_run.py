@@ -152,6 +152,8 @@ class CoastMemo:
     compiles: int = 0
     traces: int = 0
     counts: Counter[str] = field(default_factory=Counter)
+    # Raises when the search has to stop.  Asked between scans and between fires.
+    check_time: Callable[[], None] | None = None
 
 
 def memo_of(plc: PLC) -> CoastMemo:
@@ -518,7 +520,6 @@ def _try_stretch(
     reads: frozenset[str] | None,
     watched: frozenset[str],
     limit: int,
-    deadline: Callable[[], bool] | None,
 ) -> tuple[int, _Path | None]:
     """Run loop scans from the tip while a known path covers each.
 
@@ -618,8 +619,8 @@ def _try_stretch(
 
     kept = paths.paths
     while total < limit and not asked_to_stop:
-        if deadline is not None and deadline():
-            break
+        if memo.check_time is not None:
+            memo.check_time()
         if loop._blocked() is not None:
             break
         fired: _Path | None = None
@@ -688,12 +689,11 @@ def coast_until(
     predicate_reads: frozenset[str] | None = None,
     stats: dict[str, int] | None = None,
     on_kernel_scan: Callable[[int], None] | None = None,
-    deadline: Callable[[], bool] | None = None,
 ) -> bool:
     """Run *plc* up to *budget* scans, until *predicate* holds on a committed scan.
 
     Stops as stepping would: on the first scan where it holds, or at the budget, or
-    after a scan that asks to pause, or when *deadline* says so.  Returns whether it
+    after a scan that asks to pause, or after the program stops itself.  Returns whether it
     holds there.  *predicate_reads* is the exact set of tags *predicate* reads
     through ``state.tags``; without it the reads are traced.  *stats* gets
     ``logical_scans``, ``kernel_scans``, ``macro_folds`` (stretches) and
@@ -752,8 +752,8 @@ def coast_until(
     fails = 0
     learned: _Path | None = None
     while plc.state.scan_id - start_scan < budget:
-        if deadline is not None and deadline():
-            break
+        if memo.check_time is not None:
+            memo.check_time()
         plc._consume_pause_request()
         plc._ensure_running()
         plc._run_single_scan(consume_pause_request=False)
@@ -797,7 +797,7 @@ def coast_until(
                 continue
             watched = monitored | {str(name) for name in traced}
         assert kernel is not None
-        used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, deadline)
+        used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit)
         if used:
             stretches += 1
             stretched += used

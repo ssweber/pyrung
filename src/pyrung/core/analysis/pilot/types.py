@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrsistent import PVector, pvector
 
 import pyrung.core.analysis.pilot.world as _world
-from pyrung.core.analysis.pilot.budget import SearchBudget
+from pyrung.core.analysis.pilot.budget import SearchBudget, WallClock
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
@@ -233,11 +233,12 @@ class _PilotContext:
     # Public ``how()`` supplies none; other navigation clients may constrain an
     # exact action without implying a retained route choice.
     blocked_actions: frozenset[_ActionPair]
-    # Invocation work allowance for kernel scans and bounded research requests.
-    # Folded simulated dwell is separate; discarded work is never refunded.
+    # Invocation work allowance, in the ledger's units (see ``budget``): every scan run,
+    # and bounded research requests.  Discarded work is never refunded.
     max_scans: int
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
+    wall_clock: WallClock | None = None
     # A disposable retained-composition continuation observes only whether it
     # exposes another retained occurrence. The outer committed attempt owns
     # action-edge learning and its deep causal attribution.

@@ -76,7 +76,7 @@ import operator
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.circuitpy.codegen._helpers import _HELPER_DEFS
@@ -537,6 +537,7 @@ _PURE_BUILTINS: dict[str, _Pure] = {
     "min": _Pure("min", min),
     "max": _Pure("max", max),
     "round": _Pure("round", round),
+    "sorted": _Pure("sorted", sorted),
     "len": _Pure("len", len),
     "ord": _Pure("ord", ord),
     "chr": _Pure("chr", chr),
@@ -1245,6 +1246,8 @@ class _Tracer:
         callee = node.func
         if isinstance(callee, ast.Attribute):
             return self._method_call(callee, node, frame)
+        if isinstance(callee, ast.Lambda):
+            return self._lambda_call(callee, node, frame)
         if not isinstance(callee, ast.Name):
             raise Decline("call of an expression")
         name = callee.id
@@ -1263,6 +1266,33 @@ class _Tracer:
         if pure is None:
             raise Decline(f"call {name}")
         return self._pure(pure, arguments)
+
+    def _lambda_call(self, callee: ast.Lambda, node: ast.Call, frame: _Frame) -> _Value:
+        """A lambda called where it is written, as a median of an even count is generated.
+
+        Its body is one expression and nothing in an expression the tracer follows assigns,
+        so the frame it sees is the caller's with the parameters bound.
+        """
+        signature = callee.args
+        if (
+            signature.posonlyargs
+            or signature.kwonlyargs
+            or signature.vararg
+            or signature.kwarg
+            or signature.defaults
+            or len(signature.args) != len(node.args)
+        ):
+            raise Decline("lambda with more than plain parameters")
+        params = [parameter.arg for parameter in signature.args]
+        function = frame.function
+        if function.global_names.intersection(params):
+            raise Decline("lambda parameter named as a global")
+        arguments = [self._eval(argument, frame) for argument in node.args]
+        inner = _Frame(
+            replace(function, local_names=function.local_names.union(params)),
+            {**frame.locals, **dict(zip(params, arguments, strict=True))},
+        )
+        return self._eval(callee.body, inner)
 
     def _iterator(self, name: str, arguments: list[_Value]) -> _Value:
         if any(argument.local is not None for argument in arguments):

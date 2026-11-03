@@ -2429,6 +2429,7 @@ class PLC:
         max_scans: int = 4000,
         unlink: list[str] | None = None,
         on_event: Any = None,
+        wall_clock_s: float | None = 300.0,
     ) -> Any:
         """Find an input-change sequence that reaches a target state.
 
@@ -2457,7 +2458,11 @@ class PLC:
                 condition avoided independently).  Express a composite prohibition
                 explicitly — ``avoid=And(A, B)`` avoids only the combined state,
                 not A or B alone.
-            max_scans: Scan budget for the search.
+            max_scans: Work budget for the search, in interpreted scans.  A scan run in
+                the guarded loop costs a hundredth of one.
+            wall_clock_s: Seconds of real time before the search stops and says so, or
+                ``None`` for no limit.  A search this ends may have reached on a faster
+                machine.
             unlink: Harness-feedback tag names to free for fault injection.
                 Named tags have their ``link=`` coupling removed so the harness
                 stops driving them and PILOT may steer them directly — the way
@@ -2473,6 +2478,7 @@ class PLC:
             avoid=avoid,
             unlink=unlink,
             on_event=on_event,
+            wall_clock_s=wall_clock_s,
         )
 
     def _how_with_pilot(
@@ -2482,6 +2488,7 @@ class PLC:
         avoid: Any = None,
         unlink: list[str] | None = None,
         on_event: Any = None,
+        wall_clock_s: float | None = 300.0,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
@@ -2493,6 +2500,7 @@ class PLC:
             avoid_pred=_compile_avoid(avoid),
             unlink=unlink,
             on_event=on_event,
+            wall_clock_s=wall_clock_s,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
