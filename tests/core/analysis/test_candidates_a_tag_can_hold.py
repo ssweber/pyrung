@@ -11,8 +11,16 @@ import pytest
 
 from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, latch, out
 from pyrung.core import PLC
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.analysis.pilot.skiff import _declared_domain
-from pyrung.core.analysis.prove import Counterexample, Proven, never
+from pyrung.core.analysis.prove import (
+    Counterexample,
+    Intractable,
+    Proven,
+    always,
+    never,
+    reachable_states,
+)
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
 from pyrung.core.input_overrides import held_candidates, refuses_value
 
@@ -147,6 +155,35 @@ def test_a_literal_no_tag_holds_blocks_its_rung_not_the_run() -> None:
 
     assert isinstance(never(program, Y), Proven)
     assert _how(program).reachable is False
+
+
+def _splits_a_tag_holding_none_of_its_choices() -> tuple[Program, Bool]:
+    switch = Char("Sw", choices={"AB": "two"}, default="AB")
+    hit = Bool("SwHit")
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy("AB", switch)
+        with Rung(switch == "AB"):
+            out(hit)
+    return program, hit
+
+
+def test_a_split_with_no_case_to_try_declines_and_names_the_tag() -> None:
+    program, hit = _splits_a_tag_holding_none_of_its_choices()
+    for engine in (PLC, CompiledPLC):
+        plc = engine(program, dt=0.01)
+        plc.step()
+        assert plc.current_state.tags["SwHit"] is True
+
+    for result in (
+        never(program, hit, split_at=["Sw"]),
+        always(program, ~hit, split_at=["Sw"]),
+        reachable_states(program, project=["SwHit"], split_at=["Sw"]),
+    ):
+        assert isinstance(result, Intractable)
+        assert "Sw" in result.reason
+        assert result.tags == ["Sw"]
+    assert isinstance(never(program, hit), Counterexample)
 
 
 def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:

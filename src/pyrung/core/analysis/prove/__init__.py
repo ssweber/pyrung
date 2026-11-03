@@ -281,6 +281,19 @@ def _build_explore_context(
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
+    no_case_to_split = sorted(name for name, cases in (split_at_tags or {}).items() if not cases)
+    if no_case_to_split:
+        # A scan can still see such a tag hold its default, so no case at all is not "no state".
+        return Intractable(
+            reason=f"split_at over a tag that holds none of its choices: {', '.join(no_case_to_split)}",
+            dimensions=len(no_case_to_split),
+            estimated_space=0,
+            tags=no_case_to_split,
+            hints=[
+                f"  {name}: leave it out of split_at, or give it choices= its type can hold"
+                for name in no_case_to_split
+            ],
+        )
     if not _opt_config.domains_only:
         refused = _functions_the_search_cannot_call(program)
         if refused is not None:
