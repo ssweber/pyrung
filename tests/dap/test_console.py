@@ -1066,6 +1066,54 @@ class TestMonitorVerbs:
 # ---------------------------------------------------------------------------
 
 
+class TestLogVerb:
+    @staticmethod
+    def _log(tmp_path: Path, count: int, *, jit: bool) -> str:
+        script = (
+            "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+            "\n"
+            "held = Bool('Held')\n"
+            "mirror = Bool('Mirror')\n"
+            "\n"
+            "with Program(strict=False) as prog:\n"
+            "    with Rung(held):\n"
+            "        out(mirror)\n"
+            "\n"
+            "runner = PLC(prog, dt=0.010)\n"
+            "runner.force(held, True)\n"
+            f"runner.run_for(11.0, jit={jit})\n"
+            "runner.force(held, False)\n"
+            f"runner.run_for(2.0, jit={jit})\n"
+            "runner.unforce(held)\n"
+            f"runner.run_for(2.0, jit={jit})\n"
+        )
+        out = io.BytesIO()
+        adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out)
+        path = _write_script(tmp_path, f"log_{jit}_{count}.py", script)
+        _send_request(adapter, out, seq=1, command="launch", arguments={"program": str(path)})
+        resp, _ = _repl(adapter, out, f"log {count}")
+        assert resp["success"] is True
+        # Each checkpoint repeats the set in force, which is what the log has to see through.
+        assert len(adapter._runner._scan_log._force_changes_by_scan) > 3
+        return resp["body"]["result"]
+
+    def test_one_force_prints_one_line_however_many_checkpoints_it_spans(self, tmp_path: Path):
+        lines = self._log(tmp_path, 5000, jit=True).splitlines()
+        forces = [line.strip() for line in lines if "force" in line and "forces:" not in line]
+        assert forces == ["force Held True", "force Held True -> False", "unforce Held"]
+
+    def test_compiled_log_is_the_stepped_log(self, tmp_path: Path):
+        assert self._log(tmp_path, 5000, jit=True) == self._log(tmp_path, 5000, jit=False)
+
+    def test_a_span_begun_before_the_log_prints_only_what_it_becomes(self, tmp_path: Path):
+        # The last 450 of 1500 scans: Held is forced False at about 1100 and let go at about 1300.
+        lines = self._log(tmp_path, 450, jit=True).splitlines()
+        forces = [line.strip() for line in lines if "force" in line and "forces:" not in line]
+        assert forces == ["force Held True -> False", "unforce Held"]
+        # Let go before these scans, and nothing since.
+        assert "force Held" not in self._log(tmp_path, 100, jit=True)
+
+
 class TestCheckVerb:
     def test_check_clean_program(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)

@@ -1501,6 +1501,14 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         if a_scan is not None and prov != "console":
             scan_sources.setdefault(a_scan, set()).add(prov)
 
+    # A force record repeats the set in force at each checkpoint: what changed is against the last.
+    force_records = log._force_changes_by_scan
+    earlier = [scan_id for scan_id in force_records if scan_id < start]
+    last_forces = force_records[max(earlier)] if earlier else {}
+
+    # Newest first, the way a replayed stretch is kept: oldest first steps one for each scan.
+    states = {scan_id: runner.history.at(scan_id) for scan_id in range(tip, start - 1, -1)}
+
     prev_state = None
     for scan_id in range(start, tip + 1):
         entries: list[str] = []
@@ -1510,14 +1518,10 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         if patches:
             for tag, val in sorted(patches.items()):
                 entries.append(f"  patch {tag} {val!r}")
-        force_snap = log._force_changes_by_scan.get(scan_id)
+        force_snap = force_records.get(scan_id)
         if force_snap is not None:
-            prev_scan = scan_id - 1
-            prev_forces = (
-                log._force_changes_by_scan.get(prev_scan, {}) if prev_scan >= log.base_scan else {}
-            )
-            for tag in sorted(set(force_snap) | set(prev_forces)):
-                old = prev_forces.get(tag)
+            for tag in sorted(set(force_snap) | set(last_forces)):
+                old = last_forces.get(tag)
                 new = force_snap.get(tag)
                 if old != new:
                     if new is not None and old is None:
@@ -1526,8 +1530,9 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
                         entries.append(f"  unforce {tag}")
                     else:
                         entries.append(f"  force {tag} {old!r} -> {new!r}")
+            last_forces = force_snap
 
-        cur_state = runner.history.at(scan_id)
+        cur_state = states[scan_id]
         if prev_state is not None:
             for key in sorted(set(cur_state.tags.keys()) | set(prev_state.tags.keys())):
                 old_v = prev_state.tags.get(key)
