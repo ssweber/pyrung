@@ -4332,10 +4332,9 @@ class PLC:
             self._stop_to_run_transition()
 
     def _sync_runtime_flags_from_state(self) -> None:
-        self._running = bool(self._state.memory.get(_MODE_RUN_KEY, True))
-        self._battery_present = bool(
-            self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
-        )
+        memory = self._state.memory
+        self._running = bool(memory.get(_MODE_RUN_KEY, True))
+        self._battery_present = bool(memory.get(_BATTERY_PRESENT_KEY, self._battery_present))
 
     def __enter__(self) -> PLC:
         """Bind this runner as active for live Tag.value access."""
