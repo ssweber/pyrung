@@ -848,7 +848,7 @@ def _coil_corrections(
                 resolved = [
                     hold
                     for hold in _steerable_holds(guard, safe)
-                    if hold not in seen and _hold_allowed(ctx, hold)
+                    if hold not in seen and _hold_allowed(ctx, hold, plc.state.tags)
                 ]
                 for hold in resolved:
                     seen.add(hold)
@@ -1052,7 +1052,7 @@ def _accumulator_corrections(
         )
         if not reset_actions:
             continue
-        if not all(_hold_allowed(ctx, action.pair) for action in reset_actions):
+        if not all(_hold_allowed(ctx, action.pair, plc.state.tags) for action in reset_actions):
             continue  # a required lever is off-limits — the reset is unsteerable
         from pyrung.core.condition import AllCondition, CompareEq
 
@@ -1108,7 +1108,7 @@ def _accumulator_corrections(
             if holds:
                 break
         holds = [hold for hold in holds if hold[0] not in operation_inputs]
-        if not holds or not all(_hold_allowed(ctx, h) for h in holds):
+        if not holds or not all(_hold_allowed(ctx, h, plc.state.tags) for h in holds):
             return
         stops = ", ".join(f"{phys}={value!r}" for phys, value in holds)
         detail = f"stop holding {stops} ({why}"
@@ -1167,7 +1167,7 @@ def _accumulator_corrections(
                 incident.before_snap,
                 ctx,
             ):
-                if not _hold_allowed(ctx, hold):
+                if not _hold_allowed(ctx, hold, plc.state.tags):
                     continue
                 corrections.append(
                     CorrectionHypothesis(
@@ -1386,7 +1386,7 @@ def _precise_causes(
         mover_holds_filtered = tuple(
             pair
             for pair in _dedupe_pairs(mover_holds)
-            if pair[0] in moved_tags and _hold_allowed(ctx, pair)
+            if pair[0] in moved_tags and _hold_allowed(ctx, pair, plc.state.tags)
         )
         mover_values: dict[str, Any] = {}
         mover_contradiction = False
@@ -1490,7 +1490,9 @@ def _precise_causes(
                 steerable=effective_steerable,
             )
             holds_filtered = tuple(
-                pair for pair in _dedupe_pairs(holds or ()) if _hold_allowed(ctx, pair)
+                pair
+                for pair in _dedupe_pairs(holds or ())
+                if _hold_allowed(ctx, pair, plc.state.tags)
             )
             if not holds_filtered:
                 continue
@@ -1739,7 +1741,7 @@ def _absence_root_correctives(
                 continue
             hold, note = analog
             relation_note = f"; {note}"
-        if not _hold_allowed(ctx, hold):
+        if not _hold_allowed(ctx, hold, plc.state.tags):
             continue
         root_tags.add(root.tag_name)
         keyed.append(

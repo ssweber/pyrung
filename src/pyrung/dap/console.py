@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.core import AvoidCheckError
 from pyrung.dap import execution_flow
 
 # grammar.py reads this registry, but only from inside command_grammar() — so
@@ -1002,7 +1003,10 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         if fragment is not None:
             adapter._send_event("output", {"category": "console", "output": fragment})
 
-    path = runner.how(*conditions, avoid=_single("avoid"), on_event=_on_pilot_event)
+    try:
+        path = runner.how(*conditions, avoid=_single("avoid"), on_event=_on_pilot_event)
+    except AvoidCheckError as exc:
+        raise adapter.DAPAdapterError(f"how avoid: {exc}") from exc
     return ConsoleResult(str(path))
 
 

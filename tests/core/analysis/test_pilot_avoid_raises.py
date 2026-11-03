@@ -3,8 +3,8 @@
 A check that raises on a real state reaches the caller as a named error, whichever
 gate met it: the route gate before the drive, the action gate, the scan gate, a
 trial coast, a terminal reason.  It never reads as a pass and never as a verdict.
-A raise on the resting baseline only denies the hold being judged, since that
-baseline holds the steerable inputs and nothing else.
+The resting baseline holds the steerable inputs and nothing else, so a check that
+raises there is asked again with real values, and a raise there is the same error.
 """
 
 from __future__ import annotations
@@ -127,6 +127,7 @@ def test_a_condition_that_cannot_compare_names_itself() -> None:
 
     assert "Level" in raised.value.check
     assert isinstance(raised.value.__cause__, TypeError)
+    assert "can be compared" in str(raised.value)
 
 
 def test_a_tag_the_state_lacks_yet_is_read_with_a_default() -> None:
@@ -346,26 +347,217 @@ def _hold_ctx(avoid, resting=None):
     )
 
 
-def test_a_raise_on_the_resting_baseline_denies_the_hold(raising_check) -> None:
+REAL = {"Hold": True, "Danger": False, "Level": 5, "Limit": 10}
+
+
+def test_a_raise_left_on_real_values_reaches_the_caller(raising_check) -> None:
     ctx = _hold_ctx(raising_check)
 
-    assert _avoid_forces(ctx, [("Hold", True)])
-    assert not _hold_allowed(ctx, ("Hold", True))
+    with pytest.raises(_AvoidCheckRaised):
+        _hold_allowed(ctx, ("Hold", True), REAL)
+    with pytest.raises(_AvoidCheckRaised):
+        _avoid_forces(ctx, [("Hold", True)], real=REAL)
 
 
-def test_an_opaque_read_of_an_absent_tag_judges_a_hold_as_its_condition_does() -> None:
-    """The baseline has no Danger: a condition reads that as violated, an index read raises."""
-    condition = _hold_ctx(_compile_avoid(Bool("Danger")))
+def test_a_read_of_a_tag_no_real_state_has_reaches_the_caller() -> None:
+    ctx = _hold_ctx(_compile_avoid(lambda s: s["Ghost"]))
+
+    with pytest.raises(_AvoidCheckRaised):
+        _hold_allowed(ctx, ("Hold", True), REAL)
+
+
+def test_an_opaque_read_the_baseline_cannot_answer_is_asked_with_real_values() -> None:
+    """The baseline has no Danger, and a real state does: the index read gets its answer."""
     opaque = _hold_ctx(_compile_avoid(lambda s: s["Danger"]))
 
-    assert _hold_allowed(condition, ("Hold", True)) is False
-    assert _hold_allowed(opaque, ("Hold", True)) is False
+    assert _hold_allowed(opaque, ("Hold", True), REAL) is True
 
 
-def test_a_check_that_answers_on_the_resting_baseline_judges_the_hold() -> None:
+def test_a_condition_the_baseline_trips_still_refuses_the_hold() -> None:
+    """A condition reads the tag the baseline lacks as violated.  Lifting that is its own step."""
+    condition = _hold_ctx(_compile_avoid(Bool("Danger")))
+
+    assert _hold_allowed(condition, ("Hold", True), REAL) is False
+
+
+def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> None:
     reads_with_get = _hold_ctx(_compile_avoid(lambda s: bool(s.get("Danger"))))
     reads_the_input = _hold_ctx(_compile_avoid(lambda s: s["Hold"]))
+    no_danger_on_it = _hold_ctx(_compile_avoid(lambda s: s.get("Danger") is None))
 
-    assert _hold_allowed(reads_with_get, ("Hold", True)) is True
-    assert _hold_allowed(reads_the_input, ("Hold", False)) is True
-    assert _hold_allowed(reads_the_input, ("Hold", True)) is False
+    assert _hold_allowed(reads_with_get, ("Hold", True), REAL) is True
+    assert _hold_allowed(reads_the_input, ("Hold", False), REAL) is True
+    assert _hold_allowed(reads_the_input, ("Hold", True), REAL) is False
+    assert _hold_allowed(no_danger_on_it, ("Hold", True), REAL) is False
+
+
+@pytest.mark.parametrize(
+    "check",
+    [lambda s: s["Hold"] and s["Level"] > 3, lambda s: s.get("Hold") and s.get("Level") + 0 > 3],
+    ids=["index", "get"],
+)
+def test_real_values_say_what_the_hold_forces(check) -> None:
+    ctx = _hold_ctx(_compile_avoid(check))
+
+    assert _hold_allowed(ctx, ("Hold", True), {"Level": 5}) is False
+    assert _hold_allowed(ctx, ("Hold", True), {"Level": 1}) is True
+    assert _hold_allowed(ctx, ("Hold", False), {"Level": 5}) is True
+
+
+def test_a_check_already_true_without_the_hold_is_not_forced_by_it() -> None:
+    ctx = _hold_ctx(_compile_avoid(lambda s: s["Level"] > 3))
+
+    assert _hold_allowed(ctx, ("Hold", True), {"Level": 5}) is True
+
+
+def test_a_condition_with_a_program_owned_side_is_asked_with_real_values() -> None:
+    """``Input > Limit``: the baseline has no Limit, and the compare raises on what it finds."""
+    ctx = _hold_ctx(_compile_avoid(Int("Input") > Int("Limit")), {"Input": 0})
+    with pytest.raises(_AvoidCheckRaised):
+        _avoid_snap_names(ctx.avoid_pred, {"Input": 5})
+
+    assert _hold_allowed(ctx, ("Input", 5), {"Limit": 10}) is True
+    assert _hold_allowed(ctx, ("Input", 50), {"Limit": 10}) is False
+    # True at rest too, so the hold is not what forces it.
+    assert _hold_allowed(ctx, ("Input", 5), {"Limit": -1}) is True
+
+
+def test_each_member_of_a_union_is_judged_on_its_own() -> None:
+    """A member the baseline trips stays tripped when another needs the real values."""
+    avoid = _compile_avoid((Bool("Danger"), lambda s: s["Level"] > 100))
+    ctx = _hold_ctx(avoid)
+
+    assert _avoid_violations(ctx, [("Hold", True)], real=REAL) == ("Danger",)
+
+
+def test_a_bare_callable_is_asked_with_real_values() -> None:
+    ctx = _hold_ctx(lambda s: s["Level"] > 3)
+
+    assert _hold_allowed(ctx, ("Hold", True), {"Level": 1}) is True
+    assert _avoid_violations(ctx, [("Hold", True)], real={"Level": 1}) == ()
+
+
+# ---------------------------------------------------------------------------
+# A search that earns its route with corrective holds, through how()
+# ---------------------------------------------------------------------------
+
+
+def _dwell_program(limit_from=None, limit_to=None):
+    """A sensor must be held on, then off, or a watchdog takes state 6 to 8 instead of 7."""
+    sensor = Bool("HoldSensor", external=True)
+    stable_on = Timer.clone("HoldStableOn")
+    stable_off = Timer.clone("HoldStableOff")
+    on_wd = Timer.clone("HoldOnWD")
+    off_wd = Timer.clone("HoldOffWD")
+    run = Timer.clone("HoldRun")
+    settle = Timer.clone("HoldSettle")
+    state = Int("HoldState", default=6)
+    limit = Int("HoldLimit", default=0 if limit_from is None else limit_from)
+    with Program(strict=False) as prog:
+        with Rung(state == 6, sensor):
+            on_delay(stable_on, 30, "ms")
+        with Rung(state == 6, ~sensor):
+            on_delay(stable_off, 30, "ms")
+        with Rung(state == 6):
+            on_delay(on_wd, 70, "ms").reset(stable_off.Done)
+        with Rung(state == 6):
+            on_delay(off_wd, 70, "ms").reset(stable_on.Done)
+        with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+            copy(8, state)
+        with Rung(state == 6):
+            on_delay(run, 250, "ms")
+        with Rung(state == 6, run.Done):
+            copy(7, state)
+        with Rung(state == 6):
+            on_delay(settle, 20, "ms")
+        with Rung(settle.Done):
+            copy(limit_to if limit_to is not None else limit_from or 0, limit)
+    return prog, state, sensor, limit
+
+
+def _drive(prog, target, avoid):
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    return plc.how(target, avoid=avoid, max_scans=2000)
+
+
+def _holds(plan) -> int:
+    return sum(len(step.rungs) for step in plan.journal)
+
+
+def test_the_route_needs_its_corrective_holds() -> None:
+    prog, state, *_ = _dwell_program()
+
+    plan = _drive(prog, state == 7, None)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.total_scans == 24
+    assert _holds(plan) > 0
+
+
+@pytest.mark.parametrize(
+    "healthy",
+    [
+        lambda s: s.get("HoldState") == 9999,
+        lambda s: s["HoldState"] == 9999,
+        lambda s: s.get("HoldState") > 9999,
+    ],
+    ids=["get", "index", "get-compare"],
+)
+def test_a_healthy_check_keeps_a_route_with_holds(healthy) -> None:
+    """Each reads a program tag, which every real state has and the baseline does not."""
+    prog, state, *_ = _dwell_program()
+
+    plan = _drive(prog, state == 7, healthy)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.total_scans == 24
+    assert _holds(plan) > 0
+
+
+@pytest.mark.parametrize("form", ["condition", "opaque"])
+@pytest.mark.parametrize(
+    ("limit_from", "limit_to"), [(9999, 9999), (0, 100)], ids=["high", "rises-before-the-hold"]
+)
+def test_input_over_a_program_owned_limit_keeps_a_route_with_holds(
+    form, limit_from, limit_to
+) -> None:
+    """The limit is judged where the search is: 100 by the time a hold is asked for."""
+    prog, state, sensor, limit = _dwell_program(limit_from, limit_to)
+    avoid = sensor > limit if form == "condition" else (lambda s: s["HoldSensor"] > s["HoldLimit"])
+
+    plan = _drive(prog, state == 7, avoid)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.total_scans == 24
+    assert _holds(plan) > 0
+
+
+def test_input_over_a_limit_the_hold_would_cross_goes_no_further() -> None:
+    prog, state, sensor, limit = _dwell_program(0, 0)
+
+    plan = _drive(prog, state == 7, sensor > limit)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert _holds(plan) == 0
+
+
+def test_a_condition_refused_on_the_baseline_stays_refused() -> None:
+    """The baseline has no HoldState, which a condition reads as violated: as it was."""
+    prog, state, *_ = _dwell_program()
+
+    plan = _drive(prog, state == 7, state == 9999)
+
+    assert plan.status is PlanStatus.STOPPED
+
+
+def test_a_check_raising_only_with_a_hold_on_reaches_the_caller() -> None:
+    prog, state, *_ = _dwell_program()
+
+    def _raises_with_the_sensor_held(snapshot: dict) -> bool:
+        if snapshot["HoldSensor"] and snapshot["HoldState"] == 6:
+            raise ValueError("boom with the hold on")
+        return False
+
+    with pytest.raises(AvoidCheckError, match="ValueError"):
+        _drive(prog, state == 7, _raises_with_the_sensor_held)

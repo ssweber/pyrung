@@ -990,7 +990,9 @@ class AvoidCheckError(Exception):
         super().__init__(
             f"avoid check {check!r} raised {type(error).__name__}: {error}. "
             "how() cannot tell whether that state is avoided, so it stopped without a plan. "
-            "To read a tag a state may not have yet, use snapshot.get(name, default)."
+            "A callable reads a tag a state may not have yet with snapshot.get(name, default). "
+            "A condition compares what it finds, so check each tag it names is in the program "
+            "and the two sides can be compared."
         )
         self.check = check
 
@@ -2554,8 +2556,8 @@ class PLC:
         settles back to rest).  A path is excluded if it depends on the avoided
         condition at *any* of these three gates, and if every path is excluded
         the returned Path is unreachable with a reason that names the violated
-        avoid condition(s).  A check that raises on a state raises ``AvoidCheckError``
-        here, since it has not said that state is clear.
+        avoid condition(s).  A check that raises when it is asked raises
+        ``AvoidCheckError`` here, since it has not said that state is clear.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a

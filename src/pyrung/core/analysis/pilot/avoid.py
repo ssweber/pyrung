@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 _BARE_CHECK = "avoided condition"
@@ -49,46 +49,76 @@ def _avoid_violations(
     ctx: Any,
     pairs: list[tuple[str, Any]] | tuple[tuple[str, Any], ...],
     snapshot: dict[str, Any] | None = None,
+    real: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """Names of the avoid conditions that *pairs* would force.
 
     Static: overlays each ``(tag, value)`` onto *snapshot* (or the resting
     baseline when no snapshot is given — the neutral world a hold asserts its
     tag against) and evaluates the avoid predicate. This is the action gate's
-    primitive (a candidate/hold whose overlay trips avoid depends on it).
-
-    The resting baseline has the steerable inputs and nothing else, so a check may raise
-    on it for a tag it reads and a real state has.  That says nothing against the check,
-    and nothing clear about the hold: the hold is refused, as it is for a condition that
-    reads a tag the baseline lacks.  A check raising on a real snapshot raises from here.
+    primitive (a candidate/hold whose overlay trips avoid depends on it).  *real* is
+    the state a judgment on the baseline falls back on (``_resting_violations``).
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:
         return ()
-    base = dict(snapshot) if snapshot is not None else dict(getattr(ctx, "resting", {}) or {})
-    for tag, value in pairs:
-        base[tag] = value
-    try:
-        return _avoid_snap_names(avoid, base)
-    except _AvoidCheckRaised as raised:
-        if snapshot is not None:
-            raise
-        return (raised.check,)
+    if snapshot is None:
+        return _resting_violations(ctx, avoid, pairs, real or {})
+    return _avoid_snap_names(avoid, {**snapshot, **dict(pairs)})
+
+
+def _resting_violations(
+    ctx: Any,
+    avoid: Any,
+    pairs: Any,
+    real: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Names of the avoid conditions *pairs* would force from the resting baseline.
+
+    The baseline has the steerable inputs and nothing else, so a check can raise on it
+    for a tag every real state has.  That is no answer about the hold, so that check is
+    asked again with real values: *real*, the state the search is judging the hold from,
+    inputs at rest.  The hold forces it if it goes true with the hold on and was clear
+    without.  A raise there is the check's own and reaches the caller.  A check the
+    baseline can answer keeps that answer, so a condition reading a tag the baseline lacks
+    still refuses the hold.
+    """
+    resting = dict(getattr(ctx, "resting", {}) or {})
+    held = dict(pairs)
+    members = getattr(avoid, "members", None)
+    checks = [(_BARE_CHECK, avoid)] if members is None else [(m.name, m.pred) for m in members]
+
+    def forces(check: str, pred: Any) -> bool:
+        try:
+            return _avoid_member_true(check, pred, {**resting, **held})
+        except _AvoidCheckRaised:
+            at_rest = {**real, **resting}
+            return _avoid_member_true(check, pred, {**at_rest, **held}) and not _avoid_member_true(
+                check, pred, at_rest
+            )
+
+    return tuple(check for check, pred in checks if forces(check, pred))
 
 
 def _avoid_forces(
     ctx: Any,
     pairs: list[tuple[str, Any]] | tuple[tuple[str, Any], ...],
     snapshot: dict[str, Any] | None = None,
+    real: Mapping[str, Any] | None = None,
 ) -> bool:
-    return bool(_avoid_violations(ctx, pairs, snapshot))
+    return bool(_avoid_violations(ctx, pairs, snapshot, real))
 
 
-def _hold_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
+def _hold_allowed(
+    ctx: Any,
+    pair: tuple[str, Any],
+    real: Mapping[str, Any] | None = None,
+) -> bool:
+    """Whether a hold of *pair* may be installed, judged from the real state *real*."""
     tag, _value = pair
     compass = getattr(ctx, "compass", None)
     action_tags = getattr(compass, "action_tags", frozenset())
     blocked_actions = getattr(ctx, "blocked_actions", frozenset())
     if tag in action_tags or pair in blocked_actions:
         return False
-    return not _avoid_forces(ctx, [pair])
+    return not _avoid_forces(ctx, [pair], real=real)
