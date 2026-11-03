@@ -200,6 +200,59 @@ def test_the_format_builtin_stays_with_the_original():
     assert not _has_a_kernel(_program(reads_format))
 
 
+def test_a_method_of_an_import_is_the_function(tmp_path, monkeypatch):
+    """``import math`` out of sight compiles ``math.floor(v)`` differently: it means the same."""
+    module, _ = _import(
+        tmp_path,
+        monkeypatch,
+        "import math\n"
+        "import math as m\n"
+        "from math import ceil as up, floor\n\n\n"
+        "def floors(v):\n"
+        "    return {'out': math.floor(v / 2)}\n\n\n"
+        "def renamed(v):\n"
+        "    return {'out': m.floor(v / 2)}\n\n\n"
+        "def nested(v):\n"
+        "    def inner():\n"
+        "        return math.floor(v / 2)\n"
+        "    return {'out': inner()}\n\n\n"
+        "def from_import(v):\n"
+        "    return {'out': floor.__call__(v / 2)}\n",
+    )
+    for name in ("floors", "renamed", "nested", "from_import"):
+        fn = getattr(module, name)
+        assert is_the_function(embedded_source(fn), fn), name
+
+    assert not is_the_function(embedded_source(module.floors).replace("/ 2", "/ 3"), module.floors)
+
+
+def test_a_method_of_a_name_its_module_does_not_import_is_the_function(tmp_path, monkeypatch):
+    module, _ = _import(
+        tmp_path,
+        monkeypatch,
+        "class Thing:\n"
+        "    def go(self, v):\n"
+        "        return v\n\n\n"
+        "thing = Thing()\n\n\n"
+        "def calls(v):\n"
+        "    return {'out': thing.go(v)}\n",
+    )
+    assert is_the_function(embedded_source(module.calls), module.calls)
+
+
+def test_code_py_takes_a_body_that_calls_math(tmp_path, monkeypatch):
+    module, _ = _import(
+        tmp_path,
+        monkeypatch,
+        "import math\n\n\ndef floors(v):\n    return {'out': math.floor(v / 2)}\n",
+    )
+    assert module.floors(5) == {"out": 2}
+    assert "def floors(v):" in (
+        code := _generates(_program(module.floors), force_runtime=False).code
+    )
+    assert "import math" in code
+
+
 def test_the_comparison_sees_each_part_of_a_function():
     def source_of(text):
         namespace: dict = {}

@@ -14,6 +14,7 @@ import __future__ as future_flags
 
 import ast
 import inspect
+import symtable
 import textwrap
 from types import CodeType
 from typing import Any
@@ -94,6 +95,33 @@ def embedded_source(fn: Any) -> str:
     return _without_staticmethod(_out_of_its_margin(inspect.getsource(fn).rstrip()))
 
 
+def _names_in(code: CodeType) -> set[str]:
+    names = set(code.co_names)
+    for constant in code.co_consts:
+        if isinstance(constant, CodeType):
+            names |= _names_in(constant)
+    return names
+
+
+def _imports_it_names(code: CodeType) -> str:
+    """``import`` lines for each name in *code* that its file imports at module level.
+
+    The compiler asks that of a name before it calls a method on it, so ``math.floor(v)``
+    is other bytecode, with the same meaning, once ``import math`` is out of sight.
+    """
+    try:
+        lines, _ = inspect.findsource(code)
+        table = symtable.symtable("".join(lines), code.co_filename, "exec")
+    except (OSError, SyntaxError, ValueError):
+        return ""
+    names = _names_in(code)
+    return "".join(
+        f"import {symbol.get_name()}\n"
+        for symbol in table.get_symbols()
+        if symbol.is_imported() and symbol.get_name() in names
+    )
+
+
 def is_the_function(text: str, fn: Any) -> bool:
     """Whether *text*, compiled as *fn* was, defines exactly the code *fn* runs."""
     code = getattr(fn, "__code__", None)
@@ -102,7 +130,9 @@ def is_the_function(text: str, fn: Any) -> bool:
     flags = code.co_flags & future_flags.annotations.compiler_flag
     try:
         tree = ast.parse(text)
-        module = compile(text, "<embedded>", "exec", flags=flags, dont_inherit=True)
+        module = compile(
+            _imports_it_names(code) + text, "<embedded>", "exec", flags=flags, dont_inherit=True
+        )
     except (SyntaxError, ValueError):
         return False
     if (
