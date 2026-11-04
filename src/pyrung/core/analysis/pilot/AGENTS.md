@@ -238,8 +238,10 @@ is clear, so no gate may read it as a pass. Evaluate avoid through `avoid.py`, n
 it. The resting baseline has only the steerable inputs, so a check that raises there gives no
 denial: the action gate and the scan gate judge real values when the hold goes on. It is still
 asked on the values the search holds, often a failed attempt's landing that the corrected route
-may never reach, with resting filling only what they lack (`_resting_violations`), and a raise
-there reaches the caller.
+may never reach, with resting filling only what they lack and without the hold, which no scan may
+have had there (`_resting_violations`), and a raise there reaches the caller. The scan behind the
+state being read is history no plan enters, so a raise on it while binding the entry scan to its
+route is one more failure to bind (`entry_execution.py`).
 
 ## Attempt transaction
 

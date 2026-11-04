@@ -6,6 +6,7 @@ trial coast, a terminal reason.  It never reads as a pass and never as a verdict
 The resting baseline holds the steerable inputs and nothing else, so a check that
 raises there denies no hold.  It is asked again on real values, where a raise is the
 same error, and the gates that judge the hold when it goes on still stop what it forces.
+The scan behind the state how() starts from is history: a raise about it alone is no error.
 """
 
 from __future__ import annotations
@@ -423,8 +424,8 @@ def test_a_condition_with_a_program_owned_side_is_asked_with_real_values() -> No
     assert _hold_allowed(ctx, ("Input", 5), {"Limit": -1}) is True
 
 
-def test_the_re_ask_is_real_values_with_the_hold_on_then_without() -> None:
-    """Real wins over rest, and rest fills only what the real values lack."""
+def test_the_re_ask_is_real_values_as_they_stand() -> None:
+    """Real wins over rest, rest fills only what real lacks, and the hold is not applied."""
     asked = []
 
     def check(snapshot: dict) -> bool:
@@ -434,25 +435,27 @@ def test_the_re_ask_is_real_values_with_the_hold_on_then_without() -> None:
     ctx = _hold_ctx(_compile_avoid(check), {"Speed": 0, "Sensor": False, "Spare": 7})
 
     assert _hold_allowed(ctx, ("Sensor", True), {"S": 6, "Speed": 5, "Sensor": False}) is True
-    assert asked[1:] == [
-        {"S": 6, "Speed": 5, "Sensor": True, "Spare": 7},
-        {"S": 6, "Speed": 5, "Sensor": False, "Spare": 7},
-    ]
+    assert asked[1:] == [{"S": 6, "Speed": 5, "Sensor": False, "Spare": 7}]
 
 
-@pytest.mark.parametrize("spare", [True, False], ids=["with-the-hold", "without-the-hold"])
-def test_a_raise_on_either_side_of_the_re_ask_reaches_the_caller(spare) -> None:
-    """Spare picks the side: the check raises when Hold has come to match it."""
+def _raises_when_spare_matches_hold(snapshot: dict) -> bool:
+    if snapshot["S"] == 6 and snapshot["Spare"] == snapshot["Hold"]:
+        raise ValueError("only on this side")
+    return False
 
-    def check(snapshot: dict) -> bool:
-        if snapshot["S"] == 6 and snapshot["Spare"] == snapshot["Hold"]:
-            raise ValueError("only on this side")
-        return False
 
-    ctx = _hold_ctx(_compile_avoid(check))
+def test_a_raise_on_the_real_values_reaches_the_caller() -> None:
+    ctx = _hold_ctx(_compile_avoid(_raises_when_spare_matches_hold))
 
     with pytest.raises(_AvoidCheckRaised):
-        _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": spare, "Hold": False})
+        _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": False, "Hold": False})
+
+
+def test_a_raise_only_with_the_hold_applied_to_real_values_denies_nothing() -> None:
+    """Real plus hold is no state a scan had; the gates ask when the hold really goes on."""
+    ctx = _hold_ctx(_compile_avoid(_raises_when_spare_matches_hold))
+
+    assert _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": True, "Hold": False}) is True
 
 
 def test_a_check_true_on_the_values_held_denies_no_hold() -> None:
@@ -528,8 +531,9 @@ def _holds(plan) -> int:
 
 
 def _avoided_scans(plan, avoided) -> list[int]:
+    """Scans of the plan in the avoided state.  The fork has them all; a replay keeps its last."""
     return [
-        state.scan_id for state in plan.replay().history.latest(100000) if avoided(dict(state.tags))
+        state.scan_id for state in plan.fork.history.latest(100000) if avoided(dict(state.tags))
     ]
 
 
@@ -583,6 +587,7 @@ def test_input_over_a_program_owned_limit_keeps_a_route_with_holds(
 
 def test_input_over_a_limit_the_hold_would_cross_goes_no_further() -> None:
     prog, state, sensor, limit = _dwell_program(0, 0)
+    assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
 
     plan = _drive(prog, state == 7, sensor > limit)
 
@@ -650,6 +655,7 @@ def test_a_check_true_only_at_the_failed_landing_keeps_the_route(release_needed,
 def test_a_check_no_scan_of_the_route_can_clear_stops_without_spending_the_budget() -> None:
     """Armed needs Start held while the sensor is held: the action gate says so at once."""
     prog, state = _armed_dwell(False)
+    assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
 
     plan = _drive(prog, state == 7, lambda s: s["Lim"] > 0 and s["Start"] and s["Sensor"])
 
@@ -670,18 +676,19 @@ def _speed_dwell(start: dict):
 def test_a_hold_that_really_forces_the_check_stops() -> None:
     """Speed really is 5, so the sensor hold the route needs is the avoided state."""
     plc, state, *_ = _speed_dwell({"Speed": 5})
+    avoid = lambda s: s["HoldState"] == 6 and s["Speed"] > 3 and s["HoldSensor"]  # noqa: E731
+    assert plc.how(state == 7, max_scans=2000).status is PlanStatus.REACHED
+    at_rest, *_ = _speed_dwell({"Speed": 0})
+    assert at_rest.how(state == 7, avoid=avoid, max_scans=2000).status is PlanStatus.REACHED
 
-    plan = plc.how(
-        state == 7,
-        avoid=lambda s: s["HoldState"] == 6 and s["Speed"] > 3 and s["HoldSensor"],
-        max_scans=2000,
-    )
+    plan = plc.how(state == 7, avoid=avoid, max_scans=2000)
 
     assert plan.status is PlanStatus.STOPPED
 
 
 def test_a_condition_a_hold_really_forces_stops() -> None:
     plc, state, sensor, speed, limit = _speed_dwell({"Speed": 5})
+    assert plc.how(state == 7, max_scans=2000).status is PlanStatus.REACHED
 
     plan = plc.how(state == 7, avoid=And(sensor, speed > limit), max_scans=2000)
 
@@ -690,6 +697,7 @@ def test_a_condition_a_hold_really_forces_stops() -> None:
 
 def test_releasing_an_input_that_really_is_on_stops() -> None:
     plc, state, *_ = _speed_dwell({"HoldSensor": True})
+    assert plc.how(state == 7, max_scans=2000).status is PlanStatus.REACHED
 
     plan = plc.how(
         state == 7,
@@ -703,6 +711,7 @@ def test_releasing_an_input_that_really_is_on_stops() -> None:
 def test_a_condition_refused_on_the_baseline_stays_refused() -> None:
     """The baseline has no HoldState, which a condition reads as violated: as it was."""
     prog, state, *_ = _dwell_program()
+    assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
 
     plan = _drive(prog, state == 7, state == 9999)
 
@@ -758,6 +767,76 @@ def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
     assert _holds(plan) > 0
 
 
+@pytest.mark.parametrize(
+    "only_with_the_hold_applied",
+    [
+        lambda s: s["HoldState"] == 8 and s["HoldSensor"] and s["HoldOffWD_Done"],
+        lambda s: s["HoldState"] == 8 and not s["HoldSensor"] and s["HoldOnWD_Done"],
+    ],
+    ids=["hold-on", "hold-off"],
+)
+def test_a_check_raising_only_on_a_landing_with_a_hold_applied_keeps_the_route(
+    only_with_the_hold_applied,
+) -> None:
+    """A failed attempt lands in state 8 on one watchdog, and no scan has it with the other side."""
+    prog, state, *_ = _dwell_program()
+
+    def _raises(snapshot: dict) -> bool:
+        if only_with_the_hold_applied(snapshot):
+            raise ValueError("only with the hold applied to the landing")
+        return False
+
+    plan = _drive(prog, state == 7, _raises)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.total_scans == 24
+    assert _holds(plan) > 0
+    assert not _avoided_scans(plan, only_with_the_hold_applied)
+
+
+def test_a_check_raising_on_a_scan_of_a_failed_trial_reaches_the_caller() -> None:
+    """The first try with the sensor held really scans state 8 with it on; the plan does not."""
+    prog, state, *_ = _dwell_program()
+
+    def _raises_in_eight_held(snapshot: dict) -> bool:
+        if snapshot["HoldState"] == 8 and snapshot["HoldSensor"]:
+            raise ValueError("on a scan the search ran")
+        return False
+
+    with pytest.raises(AvoidCheckError, match="ValueError"):
+        _drive(prog, state == 7, _raises_in_eight_held)
+
+
+_SYSTEM_TAGS = ("sys.", "rtc.", "fault.", "_")
+
+
+def _scan_values(tags) -> tuple:
+    return tuple(sorted((k, repr(v)) for k, v in tags.items() if not k.startswith(_SYSTEM_TAGS)))
+
+
+def test_a_check_raising_on_any_one_scan_of_the_route_reaches_the_caller() -> None:
+    """Every scan the holds take the plan through meets a gate, whichever scan it is."""
+    prog, state, *_ = _dwell_program()
+    route = _drive(prog, state == 7, None).fork.history.latest(100000)
+    scans = {_scan_values(scan.tags) for scan in route}
+    assert len(scans) == len(route) == 26
+
+    start = PLC(prog, dt=0.010)
+    start.step()
+    for scan in route:
+        if scan.scan_id < start.state.scan_id:
+            continue
+        values = _scan_values(scan.tags)
+
+        def _raises_on_this_scan(snapshot: dict, _values: tuple = values) -> bool:
+            if _scan_values(snapshot) == _values:
+                raise ValueError("on this scan alone")
+            return False
+
+        with pytest.raises(AvoidCheckError, match="ValueError"):
+            _drive(prog, state == 7, _raises_on_this_scan)
+
+
 def test_a_check_raising_only_with_a_hold_on_reaches_the_caller() -> None:
     prog, state, *_ = _dwell_program()
 
@@ -768,6 +847,97 @@ def test_a_check_raising_only_with_a_hold_on_reaches_the_caller() -> None:
 
     with pytest.raises(AvoidCheckError, match="ValueError"):
         _drive(prog, state == 7, _raises_with_the_sensor_held)
+
+
+# ---------------------------------------------------------------------------
+# The scan before how() starts is history, not a state a plan enters
+# ---------------------------------------------------------------------------
+
+
+def _start_then_wait():
+    """Start runs a timer that latches Target.  Phase is 0 before the first scan, then 1."""
+    start = Bool("Start", external=True)
+    delay = Timer.clone("Delay")
+    target = Bool("Target")
+    phase = Int("Phase")
+    rate = Int("Rate", external=True)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(1, phase)
+        with Rung(rate > 100):
+            out(Bool("RateHigh"))
+        with Rung(start):
+            on_delay(delay, 100, "ms")
+        with Rung(delay.Done):
+            latch(target)
+    return prog, target
+
+
+def _scanned(prog, scans: int, patch_before_last: dict | None = None) -> PLC:
+    plc = PLC(prog, dt=0.010)
+    for scan in range(scans):
+        if patch_before_last and scan == scans - 1:
+            plc.patch(patch_before_last)
+        plc.step()
+    return plc
+
+
+@pytest.mark.parametrize(
+    ("healthy", "scans", "patch"),
+    [
+        (lambda s: s["fault.out_of_range"], 1, None),
+        (lambda s: 1 / s["Phase"] > 5, 1, None),
+        (lambda s: 1 / s["Rate"] > 5, 5, {"Rate": 2}),
+    ],
+    ids=["system-tag-after-one-scan", "written-by-the-first-scan", "patched-before-the-last-scan"],
+)
+def test_a_check_raising_only_on_the_scan_before_the_start_keeps_the_route(
+    healthy, scans, patch
+) -> None:
+    """Every state from where how() starts has what the check reads; the scan before does not."""
+    prog, target = _start_then_wait()
+    plc = _scanned(prog, scans, patch)
+    healthy(dict(plc.state.tags))
+
+    plan = plc.how(target, avoid=healthy, max_scans=2000)
+    without = _scanned(prog, scans, patch).how(target, max_scans=2000)
+
+    assert plan.status is PlanStatus.REACHED
+    assert (plan.total_scans, _holds(plan)) == (without.total_scans, _holds(without))
+    assert plan.total_scans == 10
+
+
+def test_a_check_raising_before_the_start_and_on_the_route_reaches_the_caller() -> None:
+    """The scan before the start excuses that scan only."""
+    prog, target = _start_then_wait()
+
+    def _raises_without_phase_or_at_done(snapshot: dict) -> bool:
+        return 1 / snapshot["Phase"] > 5 or 1 / (1 - snapshot["Target"]) > 5
+
+    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
+        _scanned(prog, 1).how(target, avoid=_raises_without_phase_or_at_done, max_scans=2000)
+
+
+def test_a_goal_already_true_keeps_a_check_raising_only_on_the_scan_before() -> None:
+    go = Bool("Go", external=True)
+    target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung():
+            out(target)
+        with Rung(go):
+            out(Bool("Other"))
+
+    plan = _scanned(prog, 1).how(target, avoid=lambda s: s["fault.out_of_range"], max_scans=2000)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.total_scans == 0
+
+
+def test_a_typo_after_one_scan_still_reaches_the_caller() -> None:
+    prog, target = _start_then_wait()
+
+    with pytest.raises(AvoidCheckError, match="KeyError: 'Typo'"):
+        _scanned(prog, 1).how(target, avoid=lambda s: s["Typo"], max_scans=2000)
 
 
 # ---------------------------------------------------------------------------

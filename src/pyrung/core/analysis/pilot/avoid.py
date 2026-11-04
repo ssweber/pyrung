@@ -80,10 +80,10 @@ def _resting_violations(
     give one: it is often a failed attempt's landing, and the hold goes on from an earlier
     checkpoint on a corrected trajectory that may never reach those values.  So the hold
     is not denied here; the action gate and the scan gate judge real values when it goes
-    on.  The check is still asked on *real*, with and without the hold and with resting
-    filling only what *real* lacks, so that a raise on real values reaches the caller.  A
-    check the baseline can answer keeps that answer, so a condition reading a tag the
-    baseline lacks still refuses the hold.
+    on.  The check is still asked on *real* as it stands, with resting filling only what
+    *real* lacks, so that a raise on real values reaches the caller.  *real* with the hold
+    on is not asked: no scan may ever have had it.  A check the baseline can answer keeps
+    that answer, so a condition reading a tag the baseline lacks still refuses the hold.
     """
     resting = dict(getattr(ctx, "resting", {}) or {})
     held = dict(pairs)
@@ -94,9 +94,7 @@ def _resting_violations(
         try:
             return _avoid_member_true(check, pred, {**resting, **held})
         except _AvoidCheckRaised:
-            now = {**resting, **real}
-            _avoid_member_true(check, pred, {**now, **held})
-            _avoid_member_true(check, pred, now)
+            _avoid_member_true(check, pred, {**resting, **real})
             return False
 
     return tuple(check for check, pred in checks if forces(check, pred))
