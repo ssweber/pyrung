@@ -1,12 +1,13 @@
 """An ``avoid=`` check that raises did not say the state is clear.
 
-A check that raises on a real state reaches the caller as a named error, whichever
-gate met it: the route gate before the drive, the action gate, the scan gate, a
-trial coast, a terminal reason.  It never reads as a pass and never as a verdict.
-The resting baseline holds the steerable inputs and nothing else, so a check that
-raises there denies no hold.  It is asked again on real values, where a raise is the
-same error, and the gates that judge the hold when it goes on still stop what it forces.
-The scan behind the state how() starts from is history: a raise about it alone is no error.
+A check that raises on a real state reaches the caller as a named error.  A real state is
+the one how() starts from, or a scan a trial really runs, failed trials included.  Whichever
+gate met it, it never reads as a pass and never as a verdict.
+
+A raise on any other state says nothing about the route and denies nothing: the resting
+baseline, a hold laid over a state, a route's demands, the state behind the start when a plan
+rewinds and re-runs the entry scan.  That member is not violated, the others keep their answers,
+and the gates judge the scans those choices lead to.
 """
 
 from __future__ import annotations
@@ -15,14 +16,32 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import PLC, And, Bool, Int, Or, Program, Rung, Timer, copy, latch, on_delay, out
+from pyrung import (
+    PLC,
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    Timer,
+    copy,
+    latch,
+    on_delay,
+    out,
+    reset,
+    system,
+)
 from pyrung.core import AvoidCheckError
 from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.analysis.pilot import avoid as avoid_module
 from pyrung.core.analysis.pilot import budget, pilot_events, pilot_how
 from pyrung.core.analysis.pilot.avoid import (
     _avoid_forces,
-    _avoid_snap_names,
+    _avoid_scan_names,
     _avoid_violations,
+    _avoid_weighed_after_clear,
+    _avoid_weighed_names,
     _AvoidCheckRaised,
     _hold_allowed,
 )
@@ -34,6 +53,8 @@ from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
 from pyrung.core.coast_run import _Seen, _SeenState
 from pyrung.core.rung_firings import SearchQuestionRefused, UnrecordedScansError
 from pyrung.core.runner import _compile_avoid
+from tests.fixtures import pilot_scan_zero_sequence_route as scan_zero_route
+from tests.fixtures.pilot_alarm_presets import aborted_on_first_scan, alarmed_at_start
 
 
 def _two_ways():
@@ -261,26 +282,57 @@ def raising_check(request):
 
 def test_snapshot_check_raises(raising_check) -> None:
     with pytest.raises(_AvoidCheckRaised):
-        _avoid_snap_names(raising_check, {"Danger": True})
+        _avoid_scan_names(raising_check, {"Danger": True})
 
 
-def test_action_gate_on_a_real_snapshot_raises(raising_check) -> None:
+def test_a_hold_laid_over_a_state_is_only_weighed(raising_check) -> None:
     ctx = SimpleNamespace(avoid_pred=raising_check, resting={})
 
+    assert _avoid_violations(ctx, [("Fast", True)], {"Fast": False}) == ()
+    assert _avoid_forces(ctx, [("Fast", True)], {"Fast": False}) is False
+
+
+def test_a_routes_demands_are_only_weighed(raising_check) -> None:
+    assert route_forces([], {"Danger": True}, raising_check) is False
+    assert route_forced_names([], {"Danger": True}, raising_check) == ()
+
+
+def test_a_weighed_member_that_raises_leaves_the_others_their_answers() -> None:
+    avoid = _compile_avoid((_raises_at_once, Bool("Danger")))
+    ctx = SimpleNamespace(avoid_pred=avoid, resting={})
+
+    assert _avoid_weighed_names(avoid, {"Danger": True}) == ("Danger",)
+    assert _avoid_weighed_names(avoid, {"Danger": False}) == ()
+    assert _avoid_violations(ctx, [("Danger", True)], {}) == ("Danger",)
+    assert route_forces([], {"Danger": True}, avoid) is True
+    assert route_forced_names([], {"Danger": True}, avoid) == ("Danger",)
+
+
+def test_a_real_state_is_not_weighed_when_another_member_answers() -> None:
     with pytest.raises(_AvoidCheckRaised):
-        _avoid_violations(ctx, [("Fast", True)], {"Fast": False})
+        _avoid_scan_names(_compile_avoid((Bool("Danger"), _raises_at_once)), {"Danger": True})
 
 
-def test_route_gate_raises(raising_check) -> None:
-    with pytest.raises(_AvoidCheckRaised):
-        route_forces([], {"Danger": True}, raising_check)
-    with pytest.raises(_AvoidCheckRaised):
-        route_forced_names([], {"Danger": True}, raising_check)
-
-
-def test_after_clear_gate_raises_on_either_snapshot(raising_check) -> None:
+def test_after_clear_gate_raises_on_the_scan(raising_check) -> None:
     with pytest.raises(_AvoidCheckRaised):
         _avoid_names_after_clear(raising_check, {"Danger": False}, {"Danger": True})
+
+
+def test_after_clear_gate_only_weighs_the_start() -> None:
+    def _raises_without_danger(snapshot: dict) -> bool:
+        return snapshot["Danger"]
+
+    for check in (_member_form(_raises_without_danger), _raises_without_danger):
+        assert _avoid_names_after_clear(check, {}, {"Danger": False}) == ()
+        assert len(_avoid_names_after_clear(check, {}, {"Danger": True})) == 1
+
+
+def test_a_snapshot_no_scan_had_is_weighed_against_the_start() -> None:
+    avoid = _compile_avoid((_raises_at_once, Bool("Danger")))
+
+    assert _avoid_weighed_after_clear(avoid, {"Danger": False}, {"Danger": True}) == ("Danger",)
+    assert _avoid_weighed_after_clear(avoid, {"Danger": True}, {"Danger": True}) == ()
+    assert _avoid_weighed_after_clear(_raises_at_once, {}, {"Danger": True}) == ()
 
 
 def test_after_clear_gate_raises_on_the_later_snapshot_alone() -> None:
@@ -295,7 +347,7 @@ def test_the_transit_passes_a_search_that_swallows_exceptions() -> None:
     assert issubclass(AvoidCheckError, Exception)
     with pytest.raises(_AvoidCheckRaised):
         try:
-            _avoid_snap_names(_member_form(_raises_at_once), {})
+            _avoid_scan_names(_member_form(_raises_at_once), {})
         except Exception:
             pass
 
@@ -309,11 +361,14 @@ def _seen_coast_program():
     return prog
 
 
-def test_arming_a_coast_raises_for_a_broken_check() -> None:
+def test_arming_a_coast_only_weighs_where_it_stands() -> None:
+    """It may stand behind how()'s start.  The member stays armed for the scans it runs."""
     session = CoastSession(PLC(_seen_coast_program(), dt=0.1))
 
+    session.arm_avoid(_member_form(_raises_at_once))
+
     with pytest.raises(_AvoidCheckRaised):
-        session.arm_avoid(_member_form(_raises_at_once))
+        session._avoid_triggers[0].predicate(SimpleNamespace(tags={}))
 
 
 def test_a_coast_scan_raises_for_a_broken_check() -> None:
@@ -349,37 +404,24 @@ def _hold_ctx(avoid, resting=None):
     )
 
 
-REAL = {"Hold": True, "Danger": False, "Level": 5, "Limit": 10}
-
-
-def test_a_raise_left_on_real_values_reaches_the_caller(raising_check) -> None:
+def test_a_raise_on_the_baseline_denies_no_hold(raising_check) -> None:
     ctx = _hold_ctx(raising_check)
 
-    with pytest.raises(_AvoidCheckRaised):
-        _hold_allowed(ctx, ("Hold", True), REAL)
-    with pytest.raises(_AvoidCheckRaised):
-        _avoid_forces(ctx, [("Hold", True)], real=REAL)
+    assert _hold_allowed(ctx, ("Hold", True)) is True
+    assert _avoid_forces(ctx, [("Hold", True)]) is False
 
 
-def test_a_read_of_a_tag_no_real_state_has_reaches_the_caller() -> None:
-    ctx = _hold_ctx(_compile_avoid(lambda s: s["Ghost"]))
-
-    with pytest.raises(_AvoidCheckRaised):
-        _hold_allowed(ctx, ("Hold", True), REAL)
-
-
-def test_an_opaque_read_the_baseline_cannot_answer_is_asked_with_real_values() -> None:
-    """The baseline has no Danger, and a real state does: the index read gets its answer."""
-    opaque = _hold_ctx(_compile_avoid(lambda s: s["Danger"]))
-
-    assert _hold_allowed(opaque, ("Hold", True), REAL) is True
+def test_a_read_of_a_tag_the_baseline_lacks_denies_no_hold() -> None:
+    """The baseline has no Danger, and a real state does: the scans get the answer."""
+    assert _hold_allowed(_hold_ctx(_compile_avoid(lambda s: s["Danger"])), ("Hold", True)) is True
+    assert _hold_allowed(_hold_ctx(_compile_avoid(lambda s: s["Ghost"])), ("Hold", True)) is True
 
 
 def test_a_condition_the_baseline_trips_still_refuses_the_hold() -> None:
     """A condition reads the tag the baseline lacks as violated.  Lifting that is its own step."""
     condition = _hold_ctx(_compile_avoid(Bool("Danger")))
 
-    assert _hold_allowed(condition, ("Hold", True), REAL) is False
+    assert _hold_allowed(condition, ("Hold", True)) is False
 
 
 def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> None:
@@ -387,96 +429,47 @@ def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> Non
     reads_the_input = _hold_ctx(_compile_avoid(lambda s: s["Hold"]))
     no_danger_on_it = _hold_ctx(_compile_avoid(lambda s: s.get("Danger") is None))
 
-    assert _hold_allowed(reads_with_get, ("Hold", True), REAL) is True
-    assert _hold_allowed(reads_the_input, ("Hold", False), REAL) is True
-    assert _hold_allowed(reads_the_input, ("Hold", True), REAL) is False
-    assert _hold_allowed(no_danger_on_it, ("Hold", True), REAL) is False
+    assert _hold_allowed(reads_with_get, ("Hold", True)) is True
+    assert _hold_allowed(reads_the_input, ("Hold", False)) is True
+    assert _hold_allowed(reads_the_input, ("Hold", True)) is False
+    assert _hold_allowed(no_danger_on_it, ("Hold", True)) is False
 
 
-@pytest.mark.parametrize(
-    "check",
-    [lambda s: s["Hold"] and s["Level"] > 3, lambda s: s.get("Hold") and s.get("Level") + 0 > 3],
-    ids=["index", "get"],
-)
-def test_a_hold_the_baseline_cannot_judge_is_not_denied_on_the_landing(check) -> None:
-    """Level 5 may only be where a failed attempt ended.  The hold goes on from elsewhere."""
-    ctx = _hold_ctx(_compile_avoid(check))
-
-    assert _hold_allowed(ctx, ("Hold", True), {"Level": 5}) is True
-    assert _hold_allowed(ctx, ("Hold", True), {"Level": 1}) is True
-    assert _hold_allowed(ctx, ("Hold", False), {"Level": 5}) is True
-
-
-def test_a_check_already_true_without_the_hold_is_not_forced_by_it() -> None:
-    ctx = _hold_ctx(_compile_avoid(lambda s: s["Level"] > 3))
-
-    assert _hold_allowed(ctx, ("Hold", True), {"Level": 5}) is True
-
-
-def test_a_condition_with_a_program_owned_side_is_asked_with_real_values() -> None:
+def test_a_condition_with_a_program_owned_side_denies_no_hold() -> None:
     """``Input > Limit``: the baseline has no Limit, and the compare raises on what it finds."""
     ctx = _hold_ctx(_compile_avoid(Int("Input") > Int("Limit")), {"Input": 0})
     with pytest.raises(_AvoidCheckRaised):
-        _avoid_snap_names(ctx.avoid_pred, {"Input": 5})
+        _avoid_scan_names(ctx.avoid_pred, {"Input": 5})
 
-    assert _hold_allowed(ctx, ("Input", 5), {"Limit": 10}) is True
-    assert _hold_allowed(ctx, ("Input", 50), {"Limit": 10}) is True
-    assert _hold_allowed(ctx, ("Input", 5), {"Limit": -1}) is True
+    assert _hold_allowed(ctx, ("Input", 5)) is True
 
 
-def test_the_re_ask_is_real_values_as_they_stand() -> None:
-    """Real wins over rest, rest fills only what real lacks, and the hold is not applied."""
+def test_a_hold_is_asked_about_on_the_baseline_alone() -> None:
     asked = []
 
     def check(snapshot: dict) -> bool:
         asked.append(dict(snapshot))
         return snapshot["S"] == 99
 
-    ctx = _hold_ctx(_compile_avoid(check), {"Speed": 0, "Sensor": False, "Spare": 7})
+    ctx = _hold_ctx(_compile_avoid(check), {"Speed": 0, "Sensor": False})
 
-    assert _hold_allowed(ctx, ("Sensor", True), {"S": 6, "Speed": 5, "Sensor": False}) is True
-    assert asked[1:] == [{"S": 6, "Speed": 5, "Sensor": False, "Spare": 7}]
-
-
-def _raises_when_spare_matches_hold(snapshot: dict) -> bool:
-    if snapshot["S"] == 6 and snapshot["Spare"] == snapshot["Hold"]:
-        raise ValueError("only on this side")
-    return False
-
-
-def test_a_raise_on_the_real_values_reaches_the_caller() -> None:
-    ctx = _hold_ctx(_compile_avoid(_raises_when_spare_matches_hold))
-
-    with pytest.raises(_AvoidCheckRaised):
-        _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": False, "Hold": False})
-
-
-def test_a_raise_only_with_the_hold_applied_to_real_values_denies_nothing() -> None:
-    """Real plus hold is no state a scan had; the gates ask when the hold really goes on."""
-    ctx = _hold_ctx(_compile_avoid(_raises_when_spare_matches_hold))
-
-    assert _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": True, "Hold": False}) is True
-
-
-def test_a_check_true_on_the_values_held_denies_no_hold() -> None:
-    ctx = _hold_ctx(_compile_avoid(lambda s: s["Faulted"] and s["Hold"]))
-
-    assert _hold_allowed(ctx, ("Hold", True), {"Faulted": True}) is True
+    assert _hold_allowed(ctx, ("Sensor", True)) is True
+    assert asked == [{"Speed": 0, "Sensor": True}]
 
 
 def test_each_member_of_a_union_is_judged_on_its_own() -> None:
-    """A member the baseline trips stays tripped when another needs the real values."""
+    """A member the baseline trips stays tripped when another raises on it."""
     avoid = _compile_avoid((Bool("Danger"), lambda s: s["Level"] > 100))
     ctx = _hold_ctx(avoid)
 
-    assert _avoid_violations(ctx, [("Hold", True)], real=REAL) == ("Danger",)
+    assert _avoid_violations(ctx, [("Hold", True)]) == ("Danger",)
 
 
-def test_a_bare_callable_is_asked_with_real_values() -> None:
+def test_a_bare_callable_that_raises_on_the_baseline_denies_no_hold() -> None:
     ctx = _hold_ctx(lambda s: s["Level"] > 3)
 
-    assert _hold_allowed(ctx, ("Hold", True), {"Level": 1}) is True
-    assert _avoid_violations(ctx, [("Hold", True)], real={"Level": 1}) == ()
+    assert _hold_allowed(ctx, ("Hold", True)) is True
+    assert _avoid_violations(ctx, [("Hold", True)]) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -1002,3 +995,313 @@ def test_a_tag_not_in_the_program_stops_with_the_error(program, typo) -> None:
 
     assert isinstance(raised.value.__cause__, KeyError)
     assert plc.current_state is before
+
+
+# ---------------------------------------------------------------------------
+# A hold laid over a state is no scan
+# ---------------------------------------------------------------------------
+
+
+def _same_plan(plan, without) -> None:
+    assert plan.status is PlanStatus.REACHED
+    assert [str(step) for step in plan.journal] == [str(step) for step in without.journal]
+    assert plan.total_scans == without.total_scans
+
+
+def _rate_on_speed():
+    """Speed above 3 must be applied for a 1 s timer that drives Target."""
+    speed = Int("Speed", external=True)
+    run = Timer.clone("Rn")
+    target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung(speed > 3):
+            on_delay(run, 1000, "ms")
+        with Rung(run.Done):
+            out(target)
+    return prog, target
+
+
+def test_a_rate_check_raising_only_on_the_hold_laid_over_the_state_keeps_the_route() -> None:
+    """Acc is 0 only until the first scan with Speed on has run its timer."""
+    prog, target = _rate_on_speed()
+    without = _scanned(prog, 1).how(target, max_scans=2000)
+    assert (without.total_scans, _holds(without)) == (100, 2)
+
+    plan = _scanned(prog, 1).how(
+        target,
+        avoid=lambda s: 1000 / s["Rn_Acc"] > 1e9 if s["Speed"] > 3 else False,
+        max_scans=2000,
+    )
+
+    _same_plan(plan, without)
+
+
+def test_a_rate_check_raising_on_a_scan_with_the_speed_on_reaches_the_caller() -> None:
+    prog, target = _rate_on_speed()
+
+    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
+        _scanned(prog, 1).how(
+            target,
+            avoid=lambda s: 1 / (s["Rn_Acc"] - 10) > 1e9 if s["Speed"] > 3 else False,
+            max_scans=2000,
+        )
+
+
+def _armed_dwell_target():
+    prog, state, *_ = _armed_dwell(True)
+    return prog, state == 7
+
+
+def _dwell_target():
+    prog, state, *_ = _dwell_program()
+    return prog, state == 7
+
+
+def _entry_preset():
+    """The first scan latches X, and a timer with no preset takes it away on the next."""
+    x = Bool("HX")
+    target = Bool("HT")
+    wait = Timer.clone("HW")
+    preset = Int("HP")
+    first_scan = system.sys.first_scan
+    with Program(strict=False) as prog:
+        with Rung(first_scan):
+            latch(x)
+        with Rung():
+            on_delay(wait, preset)
+        with Rung(wait.Done):
+            reset(x)
+        with Rung(x):
+            latch(target)
+        with Rung(first_scan):
+            latch(x)
+    return prog, target
+
+
+def _entry_step():
+    """As above, with the entry scan's work on a step that a later rung puts back."""
+    step = Int("HS")
+    target = Bool("HT")
+    wait = Timer.clone("HW")
+    preset = Int("HP")
+    first_scan = system.sys.first_scan
+    with Program(strict=False) as prog:
+        with Rung(first_scan):
+            copy(10, step)
+        with Rung():
+            on_delay(wait, preset)
+        with Rung(first_scan, wait.Done):
+            copy(5, step)
+        with Rung(step == 10, first_scan):
+            latch(target)
+        with Rung(first_scan, step == 5):
+            copy(10, step)
+    return prog, target
+
+
+_SKIP_IN_KEY = ("sys.", "rtc.", "fault.", "_")
+
+
+def _state_key(tags) -> tuple:
+    return tuple(sorted((k, repr(v)) for k, v in tags.items() if not k.startswith(_SKIP_IN_KEY)))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [_rate_on_speed, _dwell_target, _armed_dwell_target, _entry_preset, _entry_step],
+    ids=["rate", "dwell", "armed", "entry-preset", "entry-step"],
+)
+def test_a_check_raising_on_a_hold_laid_over_no_scan_keeps_the_route(program, monkeypatch) -> None:
+    """Every overlay the action gates weigh that the plan's scans do not have, one at a time."""
+    prog, target = program()
+    without = _scanned(prog, 1).how(target, max_scans=2000)
+    assert without.status is PlanStatus.REACHED
+    on_the_plan = {_state_key(state.tags) for state in without.fork.history.latest(100000)}
+
+    weighed = avoid_module._avoid_weighed_names
+    overlays: dict = {}
+
+    def _recording(avoid, snap):
+        overlays.setdefault(_state_key(snap), None)
+        return weighed(avoid, snap)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(avoid_module, "_avoid_weighed_names", _recording)
+        _scanned(prog, 1).how(target, avoid=lambda s: False, max_scans=2000)
+
+    off_the_plan = [key for key in overlays if key not in on_the_plan]
+    assert off_the_plan
+
+    for key in off_the_plan:
+
+        def _raises_on_this_overlay(snapshot: dict, _key: tuple = key) -> bool:
+            if _state_key(snapshot) == _key:
+                raise ValueError("on this overlay alone")
+            return False
+
+        plan = _scanned(prog, 1).how(target, avoid=_raises_on_this_overlay, max_scans=2000)
+
+        _same_plan(plan, without)
+
+
+# ---------------------------------------------------------------------------
+# The entry scan: the state behind the start is the plan's start
+# ---------------------------------------------------------------------------
+
+_FAULT = "fault.out_of_range"
+
+
+@pytest.mark.parametrize("program", [_entry_preset, _entry_step], ids=["preset", "step"])
+@pytest.mark.parametrize(
+    "check",
+    [
+        lambda s: s[_FAULT],
+        lambda s: s.get(_FAULT, False),
+        lambda s: s.get(_FAULT) is None and s["Typo"],
+    ],
+    ids=["system-tag", "with-default", "typo-only-behind-the-start"],
+)
+def test_a_raise_about_the_entry_source_keeps_its_designations(program, check) -> None:
+    """The route is the entry scan's own: it rewinds and re-runs that scan with a preset."""
+    prog, target = program()
+    without = _scanned(prog, 1).how(target, max_scans=2000)
+    assert without.total_scans == 0
+    assert without.fork.state.tags["HT"] is True
+
+    plan = _scanned(prog, 1).how(target, avoid=check, max_scans=2000)
+
+    _same_plan(plan, without)
+    assert plan.fork.state.tags["HT"] is True
+
+
+@pytest.mark.parametrize("program", [_entry_preset, _entry_step], ids=["preset", "step"])
+def test_a_typo_on_an_entry_scan_route_reaches_the_caller(program) -> None:
+    prog, target = program()
+
+    with pytest.raises(AvoidCheckError, match="KeyError: 'Typo'"):
+        _scanned(prog, 1).how(target, avoid=lambda s: s["Typo"], max_scans=2000)
+
+
+def _route_fixture(logic):
+    return lambda: _scanned(logic, 1)
+
+
+def _aborted_at_start():
+    return _scanned(aborted_on_first_scan.logic, 1)
+
+
+def _alarmed_at_start():
+    plc = PLC(alarmed_at_start.logic, dt=0.010)
+    plc.force(alarmed_at_start.Reset, True)
+    plc.force(alarmed_at_start.AtTarget, True)
+    plc.step()
+    return plc
+
+
+_ENTRY_REQUIREMENTS = {
+    "route-adjacent": (
+        _route_fixture(scan_zero_route.adjacent_logic),
+        scan_zero_route.SequenceStep == 81,
+        scan_zero_route.SequenceStep.name,
+        (9, 21),
+    ),
+    "route-field": (
+        _route_fixture(scan_zero_route.logic),
+        scan_zero_route.SequenceStep == 81,
+        scan_zero_route.SequenceStep.name,
+        (5, 5),
+    ),
+    "aborted": (
+        _aborted_at_start,
+        aborted_on_first_scan.ProcessStep == aborted_on_first_scan.AT_TARGET,
+        aborted_on_first_scan.ProcessStep.name,
+        (0, 0),
+    ),
+    "alarmed": (
+        _alarmed_at_start,
+        alarmed_at_start.ProcessStep == alarmed_at_start.COMPLETE,
+        alarmed_at_start.ProcessStep.name,
+        (2, None),
+    ),
+}
+
+
+@pytest.mark.parametrize("row", sorted(_ENTRY_REQUIREMENTS))
+def test_a_system_tag_behind_the_start_keeps_an_entry_requirement_route(row) -> None:
+    make, target, _step, (total, holds) = _ENTRY_REQUIREMENTS[row]
+    without = make().how(target, max_scans=2000)
+    assert without.total_scans == total
+    assert holds is None or _holds(without) == holds
+
+    plan = make().how(target, avoid=lambda s: s[_FAULT], max_scans=2000)
+
+    _same_plan(plan, without)
+
+
+@pytest.mark.parametrize("row", ["route-adjacent", "route-field", "aborted"])
+def test_a_division_by_the_step_behind_the_start_keeps_an_entry_requirement_route(row) -> None:
+    """The step is 0 only on the state behind the start, and the plan re-runs from there."""
+    make, target, step, _answer = _ENTRY_REQUIREMENTS[row]
+    without = make().how(target, max_scans=2000)
+
+    plan = make().how(target, avoid=lambda s: 1 / s[step] > 5, max_scans=2000)
+
+    _same_plan(plan, without)
+    assert [
+        state.scan_id for state in plan.fork.history.latest(100000) if state.tags[step] == 0
+    ] == [0]
+
+
+@pytest.mark.parametrize("row", ["route-adjacent", "route-field"])
+def test_a_raise_on_a_later_scan_of_an_entry_requirement_route_reaches_the_caller(row) -> None:
+    make, target, step, _answer = _ENTRY_REQUIREMENTS[row]
+
+    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
+        make().how(target, avoid=lambda s: 1 / (s[step] - 81) > 5, max_scans=2000)
+
+
+def test_a_raise_on_the_re_run_entry_scan_reaches_the_caller() -> None:
+    """The entry scan is what the plan rewinds to run again, so that run is a real scan."""
+    prog, target = _entry_preset()
+
+    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
+        _scanned(prog, 1).how(target, avoid=lambda s: 1 / (s["HP"] - 11) > 5, max_scans=2000)
+
+
+@pytest.mark.parametrize("row", sorted(_ENTRY_REQUIREMENTS))
+def test_a_typo_on_an_entry_requirement_route_reaches_the_caller(row) -> None:
+    make, target, _step, _answer = _ENTRY_REQUIREMENTS[row]
+
+    with pytest.raises(AvoidCheckError, match="KeyError: 'Typo'"):
+        make().how(target, avoid=lambda s: s["Typo"], max_scans=2000)
+
+
+# ---------------------------------------------------------------------------
+# A raising member does not silence the others
+# ---------------------------------------------------------------------------
+
+
+def _raises_on_fast_before_its_scan(snapshot: dict) -> bool:
+    if snapshot["Fast"] and not snapshot["Danger"]:
+        raise ValueError("Fast on with no Danger: no scan has that")
+    return False
+
+
+def test_a_member_raising_on_an_overlay_leaves_the_route_to_the_others() -> None:
+    prog, target, *_ = _two_ways()
+    plc = _scanned(prog, 1)
+
+    plan = plc.how(target, avoid=_raises_on_fast_before_its_scan, max_scans=200)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.fork.state.tags["Danger"] is True
+
+
+def test_a_member_that_answers_keeps_its_answer_beside_one_that_raises() -> None:
+    prog, target, danger, _level = _two_ways()
+    plc = _scanned(prog, 1)
+
+    plan = plc.how(target, avoid=(_raises_on_fast_before_its_scan, danger), max_scans=200)
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.fork.state.tags["Danger"] is False
