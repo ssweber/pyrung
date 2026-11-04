@@ -367,7 +367,7 @@ _CT = (Ct.Done, Ct.Acc)
 _not_done = lambda: [~Ct.Done]  # noqa: E731
 _step_is_1 = lambda: [Step == 1]  # noqa: E731
 # The drum case: stage step 1, run a scan, then the step's event rises together
-# with the pin.  The event advances 1 -> 2 before the pin acts.
+# with the pin.  The pin acts first and takes the scan.
 _DRUM_ROWS = [_idle(DoStage=True, Stage=1), _idle(En=True)]
 
 _COMPLETE_ROWS = [_idle(DoStage=True, Stage=3), _idle(En=True)]
@@ -409,10 +409,11 @@ ABSOLUTE = {
         [_idle(En=True, P1=True, P2=True)],
         (False, False, False, False),
     ),
-    # Drum: the event steps 1 -> 2 on the scan the pin acts.  Reset reads
-    # Step == 1 early and wins (step 1); a jog/jump reads it early too and
-    # acts after the event (3).  Read after the event the step is 2, the parent
-    # off, and the pin does nothing (2).
+    # Drum: the step's event rises on the scan the pin acts.  Reset reads
+    # Step == 1 early and wins (step 1); a jump reads it early too and takes the
+    # scan from the event (3).  Read after the event the step is 2, the parent
+    # off, and the pin does nothing (2).  A jog forward lands where the event
+    # would, so the step does not tell its read apart: the random schedules do.
     "drum_reset_beats_event": (
         _drum_events,
         _step_is_1,
@@ -420,14 +421,6 @@ ABSOLUTE = {
         (P1,),
         [*_DRUM_ROWS, _idle(En=True, E1=True, P1=True)],
         (1, False, False, False),
-    ),
-    "drum_jog_after_event": (
-        _drum_events,
-        _step_is_1,
-        _DRUM_WATCH,
-        (P3,),
-        [*_DRUM_ROWS, _idle(En=True, E1=True, P3=True)],
-        (3, False, True, True),
     ),
     "drum_jump_after_event": (
         _drum_events,
@@ -438,10 +431,10 @@ ABSOLUTE = {
         (3, False, True, True),
     ),
     # Completion: stage the last step, run a scan, then the last step's event
-    # arrives with the pin.  The event completes the drum and sets Flag; the
+    # arrives with the pin.  The event would complete the drum and set Flag; the
     # parent ~Flag was read before that.  Reset wins (step 1, Flag off); a jump
-    # to 1 acts and the completion stays (Flag on).  Read after the event the
-    # parent is off and the pin does nothing (step 3, Flag on).
+    # to 1 takes the scan, so no completion and step 1's row.  Read after the
+    # event the parent is off and the pin does nothing (step 3, Flag on).
     "drum_reset_vs_completion": (
         _drum_jump_to_1,
         lambda: [~Flag],
@@ -456,7 +449,7 @@ ABSOLUTE = {
         _DRUM_WATCH,
         (P2,),
         _COMPLETE_ROWS + [_idle(En=True, E3=True, P2=True)],
-        (1, True, False, False),
+        (1, False, True, False),
     ),
 }
 

@@ -796,7 +796,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
                 "EventDrumJog",
             }
         ),
-        data_reads=frozenset({"EventDrumStep", "EventDrumJumpStep"}),
+        data_reads=frozenset({"EventDrumStep", "EventDrumJumpStep", "EventDrumDone"}),
         writes=frozenset({"EventDrumOutput", "EventDrumStep", "EventDrumDone"}),
     ),
     GraphCase(
@@ -810,6 +810,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
                 "TimeDrumPreset2",
                 "TimeDrumJumpStep",
                 "TimeDrumStep",
+                "TimeDrumDone",
             }
         ),
         writes=frozenset({"TimeDrumOutput", "TimeDrumStep", "TimeDrumAcc", "TimeDrumDone"}),
@@ -862,7 +863,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         "time_event_drum",
         _time_event_drum_case,
         frozenset({"TEDrumAuto", "TEDrumEvent2", "TEDrumReset", "TEDrumJump"}),
-        data_reads=frozenset({"TEDrumPreset1", "TEDrumJumpStep", "TEDrumStep"}),
+        data_reads=frozenset({"TEDrumPreset1", "TEDrumJumpStep", "TEDrumStep", "TEDrumDone"}),
         writes=frozenset({"TEDrumOutput", "TEDrumStep", "TEDrumAcc", "TEDrumDone"}),
     ),
     GraphCase(
