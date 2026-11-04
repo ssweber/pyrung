@@ -13,7 +13,7 @@ from pyrung.click.codegen.constants import (
     _COPY_CONVERTERS,
     _FUNC_RE,
     _INSTRUCTION_NAMES,
-    _OPERAND_RE,
+    _operand_matches,
     _OUT_VARIANT_TIMER_INSTRUCTIONS,
     _RANGE_RE,
     _ascending_range_str,
@@ -1109,7 +1109,7 @@ def _register_operands_from_text(
                     collection.range_comments[range_str] = f"# {start_label}..{end_label}"
 
     # Find individual operands (skip those covered by a range)
-    for op_match in _OPERAND_RE.finditer(text):
+    for op_match in _operand_matches(text):
         operand = op_match.group(0)
         if operand in collection.tags:
             continue
@@ -1388,7 +1388,7 @@ def _ref_operands_in_text(
         _ref_operands_in_text(ptr_match.group(2), collection, refs)
 
     # Check individual operands
-    for op_match in _OPERAND_RE.finditer(text):
+    for op_match in _operand_matches(text):
         operand = op_match.group(0)
         if operand in SYSTEM_OPERAND_PATHS:
             refs.has_system_import = True
