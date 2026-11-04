@@ -21,7 +21,7 @@ MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN
   nor below nor equal, so a class is 2 only when it equals itself not.
 - ``agg_inf``: SUM {+Inf, -Inf} is NaN (Result1 = 2); AVG {+Inf, 1.0} is +Inf (Result2 = 1); AVG
   {3e38, 3e38}: 3e38 if it does not overflow on the way (Result3 = 1), +Inf (2) if a float32
-  sum does.  SUM {3e38, 3e38}: +Inf (Result4 = 1), 6e38 (2) in a store wider than a float32.  SC43
+  sum does.  SUM {3e38, 3e38}: +Inf (Result4 = 1), 2 where it stops at the Real top.  SC43
   (ErrorCode bit 1).
 - ``rand_sites``: pyrung's RAND is one draw per site per scan.  Two sites over 8 scans, 1..30000:
   they differ on some scan (Result1 = equal scans, 0 for independent); a site changes
@@ -154,7 +154,7 @@ def init_agg_nan_order(slot):
 
 
 def _inf_class(slot, value, into):
-    with Rung(*once(slot), value > 1.0e39):
+    with Rung(*once(slot), value > 3.4028235e38):
         copy(1, into)
 
 
@@ -175,14 +175,14 @@ def prove_agg_inf(slot):
     _inf_class(slot, df[187], slot.Result2)
     with Rung(*once(slot), df[190] == 3.0e38):
         copy(1, slot.Result3)
-    with Rung(*once(slot), df[190] > 1.0e39):
+    with Rung(*once(slot), df[190] > 3.4028235e38):
         copy(2, slot.Result3)
     with Rung(*once(slot)):
         calc(df.select(188, 189).sum(), df[191])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
-    with Rung(*once(slot), df[191] > 1.0e39):
+    with Rung(*once(slot), df[191] > 3.4028235e38):
         copy(1, slot.Result4)
-    with Rung(*once(slot), df[191] == 6.0e38):
+    with Rung(*once(slot), df[191] == 3.4028235e38):
         copy(2, slot.Result4)
     finish(slot)
 

@@ -154,6 +154,7 @@ from pyrung.core import (
 )
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pattern_for, put, track
 from tests.conformance.memory import ClickTimer, dd, ds, td
+from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 _BITS = [
@@ -326,11 +327,6 @@ def hundreds(slot: Any, s: Side, scan: int, into: Any) -> None:
 def over(slot: Any, s: Side, base: int, scan: int, into: Any) -> None:
     with Rung(slot.Scratch == scan):
         calc(s.acc - base, into)
-
-
-def between(*values: int) -> range:
-    """Every candidate reading of a field, so that none is asserted."""
-    return range(min(values), max(values) + 1)
 
 
 #: A case's window past the default, for the drums that first run through their steps.

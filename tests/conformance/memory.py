@@ -58,7 +58,7 @@ STAGING_DS = range(3901, 4501)
 #: group that outgrew its first one.  A group listed before it has cases is
 #: reserved for the group that will have them.
 OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
-    "rungs": {"C": range(1601, 1661), "CT": range(151, 161)},
+    "rungs": {"C": (range(1601, 1603), range(1612, 1614), range(1620, 1661)), "CT": range(151, 161)},
     # DD4.., DF20.. and DH5.. are the grey-area probes' (the math cases use none).
     "math": {
         "DS": (
@@ -131,7 +131,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
     "out": {"C": range(1801, 1852), "T": range(301, 313)},
-    "loop": {"C": range(1701, 1751), "T": (range(201, 212), range(225, 251)), "CT": range(201, 251)},
+    "loop": {"C": range(1701, 1751), "T": range(201, 212), "CT": (range(201, 212), range(215, 251))},
     "timers": {"C": (range(1471, 1472), range(1481, 1482), range(1491, 1492)), "T": range(1, 101)},
     # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
     # cases use none of them).
@@ -159,9 +159,9 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "block": {
         "C": range(1201, 1277),
-        "DS": range(4001, 4111),
+        "DS": (range(4001, 4016), range(4021, 4111)),
         "DD": range(201, 301),
-        "DF": range(201, 301),
+        "DF": (range(201, 203), range(205, 301)),
         "DH": range(101, 201),
     },
     "shift": {
@@ -195,7 +195,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "system": {
         # C969..C1000 are drum_close's.
         "C": (range(901, 904), range(911, 914), range(921, 924), range(941, 969)),
-        "T": range(101, 151),
+        "T": (range(101, 113), range(126, 151)),
         "CT": range(171, 181),
         "DD": range(901, 1000),
         "DH": range(401, 411),
@@ -208,7 +208,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     # C582..C660 are drum_settle's (the solve_order cases use none of them).
     "solve_order": {
-        "C": (range(501, 503), range(511, 522), range(527, 582), range(661, 662), range(681, 682)),
+        "C": (range(501, 503), range(511, 522), range(527, 528), range(534, 535), range(564, 582), range(661, 662), range(681, 682)),
         "T": range(151, 161),
         "CT": range(161, 171),
     },
@@ -329,6 +329,54 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DH": range(61, 67),
     },
     "real_sum": {"DF": (range(70, 101), range(142, 151))},
+    "copy_more": {
+        "C": range(528, 531),
+        "DD": range(59, 61),
+        "DF": range(192, 200),
+        "DH": range(67, 70),
+        "TXT": (range(570, 571), range(571, 751)),
+    },
+    "block_more": {
+        "C": range(531, 534),
+        "DS": range(3915, 3920),
+        "DF": range(200, 201),
+        "TXT": range(751, 754),
+    },
+    "compare": {
+        "DS": (range(3920, 3921), range(3924, 3926)),
+        "DH": range(70, 71),
+        "TXT": range(761, 777),
+    },
+    "out_more": {
+        "C": range(535, 552),
+        "DS": range(3926, 3929),
+        "T": (range(113, 116), range(225, 243)),
+    },
+    "for_more": {
+        "C": (range(552, 558), range(563, 564)),
+        "DS": range(3929, 3931),
+        "T": range(244, 249),
+        "CT": range(149, 150),
+    },
+    "call_more": {
+        "C": range(558, 563),
+        "DS": range(4016, 4017),
+        "T": (range(243, 244), range(249, 251)),
+        "CT": (range(148, 149), range(150, 151)),
+    },
+    "boot_read": {
+        "C": (range(1603, 1612), range(1614, 1620)),
+        "DS": (range(4017, 4020), range(4318, 4320)),
+        "DD": range(65, 74),
+        "DF": range(203, 204),
+        "DH": range(71, 72),
+        "T": range(116, 122),
+        "CT": range(213, 215),
+        "TXT": range(781, 782),
+    },
+    "for_wide": {"DD": range(61, 65), "T": range(125, 126), "CT": range(212, 213)},
+    "flag_scan": {"DF": range(204, 205)},
+    "rtc_set": {"DD": range(74, 77)},
 }
 
 

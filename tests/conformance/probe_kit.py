@@ -46,6 +46,11 @@ def flag_bit(slot: Any, flag: Any, into: Any, bit: int = 1) -> None:
         calc(into + bit, into)
 
 
+def between(*values: int) -> range:
+    """Every candidate reading of a field, so that none is asserted."""
+    return range(min(values), max(values) + 1)
+
+
 class GuardedProbes:
     """An op once, on the first scan past the stage whose start finds *flag* off.
 

@@ -39,6 +39,9 @@ from pyrung.conformance import (
 )
 from tests.conformance import (
     test_agg_more,
+    test_boot_read,
+    test_copy_more,
+    test_v4_more,
     test_block,
     test_call_twice,
     test_coils,
@@ -137,6 +140,16 @@ ALL_GROUPS = [
     # After every group: its probes raise SC43 and SC46 on purpose, and a flag
     # stays up to the end of the scan, so any group after it that reads a flag
     # would see them (text/to_binary read SC43 on a scan a store probe raised it).
+    test_copy_more.group,
+    test_copy_more.block_group,
+    test_v4_more.group,
+    test_v4_more.for_group,
+    test_v4_more.call_group,
+    test_boot_read.boot_group,
+    test_boot_read.wide_group,
+    test_boot_read.rtc_group,
+    test_copy_more.compare_group,
+    test_boot_read.flag_group,
     test_store_probe.group,
     # After the store probes too: they raise flags on purpose (and leave them up to
     # the end of the scan), so no group that reads one may run after them.
@@ -199,6 +212,9 @@ PARTS: dict[str, tuple[str, ...]] = {
     "H": ("word_store", "real_bits", "real_sum"),
     "I": ("drum_pins", "drum_branch", "drum_limits"),
     "J": ("math_more", "hex_math", "agg_more"),
+    "K": ("copy_more", "block_more", "compare"),
+    "L": ("out_more", "for_more", "call_more"),
+    "M": ("boot_read", "for_wide", "rtc_set", "flag_scan"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
