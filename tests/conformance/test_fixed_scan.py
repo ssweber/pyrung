@@ -122,11 +122,6 @@ def _prove_off_delay_and_drum(slot: Any) -> None:
     fire_when_all_read(slot, [slot.Result1, slot.Result2, slot.Result3, slot.Result4])
 
 
-def _init_drum_steps(slot: Any) -> None:
-    copy(0, ds[3901])
-    copy(0, ds[3902])
-
-
 group = Group(
     "fixed_scan",
     [
@@ -158,7 +153,6 @@ group = Group(
         case(
             "Off-delays and a time drum's step of 1 s and 1000 ms: the scan each ends on",
             ladder=_prove_off_delay_and_drum,
-            init=_init_drum_steps,
             keep=[ClickTimer(31).Done, ClickTimer(31).Acc, ClickTimer(32).Done, ClickTimer(32).Acc],
             expect={
                 "Result1": ANY_COUNT,
