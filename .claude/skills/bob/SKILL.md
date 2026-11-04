@@ -72,9 +72,11 @@ moved), so N branches would cost N full gates in series. Instead:
    train may gate meanwhile, but lands only once that review is clean.
    When the train holds a `how()`/history/harness/state change (profile.md "Compare gate"), run
    the compare on the merged tree against the base before submitting: `devtools/how_compare.py`.
-   An answer that changes without a recorded reason holds the train; a plan that disagrees with
-   stepping the session holds it even when old and new agree. Expected differences go in
-   `<home>/jobs/train<N>/how-compare-expected.txt`; the reasons go to the user at landing.
+   Exit 1 holds the train: a case without a row on both sides, a difference nobody explained, a
+   flag kind new to the tree, or an ABORT/SETUP_ERROR row. A flag already on the same base row
+   does not hold (it is listed every run). Expected differences go in
+   `<home>/jobs/train<N>/how-compare-expected.txt` as `<glob>[:fields]  # reason`; the reasons
+   go to the user at landing.
 2. `M submit --id train<N> ... --stages train`, `M next` in the background. While a train
    gates, commit nothing to the base (docs, skill edits included): `land` refuses once the base
    moves, and the whole gate reruns. Hold such commits until the train lands.

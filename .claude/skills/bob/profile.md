@@ -60,26 +60,37 @@ compares of the day had no entry-requirement program (avoid-fix) and never ran a
 mid-count under a held enable (triage), and the 215-answer corpus and tumbler hold neither.
 
 ```
-python -I devtools/mergeq/mergeq.py run --timeout 1700 --     .venv/Scripts/python.exe devtools/how_compare.py --base dev --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
+python -I devtools/mergeq/mergeq.py run --timeout 2000 --     uv run python devtools/how_compare.py --base dev --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
 ```
 
+(`--full`: outer `--timeout 11500`; the per-side default is 900 s fast, 5400 s full. The reviewer
+hook runs a script only from a write root, so a reviewer cannot run this tool from `devtools/`;
+the orchestrator or builder runs it and the reviewer reads the output.)
+
 - `--base` is a git ref (exported with `git archive`) or a directory; `--tree` is a directory
-  with `src/`. Each side runs in its own process at below-normal priority with a memory limit
-  and a per-row time limit, and prints `pyrung.__file__`, which the tool checks.
-- Fast set (default): 122 rows, 3.5 to 4 minutes a side (7 minutes both). `--full`: 378 rows (not yet timed end to end; expect a quarter
-  hour or more per side); run it for a branch that moves the planner itself.
+  with `src/` or a ref. Each side runs in its own process at below-normal priority with a memory
+  limit and a per-row time limit, and prints `pyrung.__file__`, which the tool checks.
+- Fast set (default): 122 cases, 3.5 to 4 minutes a side. `--full`: 378 cases, see the timing
+  in the ledger.
 - The groups: a timer mid-count under a held enable (with and without a harness, bench link
   changed), entry-requirement programs warmed 0..2 scans, programs that really reach, long
   waits (minutes, past 32.767 s), holds, two routes, every avoid form (condition, callable index,
-  `.get`, raising on a real scan), drums, goal already true, composite targets.
+  `.get`, raising on a real scan), drums, goal already true, composite targets, and truth rows
+  (held enable 120 s, held chain 3+2 min: declines today; must stay declined or become a correct
+  REACHED).
 - It prints: rows that differ (case, field, base, tree); how many rows REACHED on each side and
-  which reach on neither (agreement there is no evidence); FLAGS. A flag is a plan that disagrees
-  with stepping the session itself (no inputs, no holds, plan ends at scan S, stepping reaches at
-  S'), a goal false at the plan's tip, a replay or stepped replay that differs: flagged even when
-  old and new agree.
-- Exit 1 holds the train. Record every expected difference as `<glob on the case name>  # reason`
-  in `<home>/jobs/train<N>/how-compare-expected.txt` and pass `--expected`; anything not
-  matched holds the train until it is explained or fixed. The reasons go to the user at landing.
+  which reach on neither (agreement there is no evidence); which reached plans were not checked
+  against stepping and why; FLAGS by kind per row. PLAN_VS_STEP: a plan with no inputs or holds
+  ends at a scan other than where stepping the session itself reaches the goal. Also
+  TOTAL_VS_TIP, GOAL_FALSE_AT_TIP, REPLAY_DIFFERS, STEPPED_DIFFERS, NO_FORK, MISSED.
+- Exit 1 holds the train: a selected case without a row on both sides, a difference not covered
+  by an expected line, a flag kind new to the tree on a row, an ABORT/SETUP_ERROR row without a
+  `run` line. A flag of the same kind already on the same base row does not hold; it is listed
+  as "already on base" every run so it stays visible. Exit 2: setup problem, stale expected line.
+- Expected differences: `<glob>[:field,...]  # reason` per line in
+  `<home>/jobs/train<N>/how-compare-expected.txt`, passed with `--expected`. No field list covers
+  every field except a REACHED -> error/declined change, which needs a line naming `status`.
+  The reasons go to the user at landing.
 - Add a program when a review finds a `how()` regression the set missed (same case name never
   reused; mark it `fast=False` unless it is cheap), and say so in the ledger.
 

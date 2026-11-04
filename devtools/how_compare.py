@@ -1,35 +1,49 @@
 """how() old-versus-new: the same programs on a base ref and on a tree, a table of what differs.
 
-    .venv/Scripts/python.exe devtools/how_compare.py --base dev --tree ../state-slots
-    python -I devtools/mergeq/mergeq.py run --timeout 1500 -- \\
-        .venv/Scripts/python.exe devtools/how_compare.py --base dev --tree ../state-slots
+    python -I devtools/mergeq/mergeq.py run --timeout 2000 -- \
+        uv run python devtools/how_compare.py --base dev --tree ../state-slots
+
+The outer --timeout must exceed twice the per-side --timeout (default 900 s fast, 5400 s full)
+plus a few minutes; with --full give the outer one 11500.
 
 --base   a git ref (its src/ is exported with git archive, cached by sha) or a directory with src/
---tree   a directory with src/ (a worktree, or the merged tree of a train)
---full   the long set (256 more rows; not timed end to end); the default is the fast set
---only S run only cases whose name contains S
+--tree   a directory with src/ (a worktree, or the merged tree of a train), or a ref
+--full   the long set (378 cases instead of the fast set's 122)
+--only S run only cases whose name contains S (no match is an error)
 --expected FILE
-         differences you expect, one per line: `<glob on the case name>  # reason`.  A difference
-         under a glob is shown with its reason and does not fail the run.
+         differences you expect, one per line: `<glob>[:field,...]  # reason`.  The glob is
+         case-sensitive (fnmatchcase) on the case name.  No field list covers every field of a
+         matching case, except that a row which went from REACHED to anything else is covered
+         only by a line that names `status`.  Fields: status total holds inputs reason plan_hash
+         tip final replay_equal stepped_equal goal_at_tip step_reach cause, plus `run` (an ABORT
+         or SETUP_ERROR row) and `flags` (a flag kind new to the tree).  A reason is required, a
+         glob that matches no case is an error (printed as stale, exit 2), a missing file exit 2.
+         A missing row on either side is never explainable.
 
 Each side runs in its own worker process (devtools/how_compare_worker.py) under
 `mergeq.py run --timeout`, serially, at below-normal priority, with a memory limit and a
 per-row time limit; the program set is devtools/how_compare_programs.py.  The worker prints
-pyrung.__file__ and refuses to run if it is not under the tree given, and the table opens with
+pyrung.__file__ and refuses to run if it is not under the tree given, and the report opens with
 both paths.
 
 What is reported:
-  * rows that differ between the two sides (status, total, holds, inputs, reason, plan hash,
-    final state, replay and stepped equality, and when stepping the session itself reaches);
+  * rows that differ between the two sides, field by field;
   * how many rows REACHED on each side, and which rows reach on neither side (agreement on
-    those is no evidence);
-  * FLAGS, whether or not the sides agree: a plan with no inputs and no holds that disagrees with
-    stepping the session itself (the check that would have caught a plan of 1 scan against
-    stepping's 17), a REACHED plan whose fork does not satisfy the goal, a replay or stepped
-    replay that differs from the fork, a STOPPED answer where stepping reaches.
+    those is no evidence); which reached plans were not checked against stepping, and why;
+  * FLAGS, per row, by kind (not by text, so a shifted scan number is the same defect):
+      PLAN_VS_STEP  a plan with no inputs and no holds that ends at a different scan than
+                    stepping the session itself reaches the goal (the check that would have
+                    caught a plan of 1 scan against stepping's 17)
+      TOTAL_VS_TIP  plan.total_scans is not the fork's distance from the session
+      GOAL_FALSE_AT_TIP, REPLAY_DIFFERS, STEPPED_DIFFERS, NO_FORK (REACHED without a fork)
+      MISSED        stepping reaches by itself and how() said STOPPED or raised (no avoid)
+    A flag kind NEW to the tree on a row holds the train.  A kind already on the same base row
+    does not hold; it is listed every run under "already on base", with both sides' text.
 
-Exit 0 when every difference is expected and the tree has no flag the base lacks; 1 otherwise;
-2 on a setup problem (bad ref, wrong tree, a worker that died).
+Exit 0 when every selected case has a row on both sides, every difference is explained, and the
+tree has no new flag kind; 1 otherwise (including any ABORT or SETUP_ERROR row not named by a
+`run` line); 2 on a setup problem (bad ref or --expected, no case selected, wrong tree, stale
+expected line, a worker that died).
 """
 
 from __future__ import annotations
