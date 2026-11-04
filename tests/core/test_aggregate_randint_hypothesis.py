@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import functools
 import math
-import sys
 from fractions import Fraction
 
 import pytest
@@ -105,8 +104,8 @@ def _dest_names(src: str) -> list[tuple[str, str, tuple[int, int], str]]:
         for rng in RANGES:
             dests = ("word",) if src == "word" else ("int", "dint", "real")
             for dest in dests:
-                if src == "real" and (dest != "real" or kind == "sum"):
-                    continue  # Real sum: see test_real_sum_is_the_same_on_both_backends
+                if src == "real" and dest != "real":
+                    continue
                 out.append((src, kind, rng, dest))
     return out
 
@@ -359,24 +358,34 @@ def test_randint_patch_of_the_sites_tag_chooses_the_draw(lo, hi, pick):
         assert runner.current_state.tags["RiDraw"] == chosen
 
 
-@pytest.mark.xfail(
-    sys.version_info >= (3, 12),
-    strict=True,
-    reason=(
-        "SumExpr.evaluate uses builtin sum(), which on Python 3.12+ adds floats with "
-        "Neumaier compensation; the compiled kernel emits a left-to-right a + b + c. "
-        "A Real range sum differs in the last bit between the two backends."
-    ),
-)
-def test_real_sum_is_the_same_on_both_backends():
-    block = Block("AgRS", TagType.REAL, 1, 3)
+def _real_sum_on_each_backend(values: list[float]) -> list[float]:
+    block = Block("AgRS", TagType.REAL, 1, len(values))
     dest = Real("AgRSOut")
     with Program(strict=False) as logic:
         with Rung(Go):
-            calc(block.select(1, 3).sum(), dest)
+            calc(block.select(1, len(values)).sum(), dest)
     results = []
     for runner in (PLC(logic), CompiledPLC(logic)):
-        runner.patch({"AgGo": True, "AgRS1": 0.1, "AgRS2": 0.2, "AgRS3": 0.3})
+        runner.patch({"AgGo": True} | {block[i].name: v for i, v in enumerate(values, start=1)})
         runner.step()
         results.append(runner.current_state.tags["AgRSOut"])
-    assert results[0] == results[1]
+    return results
+
+
+def test_real_sum_is_the_same_on_both_backends():
+    results = _real_sum_on_each_backend([0.1, 0.2, 0.3])
+    assert results[0] == results[1] == (0.1 + 0.2) + 0.3
+
+
+def test_real_sum_adds_plain_left_to_right_not_compensated():
+    # Stored values are 64-bit floats here; 1e8, 1, -1e8 is exact at that width
+    # (and loses the 1 at a CLICK's 32-bit Real), so the separating case is 1e16:
+    # builtin sum() on Python 3.12+ compensates and gives 2.0, plain adds give 0.0.
+    assert sum([1e16, 1.0, 1.0, -1e16]) in (0.0, 2.0)
+    for values in ([1e16, 1.0, 1.0, -1e16], [1e8, 1.0, -1e8]):
+        got = _real_sum_on_each_backend(values)
+        plain = values[0]
+        for value in values[1:]:
+            plain += value
+        assert got[0] == got[1] == plain, values
+    assert _real_sum_on_each_backend([1e16, 1.0, 1.0, -1e16]) == [0.0, 0.0]

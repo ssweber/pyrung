@@ -42,6 +42,10 @@
 - `fault.division_error` (SC40) follows the last `calc()` to run, and `fault.out_of_range` (SC43) and `fault.address_error` (SC44) the last `calc()` or `copy()`, as on a CLICK (measured on hardware): one that runs without the fault clears the flag, where it used to stay on to the end of the scan. `blockcopy()`, `fill()`, `pack_*()` and `unpack_*()` follow like `copy()`, and all clear at scan start, by pyrung's choice.
 - A pointer or index expression past the end of its block is no address error in a `copy()` or `calc()`: a read gives the type's zero value with no flag and a write is dropped, while below the block it still sets `fault.address_error` and writes nothing. A CLICK raises no flag past the bank either; reading 0 is pyrung's choice, since pyrung has no memory beyond it.
 
+### Fixed
+
+- A Real range `.sum()` adds plain left to right on every backend, so the stored result no longer changes in the last bit with the Python version or between stepping, the compiled kernel and generated code.
+
 ### Features
 
 - CLICK validation refuses what the CLICK editor refuses: a `forloop()` count outside a constant, `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`), a `randint()` with a bare `Real` tag as a bound or two equal constant bounds (`CLK_RAND_REAL_BOUND`, `CLK_RAND_EQUAL_BOUNDS`), and a `SUM` over a bank it cannot read (`CLK_CALC_SUM_BANK_NOT_AVAILABLE`). `pyrung_to_ladder()` takes `allow=` to let named finding codes through.
