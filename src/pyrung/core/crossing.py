@@ -125,13 +125,13 @@ def evaluate_forward(
         return _apply_store(raw, claim.storage)
     if isinstance(claim, Aggregate):
         # Deferred: the expression layer is a peer, kept out of this module's imports.
-        from pyrung.core.expression import RANGE_AGGREGATE_KINDS, aggregate_values
+        from pyrung.core.expression import RANGE_AGGREGATE_KINDS, aggregate_values, sum_values
 
         if any(tag not in values for tag in claim.tags):
             return UNKNOWN
         try:
             if claim.operation == "sum":
-                raw = sum(values[tag] for tag in claim.tags)
+                raw = sum_values(values[tag] for tag in claim.tags)
             elif claim.operation in RANGE_AGGREGATE_KINDS:
                 raw = aggregate_values(claim.operation, [values[tag] for tag in claim.tags])
             else:
