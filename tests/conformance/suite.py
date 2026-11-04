@@ -190,7 +190,6 @@ PARTS: dict[str, tuple[str, ...]] = {
 }
 
 
-
 @dataclass(frozen=True)
 class ApartPart:
     """A CLICK project on memory of its own, outside the whole suite's layout.
@@ -296,7 +295,7 @@ def fixed_scan_note(part: str | None) -> str | None:
         f"Part {part} runs in fixed scan mode: in the CLICK software turn fixed scan on "
         f"(SC202) and set the scan time (SD13), write the project to the PLC, and run "
         f"`make test-conformance PLC=...` at each of {each}. "
-        "See tests/conformance/AGENTS.md, \"Fixed scan parts\"."
+        'See tests/conformance/AGENTS.md, "Fixed scan parts".'
     )
 
 

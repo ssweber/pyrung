@@ -82,6 +82,7 @@
 
 ### Fixes
 
+- Timers, Out coils and time drums count time exactly in every unit: at a fixed `dt` a timer is Done on scan `ceil(delay / dt)` whichever unit it counts in, where a `60s` timer at `dt=0.1` or a `1min` at `dt=0.01` ended a scan late.
 - A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - A kernel that fails to compile for a reason pyrung does not expect gives a `RuntimeWarning` and the scans run interpreted, rather than raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.
