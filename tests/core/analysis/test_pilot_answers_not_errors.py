@@ -26,6 +26,7 @@ from pyrung import (
     on_delay,
 )
 from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.analysis.pilot.api import pilot_events
 from tests.fixtures import pilot_bootstrap_guard_overwrite as guard
 
 BOUND: dict[str, Any] = {"wall_clock_s": 30.0, "max_scans": 3000}
@@ -94,7 +95,7 @@ class TestTargetForms:
         with Program(strict=False) as program:
             with Rung(enable):
                 on_delay(watch, 100)
-            with Rung(watch.Done):
+            with Rung(watch.Done, other):
                 latch(hit)
         return program, watch, other, hit
 
@@ -103,6 +104,12 @@ class TestTargetForms:
         unused = Int("Unused", default=0)
         plan = PLC(program, dt=0.01).how(watch.Acc >= unused, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
+
+    def test_a_tag_operand_no_rung_uses_in_the_event_stream(self) -> None:
+        program, watch, _other, _hit = self._program()
+        unused = Int("Unused", default=0)
+        events = list(pilot_events(PLC(program, dt=0.01), watch.Acc >= unused, max_scans=3000))
+        assert events[-1].kind == "finished"
 
     def test_arithmetic_in_the_target_is_a_clear_error(self) -> None:
         program, watch, _other, _hit = self._program()
@@ -116,6 +123,22 @@ class TestTargetForms:
         assert plan.status is PlanStatus.REACHED, plan.reason
         assert plan.fork is not None
         assert plan.fork.state.tags[hit.name] and plan.fork.state.tags[watch.Done.name]
+
+    def test_a_normally_closed_member_of_and(self) -> None:
+        program, watch, other, hit = self._program()
+        plan = PLC(program, dt=0.01).how(And(hit, ~other), **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+        assert plan.fork is not None
+        assert plan.fork.state.tags[hit.name] and not plan.fork.state.tags[other.name]
+
+    @pytest.mark.parametrize("goal", ["joint", "relational"])
+    def test_a_goal_on_a_tag_no_rung_uses_stops_and_says_so(self, goal: str) -> None:
+        program, watch, _other, hit = self._program()
+        flag, count = Bool("Absent"), Int("AbsentCount")
+        conditions = (And(hit, ~flag),) if goal == "joint" else (count >= 5,)
+        plan = PLC(program, dt=0.01).how(*conditions, **BOUND)
+        assert plan.status is PlanStatus.STOPPED
+        assert "no rung uses" in plan.reason
 
     def test_or_is_a_clear_error(self) -> None:
         program, watch, _other, hit = self._program()
