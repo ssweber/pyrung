@@ -19,12 +19,16 @@ Three facts carry both proofs:
 does not hold now and every producer's condition needs a blocked value. Take the
 first scan any value in the proof appears: its producer read another value of
 the proof, already there, which contradicts first. That leaves where the proof
-bottoms out, a non-retentive on-delay's Done, whose rung always needs a bool
-coupling's enable and its feedback opposed the same way (``En, ~Fb`` or ``~En, Fb``).
-The plant ends that state within its delay, and the timer starts over whenever its
-rung goes false, so it cannot time out when its preset exceeds the delay plus some
-scans of slop. An instantaneous read of the same contacts proves nothing: the state
-exists for those scans. A ``Pulse`` feedback alternates, so it has no such bound.
+bottoms out, the Done of a non-retentive, main-level on-delay with a literal preset,
+on a fixed dt, whose rung's own contacts hold a bool coupling's enable and feedback
+opposed (``En, ~Fb`` or ``~En, Fb``). The plant ends that state within its delay, and
+the timer starts over whenever its rung goes false, so it cannot time out when its
+preset exceeds the delay plus some scans of slop.
+
+The plant reads the enable between scans and a rung reads it mid-scan, so this holds
+only while those two agree to within a scan: an enable nothing writes, or one the
+program writes from a single ``out`` coil and nothing else moves. Over anything wider
+the argument has failed every time it was tried, so anything wider is ``STOPPED``.
 
 **Mutually exclusive** (``exclusion_evidence``). ``X=a`` and ``Y=b`` cannot both
 hold at the end of a scan when no rung produces both and each rung producing one
@@ -181,26 +185,8 @@ def _conjuncts(expr: Any) -> list[Any]:
     return [expr]
 
 
-def _requires(atoms: list[Any], tag: str, form: str, operand: Any = None) -> bool:
-    return any(
-        isinstance(atom, Atom)
-        and atom.tag == tag
-        and atom.form == form
-        and (operand is None or (not atom.operand_is_tag and _values_match(atom.operand, operand)))
-        for atom in atoms
-    )
-
-
-def _enable_required(atoms: list[Any], coupling: Coupling) -> bool | None:
-    """Do these contacts need the coupling driving (True), not driving (False), or neither?"""
-    en, trigger = coupling.en_name, coupling.trigger_value
-    on_form, off_form = ("xio", "xic") if trigger == 0 else ("xic", "xio")
-    if trigger not in (None, 0):
-        on = _requires(atoms, en, "eq", trigger)
-        off = _requires(atoms, en, "ne", trigger)
-    else:
-        on, off = _requires(atoms, en, on_form), _requires(atoms, en, off_form)
-    return True if on and not off else False if off and not on else None
+def _contact(atoms: list[Any], tag: str, form: str) -> bool:
+    return any(isinstance(atom, Atom) and atom.tag == tag and atom.form == form for atom in atoms)
 
 
 def _plant_delay_ms(declared_ms: int | None) -> int:
@@ -310,68 +296,70 @@ class _LinkProof:
         return self._dwell_limited(self._condition_of(node_index), room_ms, stack)
 
     def _dwell_limited(self, expr: Any, room_ms: float, stack: frozenset[Any]) -> Any:
-        """Can *expr* never stay true for *room_ms* in one stretch?
-
-        It can if some state it always needs ends too soon. One such state per arm of an
-        ``Or`` is not enough: a program may hand over from one arm to the next in one scan.
-        """
+        """Can *expr* never stay true for *room_ms* in one stretch?"""
         proved = self.never_true(expr, stack)
         if proved is not None:
             return proved
-        for (en, fb, _driving), delay_ms in self._oppositions(expr, stack).items():
+        atoms = _conjuncts(expr)
+        for coupling in self.facts.couplings:
+            delay_ms = self._opposed_delay(atoms, coupling)
+            if delay_ms is None:
+                continue
             assert self.facts.dt_ms is not None
             if delay_ms + _WINDOW_SLOP_SCANS * self.facts.dt_ms < room_ms:
-                return frozenset({(en, fb)})
+                return frozenset({(coupling.en_name, coupling.fb_name)})
         return None
 
-    def _oppositions(self, expr: Any, stack: frozenset[Any]) -> dict[Any, float]:
-        """The opposed states *expr* cannot be true without: ``(en, fb, driving)`` to its longest."""
-        if isinstance(expr, Or):
-            arms = [
-                self._oppositions(arm, stack)
-                for arm in expr.terms
-                if self.never_true(arm, stack) is None
-            ]
-            return {
-                link: delay
-                for link, delay in (arms[0] if arms else {}).items()
-                if all(link in arm for arm in arms)
-            }
-        atoms = _conjuncts(expr)
-        found: dict[Any, float] = {}
-        for coupling in self.facts.couplings:
-            opposed = self._opposed_state(atoms, coupling)
-            if opposed is not None:
-                driving, delay_ms = opposed
-                found[(coupling.en_name, coupling.fb_name, driving)] = delay_ms
-        for term in atoms:
-            if isinstance(term, Or):
-                found.update(self._oppositions(term, stack))
-        return found
-
-    def _opposed_state(self, atoms: list[Any], coupling: Coupling) -> tuple[bool, float] | None:
-        """Which way these contacts hold the feedback against its enable, and for how long.
+    def _opposed_delay(self, atoms: list[Any], coupling: Coupling) -> int | None:
+        """How long the plant lets these contacts hold the feedback against its enable, if bounded.
 
         Only a timing coupling has that bound: a profile (``Pulse``) has no resting value.
         """
         facts = self.facts
         fb = coupling.fb_name
+        trigger = coupling.trigger_value
         if (
             facts.dt_ms is None
+            or trigger not in (None, 0)
             or coupling.physical.profile is not None
             or fb in facts.overridden
             or facts.pdg.writers_of.get(fb)
             or facts._writable_through_pointer(fb)
+            or not self._read_as_the_plant_reads(coupling.en_name)
         ):
             return None
-        driving = _enable_required(atoms, coupling)
-        fb_high = _requires(atoms, fb, "xic")
-        fb_low = _requires(atoms, fb, "xio")
-        if driving is True and fb_low and not fb_high:
-            return True, _plant_delay_ms(coupling.physical.on_delay_ms)
-        if driving is False and fb_high and not fb_low:
-            return False, _plant_delay_ms(coupling.physical.off_delay_ms)
+        on_form, off_form = ("xio", "xic") if trigger == 0 else ("xic", "xio")
+        driving = _contact(atoms, coupling.en_name, on_form)
+        resting = _contact(atoms, coupling.en_name, off_form)
+        fb_high = _contact(atoms, fb, "xic")
+        fb_low = _contact(atoms, fb, "xio")
+        if driving and not resting and fb_low and not fb_high:
+            return _plant_delay_ms(coupling.physical.on_delay_ms)
+        if resting and not driving and fb_high and not fb_low:
+            return _plant_delay_ms(coupling.physical.off_delay_ms)
         return None
+
+    def _read_as_the_plant_reads(self, en: str) -> bool:
+        """Does a rung read this enable as the plant does, between scans, at most a scan late?
+
+        Nothing writing it, it moves only between scans. One main-level ``out`` coil gives it
+        one position per scan, so a rung reads this scan's or the last. Any other write can
+        move it after one reader and back before the next.
+        """
+        facts = self.facts
+        if facts._writable_through_pointer(en):
+            return False
+        writers = facts.pdg.writers_of.get(en, frozenset())
+        if not writers:
+            return True
+        if en in facts.free or len(writers) != 1:
+            return False
+        node_index = next(iter(writers))
+        if facts.pdg.rung_nodes[node_index].subroutine is not None:
+            return False
+        rung = facts.rung_of(node_index)
+        writes = [i for i in getattr(rung, "_instructions", ()) if instruction_writes_tag(i, en)]
+        return len(writes) == 1 and isinstance(writes[0], OutInstruction)
 
 
 def linked_feedback_block(target_tag: str, target_value: Any, facts: ProofFacts) -> str | None:

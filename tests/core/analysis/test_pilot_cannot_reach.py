@@ -225,20 +225,6 @@ class TestLinkProofIsNotClaimedFalsely:
 
 
 class TestLinkProofStillProves:
-    def test_every_arm_needs_the_same_opposition(self) -> None:
-        extra = Bool("Extra", external=True)
-        Watch = Timer.clone("Watch")
-
-        def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(Or(And(enable, ~feedback), And(enable, ~feedback, extra))):
-                on_delay(Watch, 3000)
-            with Rung(Watch.Done):
-                latch(hit)
-
-        program, hit = _linked(Physical("Fb", on_delay="200ms"), build)
-        plan = _harnessed(program).how(hit, **BOUND)
-        assert plan.status is PlanStatus.CANNOT_REACH, plan.reason
-
     def test_watchdog_held_off_by_its_link(self) -> None:
         Watch = Timer.clone("Watch")
 
@@ -689,3 +675,239 @@ class TestThePlantsOwnDelay:
             with Rung(watch.Done):
                 latch(hit)
         assert _proved_on(_harnessed(program, dt=0.1), hit) is not None
+
+
+# ---------------------------------------------------------------------------
+# The enable a rung reads and the enable the plant reads
+# ---------------------------------------------------------------------------
+
+
+def _mid_scan(
+    build: Callable[[Any, Any, Any, Any, Any], None],
+    *,
+    enable: Any = None,
+    feedback: Any = None,
+) -> tuple[Program, Any]:
+    go = Bool("Go", external=True)
+    enable = Bool("En") if enable is None else enable
+    feedback = (
+        Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        if feedback is None
+        else feedback
+    )
+    hit = Bool("Hit")
+    watch = Timer.clone("W")
+    with Program(strict=False) as program:
+        build(go, enable, feedback, watch, hit)
+        with Rung(watch.Done):
+            latch(hit)
+    return program, hit
+
+
+def _cleared_after_the_read(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+    with Rung(go):
+        latch(enable)
+    with Rung(enable, ~feedback):
+        on_delay(watch, 3000)
+    with Rung(go):
+        reset(enable)
+
+
+def _cleared_at_the_top(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+    with Rung():
+        reset(enable)
+    with Rung(~enable, feedback):
+        on_delay(watch, 3000)
+    with Rung(go):
+        latch(enable)
+
+
+def _clears_itself(_go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+    with Rung(enable, ~feedback):
+        on_delay(watch, 3000)
+    with Rung(enable):
+        reset(enable)
+
+
+def _latched(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+    with Rung(go):
+        latch(enable)
+    with Rung(enable, ~feedback):
+        on_delay(watch, 3000)
+
+
+def _reset_only(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+    with Rung(go):
+        reset(enable)
+    with Rung(~enable, feedback):
+        on_delay(watch, 3000)
+
+
+def _cleared_by_a_subroutine(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+    with subroutine("S"):
+        with Rung():
+            reset(enable)
+    with Rung(go):
+        latch(enable)
+    with Rung(enable, ~feedback):
+        on_delay(watch, 3000)
+    with Rung(go):
+        call("S")
+
+
+class TestAnEnableThatMovesMidScan:
+    """Each holds the opposed state for good while the plant, reading at the boundary, sees none."""
+
+    @pytest.mark.parametrize(
+        ("build", "enable", "feedback", "forced", "inputs"),
+        [
+            (_cleared_after_the_read, None, None, {}, {"Go": True}),
+            (
+                _cleared_at_the_top,
+                None,
+                Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En"),
+                {},
+                {"Go": True},
+            ),
+            (_clears_itself, Bool("En", external=True), None, {}, {"En": True}),
+            (_latched, None, None, {"En": False}, {"Go": True}),
+            (_reset_only, None, None, {"En": True}, {"Go": True}),
+            (_cleared_by_a_subroutine, None, None, {}, {"Go": True}),
+        ],
+        ids=[
+            "set, read, cleared",
+            "cleared, read, set",
+            "external, clears itself",
+            "forced off over a latch",
+            "forced on over a reset",
+            "a subroutine clears it",
+        ],
+    )
+    def test_no_proof(
+        self, build: Any, enable: Any, feedback: Any, forced: dict[str, Any], inputs: dict[str, Any]
+    ) -> None:
+        program, hit = _mid_scan(build, enable=enable, feedback=feedback)
+
+        def session() -> PLC:
+            plc = _harnessed(program)
+            for name, value in forced.items():
+                plc.force(name, value)
+            return plc
+
+        assert _step_to(session(), hit, inputs, 500) is not None
+        assert session().how(hit, max_scans=1000).status is not PlanStatus.CANNOT_REACH
+
+    def test_a_pointer_clears_it(self) -> None:
+        go = Bool("Go", external=True)
+        bits = Block("B", TagType.BOOL, 1, 3)
+        pointer = Int("Idx", default=1)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="B1")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                latch(bits[1])
+            with Rung(bits[1], ~feedback):
+                on_delay(watch, 3000)
+            with Rung(go):
+                copy(0, bits[pointer])
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
+        assert _harnessed(program).how(hit, max_scans=1000).status is not PlanStatus.CANNOT_REACH
+
+    def test_a_coil_in_a_subroutine_called_twice(self) -> None:
+        """One out coil, two positions a scan: on for the rung, off for the plant."""
+        source = Bool("Src")
+        enable = Bool("En")
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with subroutine("S"):
+                with Rung(source):
+                    out(enable)
+            with Rung():
+                latch(source)
+            with Rung():
+                call("S")
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung():
+                reset(source)
+            with Rung():
+                call("S")
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {}, 500) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+
+class TestWiderFormsClaimNothing:
+    """True on these programs, but the proof no longer argues over the shape: STOPPED, not false."""
+
+    def test_the_same_opposition_on_every_arm(self) -> None:
+        extra = Bool("Extra", external=True)
+        Watch = Timer.clone("Watch")
+
+        def build(enable: Any, feedback: Any, hit: Any) -> None:
+            with Rung(Or(And(enable, ~feedback), And(enable, ~feedback, extra))):
+                on_delay(Watch, 3000)
+            with Rung(Watch.Done):
+                latch(hit)
+
+        program, hit = _linked(Physical("Fb", on_delay="200ms"), build)
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_a_value_trigger(self) -> None:
+        mode = Int("Mode", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="200ms"), link="Mode:3")
+        hit = Bool("Hit")
+        Watch = Timer.clone("Watch")
+        with Program(strict=False) as program:
+            with Rung(mode == 3, ~feedback):
+                on_delay(Watch, 3000)
+            with Rung(Watch.Done):
+                latch(hit)
+        assert _proved_on(_harnessed(program), hit) is None
+
+
+class TestAnEnableThatKeepsTheProof:
+    def test_no_writer_and_a_force(self) -> None:
+        program, hit = _mid_scan(
+            lambda _go, enable, feedback, watch, _hit: _plain_rung(enable, feedback, watch),
+            enable=Bool("En", external=True),
+        )
+        session = _harnessed(program)
+        session.force("En", True)
+        assert session.how(hit, max_scans=1000).status is PlanStatus.CANNOT_REACH
+
+    @pytest.mark.parametrize("coil_first", [True, False], ids=["coil first", "coil after"])
+    def test_one_out_coil(self, coil_first: bool) -> None:
+        def build(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+            if coil_first:
+                with Rung(go):
+                    out(enable)
+            _plain_rung(enable, feedback, watch)
+            if not coil_first:
+                with Rung(go):
+                    out(enable)
+
+        program, hit = _mid_scan(build)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is None
+        assert _harnessed(program).how(hit, max_scans=1000).status is PlanStatus.CANNOT_REACH
+
+    def test_one_out_coil_that_toggles(self) -> None:
+        def build(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
+            with Rung(go, ~enable):
+                out(enable)
+            _plain_rung(enable, feedback, watch)
+
+        program, hit = _mid_scan(build)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is None
+        assert _harnessed(program).how(hit, max_scans=1000).status is PlanStatus.CANNOT_REACH
+
+
+def _plain_rung(enable: Any, feedback: Any, watch: Any) -> None:
+    with Rung(enable, ~feedback):
+        on_delay(watch, 3000)

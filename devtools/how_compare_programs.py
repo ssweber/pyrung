@@ -1254,6 +1254,27 @@ def _pulse_other_contact(*, held):
     return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
 
 
+def _enable_moved_mid_scan():
+    """Off when the rung reads it, on when the plant does: the dwell the link was said to end."""
+    go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
+    watch = Timer.clone("W")
+    with Program(strict=False) as prog:
+        with Rung():
+            reset(enable)
+        with Rung(~enable, feedback):
+            on_delay(watch, 3000)
+        with Rung(go):
+            latch(enable)
+        with Rung(watch.Done):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    Harness(plc).install()
+    plc.patch({"Go": True})
+    plc.step()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+
+
 def _opaque_avoid_mid_coast(avoid_of):
     def build():
         timer, bank = Timer.clone("T"), Block("B", TagType.INT, 1, 3)
@@ -1315,6 +1336,7 @@ _add("truth", "truth/proof watchdog", _proof_watchdog)
 _add("truth", "truth/proof fill station FlowAlarm", _proof_fill_station)
 _add("truth", "truth/pulse on the other contact", lambda: _pulse_other_contact(held=False))
 _add("truth", "truth/pulse on the other contact held", lambda: _pulse_other_contact(held=True))
+_add("truth", "truth/enable moved mid-scan", _enable_moved_mid_scan)
 _add(
     "truth",
     "truth/pointer avoid true mid-coast",
