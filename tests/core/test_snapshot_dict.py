@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-from pyrung import Bool, PLC, Program, Rung, out
+from pyrung import PLC, Bool, Program, Rung, out
 from pyrung.core.read_trace import _READ_ALL, _traced_call
 from pyrung.core.state import snapshot_dict
 
