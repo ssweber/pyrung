@@ -199,7 +199,9 @@ def test_an_opaque_avoid_lets_no_other_member_off(
         "__getitem__",
         lambda self, key: False if read_trace._READ_TRACES else self._untraced[key],
     )
-    monkeypatch.setattr(read_trace._TracedTags, "__contains__", lambda self, key: key in self._untraced)
+    monkeypatch.setattr(
+        read_trace._TracedTags, "__contains__", lambda self, key: key in self._untraced
+    )
     with (
         fold_check.deliberate(),
         pytest.raises(FoldMismatch, match="stop predicate true at scan 2000, folded run stopped"),
