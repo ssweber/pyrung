@@ -107,6 +107,9 @@ class ConformanceProgram:
     tag_map: TagMap
     #: What the main program writes to ``DS1`` every scan (1..32767).
     program_hash: int
+    #: Seconds a scan takes on its target, where the program declares it: what the
+    #: harness's settle time is counted in.  ``None``: the nominal scan.
+    scan_s: float | None = None
 
     def group(self, name: str) -> GroupBuild:
         for g in self.groups:

@@ -17,6 +17,9 @@ projects, one part each (``PARTS``; there is no part D)::
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
 
+Parts N and O have memory of their own (``APART_PARTS``), apart from the whole
+suite; part O is run with CLICK's fixed scan on, and its export says how.
+
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
 
     make conformance-workspace
@@ -26,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from pyrung.conformance import (
@@ -51,6 +55,8 @@ from tests.conformance import (
     test_drum_settle,
     test_drum_trace,
     test_faults,
+    test_fixed_minute,
+    test_fixed_scan,
     test_flag_probe,
     test_for_count,
     test_loop,
@@ -71,9 +77,13 @@ from tests.conformance import (
     test_system,
     test_text,
     test_timers,
+    test_unit_minute,
+    test_unit_pairs,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
+#: The layout of the parts with memory of their own (``APART_PARTS``).
+APART_MANIFEST_PATH = Path(__file__).with_name("manifest_apart.toml")
 #: Cases that passed on a real CLICK, as they are now (``record_confirmations``).
 CONFIRMED_PATH = Path(__file__).with_name("confirmed.toml")
 #: The ClickNick workspace linked to the conformance CLICK project.
@@ -179,6 +189,41 @@ PARTS: dict[str, tuple[str, ...]] = {
     "F": ("store_probe", "flag_probe", "past_write"),
 }
 
+
+
+@dataclass(frozen=True)
+class ApartPart:
+    """A CLICK project on memory of its own, outside the whole suite's layout.
+
+    Its groups' registers and raw memory are ``manifest_apart.toml`` and
+    ``memory.OWNED_APART``: they may repeat the suite's, so it never runs in one project
+    with them, and it changes no other part's hash however it grows.  With
+    *fixed_scan_ms* a person runs it with CLICK's fixed scan on, at each of those times.
+    """
+
+    groups: tuple[str, ...]
+    #: The fixed scan times (ms) its questions need, the first to run first.
+    fixed_scan_ms: tuple[int, ...] = ()
+
+
+#: Every group on memory of its own, in the order main calls them.
+APART_GROUPS = [
+    test_unit_pairs.group,
+    # Left out with ``GROUP=unit_pairs``: a minute's wait.
+    test_unit_minute.group,
+    test_fixed_scan.group,
+    # Left out with ``GROUP=fixed_scan``: a minute's wait.
+    test_fixed_minute.group,
+]
+
+APART_PARTS: dict[str, ApartPart] = {
+    # Timers in different units with one delay, Done on one scan: the relation, which
+    # holds or not whatever a scan takes.
+    "N": ApartPart(("unit_pairs", "unit_minute")),
+    # The scan each timer is Done on, counted: only fixed scan mode makes that a number.
+    "O": ApartPart(("fixed_scan", "fixed_minute"), fixed_scan_ms=(100, 10, 250)),
+}
+
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
 #: less a margin for the estimate's error and the instructions it has not
 #: measured.
@@ -189,35 +234,69 @@ def groups(part: str | None = None) -> list[Group]:
     """Every group of *part* (``None``: the whole suite), in ``ALL_GROUPS`` order."""
     if part is None:
         return list(ALL_GROUPS)
+    if part in APART_PARTS:
+        return [g for g in APART_GROUPS if g.name in APART_PARTS[part].groups]
     if part not in PARTS:
-        raise ValueError(f"Unknown part {part!r}; choose one of {', '.join(PARTS)}")
+        known = ", ".join([*PARTS, *APART_PARTS])
+        raise ValueError(f"Unknown part {part!r}; choose one of {known}")
     return [g for g in ALL_GROUPS if g.name in PARTS[part]]
 
 
 def build(part: str | None = None) -> ConformanceProgram:
-    """The program for *part* (``None``: the whole suite) on the checked-in manifest."""
-    return build_program(groups(part), load_manifest(MANIFEST_PATH))
+    """The program for *part* (``None``: the whole suite) on its manifest.
+
+    A fixed scan part counts its settle time in its longest scan.
+    """
+    apart = APART_PARTS.get(part) if part is not None else None
+    if apart is None:
+        return build_program(groups(part), load_manifest(MANIFEST_PATH))
+    program = build_program(groups(part), load_manifest(APART_MANIFEST_PATH))
+    if apart.fixed_scan_ms:
+        return replace(program, scan_s=max(apart.fixed_scan_ms) / 1000)
+    return program
 
 
-def build_for(endpoint: Endpoint | None) -> ConformanceProgram:
+def build_apart() -> ConformanceProgram:
+    """Every group on memory of its own, as one program, for a local target."""
+    return build_program(APART_GROUPS, load_manifest(APART_MANIFEST_PATH))
+
+
+def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> ConformanceProgram:
     """The build loaded at *endpoint*: the part, or the whole suite, whose layout
-    hash is in its ``DS1``.  A local target (``None``) runs the whole suite.
+    hash is in its ``DS1``.  A local target (``None``) runs the whole suite, or the
+    groups on memory of their own when *names* asks for those.
 
     Raises:
         BuildMismatchError: ``DS1`` holds no build of the suite's layout hash.
     """
     if endpoint is None:
-        return build()
+        apart = {g.name for g in APART_GROUPS}
+        return build_apart() if names and apart.issuperset(names) else build()
     found = read_program_hash(endpoint)
     known: list[str] = []
-    for part in [*PARTS, None]:
+    for part in [*PARTS, *APART_PARTS, None]:
         candidate = build(part)
         if candidate.program_hash == found:
             return candidate
         known.append(f"{part or 'whole'} {candidate.program_hash}")
     raise BuildMismatchError(
         f"{endpoint} runs program layout {found}; the suite is layout {', '.join(known)}. "
-        f"Export the part again (make conformance-export PART={'|'.join(PARTS)}) and load it."
+        f"Export the part again (make conformance-export "
+        f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it."
+    )
+
+
+def fixed_scan_note(part: str | None) -> str | None:
+    """What a person sets in CLICK before running *part*; ``None`` when it needs nothing."""
+    times = APART_PARTS[part].fixed_scan_ms if part in APART_PARTS else ()
+    if not times:
+        return None
+    each = ", ".join(f"{ms} ms" for ms in times)
+    return (
+        f"Part {part} runs in fixed scan mode: in the CLICK software turn fixed scan on "
+        f"(SC202) and set the scan time (SD13), write the project to the PLC, and run "
+        f"`make test-conformance PLC=...` at each of {each}. "
+        "See tests/conformance/AGENTS.md, \"Fixed scan parts\"."
     )
 
 
@@ -246,17 +325,20 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--part",
-        choices=sorted(PARTS),
+        choices=sorted([*PARTS, *APART_PARTS]),
         help="only that part's groups, as its own CLICK project (default: the whole suite)",
     )
     args = parser.parse_args(argv)
     program = build(args.part)
     label = f"part {args.part}, layout" if args.part else "layout"
+    note = fixed_scan_note(args.part)
 
     if args.workspace is None:
         out = program.export(args.out_dir)
         print(f"Wrote {out} ({label} {program.program_hash} in DS1)")
         _print_layout(program)
+        if note is not None:
+            print(note)
         return 0
 
     workspace = Path(args.workspace)
@@ -273,6 +355,8 @@ def main(argv: list[str]) -> int:
         "Next, in ClickNick: Preview Changes -> Copy to Click -> paste in CLICK -> save -> "
         "write to the PLC. New nicknames: clicknick-cli tag apply."
     )
+    if note is not None:
+        print(note)
     return 0
 
 

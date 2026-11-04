@@ -1,0 +1,36 @@
+# The layout of the parts with memory of their own (suite.APART_PARTS): parts N and O.
+# It shares nothing with manifest.toml, which has no room left: these registers may repeat
+# the suite's, since these groups run in no project with its groups.  Rules as there:
+# nothing moves, and a new case takes the next index in its group.
+
+[groups.unit_pairs]
+base = 101 # Conf_UnitPairs: DS101..DS150
+slots = 4
+
+[groups.unit_pairs.cases]
+one_second = 1
+three_seconds = 2
+
+[groups.unit_minute]
+base = 151 # Conf_UnitMinute: DS151..DS200
+slots = 4
+
+[groups.unit_minute.cases]
+one_minute = 1
+thirty_seconds = 2
+
+[groups.fixed_scan]
+base = 201 # Conf_FixedScan: DS201..DS400
+slots = 19
+
+[groups.fixed_scan.cases]
+scan_setup = 1
+seconds_and_ms = 2
+off_delay_and_drum = 3
+
+[groups.fixed_minute]
+base = 401 # Conf_FixedMinute: DS401..DS500
+slots = 9
+
+[groups.fixed_minute.cases]
+long_timers = 1

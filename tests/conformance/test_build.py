@@ -120,6 +120,59 @@ def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
     assert suite.groups("B")[0].name == "system"
 
 
+def test_the_groups_apart_stay_in_their_own_memory_and_manifest() -> None:
+    manifest = load_manifest(suite.APART_MANIFEST_PATH)
+    for group in suite.APART_GROUPS:
+        manifest.layout_for(group)
+    problems = memory.outside_owned(suite.APART_GROUPS, memory.OWNED_APART)
+    assert not problems, "\n".join(problems)
+    claims: dict[tuple[str, int], str] = {}
+    for group, banks in memory.OWNED_APART.items():
+        assert len(group) <= 12, group
+        for bank, entry in banks.items():
+            for owned in memory.ranges(entry):
+                for n in owned:
+                    other = claims.setdefault((bank, n), group)
+                    assert other == group, f"{group} and {other} both own {bank}{n}"
+    in_parts = [name for apart in suite.APART_PARTS.values() for name in apart.groups]
+    assert sorted(in_parts) == sorted(g.name for g in suite.APART_GROUPS)
+    assert not set(in_parts).intersection(g.name for g in suite.ALL_GROUPS)
+    assert not set(suite.APART_PARTS).intersection(suite.PARTS)
+
+
+def test_a_fixed_scan_part_declares_its_scan_and_says_what_to_set() -> None:
+    assert suite.APART_PARTS["O"].fixed_scan_ms == (100, 10, 250)
+    # Settle time counts in the longest scan the part runs at.
+    assert suite.build("O").scan_s == 0.25
+    assert suite.build("N").scan_s is None
+    assert suite.build().scan_s is None
+    note = suite.fixed_scan_note("O")
+    assert note is not None
+    for words in ("fixed scan", "SC202", "100 ms", "10 ms", "250 ms"):
+        assert words in note
+    assert note.isascii()
+    assert suite.fixed_scan_note("N") is None
+    assert suite.fixed_scan_note("A") is None
+    assert suite.fixed_scan_note(None) is None
+
+
+def test_the_export_of_a_fixed_scan_part_names_the_setting(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert suite.main(["--part", "O", str(tmp_path / "o")]) == 0
+    assert "fixed scan" in capsys.readouterr().out
+    assert suite.main(["--part", "N", str(tmp_path / "n")]) == 0
+    assert "fixed scan" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("part", sorted(suite.APART_PARTS))
+def test_each_part_apart_fits_a_click_project(part: str) -> None:
+    build = suite.build(part)
+    assert set(build.names) == set(suite.APART_PARTS[part].groups)
+    estimate = estimate_steps(pyrung_to_ladder(build.program, build.tag_map, validate=False))
+    assert estimate.total <= suite.PART_STEP_BUDGET
+
+
 @pytest.mark.parametrize("part", sorted(suite.PARTS))
 def test_each_part_fits_a_click_project(part: str) -> None:
     build = suite.build(part)

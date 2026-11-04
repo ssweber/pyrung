@@ -205,6 +205,17 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
 }
 
 
+#: Raw memory of the groups in parts with memory of their own (``suite.APART_PARTS``):
+#: they share nothing with :data:`OWNED`, which has no room left, and run in no project
+#: with its groups.
+OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
+    "unit_pairs": {"T": range(1, 11)},
+    "unit_minute": {"T": range(11, 21)},
+    "fixed_scan": {"T": range(21, 41), "C": range(1, 11), "DS": range(3901, 3903)},
+    "fixed_minute": {"T": range(41, 51)},
+}
+
+
 def ranges(owned: range | tuple[range, ...]) -> tuple[range, ...]:
     """An :data:`OWNED` entry as a tuple of ranges."""
     return owned if isinstance(owned, tuple) else (owned,)
@@ -253,11 +264,14 @@ def _address(name: str) -> tuple[str, int] | None:
     return _PREFIX_BANK.get(prefix, prefix), n
 
 
-def outside_owned(groups: Iterable[Group]) -> list[str]:
-    """One line per tag a case touches outside its group's :data:`OWNED` ranges."""
+def outside_owned(
+    groups: Iterable[Group],
+    table: Mapping[str, Mapping[str, range | tuple[range, ...]]] = OWNED,
+) -> list[str]:
+    """One line per tag a case touches outside its group's ranges in *table*."""
     problems: list[str] = []
     for g in groups:
-        owned = OWNED.get(g.name, {})
+        owned = table.get(g.name, {})
         for case in g.cases:
             everything, _writes = footprint(case)
             for name in sorted(everything):

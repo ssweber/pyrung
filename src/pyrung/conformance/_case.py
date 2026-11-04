@@ -69,6 +69,8 @@ class Case:
     probe: str | None = None
     #: Pins the CLICK export redraws as tees off the box's input wire (see ``_tee.py``).
     tee: TeeSpec | None = None
+    #: Over the wire: ``Fired`` comes last, when the answer is in, within this many seconds.
+    fires_within: float | None = None
 
     @property
     def checks(self) -> dict[str, Expectation]:
@@ -168,6 +170,7 @@ def case(
     pending: str | None = None,
     probe: str | None = None,
     tee: TeeSpec | None = None,
+    fires_within: float | None = None,
 ) -> Case:
     """Define a conformance case.
 
@@ -214,6 +217,10 @@ def case(
             its shared contacts, instead of from the rail with those contacts
             copied.  The pyrung rungs are the same, so every target runs them
             as before, and a test imports the drawing and compares.
+        fires_within: For a case that raises ``Fired`` only when its answer is in, and
+            may take longer than the harness's usual wait: the seconds it may take over
+            the wire.  Nothing moves after ``Fired``, so *scans* adds no settle time; it
+            stays the in-process scan count.
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
@@ -252,6 +259,7 @@ def case(
         pending=pending,
         probe=probe,
         tee=tee,
+        fires_within=fires_within,
     )
 
 
