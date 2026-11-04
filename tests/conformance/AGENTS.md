@@ -110,6 +110,7 @@ Reset with the instructions' own semantics, not by poking registers an instructi
 - **Counters, RTON, drums, shift registers**: tie the reset input to the reset, `count_up(ct, 100).reset(slot.Cmd == 0)`, `time_event_drum(...).reset(slot.Cmd == 0)`.
 - **Latched or toggled bits, and bits driven from inside a loop**: `reset(c[1801])` in `init`.
 - **Staged registers** (a case's raw DS/DD/DF/DH): `fill(0, ds.select(4401, 4402))` or `copy(0, df[1])` in `init`.
+- **A flasher's TDs** only freeze with its rung false, so `keep` them, unless a reading depends on one; then `copy(0, td[n])` in `init`, the one poke an instruction's register needs (`out_more/preset_mid_phase`: a coil read at a wall-clock moment follows where the last run stopped).
 - **Edge history and one-shots** need nothing: they rearm on the scans the rung is false. Not inside a loop whose For rung is false: CLICK skips that body, so nothing in it rearms (`loop/body_oneshot_holds_while_for_false`).
 
 **A reset must not depend on an open probe.** If what CLICK does is the question a case asks, the reset cannot rely on pyrung's answer. F2 (a false For rung skips its body, answered on a CLICK) is why the `loop` edge, timer, counter and one-shot cases keep their For rung true and gate a body rung instead, so their resets are scanned.
@@ -276,9 +277,9 @@ If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its
 
 ## Parts with memory of their own
 
-The whole suite's memory is full: DS, T and CT have no run left for a new group. `suite.APART_PARTS` holds the parts that do not join it: parts N and O, with their own `manifest_apart.toml` and their own table of raw memory, `memory.OWNED_APART`. Their registers and timers may repeat the suite's, since they run in no project with its groups, and so they change no other part's hash and no layout hash however they grow. `test_build.py` holds them to the same rules as the rest: every tag inside its group's ranges, no two groups on one address, each part under the step budget. In-process they run from their own module (`test_unit_pairs.py`); on a local target `test_the_groups_apart_on_a_local_target` runs them once, or `GROUP=unit_pairs` runs one on its own; `build_for` knows their layout hash in `DS1` on a CLICK.
+The whole suite's memory is full: DS, T and CT have no run left for a new group. `suite.APART_PARTS` holds the parts that do not join it: parts N, O and P, with their own `manifest_apart.toml` and their own table of raw memory, `memory.OWNED_APART`. Their registers and timers may repeat the suite's, since they run in no project with its groups, and so they change no other part's hash and no layout hash however they grow. `test_build.py` holds them to the same rules as the rest: every tag inside its group's ranges, no two groups on one address, each part under the step budget. In-process they run from their own module (`test_unit_pairs.py`); on a local target `test_the_groups_apart_on_a_local_target` runs them once, or `GROUP=unit_pairs` runs one on its own; `build_for` knows their layout hash in `DS1` on a CLICK.
 
-A case whose answer is a wait passes `fires_within=` (seconds): `Fired` comes last, the harness waits that long for it, and its `scans` (still what it takes in-process) adds no settle time. Part N: `unit_pairs` and `unit_minute`, the relation (timers in different units with one delay on one rung are Done on one scan). Leave the minute's wait out with `GROUP=unit_pairs`.
+A case whose answer is a wait passes `fires_within=` (seconds): `Fired` comes last, the harness waits that long for it, and its `scans` (still what it takes in-process) adds no settle time. Part N: `unit_pairs` and `unit_minute`, the relation (timers in different units with one delay on one rung are Done on one scan). Leave the minute's wait out with `GROUP=unit_pairs`. Part P: `text_compare`, what = and not-equal make of a TXT, a blank above all; its addresses are on nothing in `OWNED`, so a TXT it never writes is one no project of the suite wrote. `blank_literal` comes last, since the editor may refuse `""`: delete its rows if it does, and the other cases still run.
 
 ### Fixed scan part
 
@@ -398,6 +399,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
 - [x] flasher with its rung false: TDs kept and frozen, and the restart is a fresh on phase (O4, answered on hardware round 2; `out/flasher_restarts_with_on_phase`)
+- [ ] flasher restarted with its off TD frozen mid-phase, its on preset then lowered below the on TD: the off phase runs on from the frozen TD or from 0 (pyrung: from the frozen TD; `out_more/preset_mid_phase` clears the TD so as not to ask)
 - [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
 - [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
 - [x] TON auto-reset, drops Acc and Done together when rung goes false (`timers/ton_auto_reset`)
@@ -429,6 +431,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] copy converters: to_value, to_ascii, to_text, to_binary (`text/value_vs_ascii`, `text/to_text_suppress`, `text/to_binary`)
 - [x] to_value vs to_ascii on the same CHAR ('5' -> 5 vs 53) (`text/value_vs_ascii`)
 - [x] to_ascii of default/null TXT ($00) writes 0 to destination (not a no-op) (`text/null_ascii`); to_value of NUL writes 0 (`text/to_value_rejects`, pending TEXT)
+- [ ] TXT = and not-equal against a literal and a TXT (`text_compare/txt_against_literal_and_txt`), with a blank, never written or cleared, on one side and on both (`text_compare/never_written`, `text_compare/cleared`), against a space (`text_compare/blank_and_space`) and the empty literal (`text_compare/blank_literal`); part P, unread on hardware
 - [x] to_text suppress_zero default vs fixed-width (`text/to_text_suppress`, `text/to_text_fixed`, `text/to_text_fixed_negative`)
 - [x] to_text with termination_code appends one char after the digits (`text/to_text_termination`)
 - [x] copy literal string fans out across consecutive txt slots (`text/literal_fanout`)

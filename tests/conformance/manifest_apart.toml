@@ -1,4 +1,4 @@
-# The layout of the parts with memory of their own (suite.APART_PARTS): parts N and O.
+# The layout of the parts with memory of their own (suite.APART_PARTS): parts N, O and P.
 # It shares nothing with manifest.toml, which has no room left: these registers may repeat
 # the suite's, since these groups run in no project with its groups.  Rules as there:
 # nothing moves, and a new case takes the next index in its group.
@@ -27,3 +27,14 @@ slots = 19
 scan_setup = 1
 seconds_and_ms = 2
 off_delay_and_drum = 3
+
+[groups.text_compare]
+base = 401 # Conf_TextCompare: DS401..DS460
+slots = 5
+
+[groups.text_compare.cases]
+txt_against_literal_and_txt = 1
+never_written = 2
+cleared = 3
+blank_and_space = 4
+blank_literal = 5
