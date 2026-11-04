@@ -1304,6 +1304,16 @@ def test_deliberate_does_not_mask_what_escapes_it() -> None:
     del fold_check.MISMATCHES[before:]
 
 
+def test_deliberate_closes_on_a_test_failing_inside_it() -> None:
+    # pytest's failure is a BaseException: a block left open would swallow the next mismatch.
+    before = len(fold_check.MISMATCHES)
+    with pytest.raises(pytest.fail.Exception):
+        with fold_check.deliberate():
+            pytest.fail("the test's own failure")
+    assert fold_check._open_deliberate_blocks() == []
+    del fold_check.MISMATCHES[before:]
+
+
 def test_deliberate_holds_a_block_that_raises_to_its_count() -> None:
     before = len(fold_check.MISMATCHES)
     with pytest.raises(KeyError):

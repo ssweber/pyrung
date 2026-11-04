@@ -135,8 +135,9 @@ def deliberate() -> Iterator[None]:
     message = "fold-check: deliberate() expects one mismatch, this block had {}"
     try:
         yield
-    except Exception:
-        # The test's own failure goes on, and the count is held to as well.
+    except BaseException:
+        # The test's own failure goes on, pytest's being a BaseException, and the count is
+        # held to as well.  A block left open would swallow the next test's mismatch.
         blocks.pop()
         if block[0] != 1:
             _mismatch(message.format(block[0]))

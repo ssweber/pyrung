@@ -176,10 +176,12 @@ class _TracedState(SystemState):
     ``timestamp`` and ``memory`` slots stay empty, so a read past the properties raises,
     and a predicate that lets the raise out keeps the coast interpreted.
 
-    The state and map answer ``__class__`` and ``__name__`` as the real ones do.  This does
-    not see a predicate that branches on ``type(s) is SystemState`` or the map's, or on the
-    identity of either, which are not those of the real ones, or one that catches the
-    AttributeError of a slot descriptor, or names the trace's own ``_untraced``.
+    The state and map answer ``__class__`` and ``__name__`` as the real ones do.
+
+    An accepted limit: a predicate can overshoot a coast if it branches on the exact type or
+    identity of the state or map (``type(s) is SystemState``), names the trace's own
+    ``_untraced``, or catches the AttributeError of a slot descriptor.  The trace does not see
+    what these read on a real state.  Lockstep catches them under ``--fold-check``.
     """
 
     __slots__ = ("_untraced",)
