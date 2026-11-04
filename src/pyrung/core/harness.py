@@ -377,7 +377,9 @@ class Harness:
         """Move what a timer has counted to its new accumulator when its unit changed.
 
         A delay staying in its unit keeps its accumulator, so its count carries over
-        by itself; this makes a change of unit do the same.
+        by itself; this makes a change of unit do the same.  A move leaves the old
+        accumulator at zero, so an empty one has nothing to give: a harness installed
+        afresh on this state (how()'s fork) and given the same links changes nothing.
         """
         state = self._plc._state
         tags: dict[str, Any] = {}
@@ -389,6 +391,8 @@ class Harness:
             old_name, old_unit_ms = old
             count = int(state.tags.get(old_name, 0) or 0)
             frac = float(state.memory.get(f"_frac:{old_name}", 0.0) or 0.0)
+            if count == 0 and frac == 0.0:
+                continue
             elapsed_ms = (count + frac) * old_unit_ms
             new_count = int(elapsed_ms // new_unit_ms)
             new_frac = elapsed_ms / new_unit_ms - new_count

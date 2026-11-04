@@ -18,6 +18,7 @@ from pyrung.core import (
     Rung,
     TagType,
     copy,
+    latch,
     out,
     udt,
 )
@@ -652,6 +653,26 @@ class TestALinkChangedAcrossUnits:
         self._relink(plc, on_delay=then)
         plc.run(2)
         assert _fb(plc, Fb) is holds
+
+    def test_a_fresh_harness_given_the_same_links_keeps_an_off_delay_counting(self):
+        """How how()'s fork rebuilds the plant: an empty old accumulator gives nothing."""
+        plc, En, Fb = self._linked("0ms")
+        plc.patch({En: True})
+        plc.run(3)
+        self._relink(plc, off_delay="60s")
+        plc.run(1)
+        plc.force(En, False)
+        plc.run(13)
+        assert _fb(plc, Fb) is True
+        before = _whole_state(plc)
+        assert plc.current_state.tags["__cpl_off_Ts__Fb"] == 3
+
+        overrides = plc._harness.overrides
+        fresh = Harness(plc)
+        fresh.install()
+        fresh.set_overrides(overrides)
+
+        assert _whole_state(plc) == before
 
     def test_there_and_back_leaves_no_stale_count(self):
         plc, En, Fb = self._linked("5s", default=True)
