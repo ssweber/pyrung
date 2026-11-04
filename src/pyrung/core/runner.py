@@ -62,7 +62,7 @@ from pyrung.core.rung_firings import (
 )
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
-from pyrung.core.state import SystemState
+from pyrung.core.state import SystemState, snapshot_dict
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _MODE_RUN_KEY,
@@ -1642,7 +1642,7 @@ class PLC:
         # are already resolved. The range encoder compresses arithmetic churn
         # while sparse tags contribute only when their committed value changes.
         self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines()
-        self._causal_initial_tags = dict(self._state.tags)
+        self._causal_initial_tags = snapshot_dict(self._state.tags)
         self._causal_rung_firing_timelines = _CausalRungFiringTimelines(self)
         # Node-level firing log, keyed by ``RungId`` (subroutine, rung_index).
         # Holds subroutine-rung firings the main-rung log can't represent;
@@ -4698,7 +4698,7 @@ class PLC:
         state_tags_read: Mapping[str, Any] | None = None
         if fast_reads:
             if self._state_tags_read_cache_state is not self._state:
-                self._state_tags_read_cache = dict(self._state.tags)
+                self._state_tags_read_cache = snapshot_dict(self._state.tags)
                 self._state_tags_read_cache_state = self._state
             state_tags_read = self._state_tags_read_cache
         ctx = ScanContext(
