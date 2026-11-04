@@ -131,6 +131,13 @@ class Session:
         return response["body"]["result"] if response["success"] else response["message"]
 
 
+@pytest.fixture(autouse=True)
+def _allowance_outlasts_a_loaded_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The panel's clock is the user's wait; a test that wants it short sets it to 0 itself."""
+    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 300.0)
+    monkeypatch.setattr(history_seek, "_READ_CLOCK_S", 300.0)
+
+
 @pytest.fixture(scope="module")
 def stepped(tmp_path_factory: pytest.TempPathFactory) -> Session:
     return Session(tmp_path_factory.mktemp("stepped"), jit=False)

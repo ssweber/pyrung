@@ -6,6 +6,7 @@ import io
 from pathlib import Path
 from typing import Any
 
+from pyrung.core import AvoidCheckError
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
@@ -446,6 +447,21 @@ class TestCausalVerbs:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Reached" in result or "Cannot reach" in result or "Stopped" in result
+
+    def test_how_reports_an_avoid_check_that_raises(self, tmp_path: Path, monkeypatch):
+        """A console condition cannot raise on demand, so the planner's error is staged."""
+        adapter, out = _setup_how(tmp_path)
+
+        def raises(*_args, **_kwargs):
+            raise AvoidCheckError("Start > 'x'", TypeError("cannot compare"))
+
+        monkeypatch.setattr(adapter._require_runner_locked().__class__, "how", raises)
+
+        resp, _ = _repl(adapter, out, "how Done avoid ~Start", seq=10)
+
+        assert resp["success"] is False
+        assert resp["message"].startswith("how avoid: avoid check")
+        assert "Internal adapter error" not in resp["message"]
 
     def test_how_avoid_multiple_is_union(self, tmp_path: Path):
         """Comma-separated ``avoid`` conditions are a union of exclusions: both A

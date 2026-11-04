@@ -64,8 +64,8 @@ jump_to_own_step_register = 18 # retired: moved to paste_risk (part C) before an
 jog_on_last_step = 19
 
 [groups.out]
-base = 701 # Conf_Out: DS701..DS900
-slots = 19
+base = 701 # Conf_Out: DS701..DS770; DS771..DS900 went to the grey-area probes
+slots = 6
 
 [groups.out.cases]
 toggle_flips_once_per_edge = 1
@@ -101,8 +101,8 @@ edge_memory_across_iterations = 18
 skipped_body_holds_timer_and_counter = 19
 
 [groups.timers]
-base = 1101 # Conf_Timers: DS1101..DS1300
-slots = 19
+base = 1101 # Conf_Timers: DS1101..DS1220; DS1221..DS1300 went to the grey-area probes
+slots = 11
 
 [groups.timers.cases]
 ton_auto_reset = 1
@@ -118,8 +118,8 @@ fractional_accumulation = 10
 acc_clamps_at_32767 = 11
 
 [groups.counters]
-base = 1301 # Conf_Counters: DS1301..DS1500
-slots = 19
+base = 1301 # Conf_Counters: DS1301..DS1460; DS1461..DS1500 went to for_more
+slots = 15
 
 [groups.counters.cases]
 level_vs_edge = 1
@@ -139,8 +139,8 @@ pins_read_before_count = 14
 pins_read_before_count_tee = 15
 
 [groups.coils]
-base = 1501 # Conf_Coils: DS1501..DS1700
-slots = 19
+base = 1501 # Conf_Coils: DS1501..DS1610
+slots = 10
 
 [groups.coils.cases]
 out_follows_rung = 1
@@ -180,8 +180,8 @@ int_math_rand_wide_bounds = 18
 int_math_real_operand_constant = 19
 
 [groups.text]
-base = 1901 # Conf_Text: DS1901..DS2100
-slots = 19
+base = 1901 # Conf_Text: DS1901..DS2060
+slots = 15
 
 [groups.text.cases]
 value_vs_ascii = 1
@@ -201,8 +201,8 @@ fill_blank_ascii = 14
 pack_text_int_fraction = 15
 
 [groups.block]
-base = 2101 # Conf_Block: DS2101..DS2300
-slots = 19
+base = 2101 # Conf_Block: DS2101..DS2210
+slots = 10
 
 [groups.block.cases]
 blockcopy_range = 1
@@ -217,8 +217,8 @@ pack_words = 9
 unpack_words = 10
 
 [groups.shift]
-base = 2301 # Conf_Shift: DS2301..DS2500
-slots = 19
+base = 2301 # Conf_Shift: DS2301..DS2380
+slots = 7
 
 [groups.shift.cases]
 forward_range_shifts_up = 1
@@ -230,8 +230,8 @@ reset_swallows_the_edge = 6
 reversed_range_shifts_down = 7
 
 [groups.search]
-base = 2501 # Conf_Search: DS2501..DS2700
-slots = 19
+base = 2501 # Conf_Search: DS2501..DS2640; DS2641..DS2700 went to copy_more
+slots = 13
 
 [groups.search.cases]
 hit_returns_address = 1
@@ -249,8 +249,8 @@ text_windows = 12
 continuous_cursor_outside_range = 13
 
 [groups.system]
-base = 2701 # Conf_System: DS2701..DS2900
-slots = 19
+base = 2701 # Conf_System: DS2701..DS2850; DS2851..DS2900 went to out_more
+slots = 14
 
 [groups.system.cases]
 division_flag_clears_each_scan = 1
@@ -275,7 +275,9 @@ out_of_range_int_vs_other_instructions = 14
 # ever held them as groups with more than a retired case, and the staging area has
 # no 70 registers left in one run, so the part F probes (flag_probe,
 # past_write) take them.  Their case lines are gone with the entries:
-# sqrt_negative, ln_zero, ln_negative, log_zero were slot 1 each.
+# sqrt_negative, ln_zero, ln_negative, log_zero were slot 1 each.  The same goes
+# for DS2981..DS3040 (stop_log_neg, stop_asin, stop_acos; log_negative, asin_above_1
+# and acos_above_1 were slot 1 each): for_wide, rtc_set and coil_range take them.
 
 [groups.flag_probe]
 base = 2901 # Conf_FlagProbe: DS2901..DS2960; part F, the fault-flag model's unmeasured choices
@@ -295,44 +297,44 @@ slots = 1
 [groups.past_write.cases]
 past_bank_write = 1
 
-[groups.stop_log_neg]
-base = 2981 # Conf_StopLogNeg: DS2981..DS3000; retired
+[groups.for_wide]
+base = 2981 # Conf_ForWide: DS2981..DS3000; part M, a For's count past 16 bits
 slots = 1
 
-[groups.stop_log_neg.cases]
-log_negative = 1 # retired: one case of math_error/math_errors_do_not_stop
+[groups.for_wide.cases]
+count_forms = 1
 
-[groups.stop_asin]
-base = 3001 # Conf_StopAsin: DS3001..DS3020; retired
+[groups.rtc_set]
+base = 3001 # Conf_RtcSet: DS3001..DS3020; part M, the clock set from the ladder
 slots = 1
 
-[groups.stop_asin.cases]
-asin_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
+[groups.rtc_set.cases]
+date_and_time_apply = 1
 
-[groups.stop_acos]
-base = 3021 # Conf_StopAcos: DS3021..DS3040; retired
+[groups.coil_range]
+base = 3021 # Conf_CoilRange: DS3021..DS3040; part K, a coil over a range, a search over a Word table
 slots = 1
 
-[groups.stop_acos.cases]
-acos_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
+[groups.coil_range.cases]
+ranges_and_search = 1
 
 [groups.math_error]
-base = 3041 # Conf_MathError: DS3041..DS3090
-slots = 4
+base = 3041 # Conf_MathError: DS3041..DS3060
+slots = 1
 
 [groups.math_error.cases]
 math_errors_do_not_stop = 1
 
 [groups.call_twice]
-base = 3091 # Conf_CallTwice: DS3091..DS3140; main calls it twice a scan
-slots = 4
+base = 3091 # Conf_CallTwice: DS3091..DS3110; main calls it twice a scan; DS3111..DS3140 went to compare
+slots = 1
 
 [groups.call_twice.cases]
 rise_once_per_scan = 1
 
 [groups.solve_order]
-base = 3141 # Conf_SolveOrder: DS3141..DS3440
-slots = 29
+base = 3141 # Conf_SolveOrder: DS3141..DS3340
+slots = 19
 
 [groups.solve_order.cases]
 row_series_reads_rows_above = 1
@@ -372,8 +374,8 @@ body_contact_after_call = 2
 loop_in_called_subroutine = 3
 
 [groups.row_solve]
-base = 3501 # Conf_RowSolve: DS3501..DS3600; part C
-slots = 9
+base = 3501 # Conf_RowSolve: DS3501..DS3570; part C; DS3571..DS3600 went to boot_read
+slots = 6
 
 [groups.row_solve.cases]
 edge_on_branch_reads_row_above = 1
@@ -518,3 +520,180 @@ return_after_jog_back = 4
 return_after_jump = 5
 return_scan_moves = 6
 te_acc_by_step_kind = 7
+
+# Grey-area probes (parts H..), on slots the groups above never used: no hash holds a
+# block's size, so their cases are untouched.
+[groups.word_store]
+base = 771 # Conf_WordStore: DS771..DS850; part H, what a Word holds after a store
+slots = 7
+
+[groups.word_store.cases]
+word_below_zero = 1
+word_above_top = 2
+word_into_signed = 3
+block_into_word = 4
+block_from_word = 5
+fill_into_word = 6
+word_literals = 7
+
+[groups.real_sum]
+base = 851 # Conf_RealSum: DS851..DS900; part H, order and width of a Real SUM
+slots = 4
+
+[groups.real_sum.cases]
+f32_row = 1
+f64_row = 2
+sum_absorbs = 3
+math_keeps_the_one = 4
+
+[groups.real_bits]
+base = 1221 # Conf_RealBits: DS1221..DS1280; part H, a Real's raw bits
+slots = 5
+
+[groups.real_bits.cases]
+minus_zero_math = 1
+minus_zero_shapes = 2
+non_finite_raw_bits = 3
+underflow = 4
+float32_equality = 5
+
+
+[groups.drum_pins]
+base = 3341 # Conf_DrumPins: DS3341..DS3440; part I, a pin and own end
+slots = 9
+
+[groups.drum_pins.cases]
+event_and_jog = 1
+time_and_jog = 2
+end_and_jog_on_last = 3
+last_time_and_jump = 4
+last_event_and_jump = 5
+acc_jog_completing = 6
+paused_jog_with_flag = 7
+paused_jog_with_flag_mid = 8
+paused_flag_moves = 9
+
+[groups.drum_branch]
+base = 2381 # Conf_DrumBranch: DS2381..DS2480; part I, the routine branches
+slots = 9
+
+[groups.drum_branch.cases]
+jump_to_bad_step = 1
+jump_on_bad_step = 2
+correction_with_flag = 3
+flag_cleared = 4
+reset_paths = 5
+written_and_paused_acc = 6
+event_rises_in_pause = 7
+te_event_before_time = 8
+drum_in_loop = 9
+
+[groups.drum_limits]
+base = 2061 # Conf_DrumLimits: DS2061..DS2100; part I, may be refused at paste
+slots = 3
+
+[groups.drum_limits.cases]
+preset_from_ds = 1
+units = 2
+single_step = 3
+
+[groups.math_more]
+base = 1611 # Conf_MathMore: DS1611..DS1700; part J
+slots = 8
+
+[groups.math_more.cases]
+int_div_mid_formula = 1
+wide_constant_into_dint = 2
+real_past_int = 3
+abs_and_precision = 4
+mod_signs = 5
+power_edges = 6
+math_errors = 7
+functions = 8
+
+[groups.hex_math]
+base = 3061 # Conf_HexMath: DS3061..DS3090; part J
+slots = 2
+
+[groups.hex_math.cases]
+shifts = 1
+rotates_and_bits = 2
+
+[groups.agg_more]
+base = 2211 # Conf_AggMore: DS2211..DS2280; part J
+slots = 6
+
+[groups.agg_more.cases]
+sum_int_wrap = 1
+sum_bits = 2
+agg_signed = 3
+agg_nan_order = 4
+agg_inf = 5
+rand_sites = 6
+
+[groups.copy_more]
+base = 2641 # Conf_CopyMore: DS2641..DS2700; part K, Copy forms nothing has read
+slots = 5
+
+[groups.copy_more.cases]
+across_types = 1
+pointer_limits = 2
+to_text_real = 3
+to_text_ints = 4
+pack_text_forms = 5
+
+[groups.block_more]
+base = 2281 # Conf_BlockMore: DS2281..DS2300; part K, a block copy's converter and a Fill across types
+slots = 1
+
+[groups.block_more.cases]
+block_forms = 1
+
+[groups.compare]
+base = 3111 # Conf_Compare: DS3111..DS3140; part K, compare across types, CHAR with a 2-char literal
+slots = 2
+
+[groups.compare.cases]
+word_and_wide_compare = 1
+char_two_char_literal = 2
+
+[groups.out_more]
+base = 2851 # Conf_OutMore: DS2851..DS2900; part L, the v4 Out family past out
+slots = 4
+
+[groups.out_more.cases]
+toggle_and_timed = 1
+timed_maintained = 2
+zero_and_below = 3
+preset_mid_phase = 4
+
+[groups.for_more]
+base = 1461 # Conf_ForMore: DS1461..DS1500; part L, one-shot For, timers at their limits
+slots = 3
+
+[groups.for_more.cases]
+oneshot_and_edges = 1
+timers_at_limits = 2
+clock_edges_in_a_body = 3
+
+[groups.call_more]
+base = 1281 # Conf_CallMore: DS1281..DS1300; part L, per call or per scan; main calls it twice a scan
+slots = 1
+
+[groups.call_more.cases]
+called_twice = 1
+
+[groups.boot_read]
+base = 3571 # Conf_BootRead: DS3571..DS3600; part M, what a boot keeps and the first scan's edges
+slots = 2
+
+[groups.boot_read.cases]
+what_survives = 1
+first_scan_edges = 2
+
+[groups.flag_scan]
+base = 2481 # Conf_FlagScan: DS2481..DS2500; part M, SC40 and SC46 over a scan
+slots = 1
+
+[groups.flag_scan.cases]
+math_flags_over_a_scan = 1

@@ -20,10 +20,11 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pilot.avoid import _member_on_scan, _member_weighed
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.coast_run import coast_until, memo_of, work_charged
-from pyrung.core.read_trace import _extract_condition_reads, _reads_untraced
+from pyrung.core.coast_run import _NotDeclared, coast_until, memo_of, work_charged
+from pyrung.core.read_trace import _exact_condition_reads, _reads_untraced
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -176,12 +177,12 @@ def _trigger_reads(triggers: Iterable[CoastTrigger]) -> frozenset[str] | None:
     reads: set[str] = set()
     for trigger in triggers:
         reads.update(trigger.watched)
-        if trigger.condition is not None:
-            reads |= _extract_condition_reads(trigger.condition)
-        elif trigger.predicate_reads is not None:
-            reads.update(trigger.predicate_reads)
-        else:
+        says = None if trigger.condition is None else _exact_condition_reads(trigger.condition)
+        if says is None:
+            says = trigger.predicate_reads
+        if says is None:
             return None
+        reads.update(says)
     return frozenset(reads)
 
 
@@ -293,11 +294,8 @@ class CoastSession:
             # Compiled members have an exact read-set. Opaque callables do not,
             # so their contract observes the full snapshot.
             declared_reads = tuple(sorted(member.tags)) if condition is not None else None
-            try:
-                already_true = bool(member.pred(start))
-            except Exception:
-                already_true = False
-            if already_true:
+            # The start may be the state behind how()'s start, so it is only weighed.
+            if _member_weighed(member.pred, start):
                 continue
 
             def _pred(
@@ -305,6 +303,8 @@ class CoastSession:
                 _member: Any = member,
                 _declared_reads: tuple[str, ...] | None = declared_reads,
             ) -> bool:
+                # A stretch refuses an opaque member its full snapshot, so the member
+                # is judged on the real scans around the stretch and not in it.
                 try:
                     tags = state.tags
                     snapshot = (
@@ -312,9 +312,9 @@ class CoastSession:
                         if _declared_reads is None
                         else {name: tags[name] for name in _declared_reads if name in tags}
                     )
-                    return bool(_member.pred(snapshot))
-                except Exception:
+                except _NotDeclared:
                     return False
+                return _member_on_scan(_member.name, _member.pred, snapshot)
 
             triggers.append(
                 CoastTrigger(

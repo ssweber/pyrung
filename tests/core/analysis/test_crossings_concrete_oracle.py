@@ -1239,8 +1239,8 @@ def test_drum_reverse_does_not_drop_same_scan_step_advance(
         },
         instruction_memory={
             "_drum_last_step": 1,
-            "_drum_event_ready": True,
             "_drum_event_prev": False,
+            "_drum_rung_prev": True,
         },
     )
 

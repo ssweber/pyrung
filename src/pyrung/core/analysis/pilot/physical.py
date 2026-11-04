@@ -25,15 +25,17 @@ def install_harness(plc: PLC, unlink: list[str] | None = None) -> frozenset[str]
 
     Overrides on a harness *plc* already carries (a debug session's bench
     links, inherited by the fork) carry over, so PILOT plans with the same
-    wiring the session runs.
+    wiring the session runs.  *plc* stands in for the session it forks, so nothing
+    settles here: a plan starts from the session's own counts, or from cold if the
+    session has no harness.
     """
     from pyrung.core.harness import Harness
 
     previous = plc._harness
     harness = Harness(plc)
-    harness.install()
     if previous is not None and previous.overrides:
         harness.set_overrides(previous.overrides)
+    harness._install(settle=False)
     fb_names: set[str] = set()
     has_couplings = False
     for coupling in harness.couplings():

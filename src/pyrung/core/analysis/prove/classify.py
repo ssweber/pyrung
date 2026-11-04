@@ -99,7 +99,7 @@ from .absorb import (
     _all_write_targets,
     _collect_done_acc_pairs,
     _collect_progress_source_kinds,
-    _drum_times_under_its_flag,
+    _drum_flag_without_its_time,
     _find_comparison_absorptions,
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
@@ -3280,8 +3280,8 @@ def _unmodeled_accumulators(program: Program) -> dict[str, str]:
         if isinstance(instr, TimeEventDrumInstruction):
             out[instr.accumulator.name] = "time_event_drum"
         elif isinstance(instr, TimeDrumInstruction):
-            # It times steps under a completion flag that is on.
-            reason = _drum_times_under_its_flag(instr, program)
+            # Its completion flag can be on without its time up.
+            reason = _drum_flag_without_its_time(instr, program)
             if reason is not None:
                 out[instr.accumulator.name] = f"time_drum ({reason})"
         elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):

@@ -1148,10 +1148,9 @@ class TestTimeEventDrum:
 
 class TestDrumCompletion:
     """A completed drum turns its outputs off and keeps its flag on through a
-    jump (only a reset clears it); a jog or its own step forward brings the
-    outputs back.  A time drum with a jump times its steps again under that
-    flag; its ticks are black boxes, so the search finds those steps and the
-    PLC replays them."""
+    jump (only a reset clears it); a jog brings the outputs back.  The flag on
+    stops the drum's own time, however it came on, so no step ends under it:
+    ``drum_settle/acc_in_completed_drum``, ``drum_close/flag_set_from_outside``."""
 
     @staticmethod
     def _time_drum(*, jump: bool) -> Program:
@@ -1172,9 +1171,9 @@ class TestDrumCompletion:
                     drum.jump(Bool("Jump"), step=1)
         return logic
 
-    def test_jumping_time_drum_times_its_steps_again(self) -> None:
+    def test_jumping_time_drum_does_not_time_its_steps_again(self) -> None:
         logic = self._time_drum(jump=True)
-        # Reachable: complete, jump to step 1, time steps 1 and 2 again.
+        # Complete, jump to step 1: the step moves and the flag holds it there.
         plc = PLC(logic, dt=0.010)
         plc.patch({"Enable": True})
         plc.run_for(1.1)
@@ -1184,16 +1183,17 @@ class TestDrumCompletion:
         plc.patch({"Jump": False})
         plc.run_for(0.6)
         tags = plc.current_state.tags
-        assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, True)
+        assert (tags["Done"], tags["Step"], tags["Y1"], tags["Acc"]) == (True, 1, False, 0)
 
-        result = never(logic, Bool("Done"), Int("Step") == 3, Bool("Y3"))
+        result = never(logic, Bool("Done"), Int("Step") == 1)
         assert isinstance(result, Counterexample)
         tags = _replay_trace(logic, result.trace).current_state.tags
-        assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, True)
+        assert (tags["Done"], tags["Step"], tags["Y1"]) == (True, 1, False)
+        assert isinstance(never(logic, Bool("Done"), Int("Step") == 2), Proven)
 
-    def test_flag_that_starts_on_reaches_step_two(self) -> None:
-        """No jump, but the flag is on from the start, while the drum times
-        steps 1 and 2: step 2 under the flag is reachable."""
+    def test_flag_that_starts_on_holds_the_drum_until_a_reset(self) -> None:
+        """The flag is on from the start, so the drum neither times nor writes
+        until a reset frees it, and step 2 under the flag is out of reach."""
         from pyrung.core import time_drum
 
         with Program(strict=False) as logic:
@@ -1211,14 +1211,21 @@ class TestDrumCompletion:
         plc.patch({"Enable": True})
         plc.run_for(0.25)
         tags = plc.current_state.tags
-        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
+        assert (tags["Done"], tags["Step"], tags["Y1"], tags["Acc"]) == (True, 1, False, 0)
+        plc.patch({"Reset": True})
+        plc.step()
+        plc.patch({"Reset": False})
+        plc.run_for(0.25)
+        tags = plc.current_state.tags
+        assert (tags["Done"], tags["Step"], tags["Y2"]) == (False, 2, True)
 
-        result = never(logic, Bool("Done"), Int("Step") == 2, Bool("Y2"))
+        assert isinstance(never(logic, Bool("Done"), Int("Step") == 2), Proven)
+        result = never(logic, ~Bool("Done"), Int("Step") == 2)
         assert isinstance(result, Counterexample)
         tags = _replay_trace(logic, result.trace).current_state.tags
-        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
+        assert (tags["Done"], tags["Step"], tags["Y2"]) == (False, 2, True)
 
-    def test_another_step_writer_reaches_step_two_under_the_flag(self) -> None:
+    def test_another_step_writer_moves_a_completed_drum_and_no_more(self) -> None:
         from pyrung.core import time_drum
 
         with Program(strict=False) as logic:
@@ -1234,10 +1241,12 @@ class TestDrumCompletion:
                 ).reset(Bool("Reset"))
             with Rung(Bool("Back")):
                 copy(1, Int("Step"), oneshot=True)
-        result = never(logic, Bool("Done"), Int("Step") == 2, Bool("Y2"))
+        result = never(logic, Bool("Done"), Int("Step") == 1)
         assert isinstance(result, Counterexample)
         tags = _replay_trace(logic, result.trace).current_state.tags
-        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 2, True)
+        assert (tags["Done"], tags["Step"], tags["Y2"]) == (True, 1, False)
+        # The flag holds it on the step written: step 2's row never comes back under it.
+        assert isinstance(never(logic, Bool("Done"), Bool("Y2")), Proven)
 
     def test_jog_completes_the_last_step_before_its_time_is_up(self) -> None:
         """A jog on the last step turns the flag on with that step's time not
@@ -1271,8 +1280,8 @@ class TestDrumCompletion:
         assert (tags["Done"], tags["Step"], tags["Y3"]) == (True, 3, False)
 
     def test_completion_turns_the_outputs_off(self) -> None:
-        """The drum's completing scan sets the flag and ``_drum_done`` and turns
-        every output off: a completed drum never drives the last output."""
+        """The drum's completing scan sets the flag and turns every output off: a
+        completed drum never drives the last output."""
         from pyrung.core import time_drum
 
         En, Rst = Bool("En", external=True), Bool("Rst", external=True)

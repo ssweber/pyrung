@@ -9,6 +9,8 @@ pyrung adds tags of its own to a running program:
   (``pyrung.core.harness``).
 - ``__pls_ond__``, ``__pls_on__``, ``__pls_offd__``, ``__pls_off__``
   ``{feedback}``: the timers of a harness pulse (``pyrung.core.harness``).
+- ``on`` and ``off`` above with a unit (``__cpl_on_Ts__{feedback}``): the same
+  timer, for a delay too long to count in milliseconds.
 
 They are not the program's, so the DAP does not list them. Only these exact
 prefixes are matched: a user tag such as ``__init__`` or ``__spare__1`` is shown.
@@ -23,7 +25,8 @@ from typing import TypeVar
 _V = TypeVar("_V")
 
 _INTERNAL_TAG_PREFIX = re.compile(
-    r"__(?:frz\d+|cpl_(?:ond|on|off|armed)|pls_(?:ond|on|offd|off))__(?=.)",
+    r"__(?:frz\d+|cpl_(?:ond|armed|(?:on|off)(?:_T[smhd])?)"
+    r"|pls_(?:ond|offd|(?:on|off)(?:_T[smhd])?))__(?=.)",
     re.DOTALL,
 )
 

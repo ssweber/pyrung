@@ -69,6 +69,46 @@ def _rung_holding(condition: Condition | Tag | None, instruction: Any) -> Rung:
     return rung
 
 
+_TIMER_UNITS_MS = (("Tms", 1), ("Ts", 1_000), ("Tm", 60_000), ("Th", 3_600_000), ("Td", 86_400_000))
+TIMER_ACC_MAX = 32767
+
+
+def plant_timer(delay_ms: int) -> tuple[int, str, int]:
+    """``(preset, unit, ms per unit)`` for a plant timer that waits *delay_ms*.
+
+    A timer's accumulator stops at 32767 of its unit, so a preset past that is never
+    done.  This takes the finest unit the delay fits in, rounding up to a whole one:
+    milliseconds up to 32.767 s, then seconds, minutes, hours and days.
+    """
+    for unit, unit_ms in _TIMER_UNITS_MS:
+        preset = -(-delay_ms // unit_ms)
+        if preset <= TIMER_ACC_MAX:
+            return preset, unit, unit_ms
+    raise ValueError(
+        f"a feedback delay of {delay_ms} ms is longer than a timer can count (32767 days)"
+    )
+
+
+def plant_acc_name(stem: str, fb_name: str, delay_ms: int) -> str:
+    """The accumulator of a plant timer on *fb_name*, in the unit it counts *delay_ms* in.
+
+    A count means nothing without its unit, so a delay in another unit counts in another
+    tag, and any state reads the same whichever coupling runs on it, a fork from before
+    the link changed included.  Milliseconds have the plain name.
+    """
+    _preset, unit, _unit_ms = plant_timer(delay_ms)
+    return _acc_name_in(unit, stem, fb_name)
+
+
+def plant_acc_registers(stem: str, fb_name: str) -> tuple[tuple[str, int], ...]:
+    """Each accumulator a plant timer on *fb_name* could count in, and its ms per unit."""
+    return tuple((_acc_name_in(unit, stem, fb_name), ms) for unit, ms in _TIMER_UNITS_MS)
+
+
+def _acc_name_in(unit: str, stem: str, fb_name: str) -> str:
+    return f"{stem}__{fb_name}" if unit == "Tms" else f"{stem}_{unit}__{fb_name}"
+
+
 def bool_feedback_rungs(
     *,
     enable: Condition,
@@ -91,15 +131,18 @@ def bool_feedback_rungs(
     ``off_delay`` after the enable drops.  A glitch shorter than ``on_delay``
     resets the accumulator, so feedback that was never sustained is never
     fabricated — the dwell semantics, now native (no transport-delay heap).
-    Presets are in ms with a ms accumulator unit, so a held enable crosses after
-    ``ceil(delay_ms / dt_ms)`` scans.
+    Presets are in the unit :func:`plant_timer` picks, ms unless the delay is too
+    long for it, so a held enable crosses after ``ceil(delay_ms / dt_ms)`` scans, one
+    more where the longer unit's ``dt`` does not sum exactly.
     """
     from pyrung.core.condition import BitCondition
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
-    ton = OnDelayInstruction(ton_done, ton_acc, on_delay_ms, enable, unit="Tms")
+    on_preset, on_unit, _ = plant_timer(on_delay_ms)
+    off_preset, off_unit, _ = plant_timer(off_delay_ms)
+    ton = OnDelayInstruction(ton_done, ton_acc, on_preset, enable, unit=on_unit)
     ton_power = BitCondition(ton_done)
-    tof = OffDelayInstruction(fb_tag, tof_acc, off_delay_ms, ton_power, unit="Tms")
+    tof = OffDelayInstruction(fb_tag, tof_acc, off_preset, ton_power, unit=off_unit)
     return [_rung_holding(enable, ton), _rung_holding(ton_power, tof)]
 
 
@@ -197,8 +240,9 @@ def pulse_feedback_rungs(
     (``fb`` flips), so the two ping-pong.  Each rung reads ``fb`` and the timers
     as the rungs above it left them, so a half-cycle costs one scan of slop —
     inconsequential for a pulse train.
-    Presets are ms with a ms accumulator, so a dwell lasts ``ceil(dwell_ms/dt_ms)``
-    scans.
+    Presets are in the unit :func:`plant_timer` picks, ms unless the dwell is too long
+    for it, so a dwell lasts ``ceil(dwell_ms/dt_ms)`` scans, one more where the longer
+    unit's ``dt`` does not sum exactly.
     """
     from pyrung.core.condition import AllCondition, BitCondition
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
@@ -208,8 +252,10 @@ def pulse_feedback_rungs(
     fb_low = ~fb_tag
     on_guard = AllCondition(enable, fb_high)
     off_guard = AllCondition(enable, fb_low)
-    ton_high = OnDelayInstruction(on_done, on_acc, on_dwell_ms, on_guard, unit="Tms")
-    ton_low = OnDelayInstruction(off_done, off_acc, off_dwell_ms, off_guard, unit="Tms")
+    on_preset, on_unit, _ = plant_timer(on_dwell_ms)
+    off_preset, off_unit, _ = plant_timer(off_dwell_ms)
+    ton_high = OnDelayInstruction(on_done, on_acc, on_preset, on_guard, unit=on_unit)
+    ton_low = OnDelayInstruction(off_done, off_acc, off_preset, off_guard, unit=off_unit)
     return [
         _rung_holding(on_guard, ton_high),
         _rung_holding(off_guard, ton_low),

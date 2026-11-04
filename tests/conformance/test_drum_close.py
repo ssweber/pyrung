@@ -8,26 +8,25 @@ above the other.
 
 - ``return_scan_ticks``: paused on scans 3..4 with Acc 1000 staged on a time drum and a timed
   time & event drum: Acc - 1000 is 0 on the return scan (Result2, Result3), which times
-  nothing, and above 0 on the next (Result4, ErrorCode; 9 on the CLICK).  pending DRUM.
+  nothing, and above 0 on the next (Result4, ErrorCode; 9 on the CLICK).
 - ``flag_cleared_from_outside``: completed by a jog, 2424, the flag reset by a rung on scan 5,
   2020, and the step's own end on scan 6 completes it again, 2424: the flag is what stops
   the drum, not a memory of its own.
 - ``flag_set_from_outside``: a drum on step 1 with its flag set by a rung on scan 3, 1515, and
   step 1's own end on scan 4 does nothing, 1515 on scans 4 and 5; a jog on scan 6 moves it,
-  2626.  The flag again.  pending DRUM.
+  2626.  The flag again.
 - ``return_after_jog_back``: completed, jumped and jogged back, 2626, then paused on scans 6..7
   with B reset from outside, 2424: the rung's return writes nothing with the flag on, 2424.
-  pending DRUM.
 - ``return_after_jump``: completed and jumped, 1414, then paused on scans 5..6 with B latched
-  from outside, 1616: the return writes nothing, 1616.  pending DRUM.
+  from outside, 1616: the return writes nothing, 1616.
 - ``return_scan_moves``: a jog and a jump on a return scan act, 2222 and 1111 (Result2,
   Result3).  A time and a time & event drum on their last step, paused with Acc past the
   preset and a level event from the return scan: 2222 on it (Result4), not done, and 2424
-  on the next (ErrorCode).  pending DRUM.
+  on the next (ErrorCode).
 - ``te_acc_by_step_kind``: a timed time & event drum's correction keeps Acc, 9 hundreds
   (Result1), and it counts on (Result2 above 0).  An event-only one with Acc 500 staged does
   not move (Result3 = 0); one that has an event-only step 1 and a timed step 2, jogged to it,
-  does (Result4 above 0).  A timed one completed by a jog holds (ErrorCode = 0).  pending DRUM.
+  does (Result4 above 0).  A timed one completed by a jog holds (ErrorCode = 0).
 
 The cases own C702..C750, C969..C1000, C414..C450, C27..C50, T271..T298, T377..T400, DD754..DD809 and
 DS4332..DS4342, DS4352..DS4362, DS4372..DS4382 (``memory.OWNED``).
@@ -277,7 +276,6 @@ group = Group(
                 "ErrorCode": range(1, 1000),
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "The flag is what stops a completed drum: completed by a jog (2424, Result2), the "
@@ -294,7 +292,6 @@ group = Group(
             ladder=prove_flag_set_from_outside,
             expect={"Result2": 1515, "Result3": 1515, "Result4": 1515, "ErrorCode": 2626},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A rung's return writes nothing with the flag on: completed, jumped and jogged back "
@@ -303,7 +300,6 @@ group = Group(
             ladder=prove_return_after_jog_back,
             expect={"Result2": 2626, "Result3": 2424, "Result4": 2424},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A rung's return writes nothing on a completed drum: completed and jumped (1414, "
@@ -312,7 +308,6 @@ group = Group(
             ladder=prove_return_after_jump,
             expect={"Result2": 1414, "Result3": 1616, "Result4": 1616, "ErrorCode": 1616},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A jog and a jump act on a return scan (2222, 1111, Result2, Result3), and the last "
@@ -322,7 +317,6 @@ group = Group(
             expect={"Result2": 2222, "Result3": 1111, "Result4": 2222, "ErrorCode": 2424},
             scans=SCANS,
             probe="time and time & event drums: a return scan's jog, jump and last step",
-            pending="DRUM",
         ),
         case(
             "A time & event drum times only a step with a time, and not once completed: a timed "
@@ -338,7 +332,6 @@ group = Group(
                 "ErrorCode": 0,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
     ],
 )

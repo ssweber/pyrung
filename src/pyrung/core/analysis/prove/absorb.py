@@ -88,17 +88,18 @@ class _DoneAccInfo:
     kinds: dict[str, str]
 
 
-def _drum_times_under_its_flag(drum: Any, program: Program) -> str | None:
-    """Why *drum* can time a step while its completion flag is on, or None.
+def _drum_flag_without_its_time(drum: Any, program: Program) -> str | None:
+    """Why *drum*'s completion flag can be on without its last step's time up, or None.
 
     The Done/Acc tri-state reads a flag that is on as settled, whatever the
     accumulator holds.  That holds for a time drum only while the flag comes
     on at the last step and stays there until a reset.  A jump keeps the flag
-    on but takes the drum back to an earlier step it times again; a jog on the
-    last step turns the flag on with that step's time not yet up; a flag that
-    starts on is on while the drum times its first steps; and another writer
-    of its step register or of the flag can do either.  Then the drum's time
-    is a real dimension, not absorbed.  The reason reads as a hint.
+    on but moves the step and clears the accumulator; a jog on the last step
+    turns the flag on with that step's time not yet up; a flag that starts on
+    has no time behind it; and another writer of its step register can move
+    it, or of the flag can free it with its accumulator as it stands.  Then
+    the drum's time is a real dimension, not absorbed.  The reason reads as a
+    hint.
     """
     from pyrung.core.validation._common import walk_instructions
 
@@ -147,7 +148,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
         elif isinstance(instr, TimeDrumInstruction):
-            if _drum_times_under_its_flag(instr, program) is not None:
+            if _drum_flag_without_its_time(instr, program) is not None:
                 # Tracked exactly: the tri-state would hide its time.
                 continue
             done_name = instr.completion_flag.name

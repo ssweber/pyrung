@@ -18,6 +18,7 @@ from pyrung.click.codegen.constants import (
     _OPERAND_RE,
     _RANGE_RE,
     _STRING_KWARGS,
+    _sub_operands,
 )
 from pyrung.click.codegen.models import _OperandCollection
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
@@ -534,8 +535,7 @@ def _sub_operand(
 
     result = _POINTER_RE.sub(_sub_pointer, result)
 
-    def _sub_operand_token(m: re.Match[str]) -> str:
-        op = m.group(0)
+    def _sub_operand_token(op: str) -> str:
         if op in SYSTEM_OPERAND_PATHS:
             return SYSTEM_OPERAND_PATHS[op]
         render = collection.semantic_operands.get(op)
@@ -545,7 +545,7 @@ def _sub_operand(
             return collection.tags[op].var_name
         return op
 
-    result = _OPERAND_RE.sub(_sub_operand_token, result)
+    result = _sub_operands(result, _sub_operand_token)
 
     # Track expression function names for imports
     for m in _PYTHON_EXPR_FUNC_RE.finditer(result):

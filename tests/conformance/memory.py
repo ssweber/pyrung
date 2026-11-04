@@ -58,12 +58,27 @@ STAGING_DS = range(3901, 4501)
 #: group that outgrew its first one.  A group listed before it has cases is
 #: reserved for the group that will have them.
 OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
-    "rungs": {"C": range(1601, 1661), "CT": range(151, 161)},
+    "rungs": {
+        "C": (
+            range(1601, 1603),
+            range(1611, 1614),
+            range(1621, 1623),
+            range(1631, 1633),
+            range(1634, 1661),
+        ),
+        "CT": range(151, 161),
+    },
+    # DD4.., DF20.. and DH5.. are the grey-area probes' (the math cases use none).
     "math": {
-        "DS": range(4401, 4439),
-        "DD": range(1, 101),
-        "DF": range(1, 101),
-        "DH": range(1, 101),
+        "DS": (
+            range(4401, 4403),
+            range(4411, 4413),
+            range(4421, 4424),
+            range(4431, 4439),
+        ),
+        "DD": range(1, 4),
+        "DF": range(1, 20),
+        "DH": range(1, 5),
     },
     "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
     # S6 probes (tests/conformance/test_drum_rule.py, test_drum_jump.py,
@@ -124,36 +139,75 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
-    "out": {"C": range(1801, 1852), "T": range(301, 351)},
-    "loop": {"C": range(1701, 1751), "T": range(201, 251), "CT": range(201, 251)},
-    "timers": {"C": range(1471, 1501), "T": range(1, 101)},
+    "out": {"C": range(1801, 1852), "T": range(301, 313)},
+    "loop": {
+        "C": (
+            range(1701, 1702),
+            range(1711, 1712),
+            range(1720, 1722),
+            range(1729, 1732),
+            range(1741, 1751),
+        ),
+        "T": range(201, 212),
+        "CT": (range(201, 212), range(215, 251)),
+    },
+    "timers": {"C": (range(1471, 1472), range(1481, 1482), range(1491, 1492)), "T": range(1, 101)},
     # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
     # cases use none of them).
-    "counters": {"C": (range(1301, 1331), range(1383, 1401)), "CT": range(1, 147)},
-    "coils": {"C": range(1501, 1601)},
-    "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
+    "counters": {"C": (range(1301, 1302), range(1383, 1401)), "CT": range(1, 147)},
+    "coils": {
+        "C": (
+            range(1501, 1502),
+            range(1511, 1512),
+            range(1521, 1522),
+            range(1531, 1532),
+            range(1541, 1543),
+            range(1551, 1552),
+            range(1561, 1562),
+            range(1571, 1573),
+            range(1581, 1583),
+            range(1591, 1593),
+        )
+    },
+    "numeric": {
+        "DD": (range(101, 133), range(161, 164), range(171, 173)),
+        "DF": range(101, 142),
+        "DH": range(201, 223),
+    },
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
-        "DS": range(3901, 3933),
+        "DS": (range(3901, 3907), range(3911, 3915), range(3921, 3924), range(3931, 3933)),
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
     "block": {
-        "C": range(1201, 1301),
-        "DS": range(4001, 4111),
+        "C": range(1201, 1277),
+        "DS": (range(4001, 4016), range(4021, 4111)),
         "DD": range(201, 301),
-        "DF": range(201, 301),
+        "DF": (range(201, 203), range(205, 301)),
         "DH": range(101, 201),
     },
-    "shift": {"C": range(1001, 1110)},
+    "shift": {
+        "C": (
+            range(1001, 1030),
+            range(1041, 1050),
+            range(1061, 1070),
+            range(1081, 1090),
+            range(1101, 1110),
+        )
+    },
     "search": {
-        "C": range(851, 901),
+        "C": range(851, 882),
         # DS4226: past_write's pointer; DS4208..DS4222, DS4227..DS4230: drum_settle's;
         # DS4332..DS4342, DS4352..DS4362, DS4372..DS4382: drum_close's.
         "DS": (
             range(4203, 4208),
             range(4223, 4226),
-            range(4231, 4332),
+            range(4243, 4248),
+            range(4263, 4267),
+            range(4283, 4293),
+            range(4303, 4312),
+            range(4323, 4332),
             range(4343, 4352),
             range(4363, 4372),
             range(4383, 4395),
@@ -164,8 +218,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "system": {
         # C969..C1000 are drum_close's.
-        "C": range(901, 969),
-        "T": range(101, 151),
+        "C": (range(901, 904), range(911, 914), range(921, 924), range(941, 969)),
+        "T": (range(101, 113), range(126, 151)),
         "CT": range(171, 181),
         "DD": range(901, 1000),
         "DH": range(401, 411),
@@ -178,7 +232,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     # C582..C660 are drum_settle's (the solve_order cases use none of them).
     "solve_order": {
-        "C": (range(501, 582), range(661, 701)),
+        "C": (range(501, 503), range(511, 522), range(527, 582), range(661, 662), range(681, 682)),
         "T": range(151, 161),
         "CT": range(161, 171),
     },
@@ -202,6 +256,169 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "CT": range(196, 201),
         "DF": range(411, 421),
     },
+    # The grey-area probes, parts H.. (tests/conformance/probe_kit.py).  Their memory is
+    # what the groups above leave unused.
+    "word_store": {
+        "DD": range(810, 850),
+        "DF": range(434, 450),
+        "DH": range(422, 470),
+        "DS": (range(4312, 4316), range(4322, 4323)),
+    },
+    "real_bits": {
+        "DD": range(850, 860),
+        "DF": range(20, 70),
+        "DH": range(470, 500),
+        "TXT": range(546, 570),
+    },
+    # tests/conformance/test_drum_pins.py: from what other groups' cases never used.
+    "drum_pins": {
+        "C": (
+            range(662, 681),
+            range(682, 701),
+            range(882, 901),
+            range(904, 911),
+            range(914, 921),
+            range(924, 941),
+            range(1030, 1041),
+            range(1050, 1055),
+        ),
+        "T": (
+            range(182, 201),
+            range(313, 318),
+        ),
+        "DS": (
+            range(4231, 4243),
+            range(4248, 4260),
+            range(4293, 4298),
+        ),
+        "DD": range(860, 884),
+    },
+    "drum_branch": {
+        "C": (
+            range(1055, 1061),
+            range(1070, 1081),
+            range(1090, 1101),
+            range(1277, 1301),
+            range(1302, 1331),
+            range(1472, 1481),
+            range(1482, 1491),
+            range(1492, 1501),
+            range(1502, 1511),
+            range(1512, 1521),
+            range(1522, 1531),
+            range(1532, 1541),
+            range(1543, 1548),
+        ),
+        "T": (
+            range(212, 213),
+            range(223, 224),
+            range(318, 351),
+        ),
+        "DS": (
+            range(3907, 3908),
+            range(4260, 4263),
+            range(4267, 4283),
+            range(4298, 4303),
+            range(4403, 4411),
+            range(4413, 4420),
+        ),
+        "DD": (
+            range(133, 150),
+            range(884, 901),
+        ),
+    },
+    "drum_limits": {
+        "C": (
+            range(1548, 1551),
+            range(1552, 1561),
+            range(1562, 1571),
+            range(1573, 1581),
+            range(1583, 1586),
+        ),
+        "T": (
+            range(213, 223),
+            range(224, 225),
+        ),
+        "DS": (
+            range(3908, 3911),
+            range(4316, 4318),
+            range(4420, 4421),
+            range(4424, 4431),
+        ),
+        "DD": range(150, 160),
+    },
+    "math_more": {
+        "C": range(503, 511),
+        "DD": range(4, 26),
+        "DF": range(151, 170),
+    },
+    "hex_math": {"DH": range(5, 34)},
+    "agg_more": {
+        "C": (range(522, 527), range(1586, 1591)),
+        "DS": range(4318, 4322),
+        "DD": range(41, 57),
+        "DF": range(170, 192),
+        "DH": range(61, 67),
+    },
+    "real_sum": {"DF": (range(70, 101), range(142, 151))},
+    "copy_more": {
+        "C": range(1737, 1738),
+        "DD": range(59, 61),
+        "DF": range(192, 200),
+        "DH": range(67, 70),
+        "TXT": (range(570, 571), range(571, 751)),
+    },
+    "block_more": {
+        "C": range(1738, 1741),
+        "DS": range(3915, 3920),
+        "DF": range(200, 201),
+        "TXT": range(751, 754),
+    },
+    "coil_range": {
+        "C": (range(1623, 1631), range(1633, 1634)),
+        "DD": range(77, 78),
+        "DH": range(72, 77),
+    },
+    "compare": {
+        "DS": (range(3920, 3921), range(3924, 3926)),
+        "DH": range(70, 71),
+        "TXT": range(771, 777),
+    },
+    "out_more": {
+        "C": (range(1702, 1711), range(1712, 1720)),
+        "DS": range(3926, 3929),
+        "T": (range(113, 116), range(225, 243)),
+    },
+    "for_more": {
+        "C": range(1722, 1729),
+        "DS": range(3929, 3931),
+        "DD": range(78, 84),
+        "T": (range(122, 123), range(244, 249)),
+        "CT": range(149, 150),
+    },
+    "call_more": {
+        "C": range(1732, 1737),
+        "DS": range(4016, 4017),
+        "T": (range(243, 244), range(249, 251)),
+        "CT": (range(148, 149), range(150, 151)),
+    },
+    "boot_read": {
+        "C": (range(1603, 1607), range(1609, 1611), range(1614, 1621)),
+        "DS": (range(4017, 4018), range(4019, 4021)),
+        "DD": range(65, 74),
+        "DF": range(203, 204),
+        "DH": range(71, 72),
+        "T": range(116, 122),
+        "CT": range(213, 215),
+        "TXT": range(781, 782),
+    },
+    "for_wide": {
+        "DD": range(61, 65),
+        "T": (range(123, 124), range(125, 126)),
+        "CT": range(212, 213),
+    },
+    "flag_scan": {"DF": range(204, 205)},
+    "rtc_set": {"DD": (range(74, 77), range(84, 86))},
 }
 
 

@@ -10,27 +10,34 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrsistent import PMap
+
+from pyrung.core.state import SystemState, _put_tags
 
 _PMAP: Any = PMap  # its bucket accessors are private API
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
-    from pyrung.core.state import SystemState
 
 
 def _extract_condition_reads(condition: Any) -> frozenset[str]:
     """Every tag name a ``run_until`` condition reads, regardless of form.
 
-    Bare contacts, ``rise``/``fall`` edges, comparison left sides, tag operands
-    on comparison right sides, and both legs of ``ArithAtom`` compounds.  A junk
-    name (a Char *value* operand that happens to be a string) is harmless: it
-    only makes a caller watch one name more.
+    Bare contacts and bare tags, ``rise``/``fall`` edges, comparison left sides, tag
+    operands on comparison right sides, and both legs of ``ArithAtom`` compounds.  A
+    junk name (a Char *value* operand that happens to be a string) is harmless: it
+    only makes a caller watch one name more.  A condition this cannot see into (an
+    indirect or expression comparison) gives a junk name in place of what it reads:
+    a caller that relies on the set being whole asks :func:`_exact_condition_reads`.
     """
     from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or, _condition_to_expr
-    from pyrung.core.tag import Tag
+    from pyrung.core.condition import _as_condition
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    if isinstance(condition, (Tag, ImmediateRef)):
+        condition = _as_condition(condition)
 
     out: set[str] = set()
 
@@ -56,12 +63,56 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
     return frozenset(out)
 
 
+def _exact_condition_reads(condition: Any) -> frozenset[str] | None:
+    """The tags a condition reads, or None if it reads anything it does not name.
+
+    A coast runs on while what its predicate reads holds still, so a read missing here
+    runs it past the stop.  An indirect comparison reads a pointer and the slot it
+    selects, and an expression reads its terms; None sends the caller to
+    :func:`_traced_call`, which records them.
+    """
+    return _extract_condition_reads(condition) if _names_every_read(condition) else None
+
+
+def _names_every_read(condition: Any) -> bool:
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+        _EdgeCondition,
+    )
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    if isinstance(condition, (Tag, ImmediateRef)):
+        return True
+    if isinstance(condition, (AllCondition, AnyCondition)):
+        return all(_names_every_read(term) for term in condition.conditions)
+    if isinstance(
+        condition, (BitCondition, IntTruthyCondition, NormallyClosedCondition, _EdgeCondition)
+    ):
+        return True
+    if isinstance(condition, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
+        value = condition.value
+        if isinstance(value, Tag):
+            return not value.readonly  # lowers to its default, dropping the name
+        return value is None or isinstance(value, (bool, int, float, str))
+    return False
+
+
 # Reads of an opaque stop predicate.  A coast's undeclared predicate is judged on
 # a state whose field and tag reads are recorded: a loop may run on only while the
 # predicate read no value it moves (it then takes the same path and returns the
 # same answer on every scan in between).
 _READ_TRACES: list[set[str]] = []
-_READ_ALL = "*"  # iterated or compared the whole tag map
+_READ_ALL = "*"  # iterated, compared, counted or evolved the whole tag map
 _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
 
 
@@ -92,30 +143,79 @@ class _TracedTags(PMap):
 
     __hash__ = PMap.__hash__
 
+    def __len__(self) -> int:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return PMap.__len__(self)
 
-def _traced_state_class() -> type:
-    global _TRACED_STATE
-    if _TRACED_STATE is None:
-        from pyrung.core.state import SystemState
-
-        class _TracedState(SystemState):
-            """A SystemState whose field reads (and tag reads) are recorded."""
-
-            __slots__ = ()
-
-            def __getitem__(self, key: Any) -> Any:
-                value = _PMAP._getitem(self._buckets, key)
-                if key == "tags":
-                    return _PMAP.__new__(_TracedTags, value._size, value._buckets)
-                if _READ_TRACES:
-                    _READ_TRACES[-1].add(_FIELD_READ + str(key))
-                return value
-
-        _TRACED_STATE = _TracedState
-    return _TRACED_STATE
+    def evolver(self) -> Any:
+        # ``set``, ``update``, ``remove``, ``+`` and ``transform`` start here: what they
+        # return is a plain map, and a read of it would go unrecorded.
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return PMap.evolver(self)
 
 
-_TRACED_STATE: type | None = None
+def _recorded_field(name: str) -> Any:
+    """A property that records each read of a field of the state being traced."""
+    read = _FIELD_READ + name
+
+    def get(self: Any) -> Any:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(read)
+        return getattr(self._untraced, name)
+
+    return property(get)
+
+
+class _TracedState(SystemState):
+    """A SystemState whose field reads (and tag reads) are recorded.
+
+    Every read through the state and map API is recorded: attributes, subscripts,
+    ``items()``, equality, hashing, ``repr``, copying and evolving all come through these
+    properties or the recording tag map in the ``tags`` slot.  The ``scan_id``,
+    ``timestamp`` and ``memory`` slots stay empty, so a read past the properties raises,
+    and a predicate that lets the raise out keeps the coast interpreted.
+
+    It does not see a predicate that names private attributes (``s.tags._buckets``),
+    unbound base methods (``PMap.__getitem__(s.tags, key)``), or a slot descriptor whose
+    AttributeError it catches, or that branches on the type or identity of the state or
+    map, which are not those of the real ones.
+    """
+
+    __slots__ = ("_untraced",)
+
+    scan_id = _recorded_field("scan_id")
+    timestamp = _recorded_field("timestamp")
+    memory = _recorded_field("memory")
+
+    def __new__(cls, **fields: Any) -> Any:
+        # What ``copy`` and ``type(s)(...)`` make: a plain state, from fields they read.
+        return SystemState(**fields)
+
+    def scanned(self, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> SystemState:
+        # The same check as the base, then a plain state: these comparisons record the
+        # fields, and a read of the result is a read of values already recorded.
+        if (
+            scan_id is self.scan_id
+            and timestamp is self.timestamp
+            and tags is self.tags
+            and memory is self.memory
+        ):
+            return self
+        return SystemState(scan_id=scan_id, timestamp=timestamp, tags=tags, memory=memory)
+
+
+_put_untraced: Any = cast(Any, _TracedState)._untraced.__set__
+
+
+def _traced_state(state: SystemState) -> _TracedState:
+    """A state answering as *state* does, recording what is read of it."""
+    tags: Any = state.tags
+    traced = object.__new__(_TracedState)
+    _put_tags(traced, _PMAP.__new__(_TracedTags, tags._size, tags._buckets))
+    _put_untraced(traced, state)
+    return traced
 
 
 @contextmanager
@@ -142,7 +242,7 @@ def _traced_call(
     predicate that reads ``plc.state`` instead of its argument is traced too.
     """
     state = runner._state
-    traced = _PMAP.__new__(_traced_state_class(), state._size, state._buckets)
+    traced = _traced_state(state)
     reads: set[str] = set()
     _READ_TRACES.append(reads)
     runner._state = traced

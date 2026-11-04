@@ -27,7 +27,7 @@ from pyrung.core.analysis.pilot.attempt_observation import (
     _observe_temporal_setup_occurrences,
     _route_blocker_crossings,
 )
-from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _avoid_weighed_after_clear
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     EarnedWorkReceipt,
@@ -679,7 +679,7 @@ def _verify_gates(
                 nogoods=({nogood_pair} if nogood_pair is not None else ()),
                 avoid_names=coast_avoided,
             )
-        settled = _avoid_snap_names(ctx.avoid_pred, trial.snap)
+        settled = _avoid_scan_names(ctx.avoid_pred, trial.snap)
         if settled:
             gate_events.append(
                 PilotGateEvent("avoid", f"settled state matches avoid: {', '.join(settled)}")
@@ -689,7 +689,13 @@ def _verify_gates(
                 avoid_names=settled,
             )
         for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
-            wink = _trial_gates._avoid_names_after_clear(ctx.avoid_pred, frame.snap, snap)
+            # Some trials keep their source here: the values they stood on before any scan,
+            # which may be behind how()'s start, and no scan they ran.
+            wink = (
+                _avoid_weighed_after_clear(ctx.avoid_pred, frame.snap, snap)
+                if snap is trial.source_snap
+                else _trial_gates._avoid_names_after_clear(ctx.avoid_pred, frame.snap, snap)
+            )
             if wink:
                 gate_events.append(
                     PilotGateEvent("avoid", f"transient scan enters avoid: {', '.join(wink)}")

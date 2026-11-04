@@ -10,7 +10,10 @@ from pyrung.core.analysis.pilot.compass import Compass, CompassKnowledge, Naviga
 def _setup() -> drive_setup.DriveSetup:
     evidence = SimpleNamespace(affine_projections=lambda: {"Derived": "projection"})
     return drive_setup.DriveSetup(
-        work=SimpleNamespace(_known_tags_by_name={"SetupWork": object()}),
+        work=SimpleNamespace(
+            _known_tags_by_name={"SetupWork": object()},
+            state=SimpleNamespace(tags={"SetupWork": 1}),
+        ),
         program=object(),
         pdg=object(),
         steerable=frozenset({"Command"}),
@@ -117,12 +120,24 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
     monkeypatch: Any,
 ) -> None:
     setup = _setup()
-    override_work = SimpleNamespace(_known_tags_by_name={"OverrideWork": object()})
+    override_work = SimpleNamespace(
+        _known_tags_by_name={"OverrideWork": object()},
+        state=SimpleNamespace(tags={"OverrideWork": 2}),
+    )
     override_compass = Compass(knowledge=CompassKnowledge())
     contexts = (object(), object())
     routes = (object(), object())
     context_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     route_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    asked: list[tuple[str, dict[str, Any]]] = []
+
+    def avoid(snapshot: dict[str, Any]) -> bool:
+        asked.append(("avoid", snapshot))
+        return False
+
+    def other_avoid(snapshot: dict[str, Any]) -> bool:
+        asked.append(("other-avoid", snapshot))
+        return False
 
     def make_context(*args: Any, **kwargs: Any) -> Any:
         context_calls.append((args, kwargs))
@@ -141,7 +156,7 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
         True,
         "predicate",
         max_scans=31,
-        avoid_pred="avoid",
+        avoid_pred=avoid,
     )
     overridden = drive_setup.prepare_target_context(
         setup,
@@ -149,7 +164,7 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
         False,
         "other-predicate",
         max_scans=37,
-        avoid_pred="other-avoid",
+        avoid_pred=other_avoid,
         compass=override_compass,
         work=override_work,
     )
@@ -158,12 +173,14 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
     assert overridden == (contexts[1], routes[1])
     assert context_calls[0] == (
         (setup, setup.work, "Target", True, "predicate"),
-        {"max_scans": 31, "avoid_pred": "avoid", "compass": None},
+        {"max_scans": 31, "avoid_pred": avoid, "compass": None},
     )
     assert context_calls[1] == (
         (setup, override_work, "Target", False, "other-predicate"),
-        {"max_scans": 37, "avoid_pred": "other-avoid", "compass": override_compass},
+        {"max_scans": 37, "avoid_pred": other_avoid, "compass": override_compass},
     )
+    # The start ask reads the work the search will start from, not the setup's.
+    assert asked == [("avoid", {"SetupWork": 1}), ("other-avoid", {"OverrideWork": 2})]
     assert route_calls[0][0][0] is setup.work
     assert route_calls[1][0][0] is override_work
     for args, _kwargs in route_calls:

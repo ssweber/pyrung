@@ -138,20 +138,17 @@ def _theory_occurrence_identity(occurrence: Any) -> tuple[Any, ...]:
 
 
 def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBoundaryIdentity:
-    if checkpoint.key is None:
-        scan_id = checkpoint.world.work.state.scan_id
-        return TheoryBoundaryIdentity(
-            world_key=("unavailable-world-key", scan_id),
-            scan_id=scan_id,
-            owner_ref=checkpoint.owner.reference,
-        )
     scan_id = checkpoint.world.work.state.scan_id
     owner = execution_owner(checkpoint.world.work, scan_id)
     # Requirement constraints belong to the theory version, not to the
     # physical scan-source identity. Compass world keys append them as a third
     # member for candidate/nogood isolation; strip that suffix here so adding a
     # later requirement does not manufacture a different historical source.
-    world_key = _physical_world_key(tuple(checkpoint.key))
+    world_key = (
+        ("unavailable-world-key", scan_id)
+        if checkpoint.key is None
+        else _physical_world_key(tuple(checkpoint.key))
+    )
     if owner is None:
         # Boundary zero precedes the first execution epoch. Its retained
         # checkpoint owner is the exact source identity; the subsequent attempt

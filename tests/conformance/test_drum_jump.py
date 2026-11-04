@@ -7,10 +7,10 @@ time & event drum side by side.  The expectations are what pyrung reads, the
 S5 drum rule extended to the two kinds (docs/instructions/drum-shift-search.md);
 a snapshot that reads otherwise on a CLICK is an answer.
 
-- ``paused_jog_cases`` (answered 2026-11-02, pending DRUM): scenario A, a jog on the
+- ``paused_jog_cases`` (answered 2026-11-02): scenario A, a jog on the
   last step while the rung is false (scans 3..5) completes the drum at once with its
   outputs off, 2424 on scan 4 (Result2) and on scan 6 when the rung returns (Result3).
-  pyrung has the outputs stand until the rung returns, 2626 on scan 4.  Scenario B, a jog rising on a bad step (5, written on scan 3) while the rung is
+  Scenario B, a jog rising on a bad step (5, written on scan 3) while the rung is
   false (scans 3..6): the jog is dropped, so when the rung returns on scan 7 the
   drum corrects to step 1 and writes its row, 1111 (Result4), and stays, 1111
   (ErrorCode).  A jog that is kept moves it on, reading 2222 or 2424.
@@ -21,26 +21,26 @@ a snapshot that reads otherwise on a CLICK is an answer.
   already on (2, with B reset above the drums on scan 4): it counts as a move
   and writes the row, 2222 (Result4, ErrorCode); a drum that ignores it reads
   2020.
-- ``jump_after_completion`` (answered 2026-11-02, pending DRUM): scenario A, a 2-step
+- ``jump_after_completion`` (answered 2026-11-02): scenario A, a 2-step
   drum completed by a jog on scan 3, then a jump to step 1 on scan 5: the step moves
   but the outputs stay off, flag on, 1414 (Result2), and a jog with a jump on scan 7
   leaves it, 1414 (Result3), the jump beating the jog.  Scenario B, after the same jump
   (1414, Result4), step 1's own end (the time drum's Acc staged past its 2 s preset, the
-  other's event) does not move it either, 1414 (ErrorCode).  pyrung reads 1515 and
-  2626.  ``drum_settle/after_jump_jog_alone`` asks what a jog alone does there.
+  other's event) does not move it either, 1414 (ErrorCode).
+  ``drum_settle/after_jump_jog_alone`` asks what a jog alone does there.
 - ``completed_drum_fires_again`` (probe): both drums complete on scan 4 (the time
   drum by Acc staged past its 2 s preset, the other by its level event, on from scan
   4; it reaches step 2 on scan 2, see ``test_drum_rule``), 2424 (Result2).  B turned on
   from outside on scan 5 stays on while the drums fire again (their time and event
   still true) and rewrite only the flag: 2626 (Result3, Result4, ErrorCode).  A drum
   that writes every output off again reads 2424 throughout.
-- ``acc_through_jog_completion`` (answered 2026-11-02, pending DRUM): a time drum with
+- ``acc_through_jog_completion`` (answered 2026-11-02): a time drum with
   Acc 900 staged on scan 2 is jogged on its last step on scan 3: the completion keeps
   the accumulator, Acc / 100 = 9 (Result2), and it then holds, moving on none of scans
-  4..8 (Result3 = 0; pyrung counts on, 3 to 5).  A second drum is given step 5 and a
+  4..8 (Result3 = 0).  A second drum is given step 5 and a
   jog (the hold scan) on scan 3 with Acc 900 staged above it: the hold scan does not
   tick the accumulator, so Acc - 900 = 0 (Result4), and the next scan's correction
-  keeps it, 900..999 (ErrorCode, 910 on the CLICK; pyrung clears it, 0).
+  keeps it, 900..999 (ErrorCode, 910 on the CLICK).
 
 The cases own C1110..C1200 and C1401..C1470, T251..T270, DD661..DD680 and the DS
 the group's rigs name (``memory.OWNED``).
@@ -249,7 +249,6 @@ group = Group(
             ladder=prove_paused_jog_cases,
             expect={"Result2": 2424, "Result3": 2424, "Result4": 1111, "ErrorCode": 1111},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A jump beats a jog on the last step and counts when it lands on the step "
@@ -271,7 +270,6 @@ group = Group(
             ladder=prove_jump_after_completion,
             expect={"Result2": 1414, "Result3": 1414, "Result4": 1414, "ErrorCode": 1414},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A completed drum that fires again rewrites only the flag: both complete on "
@@ -291,7 +289,6 @@ group = Group(
             ladder=prove_acc_through_jog_completion,
             expect={"Result2": 9, "Result3": 0, "Result4": 0, "ErrorCode": range(900, 1000)},
             scans=SCANS,
-            pending="DRUM",
         ),
     ],
 )
