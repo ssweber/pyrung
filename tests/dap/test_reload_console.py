@@ -6,6 +6,8 @@ import io
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
@@ -98,6 +100,43 @@ def _setup(tmp_path: Path, script: str = BASIC_SCRIPT) -> tuple[DAPAdapter, io.B
     _send_request(adapter, out_stream, seq=3, command="next")
     _drain_messages(out_stream)
     return adapter, out_stream, script_path
+
+
+AMBIENT_SCRIPT = (
+    "from pyrung.core import Bool, PLC, Physical, Program, Real, Rung, out\n"
+    "from pyrung.core.physical import Approach\n"
+    "\n"
+    "en = Bool('En')\n"
+    "temp = Real(\n"
+    "    'Temp',\n"
+    "    physical=Physical('T', profile=Approach(toward='Ambient', rate=0.3)),\n"
+    "    link='En',\n"
+    ")\n"
+    "\n"
+    "with Program(strict=False) as prog:\n"
+    "    with Rung(en):\n"
+    "        out(Bool('Echo'))\n"
+    "    with Rung(temp > 1000.0):\n"
+    "        out(Bool('Seen'))\n"
+    "\n"
+    "runner = PLC(prog, dt=0.010)\n"
+)
+
+
+class TestASetpointNoRungNames:
+    @pytest.mark.filterwarnings("ignore:.*no rung names")
+    def test_launch_and_reload_keep_the_plant(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path, AMBIENT_SCRIPT)
+        assert adapter._harness is not None
+        assert adapter._runner.current_state.tags["Ambient"] == 0.0
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert resp["success"] is True
+        assert "Reloaded" in resp["body"]["result"]
+        assert adapter._harness is not None
+        assert adapter._runner._harness is adapter._harness
+        assert adapter._harness.coupling_summary()["profile_couplings"]
 
 
 class TestReload:

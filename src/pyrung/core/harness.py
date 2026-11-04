@@ -12,6 +12,7 @@ accumulator, so feedback that was never sustained is never fabricated.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -165,18 +166,7 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
     writer = _program_writer(plc, coupling.fb_name)
     if writer is not None:
         return f"{coupling.fb_name} is written by the program at {writer}"
-    return _setpoint_problem(plc, coupling.physical)
-
-
-def _setpoint_problem(plc: PLC, physical: Physical) -> str | None:
-    """Why an ``Approach`` cannot read its setpoint tag: it must be one the rungs name or reach."""
-    profile = physical.profile
-    if not isinstance(profile, Approach) or not isinstance(profile.toward, str):
-        return None
-    name = profile.toward
-    if name in plc._known_tags_by_name or plc._tags_rungs_reach.holds(name):
-        return None
-    return f"unknown tag: {name}"
+    return None
 
 
 def _program_writer(plc: PLC, tag_name: str) -> str | None:
@@ -237,11 +227,10 @@ class Harness:
     def install(self) -> None:
         if self._installed:
             return
-        self._discover_couplings()
-        for coupling in self._declared:
-            self._refuse_unknown_setpoint(coupling)
         self._installed = True
+        self._discover_couplings()
         self._rebuild_couplings()
+        self._warn_of_unknown_setpoints()
         self._plc._note_plant_change()
         self._refresh_synthesis()
         self._seed_plant_defaults()
@@ -334,14 +323,13 @@ class Harness:
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
                 raise ValueError(f"Override for {fb_name!r} drives {coupling.fb_name!r}.")
-            if coupling is not None:
-                self._refuse_unknown_setpoint(coupling)
         self._overrides = dict(overrides)
         counted_in = self._timer_accumulators()
         self._rebuild_couplings()
         if self._installed:
             # Rebuild the overlay and monitors so changed couplings take
             # effect from the next scan (cut ones stop synthesizing).
+            self._warn_of_unknown_setpoints()
             self._plc._note_plant_change()
             self._refresh_synthesis()
             self._seed_plant_defaults()
@@ -351,10 +339,24 @@ class Harness:
             self._monitors.clear()
             self._install_monitors()
 
-    def _refuse_unknown_setpoint(self, coupling: Coupling) -> None:
-        problem = _setpoint_problem(self._plc, coupling.physical)
-        if problem is not None:
-            raise ValueError(f"{coupling.fb_name} cannot approach its setpoint: {problem}")
+    def _warn_of_unknown_setpoints(self) -> None:
+        """Say so when an ``Approach`` will run toward a tag nothing has given a value.
+
+        It can be meant: an ambient temperature a test patches is in no rung.  A name
+        already in the state has its value, whoever wrote it, and is not unknown.
+        """
+        plc = self._plc
+        for c in self._profile_couplings:
+            if not isinstance(c.profile, Approach) or not isinstance(c.profile.toward, str):
+                continue
+            name = c.profile.toward
+            if name in plc._state.tags or plc._tag_known_or_reached(name) is not None:
+                continue
+            warnings.warn(
+                f"{c.fb_name} approaches {name}, which no rung names: "
+                "it starts from 0 until something writes it.",
+                stacklevel=3,
+            )
 
     def _timer_accumulators(self) -> dict[tuple[str, str], tuple[str, int]]:
         """Each plant timer's accumulator and its ms per unit, by what the timer times."""
@@ -754,7 +756,7 @@ class Harness:
                 if isinstance(toward, str):
                     toward_operand = self._tag_rungs_know(toward)
                     if toward_operand is None:
-                        raise ValueError(f"unknown tag: {toward}")
+                        toward_operand = Real(toward)
                 plant.extend(
                     analog_approach_rung(
                         enable=enable,

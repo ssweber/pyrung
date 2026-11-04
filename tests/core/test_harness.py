@@ -901,24 +901,85 @@ class TestPlantOnASlotOnlyAPointerReaches:
         ran.run(500)
         assert _whole_state(ran) == _whole_state(stepped)
 
-    def test_a_setpoint_no_rung_names_refuses_at_install(self):
+    @staticmethod
+    def _ambient_program():
+        """A setpoint no rung names: an ambient temperature a test may patch."""
         En = Bool("En")
         Temp = Real(
-            "Temp", physical=Physical("T", profile=Approach(toward="Sp", rate=0.3)), link="En"
+            "Temp",
+            default=20.0,
+            physical=Physical("T", profile=Approach(toward="Sp", rate=0.3)),
+            link="En",
         )
+        Lamp = Bool("Lamp")
         with Program(strict=False) as logic:
             with Rung(En):
-                out(Bool("Echo"))
+                latch(Lamp)
             with Rung(Temp > 1000.0):
                 out(Bool("Seen"))
+        return logic, En, Lamp
+
+    # Temp after 500 scans of dt 0.01 toward a setpoint, from 20.0: the first only arms it.
+    @staticmethod
+    def _temp_toward(setpoint: float) -> float:
+        return setpoint - (setpoint - 20.0) * (1 - 0.3 * 0.01) ** 499
+
+    def test_a_setpoint_nobody_knows_warns_at_install_and_runs_from_zero(self):
+        logic, En, _Lamp = self._ambient_program()
         plc = PLC(logic, dt=0.01)
         harness = Harness(plc)
-        with pytest.raises(ValueError, match="unknown tag: Sp"):
+        with pytest.warns(UserWarning, match="Sp, which no rung names: it starts from 0") as seen:
             harness.install()
-        assert plc._harness is None
-        assert "Sp" not in plc.current_state.tags
+        assert str(seen[0].message).isascii()
+        assert plc._harness is harness
+        assert plc.current_state.tags["Sp"] == 0.0
+        plc.patch({En: True})
+        plc.run(500)
+        assert plc.current_state.tags["Temp"] == pytest.approx(self._temp_toward(0.0), rel=1e-3)
 
-    def test_a_setpoint_no_rung_names_refuses_a_bench_link(self):
+    @pytest.mark.parametrize("when", ["before install", "after install"])
+    def test_a_setpoint_no_rung_names_can_be_patched_by_name(self, when, recwarn):
+        logic, En, _Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        if when == "before install":
+            plc.patch({"Sp": 150.0})
+        Harness(plc).install()
+        if when == "after install":
+            plc.patch({"Sp": 150.0})
+        plc.patch({En: True})
+        plc.run(500)
+        assert plc.current_state.tags["Temp"] == pytest.approx(self._temp_toward(150.0), rel=1e-3)
+
+    def test_a_setpoint_already_in_state_is_known_and_keeps_its_value(self, recwarn):
+        logic, En, _Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        plc.patch({"Sp": 150.0})
+        plc.step()
+        Harness(plc).install()
+        assert [w for w in recwarn if "no rung names" in str(w.message)] == []
+        assert plc.current_state.tags["Sp"] == 150.0
+        plc.patch({En: True})
+        plc.run(500)
+        assert plc.current_state.tags["Temp"] == pytest.approx(self._temp_toward(150.0), rel=1e-3)
+
+    def test_how_on_an_unrelated_target_runs_with_such_a_setpoint(self):
+        logic, _En, Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        with pytest.warns(UserWarning, match="no rung names"):
+            plan = plc.how(Lamp, wall_clock_s=30, max_scans=2_000)
+        assert plan.status is PlanStatus.REACHED
+
+    def test_how_after_install_does_not_warn_again(self, recwarn):
+        logic, _En, Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        with pytest.warns(UserWarning, match="no rung names"):
+            Harness(plc).install()
+        recwarn.clear()
+        plan = plc.how(Lamp, wall_clock_s=30, max_scans=2_000)
+        assert plan.status is PlanStatus.REACHED
+        assert [w for w in recwarn if "no rung names" in str(w.message)] == []
+
+    def test_a_bench_link_toward_a_setpoint_no_rung_names_runs_and_warns(self):
         En, Temp = Bool("En"), Real("Temp")
         with Program(strict=False) as logic:
             with Rung(En):
@@ -931,11 +992,26 @@ class TestPlantOnASlotOnlyAPointerReaches:
         coupling = Coupling(
             "En", "Temp", Physical("T", profile=Approach(toward="Sp", rate=0.3)), None
         )
-        assert link_problem(plc, coupling) == "unknown tag: Sp"
-        with pytest.raises(ValueError, match="unknown tag: Sp"):
+        assert link_problem(plc, coupling) is None
+        with pytest.warns(UserWarning, match="no rung names"):
             harness.set_overrides({"Temp": coupling})
-        assert harness.overrides == {}
-        assert "Sp" not in plc.current_state.tags
+        assert harness.overrides == {"Temp": coupling}
+
+    def test_run_equals_step_toward_a_setpoint_no_rung_names(self, recwarn):
+        def started():
+            logic, En, _Lamp = self._ambient_program()
+            plc = PLC(logic, dt=0.01)
+            plc.patch({"Sp": 150.0})
+            Harness(plc).install()
+            plc.patch({En: True})
+            return plc
+
+        stepped = started()
+        for _ in range(300):
+            stepped.step()
+        ran = started()
+        ran.run(300)
+        assert _whole_state(ran) == _whole_state(stepped)
 
     def test_a_setpoint_only_a_pointer_reaches_passes_link_problem(self):
         logic, _En = self._approach_program()
