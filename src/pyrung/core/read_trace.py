@@ -185,9 +185,12 @@ class _TracedState(SystemState):
 
     An accepted limit: a predicate can overshoot a coast if it branches on the exact type or
     identity of the state or map (``type(s) is SystemState``), names the trace's own
-    ``_untraced``, catches the AttributeError of a slot descriptor, or reads ``plc.playhead``
-    (it moves with the scans, and is no read of a state).  The trace does not see what these
-    read on a real state.  Lockstep catches them under ``--fold-check``.
+    ``_untraced``, or catches the AttributeError of a slot descriptor.  The trace does not see
+    what these read on a real state.  Lockstep catches them under ``--fold-check``.
+
+    A second accepted limit, which lockstep does not catch: a predicate reading ``plc.playhead``
+    can overshoot too.  It moves with the scans and is no read of a state, and a twin asked the
+    same predicate reads the real runner's playhead where the run landed.
     """
 
     __slots__ = ("_untraced",)
