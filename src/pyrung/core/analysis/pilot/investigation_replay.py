@@ -482,9 +482,7 @@ def investigate_excursion(
 
     action_tags = {tag for tag, _ in applied_actions}
     candidate_holds = [(tag, value) for tag, value in candidate_holds if tag not in action_tags]
-    candidate_holds = [
-        hold for hold in candidate_holds if _hold_allowed(ctx, hold, post_pulse_snap)
-    ]
+    candidate_holds = [hold for hold in candidate_holds if _hold_allowed(ctx, hold)]
     if not candidate_holds:
         return ExcursionResult(reverted=reverted)
 

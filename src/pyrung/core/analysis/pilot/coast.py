@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot.avoid import _avoid_member_true
+from pyrung.core.analysis.pilot.avoid import _member_on_scan, _member_weighed
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.coast_run import _NotDeclared, coast_until, memo_of, work_charged
@@ -294,7 +294,8 @@ class CoastSession:
             # Compiled members have an exact read-set. Opaque callables do not,
             # so their contract observes the full snapshot.
             declared_reads = tuple(sorted(member.tags)) if condition is not None else None
-            if _avoid_member_true(member.name, member.pred, start):
+            # The start may be the state behind how()'s start, so it is only weighed.
+            if _member_weighed(member.pred, start):
                 continue
 
             def _pred(
@@ -313,7 +314,7 @@ class CoastSession:
                     )
                 except _NotDeclared:
                     return False
-                return _avoid_member_true(_member.name, _member.pred, snapshot)
+                return _member_on_scan(_member.name, _member.pred, snapshot)
 
             triggers.append(
                 CoastTrigger(

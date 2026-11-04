@@ -14,7 +14,6 @@ from typing import Any
 from pyrsistent import pvector
 
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
-from pyrung.core.analysis.pilot.avoid import _avoid_snap_names, _AvoidCheckRaised
 from pyrung.core.analysis.pilot.bootstrap import (
     _BootstrapExecution,
     bind_observed_route_designations,
@@ -190,13 +189,6 @@ def bind_entry_execution_to_route(
                     avoid_pred=ctx.avoid_pred,
                 ),
             )
-        except _AvoidCheckRaised:
-            # The source is the scan behind the state being read, already history, which no
-            # plan enters: a raise about it says nothing of a route, so the same fallback
-            # applies.  The state being read is not excused, and a goal already true may
-            # have no other ask.
-            _avoid_snap_names(ctx.avoid_pred, frame.snap)
-            logger.debug("pilot: avoid check raised on the entry source", exc_info=True)
         except Exception:  # noqa: BLE001 - landing frame remains conservative fallback
             logger.debug("pilot: entry source route binding failed closed", exc_info=True)
     designations = bind_observed_route_designations(

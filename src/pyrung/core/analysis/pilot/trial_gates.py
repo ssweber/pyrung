@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import Any
 
-from pyrung.core.analysis.pilot.avoid import _BARE_CHECK, _avoid_member_true, _avoid_snap_names
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _member_weighed
 from pyrung.core.analysis.pilot.coast import _has_pending_effects
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Reachable
 from pyrung.core.analysis.pilot.earned_work import (
@@ -79,18 +79,19 @@ def _avoid_names_after_clear(
     start: dict[str, Any],
     observed: dict[str, Any],
 ) -> tuple[str, ...]:
-    """Avoid members clear at *start* that fire in one later observation.
+    """Avoid members clear at *start* that fire on *observed*, a scan the trial ran.
 
     Compiled unions own the per-member distinction. A bare callable has only
-    aggregate identity, so starting true exempts its later snapshots.
+    aggregate identity, so starting true exempts its later snapshots.  The start
+    may be the state behind how()'s start, so it is only weighed.
     """
 
     violated_after_clear = getattr(avoid, "violated_after_clear", None)
     if violated_after_clear is not None:
         return tuple(violated_after_clear(start, observed))
-    if _avoid_member_true(_BARE_CHECK, avoid, start):
+    if _member_weighed(avoid, start):
         return ()
-    return _avoid_snap_names(avoid, observed)
+    return _avoid_scan_names(avoid, observed)
 
 
 def _record_gate(
