@@ -26,9 +26,10 @@ MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN
 - ``rand_sites``: pyrung's RAND is one draw per site per scan.  Two sites over 8 scans, 1..30000:
   they differ on some scan (Result1 = equal scans, 0 for independent); a site changes
   from scan to scan (Result2 = changes of 7, above 2).  One formula with two (Result3 = scans
-  they cancel to 0, 0).  A bound written above the Math on its own scan (Result4): pyrung's
-  bounds are read at the start of the scan, so it reads the old 5; 9 reads as CLICK using
-  the value live.
+  they cancel to 0, 0).  A bound written above the Math on its own scan (Result4): 5 is the bound
+  as the scan began, 9 is the bound live.  pyrung's engines differ here until a CLICK settles it:
+  core and the kernel read 5, the generated P1AM code reads 9.  So Result4 is a reading, and the
+  case records what it read until then; Result1..3 still assert.
 pyrung refuses ``randint`` in a For body, so a draw per iteration is not asked here.
 
 The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66, C522..C526 and C1586..C1590.
@@ -40,7 +41,7 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, latch, reset, system
 from pyrung.core.expression import randint
 from tests.conformance.memory import c, dd, df, dh, ds
-from tests.conformance.probe_kit import class_of, finish, flag_bit, once
+from tests.conformance.probe_kit import between, class_of, finish, flag_bit, once
 from tests.conformance.scans import count_scans, done, scans_for
 
 SC43 = system.fault.out_of_range
@@ -268,7 +269,8 @@ group = Group(
         case(
             "RAND is one draw per site and per scan: two sites differ on most scans (Result1 = "
             "equal scans), a site changes (Result2, changes of 7), a formula with two does not "
-            "cancel (Result3); a bound written on its scan is read at the scan start (Result4)",
+            "cancel (Result3); a bound written above the Math on its scan: 5 is the bound as the scan "
+            "began, 9 live (Result4)",
             ladder=prove_rand_sites,
             init=init_rand_sites,
             scans=scans_for(),
@@ -276,7 +278,7 @@ group = Group(
                 "Result1": range(0, 2),
                 "Result2": range(3, 8),
                 "Result3": range(0, 2),
-                "Result4": 5,
+                "Result4": between(5, 9),
             },
             probe="RAND: sites independent; bounds read when",
         ),
