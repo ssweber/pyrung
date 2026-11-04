@@ -130,7 +130,7 @@ Also accepted: `Tms`/`Ts`/`Tm`/`Th`/`Td` — great for tag names (`FillTimeTm` s
 
 The accumulator stores integer ticks in the selected unit. The time unit controls how `dt` is converted to accumulator ticks.
 
-Time is summed exactly, in every unit: at a fixed `dt`, with the rung's first scan counting a whole `dt`, a timer is Done on scan `ceil(delay / dt)`, so `1s` and `1000ms` finish together. The same goes for off-delays, `debounce`, `flasher`, `timed` and a time drum's steps.
+Time is summed exactly, in every unit: at a fixed `dt`, with the rung's first scan counting a whole `dt`, a timer is Done on scan `ceil(delay / dt)`, so `1s` and `1000ms` finish together. Off-delays, `debounce`, `flasher`, `timed` and a time drum's steps count time the same way.
 
 ### Example: traffic light
 
