@@ -23,6 +23,7 @@ pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 Run = Bool("Run")
 Lamp = Bool("Lamp")
 T = Timer.clone("TraceT")
+ACC = T.Acc.name  # in seconds: 20 at about scan 2000, inside SCANS
 
 SCANS = 5_000
 SAVED = SystemState(scan_id=1, timestamp=0.5, tags=pmap({"Run": True}), memory=pmap())
@@ -65,6 +66,13 @@ READS: dict[str, tuple[Any, set[str]]] = {
     "whole tag map": (lambda s: dict(s.tags), {_READ_ALL, "Lamp", "Run"}),
     "tag map equality": (lambda s: s.tags == pmap(), {_READ_ALL}),
     "tag map iterated": (lambda s: list(s.tags), {_READ_ALL}),
+    "tag map counted": (lambda s: len(s.tags), {_READ_ALL}),
+    "tag map truth": (lambda s: bool(s.tags), {_READ_ALL}),
+    "tag map set": (lambda s: s.tags.set("z", 1), {_READ_ALL}),
+    "tag map update": (lambda s: s.tags.update({"z": 1}), {_READ_ALL}),
+    "tag map remove": (lambda s: s.tags.remove("Lamp"), {_READ_ALL}),
+    "tag map plus": (lambda s: s.tags + {"z": 1}, {_READ_ALL}),
+    "tag map evolver": (lambda s: s.tags.evolver(), {_READ_ALL}),
     "state equality": (lambda s: s == SAVED, EVERY_FIELD),
     "state inequality": (lambda s: s != SAVED, EVERY_FIELD),
     "state equality the other way": (lambda s: SAVED == s, EVERY_FIELD),
@@ -165,12 +173,27 @@ def test_a_predicate_reading_plc_state_stays_in_the_loop() -> None:
         pytest.param(lambda s: s.timestamp >= 7.77, id="timestamp"),
         pytest.param(lambda s: s.get("timestamp") >= 7.77, id="timestamp get"),
         pytest.param(lambda s: dict(s)["scan_id"] >= 777, id="as a dict"),
-        pytest.param(lambda s: s.tags[T.Acc.name] >= 7_770, id="an accumulator"),
-        pytest.param(lambda s: dict(s.items())["tags"][T.Acc.name] >= 7_770, id="items"),
-        pytest.param(lambda s: hash(s) % 997 == 0, id="hash"),
+        pytest.param(lambda s: s.tags[ACC] >= 20, id="an accumulator"),
+        pytest.param(lambda s: dict(s.items())["tags"][ACC] >= 20, id="items"),
+        pytest.param(lambda s: s.tags.set("z", 1)[ACC] >= 20, id="map set"),
+        pytest.param(lambda s: s.tags.update({"z": 1})[ACC] >= 20, id="map update"),
+        pytest.param(lambda s: s.tags.remove("Run")[ACC] >= 20, id="map remove"),
+        pytest.param(lambda s: (s.tags + {"z": 1})[ACC] >= 20, id="map plus"),
+        pytest.param(lambda s: s.tags.evolver()[ACC] >= 20, id="map evolver"),
+        pytest.param(lambda s: s.tags.transform(["z"], 1)[ACC] >= 20, id="map transform"),
     ],
 )
 def test_a_predicate_reading_what_moves_lands_as_stepping(predicate: Any) -> None:
     plc = _plc()
-    coast_until(plc, predicate, budget=SCANS)
+    assert coast_until(plc, predicate, budget=SCANS) is True
+    _assert_landed_as_stepping(plc, _stepped_until(predicate))
+
+
+def test_a_predicate_hashing_the_state_lands_as_stepping() -> None:
+    # String hashes are salted per process, so it may not hit: the two must agree either way.
+    def predicate(s: Any) -> bool:
+        return hash(s) % 997 == 0
+
+    plc = _plc()
+    assert coast_until(plc, predicate, budget=SCANS) is predicate(plc.state)
     _assert_landed_as_stepping(plc, _stepped_until(predicate))

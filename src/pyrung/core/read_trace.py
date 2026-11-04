@@ -93,6 +93,18 @@ class _TracedTags(PMap):
 
     __hash__ = PMap.__hash__
 
+    def __len__(self) -> int:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return PMap.__len__(self)
+
+    def evolver(self) -> Any:
+        # ``set``, ``update``, ``remove``, ``+`` and ``transform`` start here: what they
+        # return is a plain map, and a read of it would go unrecorded.
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return PMap.evolver(self)
+
 
 def _recorded_field(name: str) -> Any:
     """A property over a state's slot that records each read of the field."""
