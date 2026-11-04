@@ -835,6 +835,31 @@ def _avoid_expr_has_edge(expr: Any) -> bool:
     return any(_avoid_expr_has_edge(child) for child in getattr(expr, "terms", ()) or ())
 
 
+def _avoid_expr_is_opaque(expr: Any) -> bool:
+    """Does this avoid lower to a stand-in for a pointer or an expression, naming no real tag?"""
+    if getattr(expr, "unsupported", None) is not None:
+        return True
+    if str(getattr(expr, "tag", "")).startswith("indirect("):
+        return True
+    return any(_avoid_expr_is_opaque(child) for child in getattr(expr, "terms", ()) or ())
+
+
+def _avoid_condition_predicate(condition: Any) -> Callable[[dict[str, Any]], bool]:
+    """Evaluate *condition* itself on a state, each tag not yet in it at its default."""
+
+    class _StateReads:
+        def __init__(self, state: dict[str, Any]) -> None:
+            self._state = state
+
+        def get_tag(self, name: str, default: Any = None) -> Any:
+            return self._state.get(name, default)
+
+    def _predicate(state: dict[str, Any]) -> bool:
+        return bool(condition.evaluate(_StateReads(state)))
+
+    return _predicate
+
+
 def _avoid_condition(spec: Any, expr: Any) -> Any | None:
     """Return the executable condition of one condition-like avoid.
 
@@ -880,12 +905,17 @@ def _compile_avoid(spec: Any) -> Any:
                 "use a snapshot state condition or callable"
             )
         name = _render_avoid_expr(expr) if expr is not None else ", ".join(tags or ()) or "avoid"
+        condition = _avoid_condition(cond, expr)
+        if expr is not None and _avoid_expr_is_opaque(expr):
+            # The lowered form has no reading of these, and undecided counts as violated.
+            name = str(condition)
+            pred = _avoid_condition_predicate(condition)
         members.append(
             _AvoidMember(
                 name=name,
                 pred=pred,
                 tags=frozenset(tags or ()),
-                condition=_avoid_condition(cond, expr),
+                condition=condition,
             )
         )
     return _AvoidPredicate(tuple(members))

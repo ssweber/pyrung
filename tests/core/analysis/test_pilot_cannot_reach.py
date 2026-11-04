@@ -313,18 +313,20 @@ class TestExclusionProof:
     def test_a_tag_the_outside_may_set(self) -> None:
         """A rung that clobbers an external input does not keep it down."""
         go = Bool("Go", external=True)
+        again = Bool("Again", external=True)
         ext_x = Bool("ExtX", external=True)
         ext_y = Bool("ExtY", external=True)
         with Program(strict=False) as program:
             with Rung(go):
                 latch(ext_x)
                 reset(ext_y)
-            with Rung(ext_x, ext_y):
-                reset(go)
+            with Rung(again):
+                latch(ext_y)
+                reset(ext_x)
         goal = {"ExtX": True, "ExtY": True}
         assert _both(PLC(program, dt=0.01), [({"ExtX": True, "ExtY": True}, 1)], goal)
 
-        plan = PLC(program, dt=0.01).how(ext_x, ext_y, **BOUND)
+        plan = PLC(program, dt=0.01).how(ext_x, ext_y, max_scans=300)
         assert plan.status is not PlanStatus.CANNOT_REACH, plan.reason
 
     def test_writers_two_rungs_upstream(self) -> None:

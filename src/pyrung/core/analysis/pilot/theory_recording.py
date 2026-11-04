@@ -67,6 +67,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryAttemptDisposition,
     TheoryAttemptReceipt,
     TheoryClaim,
+    TheoryInvariantError,
     TheoryPhaseKind,
     TheoryPhaseReceipt,
     TheoryTemporalIntent,
@@ -713,10 +714,10 @@ def _record_controlled_setup_attempt(
 
     execution = attempt.executed_attempt
     if execution is None:
-        raise ValueError("setup-first execution lost its exact attempt evidence")
+        raise TheoryInvariantError("setup-first execution lost its exact attempt evidence")
     execution_receipt = execution.execution
     if execution_receipt is None:
-        raise ValueError("setup-first execution has no immutable execution receipt")
+        raise TheoryInvariantError("setup-first execution has no immutable execution receipt")
     owner = execution_owner(execution.pulse.fork, execution.assertion_scan)
     if owner is None:
         raise ValueError("setup-first execution has no exact assertion owner")

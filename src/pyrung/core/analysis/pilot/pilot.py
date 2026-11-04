@@ -117,6 +117,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     IntrascanTracebackFinding,
     IntrascanTracebackFrontier,
     TheoryAttemptDisposition,
+    TheoryInvariantError,
     TheoryTermination,
     active_theory,
     temporal_need_request,
@@ -519,7 +520,13 @@ def _pilot_loop_events(
     try:
         yield from _search_events(plc, ctx, at_the_stop)
         return
-    except (SearchStopped, SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused) as ended:
+    except (
+        SearchStopped,
+        SearchOutOfTime,
+        SearchOutOfMemory,
+        SearchQuestionRefused,
+        TheoryInvariantError,
+    ) as ended:
         stop = ended
     state = at_the_stop["state"]
     memo.check_limits = None
@@ -539,6 +546,10 @@ def _pilot_loop_events(
     elif isinstance(stop, SearchOutOfMemory):
         termination = TheoryTermination.BUDGET
         reason = _out_of_a_limit("memory budget exhausted (about 1 GB held)", at_the_stop, ctx)
+    elif isinstance(stop, TheoryInvariantError):
+        # Its record of what it tried stopped adding up, so no plan from it could be verified.
+        termination = TheoryTermination.STUCK
+        reason = _out_of_a_limit(f"how() lost track of its own evidence: {stop}", at_the_stop, ctx)
     else:
         termination = TheoryTermination.STUCK
         reason = _out_of_a_limit(f"a question was refused: {stop}", at_the_stop, ctx)

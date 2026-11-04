@@ -10,8 +10,8 @@ Three facts carry both proofs:
 * ``ProofFacts.producers`` lists every rung able to put a value in a tag, and
   refuses when a write can happen outside the rung's condition (a coil going
   false, a timer) or through a pointer.
-* A tag the plan or the plant may set (``free``: steerable, forced, harness
-  feedback) has no such list.
+* A tag the plan, the plant or the outside may set (``free``: steerable, forced,
+  harness feedback, external, system) has no such list.
 * The state how() starts from counts: a value already there needs no producer.
 
 **Blocked by a link** (``linked_feedback_block``). A value is blocked when it
@@ -148,6 +148,7 @@ def facts_for(setup: DriveSetup) -> ProofFacts:
         | forced
         | {coupling.fb_name for coupling in couplings}
         | SYSTEM_TAGS_BY_NAME.keys()
+        | {name for name, tag in setup.pdg.tags.items() if tag.external}
     )
     return ProofFacts(
         snapshot=setup.diag_snapshot,

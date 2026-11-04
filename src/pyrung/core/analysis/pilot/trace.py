@@ -77,6 +77,7 @@ from pyrung.core.analysis.sp_values import (
     _written_value_for_tag,
 )
 from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+from pyrung.core.expression import ExprCompare
 from pyrung.core.crossing import (
     Affine,
     AffineCmp,
@@ -1751,6 +1752,10 @@ def _trace_expression(
         return []
 
     if isinstance(expr, Atom):
+        # Arithmetic in a comparison is a gate this trace has no lever for, like a relation
+        # with none below.  Execution still reads it, so a plan through it is still verified.
+        if isinstance(expr.unsupported, ExprCompare):
+            return []
         if expr.unsupported is not None:
             raise _trace_read.UnsupportedConstruct("condition", expr.unsupported, provenance)
         target = _trace_constraints._atom_target(expr, env.snapshot)

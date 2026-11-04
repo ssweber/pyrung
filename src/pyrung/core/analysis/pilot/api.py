@@ -41,6 +41,7 @@ def _relational_target_atom(cond: Any) -> Any | None:
     """
     from pyrung.core.analysis.simplified import Atom
     from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt
+    from pyrung.core.expression import Expression
     from pyrung.core.tag import Tag
 
     forms = {CompareLt: "lt", CompareLe: "le", CompareGt: "gt", CompareGe: "ge"}
@@ -49,6 +50,11 @@ def _relational_target_atom(cond: Any) -> Any | None:
         return None
     tag = cond.tag
     tag_name = tag.name if isinstance(tag, Tag) else str(tag)
+    if isinstance(cond.value, Expression):
+        raise ValueError(
+            f"pilot: how() target {tag_name} is compared with arithmetic; compare it with "
+            "a tag or a literal."
+        )
     operand = cond.value.name if isinstance(cond.value, Tag) else cond.value
     return Atom(
         tag=tag_name,
@@ -68,11 +74,15 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
       ``predicate`` Atom (the goal is the relation, not a frozen value); the
       ``(tag, value)`` pair is a representative for display/keying only.
     """
-    from pyrung.core.condition import CompareEq
+    from pyrung.core.condition import AnyCondition, BitCondition, CompareEq
     from pyrung.core.tag import Tag
 
     if isinstance(cond, Tag):
         return cond.name, True, None
+
+    # And(Tag, ...) holds its members as contacts.
+    if isinstance(cond, BitCondition) and isinstance(cond.tag, Tag):
+        return cond.tag.name, True, None
 
     if isinstance(cond, CompareEq):
         tag = cond.tag
@@ -95,6 +105,11 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
     if atom is not None:
         return atom.tag, atom.operand, atom
 
+    if isinstance(cond, AnyCondition):
+        raise ValueError(
+            f"pilot: how() has no either-or target: {cond!r}.  Ask for one arm at a time."
+        )
+
     raise ValueError(
         f"pilot: cannot extract a target from {cond!r}.  Pass a Tag (Bool target), "
         "tag == value, or a relational comparison (tag < / <= / > / >= value)."
@@ -105,7 +120,16 @@ def _parse_targets(*conditions: Any) -> list[tuple[str, Any, Any]]:
     """Extract one ``(tag, value, predicate)`` per condition (multi-target goals)."""
     if not conditions:
         raise ValueError("pilot: how() requires at least one target condition")
-    return [_parse_one(c) for c in conditions]
+    from pyrung.core.condition import AllCondition
+
+    def flat(condition: Any) -> Iterator[Any]:
+        if isinstance(condition, AllCondition):
+            for member in condition.conditions:
+                yield from flat(member)
+        else:
+            yield condition
+
+    return [_parse_one(member) for condition in conditions for member in flat(condition)]
 
 
 def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
@@ -113,6 +137,29 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     if len(conditions) != 1:
         raise ValueError("pilot currently supports exactly one target condition")
     return _parse_one(conditions[0])
+
+
+def _freeze_unused_operands(
+    targets: list[tuple[str, Any, Any]], setup: _drive_setup.DriveSetup
+) -> list[tuple[str, Any, Any]]:
+    """A relational operand no rung uses has one value through a search: compare with that.
+
+    The search only carries tags the program uses, so it has no live value to read.
+    """
+    frozen = []
+    for tag, value, predicate in targets:
+        if (
+            predicate is not None
+            and predicate.operand_is_tag
+            and predicate.operand not in setup.pdg.tags
+        ):
+            known = setup.work._known_tags_by_name.get(predicate.operand)
+            default = known.default if known is not None else 0
+            literal = setup.diag_snapshot.get(predicate.operand, default)
+            predicate = replace(predicate, operand=literal, operand_is_tag=False)
+            value = literal
+        frozen.append((tag, value, predicate))
+    return frozen
 
 
 def _plan_from_outcome(
@@ -242,6 +289,7 @@ def pilot_how(
     clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
+    targets = _freeze_unused_operands(targets, setup)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()
     if goal.members:
