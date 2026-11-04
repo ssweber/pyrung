@@ -108,15 +108,7 @@ def test_a_predicate_naming_a_timer_is_asked() -> None:
 def test_a_trace_that_misreads_a_predicate_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
     # Reads no tag and answers False: the coast runs past a stop that holds for a while, then
     # goes on to its budget, so only a twin asked past the trace can say so.
-    run = Bool("Run")
-    timer = Timer.clone("MisreadT")
-    with Program() as prog:
-        with Rung(run):
-            on_delay(timer, 30, "s")
-    plc = PLC(prog, dt=0.01)
-    plc.patch({run: True})
-    plc.step()
-    acc = timer.Acc.name
+    plc, acc = _timing_plc("MisreadT")
     monkeypatch.setattr(read_trace._TracedTags, "__getitem__", lambda _self, _key: False)
 
     def predicate(s: Any) -> bool:
@@ -133,6 +125,55 @@ def test_a_trace_that_misreads_a_predicate_is_caught(monkeypatch: pytest.MonkeyP
             predicate,
             budget=5_000,
         )
+
+
+def _timing_plc(name: str) -> tuple[PLC, str]:
+    run = Bool("Run")
+    timer = Timer.clone(name)
+    with Program() as prog:
+        with Rung(run):
+            on_delay(timer, 30, "s")
+    plc = PLC(prog, dt=0.01)
+    plc.patch({run: True})
+    plc.step()
+    return plc, timer.Acc.name
+
+
+def test_a_predicate_judged_on_executed_scans_is_let_off_between_them(installed) -> None:
+    import pyrung.core.analysis.pilot.coast as pilot_coast
+
+    fold_check.install()
+    plc, acc = _timing_plc("LetOffT")
+    before = fold_check.STATS["predicate let off: true between the scans it is judged on"]
+
+    def predicate(s: Any) -> bool:
+        with pilot_coast._reads_untraced():
+            return s.tags[acc] == 20
+
+    assert installed.coast_until(plc, predicate, budget=5_000) is False
+    assert plc.state.scan_id == 5_001
+    assert (
+        fold_check.STATS["predicate let off: true between the scans it is judged on"] == before + 1
+    )
+
+
+def test_a_predicate_is_only_let_off_on_a_scan_that_asked_past_the_trace(installed) -> None:
+    import pyrung.core.analysis.pilot.coast as pilot_coast
+
+    fold_check.install()
+    plc = _plc()
+
+    def predicate(s: Any) -> bool:
+        if s.tags["N"] < 3:
+            with pilot_coast._reads_untraced():
+                return False
+        return s.tags["N"] >= 5
+
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
+    ):
+        fold_check._checked("run_until", plc, _stepper(plc, 9), predicate)
 
 
 def test_a_stop_on_the_first_true_scan_passes() -> None:
@@ -156,6 +197,7 @@ def installed(monkeypatch: pytest.MonkeyPatch):
     for mod, name in (
         (coast_run, "coast_until"),
         (pilot_coast, "coast_until"),
+        (pilot_coast, "_reads_untraced"),
         (compiled_run, "run_scans"),
         (compiled_run, "INTERPRETED_PREFIX"),
         (scan_trace, "MIN_RUN_SCANS"),

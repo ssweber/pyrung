@@ -10,7 +10,9 @@ on its plain state and not through the read trace, which is what is being checke
 true on the twin at a scan before the one where the run stopped, the run overshot and
 :class:`FoldMismatch` says so.  A predicate that reads the real runner instead of its
 argument (it would answer about the wrong runner on a twin) or that raises on the twin is not
-asked, and is counted.  A mismatch raises :class:`FoldMismatch` inside the test that ran it,
+asked, and is counted.  PILOT's opaque ``avoid=`` is judged on the scans a coast really executes,
+by contract (``read_trace._reads_untraced``), so a predicate that asked one isn't held to a true
+answer between them, and that is counted too.  A mismatch raises :class:`FoldMismatch` inside the test that ran it,
 naming the scan and the differing keys.
 
 The guarded scan loop runs in a finer mode here: it fires a few scans at a time
@@ -740,6 +742,15 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
 _SEARCH_LIMITS = (SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused)
 
 
+class _JudgedOnExecutedScans:
+    """Whether the last ask reached a part of the predicate judged only on executed scans.
+
+    A class because it is what a predicate's private copy shares with the original.
+    """
+
+    asked = False
+
+
 class _NotTheTwin(BaseException):
     """The predicate touched the real runner's state while the twin was asked.
 
@@ -922,6 +933,7 @@ def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) ->
     is detected, not answered.  A predicate that raises is unknown on this scan only
     (``False`` is not assumed).
     """
+    _JudgedOnExecutedScans.asked = False
     real = plc._state
     poison = _PoisonedState()
     plc._state = poison
@@ -1308,6 +1320,7 @@ def _checked(
         sample.update((scan - 1, scan))
     stop_held = None
     stop_raised = None
+    let_off = False
     for _ in range(n):
         try:
             twin._run_single_scan(consume_pause_request=False)
@@ -1337,6 +1350,10 @@ def _checked(
                 STATS["predicate scans"] += 1
                 if sid == end:
                     stop_held = bool(hit)
+                elif hit and _JudgedOnExecutedScans.asked:
+                    if not let_off:
+                        _note_skip("predicate let off: true between the scans it is judged on")
+                    let_off = True
                 elif hit:
                     raise _mismatch(
                         f"fold-check ({kind}): stop predicate true at scan {sid}, "
@@ -1444,6 +1461,16 @@ def install() -> None:
     setattr(coast_run, "coast_until", coast_until)  # noqa: B010
     setattr(pilot_coast, "coast_until", coast_until)  # noqa: B010
 
+    untraced = pilot_coast._reads_untraced
+
+    @contextmanager
+    def reads_untraced() -> Iterator[None]:
+        _JudgedOnExecutedScans.asked = True
+        with untraced():
+            yield
+
+    setattr(pilot_coast, "_reads_untraced", reads_untraced)  # noqa: B010
+
 
 def export() -> dict[str, Any]:
     """This process's record, in plain types: what an xdist worker sends its controller."""
@@ -1518,6 +1545,7 @@ def files_without_the_loop() -> list[tuple[str, int]]:
 
 _SKIPS_LISTED_BY_TEST = (
     "predicate skipped",
+    "predicate let off",
     "compared at the landing",
     "skipped: longer",
     "skipped: the test steps its own twin",
