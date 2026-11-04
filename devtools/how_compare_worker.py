@@ -185,17 +185,23 @@ def stepped_replay_final(fork):
         return f"n/a:{type(error).__name__}"
 
 
+STEP_BUDGET_S = 8.0  # stepping the oracle never spends more than this, whatever the cap
+
+
 def session_step_reach(plc, goal, cap):
     """Step a fork of the session itself, no inputs, and say when the goal first holds."""
     try:
+        deadline = time.perf_counter() + STEP_BUDGET_S
         twin = plc.fork()
         start = twin.state.scan_id
         if safe_goal(goal, dict(twin.state.tags)):
             return start, start
-        for _ in range(cap):
+        for i in range(cap):
             twin.step()
             if safe_goal(goal, dict(twin.state.tags)):
                 return start, twin.state.scan_id
+            if i % 64 == 63 and time.perf_counter() > deadline:
+                return start, "n/a:step budget"
         return start, None
     except Exception as error:  # noqa: BLE001
         return None, f"n/a:{type(error).__name__}"
@@ -300,6 +306,8 @@ def run_row(case):
             row["step_check"] = (
                 f"unchecked: plan uses {row.get('inputs')} input(s), {row.get('holds')} hold(s)"
             )
+        elif isinstance(hit, str):
+            row["step_check"] = f"unchecked: stepping stopped ({hit})"
         else:
             row["step_check"] = "checked against stepping"
             if isinstance(hit, int) and hit != row["tip"]:

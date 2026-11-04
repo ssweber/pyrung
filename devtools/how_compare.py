@@ -13,8 +13,9 @@ plus a few minutes; with --full give the outer one 11500.
 --expected FILE
          differences you expect, one per line: `<glob>[:field,...]  # reason`.  The glob is
          case-sensitive (fnmatchcase) on the case name.  No field list covers every field of a
-         matching case, except that a row which went from REACHED to anything else is covered
-         only by a line that names `status`.  Fields: status total holds inputs reason plan_hash
+         matching case except `flags` and `run`, which must be named; a row which went from
+         REACHED to anything else (an answer, an error, ABORT) is covered only by a line that
+         names `status` (and `run` or `flags` too, where those changed).  Fields: status total holds inputs reason plan_hash
          tip final replay_equal stepped_equal goal_at_tip step_reach cause, plus `run` (an ABORT
          or SETUP_ERROR row) and `flags` (a flag kind new to the tree).  A reason is required, a
          glob that matches no case is an error (printed as stale, exit 2), a missing file exit 2.
@@ -389,6 +390,19 @@ def main() -> int:
     }
     unexplained = 0
     print()
+    print(f"ROWS THAT DIFFER ({len({d[0] for d in diffs})} of {len(names)}):")
+    by_row: dict[str, list[tuple[str, object, object]]] = {}
+    for c, field, vb, vn in diffs:
+        by_row.setdefault(c, []).append((field, vb, vn))
+    for c, items in by_row.items():
+        shown = {f: (x, y) for f, x, y in items}
+        head = []
+        for f in ("status", "total", "run"):
+            if f in shown:
+                head.append(f"{f} {short(shown[f][0], 30)} -> {short(shown[f][1], 30)}")
+        rest = [f for f, _, _ in items if f not in ("status", "total", "run")]
+        print(f"  {c}: {'; '.join(head)}{'; ' if head and rest else ''}{', '.join(rest)}")
+    print()
     print(f"DIFFERENCES: {len({d[0] for d in diffs})} rows of {len(names)}, {len(diffs)} fields")
     if diffs:
         print("| case | field | base | tree | expected |")
@@ -399,9 +413,12 @@ def main() -> int:
             if not fnmatch.fnmatchcase(c, glob):
                 continue
             if fields is None:
-                covers = c not in regress
+                # a bare line covers neither a regression nor `flags` / `run`
+                covers = c not in regress and field not in ("flags", "run")
+            elif c in regress:
+                covers = "status" in fields and (field in fields or field not in ("flags", "run"))
             else:
-                covers = field in fields or (c in regress and "status" in fields)
+                covers = field in fields
             if covers:
                 why = reason
                 break
@@ -452,7 +469,11 @@ def main() -> int:
         print("ABORT / SETUP_ERROR rows (hold unless an expected line names `run` for them)")
         for c in bad:
             ok = any(
-                fnmatch.fnmatchcase(c, g) and f is not None and "run" in f for g, f, _ in expected
+                fnmatch.fnmatchcase(c, g)
+                and f is not None
+                and "run" in f
+                and (c not in regress or "status" in f)
+                for g, f, _ in expected
             )
             bad_unexplained += not ok
             print(
