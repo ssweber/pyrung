@@ -164,6 +164,7 @@ def compile_kernel(
     return CompiledKernel(
         step_fn=step_fn,
         pre_step_fn=pre_step_fn,
+        calls_functions=bool(ctx.function_objects),
         referenced_tags=dict(ctx.referenced_tags),
         block_specs=block_specs,
         # Edge contacts keep their memory per site in ``memory``

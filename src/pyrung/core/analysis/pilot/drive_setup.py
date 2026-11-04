@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import RouteTaken
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names
 from pyrung.core.analysis.pilot.compass import Compass, NavigationCatalog
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
@@ -220,6 +221,9 @@ def prepare_target_context(
     """Bind one target and its initial route report to a prepared drive."""
 
     target_work = setup.work if work is None else work
+    # The state how() starts from is real, and it may be the one state the search never asks
+    # as real: a goal already true runs no trial.
+    _avoid_scan_names(avoid_pred, dict(target_work.state.tags))
     route_taken = _target_route.prepare_target_route(
         target_work,
         target_tag,

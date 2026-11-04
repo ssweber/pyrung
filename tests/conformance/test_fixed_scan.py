@@ -12,9 +12,11 @@ too, on the scan it raises ``Fired``: ``Result3`` the set time (SD13), ``Result4
 scan so far (SD12: above the set time, a scan overran in the window), ``ErrorCode`` fixed scan
 mode (SC202).  That leaves ``Result1`` and ``Result2`` for two counts a case.
 
-Every expectation is a range holding every reading.  1 s at 100 ms is scan 10, as in pyrung at
-a fixed ``dt``, where every scan adds its time and the rung's first scan is a whole scan of
-it; scan 11 if the first scan adds no time, or the timer loses a scan to a slip.
+Every expectation is a :func:`~tests.conformance.probe_kit.between`, so a pass says nothing:
+what a case read goes in ``readings.toml`` with its setting, and never in ``confirmed.toml``.
+1 s at 100 ms is scan 10, as in pyrung at a fixed ``dt``, where every scan adds its time and
+the rung's first scan is a whole scan of it; scan 11 if the first scan adds no time, or the
+timer loses a scan to a slip.
 
 Off fixed scan (a CLICK without the setting, the local soft PLC, ``TARGET=circuitpy``) a scan
 is as long as it takes, and the counts vary with the wall clock: the ranges pass, and each
@@ -30,16 +32,17 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, off_delay, on_delay, time_drum
 from pyrung.core.system_points import system
 from tests.conformance.memory import ClickTimer, c, ds, td
+from tests.conformance.probe_kit import between
 
 #: Any reading a count or a setting can leave in a slot's Int.
-ANY_COUNT = range(0, 32768)
+ANY_COUNT = between(0, 32767)
 #: Two counts, and the scan they were counted under.
 READING: dict[str, range] = {
     "Result1": ANY_COUNT,
     "Result2": ANY_COUNT,
     "Result3": ANY_COUNT,
     "Result4": ANY_COUNT,
-    "ErrorCode": range(0, 2),
+    "ErrorCode": between(0, 1),
 }
 
 
@@ -123,7 +126,7 @@ group = Group(
             "What the PLC says about its scan: fixed scan mode, the set time, the time it took",
             ladder=_prove_scan_setup,
             expect={
-                "Result1": range(0, 2),
+                "Result1": between(0, 1),
                 "Result2": ANY_COUNT,
                 "Result3": ANY_COUNT,
                 "Result4": ANY_COUNT,
@@ -160,4 +163,5 @@ def test_at_the_in_process_fixed_scan_each_count_is_the_ceil() -> None:
     assert results["scan_setup"]["Result2"] == 10
     setting = {"Result3": 10, "Result4": 10, "ErrorCode": 1}
     assert results["seconds_and_ms"] == {"Result1": 100, "Result2": 100, **setting}
-    assert results["off_delay_and_drum"] == {"Result1": 100, "Result2": 100, **setting}
+    # A drum's step starts on a scan of its own (``tests/core/test_timer_exact.py``).
+    assert results["off_delay_and_drum"] == {"Result1": 100, "Result2": 101, **setting}

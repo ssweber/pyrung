@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from collections import Counter
 from dataclasses import replace
 
@@ -33,6 +34,13 @@ from pyrung.core import PLC, Program, Rung, calc, copy
 from pyrung.core.system_points import system
 from pyrung.core.validation._common import _collect_write_sites
 from tests.conformance import memory, suite
+from tests.conformance.probe_kit import (
+    asks_for_a_reading,
+    between,
+    reading_lines,
+    record_readings,
+    record_run,
+)
 
 ds = ClickBlocks().ds
 
@@ -437,6 +445,75 @@ def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
     assert is_confirmed(passed, record)
     # Rewritten since (another hash): unconfirmed until it passes again.
     assert not is_confirmed(replace(passed, case_hash="h9"), record)
+
+
+def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, monkeypatch) -> None:
+    asks = case("x", ladder=_prove_constant, expect={"Result1": between(0, 9)})
+    asserts = case("x", ladder=_prove_constant, expect={"Result1": range(0, 10)})
+    assert asks_for_a_reading(asks)
+    assert not asks_for_a_reading(asserts)
+    read = CaseResult(
+        case=asks, passed=True, actual={"Result1": 7}, slot_index=1, group="g", case_hash="h1"
+    )
+    other = CaseResult(
+        case=asserts, passed=True, actual={"Result1": 7}, slot_index=2, group="g", case_hash="h2"
+    )
+    path = tmp_path / "readings.toml"
+    assert record_readings(path, [read, other], on="2026-11-04") == ["g/constant"]
+    assert record_readings(path, [replace(read, actual={"Result1": 8})], on="2026-11-05")
+    assert record_readings(path, [replace(read, stale=True)], on="2026-11-06") == []
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"] == [
+        {"case": "g/constant", "hash": "h1", "on": "2026-11-04", "read": {"Result1": 7}},
+        {"case": "g/constant", "hash": "h1", "on": "2026-11-05", "read": {"Result1": 8}},
+    ]
+    assert reading_lines([read, other]) == ["read g/constant {'Result1': 7}"]
+    monkeypatch.setenv("PYRUNG_CONFORMANCE_STEP", "STOP->RUN")
+    record_readings(path, [read], on="2026-11-07")
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"][-1]["step"] == "STOP->RUN"
+
+
+def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) -> None:
+    results = [replace(r, case_hash="h") for r in run(suite.groups("O"))]
+    assert results
+    assert all(r.passed and asks_for_a_reading(r.case) for r in results)
+    confirmed, readings = tmp_path / "confirmed.toml", tmp_path / "readings.toml"
+    added, dropped, read = record_run(confirmed, readings, results, on="2026-11-04")
+    assert (added, dropped) == ([], [])
+    assert load_confirmations(confirmed) == {}
+    assert read == [f"fixed_scan/{r.case.id}" for r in results]
+    recorded = tomllib.loads(readings.read_text(encoding="utf-8"))["reading"]
+    counted = {entry["case"]: entry["read"] for entry in recorded}
+    # Each count with the setting it was counted under.
+    for name in ("seconds_and_ms", "off_delay_and_drum"):
+        assert {"Result1", "Result2", "Result3", "Result4", "ErrorCode"} == set(
+            counted[f"fixed_scan/{name}"]
+        )
+
+
+def test_a_pass_of_part_n_is_confirmed(tmp_path) -> None:
+    results = [replace(r, case_hash="h") for r in run(suite.groups("N"))]
+    added, _dropped, read = record_run(
+        tmp_path / "confirmed.toml", tmp_path / "readings.toml", results, on="2026-11-04"
+    )
+    assert read == []
+    assert sorted(added) == sorted(f"{r.group}/{r.case.id}" for r in results)
+
+
+def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
+    asked = {
+        f"{g.name}/{c.id}"
+        for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS)
+        for c in g.cases
+        if asks_for_a_reading(c)
+    }
+    confirmed = load_confirmations(suite.CONFIRMED_PATH)
+    assert not asked & set(confirmed)
+    assert {
+        "boot_read/what_survives",
+        "rtc_set/date_and_time_apply",
+        "real_sum/f64_row",
+        "fixed_scan/seconds_and_ms",
+    } <= asked
 
 
 def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:

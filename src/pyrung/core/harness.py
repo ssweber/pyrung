@@ -12,6 +12,7 @@ accumulator, so feedback that was never sustained is never fabricated.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -23,6 +24,12 @@ from pyrung.core.physical import (
     Pulse,
     Ramp,
     profile_to_token,
+)
+from pyrung.core.synthesis import (
+    TIMER_ACC_MAX,
+    plant_acc_name,
+    plant_acc_registers,
+    plant_timer,
 )
 from pyrung.core.tag import TagType
 
@@ -167,6 +174,15 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
     return None
 
 
+_NS_PER_MS = 1_000_000
+
+
+def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
+    """A plant timer's carry, in ns as the timer keeps it.  A saved float is of its unit."""
+    carry = state.memory.get(f"_frac:{acc_name}", 0) or 0
+    return round(carry * unit_ns) if carry.__class__ is float else carry
+
+
 def _program_writer(plc: PLC, tag_name: str) -> str | None:
     """Location of the first program instruction that writes *tag_name*, if any."""
     from pyrung.core.validation._common import _collect_write_sites, compact_site_location
@@ -211,6 +227,7 @@ class Harness:
     _overrides: dict[str, Coupling | None] = field(default_factory=dict, init=False)
     _monitors: list[Any] = field(default_factory=list, init=False)
     _installed: bool = field(default=False, init=False)
+    _other_unit_registers: tuple[str, ...] | None = field(default=None, init=False)
 
     def __init__(self, plc: PLC) -> None:
         self._plc = plc
@@ -220,29 +237,42 @@ class Harness:
         self._overrides: dict[str, Coupling | None] = {}
         self._monitors: list[Any] = []
         self._installed = False
+        self._other_unit_registers = None
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
 
     def install(self) -> None:
+        """Put the plant on the runner, a feedback whose enable is on as long since settled."""
+        self._install(settle=True)
+
+    def _install(self, *, settle: bool) -> None:
+        """Without *settle* a feedback stays as the state has it, its timers counting from there."""
         if self._installed:
             return
         self._installed = True
         self._discover_couplings()
         self._rebuild_couplings()
+        self._warn_of_unknown_setpoints()
         self._plc._note_plant_change()
         self._refresh_synthesis()
         self._seed_plant_defaults()
-        self._seed_bool_state()
+        self._carry_counts_to_current_units()
+        if settle:
+            self._seed_bool_state()
         self._install_monitors()
         self._plc._harness = self
 
-    def fork_onto(self, plc: PLC) -> Harness:
+    def fork_onto(self, plc: PLC, *, as_recorded: bool = False) -> Harness:
         """Create a copy of this harness installed on *plc*.
 
         The fork inherits the parent's committed state — including each bool
         timer's accumulator registers — so the dwell carries over with no
-        re-seed; only the (stateless) timer instructions and the fractional
-        remainder are copied.  This is the seam the synthesis-overlay install
+        re-seed; only the (stateless) timer instructions and the carry are
+        copied.  This is the seam the synthesis-overlay install
         grows into.
+
+        A state from before a link changed may hold a count in another unit's register,
+        and it moves here unless *as_recorded*: a replay of the scans as they ran keeps
+        the state they ran from.
         """
         from copy import copy
 
@@ -253,6 +283,7 @@ class Harness:
         clone._declared = list(self._declared)
         clone._overrides = dict(self._overrides)
         clone._installed = True
+        clone._other_unit_registers = self._other_unit_registers
         clone._monitors = []
         clone.on_patches_applied = None
         # Rebuild the synthesis overlay on the fork (fresh, stateless timer
@@ -261,6 +292,8 @@ class Harness:
         # re-seed.  The brackets survive the fork as a program reference — feedback
         # (bool and analog) is entirely plant rungs now, no private callback.
         clone._refresh_synthesis()
+        if not as_recorded:
+            clone._carry_counts_to_current_units()
         clone._install_monitors()
         plc._harness = clone
         return clone
@@ -312,9 +345,11 @@ class Harness:
 
         Each key is a feedback tag name.  A ``Coupling`` value runs instead of
         any declared coupling on that feedback (or adds one); ``None`` cuts the
-        declared coupling, leaving the feedback a free input.  A coupling added
-        while its enable is already on starts cold: the feedback follows after
-        its on-delay, as freshly wired hardware would.
+        declared coupling, leaving the feedback a free input.  A coupling on a
+        feedback no timer has counted for starts cold: under a held enable the feedback
+        follows after its on-delay, as freshly wired hardware would.  A coupling
+        replaced, or cut and linked again, keeps the time its timers have counted,
+        whatever unit the new delays count in.
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
@@ -324,13 +359,88 @@ class Harness:
         if self._installed:
             # Rebuild the overlay and monitors so changed couplings take
             # effect from the next scan (cut ones stop synthesizing).
+            self._warn_of_unknown_setpoints()
             self._plc._note_plant_change()
             self._refresh_synthesis()
             self._seed_plant_defaults()
+            self._carry_counts_to_current_units()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
             self._install_monitors()
+
+    def _warn_of_unknown_setpoints(self) -> None:
+        """Say so when an ``Approach`` will run toward a tag nothing has given a value.
+
+        It can be meant: an ambient temperature a test patches is in no rung.  A name
+        already in the state has its value, whoever wrote it, and is not unknown.
+        """
+        plc = self._plc
+        for c in self._profile_couplings:
+            if not isinstance(c.profile, Approach) or not isinstance(c.profile.toward, str):
+                continue
+            name = c.profile.toward
+            if name in plc._state.tags or plc._tag_known_or_reached(name) is not None:
+                continue
+            warnings.warn(
+                f"{c.fb_name} approaches {name}, which no rung names: "
+                "it starts from 0 until something writes it.",
+                stacklevel=3,
+            )
+
+    def _plant_timers(self) -> Iterator[tuple[str, str, int]]:
+        """``(stem, feedback, delay in ms)`` of each plant timer the couplings run."""
+        for c in self._bool_couplings:
+            yield "__cpl_on", c.fb_name, c.on_delay_ms
+            yield "__cpl_off", c.fb_name, c.off_delay_ms
+        for c in self._profile_couplings:
+            if isinstance(c.profile, Pulse):
+                yield "__pls_on", c.fb_name, c.profile.on_dwell_ms
+                yield "__pls_off", c.fb_name, c.profile.off_dwell_ms
+
+    def _carry_counts_to_current_units(self) -> None:
+        """Move a count sitting in another unit's register to the one its timer uses now.
+
+        A delay staying in its unit finds its count where it is, however the state got
+        here: a link replaced, cut and linked again, a reload, a fork from before a
+        change.  This makes a change of unit do the same, from the state alone.  A move
+        leaves zero behind, so a zero has nothing to give, and a state with its counts in
+        place is not touched.  Were two registers to hold a count, the longer time stands.
+        """
+        state = self._plc._state
+        # Every fork comes through here, and almost never has anything to move.
+        if self._other_unit_registers is None:
+            self._other_unit_registers = tuple(
+                name
+                for stem, fb_name, delay_ms in self._plant_timers()
+                for name, _unit_ms in plant_acc_registers(stem, fb_name)
+                if name != plant_acc_name(stem, fb_name, delay_ms)
+            )
+        if not any(name in state.tags for name in self._other_unit_registers):
+            return
+        tags: dict[str, Any] = {}
+        memory: dict[str, Any] = {}
+        for stem, fb_name, delay_ms in self._plant_timers():
+            current = plant_acc_name(stem, fb_name, delay_ms)
+            counted_ns: dict[str, Any] = {}
+            for name, unit_ms in plant_acc_registers(stem, fb_name):
+                unit_ns = unit_ms * _NS_PER_MS
+                ns = int(state.tags.get(name, 0) or 0) * unit_ns + _carry_ns(state, name, unit_ns)
+                if ns != 0:
+                    counted_ns[name] = ns
+            if not counted_ns.keys() - {current}:
+                continue
+            for name in counted_ns:
+                tags[name] = 0
+                memory[f"_frac:{name}"] = 0
+            _preset, _unit, unit_ms = plant_timer(delay_ms)
+            new_count, new_frac = divmod(max(counted_ns.values()), unit_ms * _NS_PER_MS)
+            if new_count > TIMER_ACC_MAX:
+                new_count, new_frac = TIMER_ACC_MAX, 0
+            tags[current] = new_count
+            memory[f"_frac:{current}"] = new_frac
+        if tags:
+            self._plc._edit_tip_tags(tags, memory=memory)
 
     def pending(self, fb_name: str) -> bool:
         """True while a bool coupling on *fb_name* is still counting toward a flip."""
@@ -345,16 +455,21 @@ class Harness:
         Keyed by feedback name; a feedback that agrees with its enable is
         absent. Rising, the on-delay is counting; falling, the off-delay is.
         """
-        snap = self._plc.current_state.tags
+        state = self._plc.current_state
+        snap = state.tags
         left: dict[str, int] = {}
         for c in self._bool_couplings:
             if not self._bool_mid_transition(c, snap):
                 continue
             if snap.get(c.fb_name, False):
-                remaining = c.off_delay_ms - int(snap.get(c.tof_acc_name, 0) or 0)
+                delay_ms, acc_name = c.off_delay_ms, c.tof_acc_name
             else:
-                remaining = c.on_delay_ms - int(snap.get(c.ton_acc_name, 0) or 0)
-            left[c.fb_name] = max(0, remaining)
+                delay_ms, acc_name = c.on_delay_ms, c.ton_acc_name
+            preset, _unit, unit_ms = plant_timer(delay_ms)
+            unit_ns = unit_ms * _NS_PER_MS
+            remaining_ns = (preset - int(snap.get(acc_name, 0) or 0)) * unit_ns
+            remaining_ns -= _carry_ns(state, acc_name, unit_ns)
+            left[c.fb_name] = max(0, round(remaining_ns / _NS_PER_MS))
         return left
 
     @property
@@ -546,6 +661,7 @@ class Harness:
 
     def _rebuild_couplings(self) -> None:
         """Lower the declared couplings plus overrides into the working lists."""
+        self._other_unit_registers = None
         self._bool_couplings = []
         self._profile_couplings = []
         for c in self._declared:
@@ -591,9 +707,10 @@ class Harness:
         previous commit's command).  The on-delay accumulates while the enable
         matches (``on_delay`` preset, in ms); the off-delay, driven by its done
         bit, holds the feedback for ``off_delay`` after the enable drops.  Presets
-        are the declared delays in ms with a ms accumulator unit, so a held enable
-        crosses after ``ceil(delay_ms / dt_ms)`` scans (``delay_ms == 0`` ⇒ the
-        program sees the feedback next scan, from the scan boundary).
+        are the declared delays, in ms unless one is too long for it (see
+        :func:`~pyrung.core.synthesis.plant_timer`), so a held enable
+        crosses after ``ceil(delay_ms / dt_ms)`` scans (``delay_ms == 0`` ⇒ the program
+        sees the feedback next scan, from the scan boundary).
 
         Idempotent — used at install, on each fork (fresh instructions reading the
         fork's tags; accumulator *state* rides the inherited committed state), and
@@ -623,9 +740,9 @@ class Harness:
                 else BitCondition(en_tag)
             )
             ton_done = Bool(f"__cpl_ond__{c.fb_name}", retentive=False)
-            ton_acc = Int(f"__cpl_on__{c.fb_name}", retentive=False)
-            tof_acc = Int(f"__cpl_off__{c.fb_name}", retentive=False)
-            fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+            ton_acc = Int(plant_acc_name("__cpl_on", c.fb_name, c.on_delay_ms), retentive=False)
+            tof_acc = Int(plant_acc_name("__cpl_off", c.fb_name, c.off_delay_ms), retentive=False)
+            fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
                 fb_tag = Bool(c.fb_name)
             c.ton_done_name = ton_done.name
@@ -648,7 +765,7 @@ class Harness:
             en_tag = self._plc._known_tags_by_name.get(c.en_name)
             if en_tag is None:
                 continue
-            fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+            fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
                 fb_tag = Bool(c.fb_name) if isinstance(spec, Pulse) else Real(c.fb_name)
             if c.trigger_value is not None:
@@ -674,8 +791,9 @@ class Harness:
                 toward = spec.toward
                 toward_operand: Any = toward
                 if isinstance(toward, str):
-                    known_toward = self._plc._known_tags_by_name.get(toward)
-                    toward_operand = Real(toward) if known_toward is None else known_toward
+                    toward_operand = self._tag_rungs_know(toward)
+                    if toward_operand is None:
+                        toward_operand = Real(toward)
                 plant.extend(
                     analog_approach_rung(
                         enable=enable,
@@ -692,9 +810,15 @@ class Harness:
                         disable=disable,
                         fb_tag=fb_tag,
                         on_done=Bool(f"__pls_ond__{c.fb_name}", retentive=False),
-                        on_acc=Int(f"__pls_on__{c.fb_name}", retentive=False),
+                        on_acc=Int(
+                            plant_acc_name("__pls_on", c.fb_name, spec.on_dwell_ms),
+                            retentive=False,
+                        ),
                         off_done=Bool(f"__pls_offd__{c.fb_name}", retentive=False),
-                        off_acc=Int(f"__pls_off__{c.fb_name}", retentive=False),
+                        off_acc=Int(
+                            plant_acc_name("__pls_off", c.fb_name, spec.off_dwell_ms),
+                            retentive=False,
+                        ),
                         on_dwell_ms=spec.on_dwell_ms,
                         off_dwell_ms=spec.off_dwell_ms,
                     )
@@ -710,6 +834,17 @@ class Harness:
         self._plc._compiled_replay_kernel = None
         self._plc._soft_exec_program_cache = None
         self._plc._causal_lineage.invalidate_current_epoch()
+
+    def _tag_rungs_know(self, name: str) -> Any | None:
+        """The program's tag for *name*, a slot only a pointer reaches included.
+
+        A stand-in in its place would seed the slot with the wrong default, and the
+        program's own read of the slot would change with it.
+        """
+        tag = self._plc._tag_known_or_reached(name)
+        if tag is not None:
+            self._plc._register_known_tag(tag)
+        return tag
 
     def _seed_plant_defaults(self) -> None:
         """Put each tag the plant uses in the state, at its default."""
@@ -742,7 +877,7 @@ class Harness:
             en_raw = snap.get(c.en_name, False)
             en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
             if en_on:
-                seed[c.ton_acc_name] = c.on_delay_ms
+                seed[c.ton_acc_name] = plant_timer(c.on_delay_ms)[0]
                 seed[c.ton_done_name] = True
                 seed[c.fb_name] = True
         if seed:

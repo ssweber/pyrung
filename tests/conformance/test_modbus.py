@@ -20,7 +20,6 @@ import pytest
 from pyrung.click import ClickBlocks
 from pyrung.conformance import (
     BuildMismatchError,
-    CaseResult,
     CircuitPySim,
     ConformanceError,
     ConformanceProgram,
@@ -33,7 +32,6 @@ from pyrung.conformance import (
     case,
     format_report,
     load_confirmations,
-    record_confirmations,
     run_modbus,
     wait_for_scan_counter_wrap,
 )
@@ -41,16 +39,11 @@ from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
 from pyrung.core import Rung, calc, copy, on_delay
 from tests.conformance import suite, test_system
 from tests.conformance.memory import ClickTimer
+from tests.conformance.probe_kit import reading_lines, record_run
 
 ds = ClickBlocks().ds
 
 pytestmark = pytest.mark.conformance
-
-
-def _read_lines(results: list[CaseResult]) -> list[str]:
-    """A ``read`` line per case of a group apart: a range passes, so what it read is the answer."""
-    apart = {g.name for g in suite.APART_GROUPS}
-    return [f"read {r.group}/{r.case.id} {r.actual}" for r in results if r.group in apart]
 
 
 def test_all_groups_over_modbus(
@@ -70,13 +63,16 @@ def test_all_groups_over_modbus(
             wait_for_scan_counter_wrap(conformance_endpoint)
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     if conformance_endpoint is not None:
-        # A real CLICK: record what passed, drop what failed (confirmed.toml).
-        added, dropped = record_confirmations(
-            suite.CONFIRMED_PATH, results, on=date.today().isoformat()
+        # A real CLICK: record what passed, drop what failed (confirmed.toml).  A case
+        # whose range holds every candidate answers nothing by passing: it records what
+        # it read instead (readings.toml).
+        added, dropped, read = record_run(
+            suite.CONFIRMED_PATH, suite.READINGS_PATH, results, on=date.today().isoformat()
         )
         print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
+        print(f"readings.toml: {len(read)} read")
     print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
-    for line in _read_lines(results):
+    for line in reading_lines(results):
         print(line)
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in loaded)
@@ -142,7 +138,7 @@ def test_the_groups_apart_on_a_local_target(
         pytest.skip("runs when the whole suite runs on a local target")
     results = run_modbus(suite.build_apart(), sim=conformance_sim)
     print(format_report(results))
-    for line in _read_lines(results):
+    for line in reading_lines(results):
         print(line)
     assert_all_passed(results)
 

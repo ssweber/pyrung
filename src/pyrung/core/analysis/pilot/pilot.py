@@ -61,6 +61,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Stuck,
     _ActionPair,
+    act_identity,
 )
 from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
@@ -1381,7 +1382,10 @@ def _search_events(
         attempt = transition.attempt
         assert attempt is not None
         controlled_setup_attempt = None
-        if controlling_setup_request is not None:
+        setup_has_no_execution = (
+            controlling_setup_request is not None and attempt.executed_attempt is None
+        )
+        if controlling_setup_request is not None and not setup_has_no_execution:
             assert theory_source_checkpoint is not None
             controlled_setup_attempt = _theory_recording._record_controlled_setup_attempt(
                 state,
@@ -1393,7 +1397,28 @@ def _search_events(
         if controlled_setup_attempt is not None and attempt.trial is not None:
             transition = _attempt_transition.adopt_deferred_transition(transition, state, ctx)
         if attempt.trial is None:
-            if controlled_setup_attempt is not None:
+            if setup_has_no_execution:
+                # Rejected with no execution to record and no requirement to refine: a
+                # gate refused the setup before it ran (avoid=, or a value its tag cannot
+                # hold).  As when an executed setup is rejected, the theory ends here.
+                theory = active_theory(state.theory_state)
+                if theory is None:
+                    raise ValueError("rejected temporal attempt lost its theory")
+                _theory_recording._record_controlling_theory_fact(
+                    state,
+                    AbandonTheory(
+                        theory_id=theory.theory_id,
+                        version_id=theory.current_version_id,
+                        termination=TheoryTermination.STUCK,
+                        abandonment_identity=(
+                            "working-theory-setup-refused",
+                            theory.theory_id,
+                            theory.current_version_id,
+                            act_identity(act),
+                        ),
+                    ),
+                )
+            elif controlled_setup_attempt is not None:
                 if _theory_recording._records_controlling_need(transition.theory_transition):
                     assert transition.theory_transition is not None
                     _theory_recording._record_working_theory_transition(
@@ -1493,6 +1518,24 @@ def _search_events(
                 # with it; otherwise a later Compass read inherits temporary
                 # logic that has no successful World-change receipt.
                 state.load_world(prerequisite_source_world)
+            if setup_has_no_execution:
+                assert controlling_source_world is not None
+                state.load_world(controlling_source_world)
+                yield from _stopped_events(
+                    state,
+                    ctx,
+                    frame,
+                    _with_avoid_reason(
+                        "The setup this route needs was rejected",
+                        state,
+                        ctx,
+                        frame,
+                    ),
+                    journal_channel_tags,
+                    journal_acc_names,
+                    candidate_count=1,
+                )
+                return
             if controlled_setup_attempt is not None:
                 assert controlling_source_world is not None
                 state.load_world(controlling_source_world)

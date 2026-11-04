@@ -7,6 +7,7 @@ requested conditions into that engine's inputs and assembles public plans.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -15,8 +16,10 @@ import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
+from pyrung.core.analysis.pilot.avoid import _AvoidCheckRaised
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.types import PilotEvent
+from pyrung.core.runner import AvoidCheckError
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -164,6 +167,15 @@ def _plan_from_outcome(
     )
 
 
+@contextmanager
+def _avoid_errors_named() -> Iterator[None]:
+    """A check that raised in the search reaches the caller under its public name."""
+    try:
+        yield
+    except _AvoidCheckRaised as raised:
+        raise AvoidCheckError(raised.check, raised.error) from raised.error
+
+
 def pilot_events(
     plc: PLC,
     *conditions: Any,
@@ -176,22 +188,25 @@ def pilot_events(
 
     ``unlink`` frees the named harness-feedback tags for fault injection (see
     :func:`pilot_how`). ``avoid_pred`` excludes routes, actions, and observed
-    states the same way ``how(avoid=...)`` does.
+    states the same way ``how(avoid=...)`` does, and one that raises on a real
+    state ends the stream with ``AvoidCheckError``.
     """
     clock = _budget.WallClock.starting_now(wall_clock_s)
     target_tag, target_value, target_predicate = _parse_target(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    ctx, _route_taken = _drive_setup.prepare_target_context(
-        setup,
-        target_tag,
-        target_value,
-        target_predicate,
-        max_scans=max_scans,
-        avoid_pred=avoid_pred,
-    )
-    yield from _engine._pilot_loop_events(setup.work, replace(ctx, wall_clock=clock))
+    with _avoid_errors_named():
+        ctx, _route_taken = _drive_setup.prepare_target_context(
+            setup,
+            target_tag,
+            target_value,
+            target_predicate,
+            max_scans=max_scans,
+            avoid_pred=avoid_pred,
+        )
+        yield from _engine._pilot_loop_events(setup.work, replace(ctx, wall_clock=clock))
 
 
+@_avoid_errors_named()
 def pilot_how(
     plc: PLC,
     *conditions: Any,
@@ -206,7 +221,8 @@ def pilot_how(
     For a multi-route value target (``Bool == True/False`` or word
     ``tag == value``) PILOT starts with a deterministic preferred route and
     records the route that actually reached the goal on ``Plan.route``;
-    ``avoid_pred`` excludes a reported route so PILOT can take another.
+    ``avoid_pred`` excludes a reported route so PILOT can take another. One that
+    raises on a real state ends the search with ``AvoidCheckError``.
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so

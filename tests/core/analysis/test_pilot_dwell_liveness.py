@@ -5,7 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from pyrung import PLC, Bool, Int, Or, Program, Timer, copy, on_delay, out, rung
+from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.api import pilot_events
 from pyrung.core.analysis.pilot.coast import _coast_holding_state
@@ -217,3 +220,51 @@ def test_full_pilot_learns_complementary_dwell_as_separate_local_incidents() -> 
         (tags["sensor"].name, False),
         (tags["sensor"].name, True),
     }
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        lambda s: s["DwellPilotRotateState"] == 6,
+        lambda s: s.get("DwellPilotRotateState") == 6,
+    ],
+    ids=["index", "get"],
+)
+def test_an_opaque_avoid_true_at_the_start_of_a_dwell_stops_naming_it(check) -> None:
+    """A gate refuses the setup before it runs, so there is no execution for its theory."""
+    program, tags = _delayed_rotate_sensor_state_program()
+    plc = PLC(program, dt=0.010)
+    plc.step()
+
+    plan = plc.how(tags["state"] == 7, avoid=check, max_scans=2_000, wall_clock_s=60)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.total_scans == 0
+    assert plan.reason.startswith("The setup this route needs was rejected: avoid excludes")
+
+
+@pytest.mark.parametrize(
+    ("check", "reason"),
+    [
+        (lambda s: s["DwellPilotRotateSensor"] is True, "No productive next action was found;"),
+        (
+            lambda s: s["DwellPilotRotateSensor"] is False,
+            "No productive next action was found: avoid excludes",
+        ),
+        (
+            lambda s: s["DwellPilotRotateState"] == 8,
+            "No productive next action was found: avoid excludes",
+        ),
+    ],
+    ids=["sensor-on", "sensor-off", "other-leg"],
+)
+def test_an_opaque_avoid_on_a_dwell_setup_stops_with_no_route(check, reason) -> None:
+    program, tags = _delayed_rotate_sensor_state_program()
+    plc = PLC(program, dt=0.010)
+    plc.step()
+
+    plan = plc.how(tags["state"] == 7, avoid=check, max_scans=2_000, wall_clock_s=60)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.total_scans == 0
+    assert plan.reason.startswith(reason)

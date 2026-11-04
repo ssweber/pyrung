@@ -755,7 +755,7 @@ class TestInstructionCoverage:
         result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         compile(result.code, "code.py", "exec")
-        assert "_ready" in result.code
+        assert "_end_met" in result.code
         assert "_frac:" in result.code
 
     def test_off_delay_codegen_keeps_timing_at_done_false_acc_zero(self):
@@ -843,7 +843,6 @@ class TestInstructionCoverage:
         assert "_frac:" in source_code
         assert "_drum_jump_prev:i" in source_code
         assert "_drum_jog_prev:i" in source_code
-        assert "_drum_done:i" in source_code
         assert "_drum_rung_prev:i" in source_code
 
         class StubBase:
@@ -3089,3 +3088,56 @@ class TestRangeAggregateCodegen:
         assert "min((" in source_code
         assert "sorted((" in source_code
         assert ") / 4)" in source_code
+
+
+class TestCharAgainstChar:
+    """A Char tag compares with another Char tag (or slot) the same on every backend."""
+
+    _OPS = {
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+        "<": lambda a, b: a < b,
+        "<=": lambda a, b: a <= b,
+        ">": lambda a, b: a > b,
+        ">=": lambda a, b: a >= b,
+    }
+
+    @pytest.mark.parametrize("op", list(_OPS))
+    @pytest.mark.parametrize("left,right", [("A", "A"), ("A", "B"), ("B", "A"), ("a", "A")])
+    def test_tag_against_tag_on_every_backend(self, monkeypatch, op, left, right):
+        a = Char("A", default=left)
+        b = Char("B", default=right)
+        hit = Bool("Hit")
+        compare = self._OPS[op]
+        with Program(strict=False) as prog:
+            with Rung(compare(a, b)):
+                out(hit)
+
+        results = _on_every_backend(prog, monkeypatch, (hit,), scans=1)
+        expected = (bool(compare(left, right)),)
+        assert results == {name: expected for name in results}
+
+    @pytest.mark.parametrize("op", list(_OPS))
+    def test_block_slot_against_block_slot_on_every_backend(self, monkeypatch, op):
+        slots = Block("Slots", TagType.CHAR, 1, 3)
+        hit = Bool("Hit")
+        compare = self._OPS[op]
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                copy("A", slots[1])
+                copy("B", slots[2])
+            with Rung(~system.sys.first_scan, compare(slots[1], slots[2])):
+                out(hit)
+
+        results = _on_every_backend(prog, monkeypatch, (hit,), scans=2)
+        expected = (bool(compare("A", "B")),)
+        assert results == {name: expected for name in results}
+
+    def test_tag_with_choices_against_tag_builds_conditions(self):
+        from pyrung.core.condition import CompareEq, CompareGt
+
+        a = Char("A", default="x", choices={"x": "Ex", "y": "Why"})
+        b = Char("B", default="x")
+        assert isinstance(a == b, CompareEq)
+        assert isinstance(a > b, CompareGt)
+        assert isinstance(b == a, CompareEq)

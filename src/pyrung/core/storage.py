@@ -34,7 +34,7 @@ def store_char(value: Any) -> Any:
     Every path that stores into a CHAR (instruction writes, reset, patch and
     force, tag defaults) goes through here, so the engine has one blank.
     """
-    return BLANK_CHAR if value == "" else value
+    return BLANK_CHAR if isinstance(value, str) and value == "" else value
 
 
 def real_in_range(value: Any) -> bool:

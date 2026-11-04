@@ -35,7 +35,7 @@ from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
 from pyrung.core.condition_trace import ConditionTraceEngine
-from pyrung.core.context import ConditionView, RungId, ScanContext
+from pyrung.core.context import ConditionView, RungId, ScanContext, refused_inside_its_own_scan
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.executor import (
@@ -62,7 +62,7 @@ from pyrung.core.rung_firings import (
 )
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
-from pyrung.core.state import SystemState
+from pyrung.core.state import SystemState, snapshot_dict
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _MODE_RUN_KEY,
@@ -132,7 +132,7 @@ def _parse_retention(value: str | int | None, dt_seconds: float) -> int | None:
 # Conservative per-entry byte estimate for PMap HAMT nodes.
 _PER_PMAP_ENTRY_BYTES = 200
 
-# Fixed overhead for PRecord shell (scan_id, timestamp, two PMap roots).
+# Fixed overhead for the state shell (scan_id, timestamp, two PMap roots).
 _STATE_BASE_BYTES = 200
 
 
@@ -728,9 +728,11 @@ class _DebugNamespace:
     # -- DebugRunner protocol (used by PLCDebugger) --
 
     def prepare_scan(self) -> tuple[ScanContext, float]:
+        self._plc._refuse_inside_a_call()
         return self._plc._prepare_scan()
 
     def commit_scan(self, ctx: ScanContext, dt: float) -> None:
+        self._plc._refuse_inside_a_call()
         self._plc._commit_scan(ctx, dt)
 
     def iter_top_level_rungs(self) -> Iterable[Rung]:
@@ -976,6 +978,28 @@ class EpochRef:
 
 def _new_epoch_ref() -> EpochRef:
     return EpochRef(next(_EPOCH_REFERENCE_VALUES))
+
+
+class AvoidCheckError(Exception):
+    """An ``avoid=`` check raised on a real state: where how() starts, or a scan a trial ran.
+
+    A check that raised did not say the state is clear, so how() does not go through it,
+    and it proved nothing about the target.  So there is no plan to return, and the check's
+    own exception is the ``__cause__``.  A raise on a state how() is only weighing, such as
+    a hold laid over a state, is not this error.
+    """
+
+    def __init__(self, check: str, error: Exception) -> None:
+        super().__init__(
+            f"avoid check {check!r} raised {type(error).__name__}: {error}. "
+            "That was on the state how() starts from or on a scan a trial ran, which may be a "
+            "trial the plan would not have kept. A raise is no answer, so how() stopped without "
+            "a plan. "
+            "A callable reads a tag a state may not have yet with snapshot.get(name, default). "
+            "A condition compares what it finds, so check each tag it names is in the program "
+            "and the two sides can be compared."
+        )
+        self.check = check
 
 
 class SearchStopped(Exception):
@@ -1605,12 +1629,17 @@ class PLC:
             # Forks start from this runner's own (already migrated) states.
             self._state = migrate_legacy_edge_memory(self._state, self._site_table)
         # Mutable read mirror for ordinary interpreted scans.  The committed
-        # state remains an immutable PMap; this avoids repeated HAMT bucket
+        # tag map remains an immutable PMap; this avoids repeated HAMT bucket
         # walks while a scan reads its unchanged input image.  Capturing/debug
         # scans bypass it because they retain ConditionViews after commit.
         self._state_tags_read_cache: dict[str, Any] | None = None
         self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
+        # How many of this PLC's ``run_function`` bodies are running now: none of them may
+        # scan, stop or reboot it or set its battery (ScanContext.call_user_function).  Not "a
+        # scan is open": a paused scan_steps generator has one open, and doing those beside it
+        # is legal.
+        self._user_calls_running = 0
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
         self._state = self._apply_runtime_memory_flags(
@@ -1642,7 +1671,7 @@ class PLC:
         # are already resolved. The range encoder compresses arithmetic churn
         # while sparse tags contribute only when their committed value changes.
         self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines()
-        self._causal_initial_tags = dict(self._state.tags)
+        self._causal_initial_tags = snapshot_dict(self._state.tags)
         self._causal_rung_firing_timelines = _CausalRungFiringTimelines(self)
         # Node-level firing log, keyed by ``RungId`` (subroutine, rung_index).
         # Holds subroutine-rung firings the main-rung log can't represent;
@@ -2537,7 +2566,10 @@ class PLC:
         settles back to rest).  A path is excluded if it depends on the avoided
         condition at *any* of these three gates, and if every path is excluded
         the returned Path is unreachable with a reason that names the violated
-        avoid condition(s).
+        avoid condition(s).  A check that raises on the state how() starts from, or
+        on a scan a trial runs, raises ``AvoidCheckError`` here, since it has not
+        said that state is clear.  A raise on a state how() is only weighing, such
+        as a hold laid over a state, says nothing about the route and denies nothing.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a
@@ -2717,6 +2749,7 @@ class PLC:
         *,
         history_budget: int | float | None = None,
         inherit_log: bool = True,
+        _as_recorded: bool = False,
     ) -> PLC:
         """Create an independent runner from retained historical state.
 
@@ -2735,7 +2768,13 @@ class PLC:
         historical_owner = self._causal_lineage.owner_at(target_scan_id)
         if historical_owner is None:
             raise KeyError(target_scan_id)
-        historical_state = historical_owner.state_at(target_scan_id)
+        # A runner's first scan belongs to its parent's epoch, but this runner ran on from
+        # its own edit of that state (a harness moving a count, a tip seed).
+        historical_state = (
+            self._initial_state
+            if target_scan_id == self._initial_scan_id
+            else historical_owner.state_at(target_scan_id)
+        )
         effective_budget = (
             history_budget if history_budget is not None else self._recent_state_cache_budget
         )
@@ -2761,11 +2800,6 @@ class PLC:
         fork._search_refuses_restart = self._search_refuses_restart
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
-        if self._harness is not None:
-            # Re-install the feedback harness on the fork (it rebuilds its plant
-            # rungs against the fork's tags; accumulator state rides the inherited
-            # committed state).
-            self._harness.fork_onto(fork)
         if inherit_log:
             # Continue the parent's recording instead of starting a fresh log, so
             # a chain of execution forks accumulates the whole history —
@@ -2777,6 +2811,11 @@ class PLC:
                 self._causal_lineage.seal_through(target_scan_id),
             )
             fork._causal_initial_tags = dict(self._causal_initial_tags)
+        if self._harness is not None:
+            # Re-install the feedback harness on the fork (it rebuilds its plant
+            # rungs against the fork's tags; accumulator state rides the inherited
+            # committed state).
+            self._harness.fork_onto(fork, as_recorded=_as_recorded)
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:
@@ -2975,14 +3014,18 @@ class PLC:
         self._epoch_caches.on_replay_anchor_replaced()
         self._cache_state(state)
 
-    def _edit_tip_tags(self, tags: Mapping[str, Any]) -> None:
-        """Put *tags* in the state the next scan starts from, between scans.
+    def _edit_tip_tags(
+        self, tags: Mapping[str, Any], *, memory: Mapping[str, Any] | None = None
+    ) -> None:
+        """Put *tags* and *memory* in the state the next scan starts from, between scans.
 
         The scans before the tip ran without them and stay as they ran.  The tip's
         own entries follow it, so it reads the same before and after the next scan,
         and a causal transition's first ``before`` is the value set here.
         """
         state = self._state.with_tags(dict(tags))
+        if memory:
+            state = state.with_memory(dict(memory))
         self._state = state
         scan_id = state.scan_id
         replaced = self._recent_state_cache.pop(scan_id, None)
@@ -3020,6 +3063,20 @@ class PLC:
             if scan_id < changed_at:
                 return plant
         return None
+
+    def _run_on_the_plant_of_the_scan_after(self, scan_id: int, replay: PLC) -> None:
+        """Give *replay*, positioned at *scan_id*, the plant its next scan ran under."""
+        earlier_plant = self._earlier_plant_at(scan_id)
+        if earlier_plant is None:
+            return
+        if replay._synthesis is None:
+            from pyrung.core.synthesis import Synthesis
+
+            replay._synthesis = Synthesis()
+        replay._synthesis.plant = list(earlier_plant)
+        if replay._harness is not None:
+            # Today's couplings do not describe these rungs.
+            replay._harness._detach()
 
     def _plant_tag_defaults(self) -> dict[str, Any]:
         """Each tag the synthesis plant uses, at its default.
@@ -3289,18 +3346,9 @@ class PLC:
         """
         log = self._scan_log.snapshot()
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-        replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
+        replay = self.fork(scan_id=anchor_scan_id, inherit_log=False, _as_recorded=True)
         self._copy_current_synthesis_onto(replay)
-        earlier_plant = self._earlier_plant_at(anchor_scan_id)
-        if earlier_plant is not None:
-            if replay._synthesis is None:
-                from pyrung.core.synthesis import Synthesis
-
-                replay._synthesis = Synthesis()
-            replay._synthesis.plant = list(earlier_plant)
-            if replay._harness is not None:
-                # Today's couplings do not describe these rungs.
-                replay._harness._detach()
+        self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
@@ -3654,6 +3702,7 @@ class PLC:
                 forces=self._replay_force_map_at_scan(prev_scan, log),
                 replay_mode=True,
             )
+            self._run_on_the_plant_of_the_scan_after(prev_scan, replay)
         else:
             # ``target`` is the first reconstructable scan — nothing before it to
             # replay to; build the fork directly at the anchor.
@@ -3983,7 +4032,8 @@ class PLC:
         Patches and forces applied afterwards reach the first scan.  Does
         nothing in RUN mode.
         """
-        self._ensure_running()
+        if not self._running:
+            self._ensure_running()
 
     @property
     def keep_forces_on_run(self) -> bool:
@@ -4002,6 +4052,7 @@ class PLC:
 
     def stop(self) -> None:
         """Transition PLC to STOP mode."""
+        self._refuse_inside_a_call()
         if not self._running:
             return
         self._running = False
@@ -4019,6 +4070,7 @@ class PLC:
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
+        self._refuse_inside_a_call()
         new_value = bool(value)
         if new_value == self._battery_present:
             return
@@ -4043,6 +4095,7 @@ class PLC:
         replay-addressable — users who need that should ``fork()``
         before rebooting.
         """
+        self._refuse_inside_a_call()
         tag_values = self._rebuild_tags_for_reset(
             preserve_all=self._battery_present,
             preserve_retentive=False,
@@ -4323,7 +4376,15 @@ class PLC:
         self._pending_patches.update(restored)
         self._this_scan_drained_patches = {}
 
+    def _refuse_inside_a_call(self) -> None:
+        if self._user_calls_running:
+            raise refused_inside_its_own_scan()
+
     def _ensure_running(self) -> None:
+        # Every way into a scan comes through here first, ahead of anything it would move.
+        # Not through _refuse_inside_a_call: every scan pays for this line.
+        if self._user_calls_running:
+            raise refused_inside_its_own_scan()
         # A replay walks one recording, and a restart ends a recording: a stop inside
         # it scanned on until a later call, which is past the end of this log.
         if not self._running and not self._replay_mode:
@@ -4698,14 +4759,14 @@ class PLC:
         state_tags_read: Mapping[str, Any] | None = None
         if fast_reads:
             if self._state_tags_read_cache_state is not self._state:
-                self._state_tags_read_cache = dict(self._state.tags)
+                self._state_tags_read_cache = snapshot_dict(self._state.tags)
                 self._state_tags_read_cache_state = self._state
             state_tags_read = self._state_tags_read_cache
         ctx = ScanContext(
             self._state,
             resolver=self._system_runtime.resolve,
             read_only_tags=self._system_runtime.read_only_tags,
-            consumed_tags_getter=self._consumed_tags_for_capture,
+            runner=self,
             replay_io=replay_io,
             state_tags_read=state_tags_read,
         )
@@ -5001,6 +5062,8 @@ class PLC:
                 rung.evaluate(ctx)
             yield i, rung, ctx
 
+        # This generator can be resumed from anywhere, a callable included.
+        self._refuse_inside_a_call()
         self._commit_scan(ctx, dt)
 
     def _scan_steps_debug(self) -> Generator[ScanStep, None, None]:

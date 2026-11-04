@@ -105,7 +105,7 @@ class TimedSite:
     verb: str
     unit: TimeUnit
     literal_presets: tuple[int, ...] = ()
-    # A drum's completion flag: once on, its last step's tick is no timer
+    # A drum's completion flag: once on, the tick that set it is no timer
     # still running (``_concretely_settled``).
     completion: str | None = None
 
@@ -954,7 +954,7 @@ def _concretely_settled(context: _ExploreContext, plc: Any) -> bool:
         if site.completion is not None and state.tags.get(
             site.completion, defaults.get(site.completion, False)
         ):
-            # A completed drum: its last step's accumulator keeps counting.
+            # The tick that completed the drum: its accumulator holds from here.
             continue
         done = bool(state.tags.get(site.owner, defaults.get(site.owner, False)))
         if site.verb == "on_delay" and done:

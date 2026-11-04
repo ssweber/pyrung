@@ -21,6 +21,7 @@ from pyrung.core import (
     rise,
     shift,
     time_drum,
+    time_event_drum,
 )
 from pyrung.core.crossing import Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceProfile
@@ -263,6 +264,57 @@ def test_time_drum_retraces_at_each_step_boundary() -> None:
     assert operation.pulse is None
     assert operation.holds[0].value is True
     assert operation.progress == operation.holds[0]
+
+
+def test_a_drum_with_its_flag_on_waits_for_the_reset_that_frees_it() -> None:
+    """The flag on stops the drum's own time and events, so holding them does nothing."""
+    enable = Bool("Enable", external=True)
+    reset = Bool("Reset", external=True)
+    event = Bool("Event", external=True)
+    step = Int("Step")
+    acc = Int("DrumAcc")
+    done = Bool("Done")
+    drums = (
+        lambda: event_drum(
+            outputs=[Bool("Y1")],
+            events=[event, event],
+            pattern=[[1], [0]],
+            current_step=step,
+            completion_flag=done,
+        ),
+        lambda: time_drum(
+            outputs=[Bool("Y1")],
+            presets=[50, 60],
+            pattern=[[1], [0]],
+            current_step=step,
+            accumulator=acc,
+            completion_flag=done,
+        ),
+        lambda: time_event_drum(
+            outputs=[Bool("Y1")],
+            presets=[50, None],
+            events=[None, event],
+            pattern=[[1], [0]],
+            current_step=step,
+            accumulator=acc,
+            completion_flag=done,
+        ),
+    )
+    for drum in drums:
+        with Program() as program:
+            with Rung(enable):
+                drum().reset(reset)
+        profile = _only_profile(program)
+        assert profile is not None
+        snapshot = {step.name: 1, acc.name: 0, done.name: True}
+        operation = profile.plan(Eq(step.name, frozenset((2,))), snapshot)
+        assert operation is not None
+        assert operation.until == Eq(done.name, frozenset((False,)))
+        assert operation.holds[0].condition.tag is reset
+        # With the flag off the same target asks for the drum's own step end.
+        freed = profile.plan(Eq(step.name, frozenset((2,))), {**snapshot, done.name: False})
+        assert freed is not None
+        assert freed.until == Cmp(step.name, ">=", 2)
 
 
 def test_time_drum_uses_the_step_boundary_when_acc_will_reset() -> None:

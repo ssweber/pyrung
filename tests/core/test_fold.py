@@ -3686,9 +3686,10 @@ class TestClockGatedTimeDrum:
 
 
 class TestTimedDrumCorrectedEveryScan:
-    """A step register kept bad has a timed drum correct it every scan, which clears
-    the accumulator: the boundary readings stay put, and the scan times and clears
-    with one write.  A landing at the window's dt would time past the preset."""
+    """A step register kept bad has a timed drum correct it every scan, which keeps
+    the accumulator (``drum_settle/correction_with_acc_staged``), so step 1's time
+    still ends.  The step a move leaves is written bad again, and the row stays
+    step 2's while Acc times up and moves on, over and over."""
 
     @staticmethod
     def _drum(kind: str) -> Any:
@@ -3740,10 +3741,9 @@ class TestTimedDrumCorrectedEveryScan:
             self._build(kind, writer), _scans(300), patch={"En": True, "Stage": True}
         )
         assert _full_state(folded) == _full_state(stepped)
-        # The correction clears the accumulator every scan, so no step's time is up.
-        assert folded.state.tags["DAcc"] == 0
-        assert folded.state.tags["O1"] is True
-        assert folded.state.tags["O2"] is False
+        assert 0 <= folded.state.tags["DAcc"] < 500
+        assert folded.state.tags["O1"] is False
+        assert folded.state.tags["O2"] is True
         self._assert_replay_matches(folded, stepped)
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
@@ -3754,13 +3754,14 @@ class TestTimedDrumCorrectedEveryScan:
 
         folded, stepped = _folded_and_stepped(self._build(kind, "none"), run, patch={"En": True})
         assert _full_state(folded) == _full_state(stepped)
-        assert folded.state.tags["O1"] is True
+        assert folded.state.tags["O1"] is False
+        assert folded.state.tags["O2"] is True
         self._assert_replay_matches(folded, stepped)
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
     def test_good_step_written_every_scan_still_folds(self, kind: str) -> None:
-        """Only a correction declines: a writer holding a good step leaves the
-        accumulator to time, and the fold's window stays as long as it was."""
+        """A writer holding a good step leaves the accumulator to time, and the
+        loop's window stays as long as it was."""
 
         def build() -> Program:
             with Program(strict=False) as prog:
