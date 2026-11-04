@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pyrung.core.analysis.pilot.budget as _budget
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
+import pyrung.core.analysis.pilot.static_proofs as _static_proofs
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
 from pyrung.core.analysis.pilot.avoid import _AvoidCheckRaised
@@ -124,18 +125,12 @@ def _plan_from_outcome(
     target_tag, target_value = target.tag, target.value
     targets = tuple((member.tag, member.value) for member in target.members)
 
-    # A search that did not finish found no block.  The link may still be on its way to one.
+    # The proof reads the program, not the search, so a search cut short does not weaken it.
     linked_block = (
         None
-        if outcome.reached or outcome.cut_short or target.predicate is not None
-        else _target_route.linked_feedback_block(
-            target_tag,
-            target_value,
-            setup.diag_snapshot,
-            setup.pdg,
-            setup.program,
-            setup.steerable,
-            _target_route.harness_couplings(setup.work),
+        if outcome.reached or target.predicate is not None
+        else _static_proofs.linked_feedback_block(
+            target_tag, target_value, _static_proofs.facts_for(setup)
         )
     )
     return Plan(
@@ -252,9 +247,7 @@ def pilot_how(
     if goal.members:
         from pyrung.core.analysis.pilot import multitarget
 
-        ok, reason = multitarget.analyze(
-            setup.diag_snapshot, setup.pdg, setup.program, setup.steerable, targets
-        )
+        ok, reason = multitarget.analyze(_static_proofs.facts_for(setup), targets)
         if not ok:
             return Plan(
                 reachable=False,
