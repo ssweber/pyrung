@@ -16,6 +16,8 @@ yourself, or run the gate.
 - Work only in your worktree, on your branch. Commit there with Conventional Commits. Never
   merge, push, rebase someone else's branch, or `git stash` (the stash stack is shared across
   worktrees; parallel builders have lost work to it).
+- Commit as you go: a `wip(<name>): ...` checkpoint at each working milestone, before any long
+  run. A machine crash or a dead session keeps only what is committed.
 - Read the repo's AGENTS.md (and any sub-AGENTS.md for the code you touch) before editing.
 - Iterate on targeted tests: single files or `-k`. Use Bash; a hook runs every pytest under
   a hard timeout and a named process group (a leading `timeout 300` sets the limit, default

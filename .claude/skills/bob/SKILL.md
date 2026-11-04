@@ -34,7 +34,8 @@ Tool: `M = python -I devtools/mergeq/mergeq.py` (run from the main checkout; see
   The brief holds: worktree + branch, the goal, the spec documents to read (absolute paths if
   untracked), ground-truth rules, what is out of scope, and anything already ruled. Do not
   paste history, do not pre-judge ("don't flag X"). Independent steps run in parallel, within
-  the machine budget in profile.md.
+  the machine budget in profile.md. Save the brief as `<home>/jobs/<name>/BRIEF.md` first: if
+  the builder dies, a fresh one continues from that file and the branch's commits.
 
 ## 2. Per branch: fast gate + review, in parallel
 
