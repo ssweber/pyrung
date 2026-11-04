@@ -169,7 +169,11 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
             range(1591, 1593),
         )
     },
-    "numeric": {"DD": (range(101, 133), range(161, 164), range(171, 173)), "DF": range(101, 142), "DH": range(201, 223)},
+    "numeric": {
+        "DD": (range(101, 133), range(161, 164), range(171, 173)),
+        "DF": range(101, 142),
+        "DH": range(201, 223),
+    },
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
         "DS": (range(3901, 3907), range(3911, 3915), range(3921, 3924), range(3931, 3933)),
