@@ -14,11 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 from pyrsistent import PMap
 
+from pyrung.core.state import SystemState, _build
+
 _PMAP: Any = PMap  # its bucket accessors are private API
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
-    from pyrung.core.state import SystemState
 
 
 def _extract_condition_reads(condition: Any) -> frozenset[str]:
@@ -93,29 +94,39 @@ class _TracedTags(PMap):
     __hash__ = PMap.__hash__
 
 
-def _traced_state_class() -> type:
-    global _TRACED_STATE
-    if _TRACED_STATE is None:
-        from pyrung.core.state import SystemState
+def _recorded_field(name: str) -> Any:
+    """A property over a state's slot that records each read of the field."""
+    slot: Any = getattr(SystemState, name)
+    read = _FIELD_READ + name
 
-        class _TracedState(SystemState):
-            """A SystemState whose field reads (and tag reads) are recorded."""
+    def get(self: SystemState) -> Any:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(read)
+        return slot.__get__(self)
 
-            __slots__ = ()
-
-            def __getitem__(self, key: Any) -> Any:
-                value = _PMAP._getitem(self._buckets, key)
-                if key == "tags":
-                    return _PMAP.__new__(_TracedTags, value._size, value._buckets)
-                if _READ_TRACES:
-                    _READ_TRACES[-1].add(_FIELD_READ + str(key))
-                return value
-
-        _TRACED_STATE = _TracedState
-    return _TRACED_STATE
+    return property(get)
 
 
-_TRACED_STATE: type | None = None
+_TAGS_SLOT: Any = SystemState.tags
+
+
+class _TracedState(SystemState):
+    """A SystemState whose field reads (and tag reads) are recorded.
+
+    Every way into a state's fields goes through these properties: subscripts,
+    ``items()``, equality, hashing and ``repr`` all read the attributes.
+    """
+
+    __slots__ = ()
+
+    scan_id = _recorded_field("scan_id")
+    timestamp = _recorded_field("timestamp")
+    memory = _recorded_field("memory")
+
+    @property
+    def tags(self) -> Any:
+        value = _TAGS_SLOT.__get__(self)
+        return _PMAP.__new__(_TracedTags, value._size, value._buckets)
 
 
 @contextmanager
@@ -142,7 +153,7 @@ def _traced_call(
     predicate that reads ``plc.state`` instead of its argument is traced too.
     """
     state = runner._state
-    traced = _PMAP.__new__(_traced_state_class(), state._size, state._buckets)
+    traced = _build(_TracedState, state.scan_id, state.timestamp, state.tags, state.memory)
     reads: set[str] = set()
     _READ_TRACES.append(reads)
     runner._state = traced

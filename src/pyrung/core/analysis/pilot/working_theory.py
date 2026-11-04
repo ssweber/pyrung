@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot.execution import (
 )
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import EpochRef
+from pyrung.core.state import SystemState
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.intrascan_research import (
@@ -1377,7 +1378,9 @@ def assert_detached_theory_value(value: Any, *, path: str = "value") -> None:
         if current is None or isinstance(current, (str, bytes, int, float, bool, StrEnum)):
             continue
 
-        compound = isinstance(current, tuple | frozenset | PMap) or is_dataclass(current)
+        compound = isinstance(current, tuple | frozenset | PMap | SystemState) or is_dataclass(
+            current
+        )
         if not compound:
             raise TheoryInvariantError(
                 f"{current_path} contains unsupported live type {value_type.__name__}"
@@ -1395,7 +1398,7 @@ def assert_detached_theory_value(value: Any, *, path: str = "value") -> None:
             children.extend(
                 (item, f"{current_path}[{index}]") for index, item in enumerate(current)
             )
-        elif isinstance(current, PMap):
+        elif isinstance(current, PMap | SystemState):
             for key, item in current.items():
                 children.append((key, f"{current_path}.key"))
                 children.append((item, f"{current_path}[{key!r}]"))

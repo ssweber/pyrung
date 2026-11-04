@@ -132,7 +132,7 @@ def _parse_retention(value: str | int | None, dt_seconds: float) -> int | None:
 # Conservative per-entry byte estimate for PMap HAMT nodes.
 _PER_PMAP_ENTRY_BYTES = 200
 
-# Fixed overhead for PRecord shell (scan_id, timestamp, two PMap roots).
+# Fixed overhead for the state shell (scan_id, timestamp, two PMap roots).
 _STATE_BASE_BYTES = 200
 
 

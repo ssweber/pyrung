@@ -40,7 +40,7 @@ src/pyrung/
 ├── pytest_plugin.py     # Coverage plugin (pyrung_coverage fixture)
 ├── core/
 │   ├── tag.py           # Tag types (Bool, Int, Dint, Real, Word, Char), UDT, named_array
-│   ├── state.py         # SystemState (immutable PRecord), scan state
+│   ├── state.py         # SystemState (immutable, slotted; tags and memory are PMaps), scan state
 │   ├── rung.py          # Rung DSL, condition evaluation
 │   ├── runner.py        # Engine plus first-class causal Epoch lineage (step, seek, fork)
 │   ├── kernel.py        # Compiled execution kernel

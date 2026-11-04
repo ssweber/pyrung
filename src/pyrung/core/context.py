@@ -32,8 +32,7 @@ WriteOccurrenceSink = Callable[
 ]
 
 # Read-path sentinel: hot lookups cache the ``state.tags``/``state.memory``
-# pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
-# and probe them a single time via try/except instead of ``in`` + ``[]``.
+# pmaps once and probe them a single time via try/except instead of ``in`` + ``[]``.
 _MISSING = object()
 
 
