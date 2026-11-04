@@ -1185,9 +1185,11 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         "    scan_start_ns = time.monotonic_ns()",
         "    _sd_write_status = False",
         # dt in seconds, as core's timers take it, from the exact ns difference.
-        "    dt = (scan_start_ns - _last_scan_ns) / 1000000000",
+        "    _dt_ns = scan_start_ns - _last_scan_ns",
+        "    dt = _dt_ns / 1000000000",
         "    _last_scan_ns = scan_start_ns",
         '    _mem["_dt"] = dt',
+        '    _mem["_dt_ns"] = _dt_ns',
         "",
     ]
 
@@ -1278,6 +1280,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 # The first RUN scan times the loop pass it runs in, as core's
                 # first scan after start() advances by a full dt.
                 '            _mem["_dt"] = dt',
+                '            _mem["_dt_ns"] = _dt_ns',
                 '            print("Mode: RUN")',
                 "        else:",
                 "            save_memory()",

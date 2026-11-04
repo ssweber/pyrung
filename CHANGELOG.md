@@ -83,6 +83,7 @@
 
 ### Fixes
 
+- Timers, Out coils and time drums count time exactly in every unit: at a fixed `dt` a timer is Done on scan `ceil(delay / dt)` whichever unit it counts in, where a `60s` timer at `dt=0.1` or a `1min` at `dt=0.01` ended a scan late.
 - A `run_function()` or `run_enabled_function()` that scans, stops or reboots the PLC running it or sets its battery (`step()`, `run()`, `run_for()`, `run_until()`, a `scan_steps` scan, `stop()`, `reboot()`, `battery_present`), on `PLC` or `CompiledPLC`, raises `RuntimeError`, where the scan published a wrong state and the two backends disagreed. Set a tag through `outs=` and act on it from outside the scan, or scan another PLC or a `PLC.fork()`.
 - A constant in an imported CLICK ladder (hex such as `FFC0h`, a Real, or quoted text) is never read as an address, so the generated `tags.py` no longer gains a stray tag like `C0 = c[0]` that fails on import.
 - Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`. CLICK's Compare offers only `=` and `!=` on text, so `<`, `<=`, `>` and `>=` on a Char are a `CLK_TEXT_ORDER_COMPARE` finding that export refuses unless allowed.

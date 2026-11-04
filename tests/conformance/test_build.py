@@ -39,6 +39,7 @@ from tests.conformance.probe_kit import (
     between,
     reading_lines,
     record_readings,
+    record_run,
 )
 
 ds = ClickBlocks().ds
@@ -125,6 +126,55 @@ def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
     assert len(hashes) == 1 + len(suite.PARTS)
     # The system group still runs first in its part (see test_system.py).
     assert suite.groups("B")[0].name == "system"
+
+
+def test_the_groups_apart_stay_in_their_own_memory_and_manifest() -> None:
+    manifest = load_manifest(suite.APART_MANIFEST_PATH)
+    for group in suite.APART_GROUPS:
+        manifest.layout_for(group)
+    problems = memory.outside_owned(suite.APART_GROUPS, memory.OWNED_APART)
+    assert not problems, "\n".join(problems)
+    claims: dict[tuple[str, int], str] = {}
+    for group, banks in memory.OWNED_APART.items():
+        assert len(group) <= 12, group
+        for bank, entry in banks.items():
+            for owned in memory.ranges(entry):
+                for n in owned:
+                    other = claims.setdefault((bank, n), group)
+                    assert other == group, f"{group} and {other} both own {bank}{n}"
+    in_parts = [name for apart in suite.APART_PARTS.values() for name in apart.groups]
+    assert sorted(in_parts) == sorted(g.name for g in suite.APART_GROUPS)
+    assert not set(in_parts).intersection(g.name for g in suite.ALL_GROUPS)
+    assert not set(suite.APART_PARTS).intersection(suite.PARTS)
+
+
+def test_a_fixed_scan_part_says_what_to_set() -> None:
+    assert suite.APART_PARTS["O"].fixed_scan_ms == 100
+    note = suite.fixed_scan_note("O")
+    assert note is not None
+    for words in ("fixed scan", "SC202", "100 ms"):
+        assert words in note
+    assert note.isascii()
+    assert suite.fixed_scan_note("N") is None
+    assert suite.fixed_scan_note("A") is None
+    assert suite.fixed_scan_note(None) is None
+
+
+def test_the_export_of_a_fixed_scan_part_names_the_setting(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert suite.main(["--part", "O", str(tmp_path / "o")]) == 0
+    assert "fixed scan" in capsys.readouterr().out
+    assert suite.main(["--part", "N", str(tmp_path / "n")]) == 0
+    assert "fixed scan" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("part", sorted(suite.APART_PARTS))
+def test_each_part_apart_fits_a_click_project(part: str) -> None:
+    build = suite.build(part)
+    assert set(build.names) == set(suite.APART_PARTS[part].groups)
+    estimate = estimate_steps(pyrung_to_ladder(build.program, build.tag_map, validate=False))
+    assert estimate.total <= suite.PART_STEP_BUDGET
 
 
 @pytest.mark.parametrize("part", sorted(suite.PARTS))
@@ -422,11 +472,48 @@ def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, mo
     assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"][-1]["step"] == "STOP->RUN"
 
 
+def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) -> None:
+    results = [replace(r, case_hash="h") for g in suite.groups("O") for r in run(g)]
+    assert results
+    assert all(r.passed and asks_for_a_reading(r.case) for r in results)
+    confirmed, readings = tmp_path / "confirmed.toml", tmp_path / "readings.toml"
+    added, dropped, read = record_run(confirmed, readings, results, on="2026-11-04")
+    assert (added, dropped) == ([], [])
+    assert load_confirmations(confirmed) == {}
+    assert read == [f"fixed_scan/{r.case.id}" for r in results]
+    recorded = tomllib.loads(readings.read_text(encoding="utf-8"))["reading"]
+    counted = {entry["case"]: entry["read"] for entry in recorded}
+    # Each count with the setting it was counted under.
+    for name in ("seconds_and_ms", "off_delay_and_drum"):
+        assert {"Result1", "Result2", "Result3", "Result4", "ErrorCode"} == set(
+            counted[f"fixed_scan/{name}"]
+        )
+
+
+def test_a_pass_of_part_n_is_confirmed(tmp_path) -> None:
+    results = [replace(r, case_hash="h") for g in suite.groups("N") for r in run(g)]
+    added, _dropped, read = record_run(
+        tmp_path / "confirmed.toml", tmp_path / "readings.toml", results, on="2026-11-04"
+    )
+    assert read == []
+    assert sorted(added) == sorted(f"{r.group}/{r.case.id}" for r in results)
+
+
 def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
-    asked = {f"{g.name}/{c.id}" for g in suite.ALL_GROUPS for c in g.cases if asks_for_a_reading(c)}
+    asked = {
+        f"{g.name}/{c.id}"
+        for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS)
+        for c in g.cases
+        if asks_for_a_reading(c)
+    }
     confirmed = load_confirmations(suite.CONFIRMED_PATH)
     assert not asked & set(confirmed)
-    assert {"boot_read/what_survives", "rtc_set/date_and_time_apply", "real_sum/f64_row"} <= asked
+    assert {
+        "boot_read/what_survives",
+        "rtc_set/date_and_time_apply",
+        "real_sum/f64_row",
+        "fixed_scan/seconds_and_ms",
+    } <= asked
 
 
 def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:

@@ -40,7 +40,7 @@ from ._primitives import (
     _range_item_read_expr,
     _range_item_write_expr,
     _search_compare_expr,
-    _timer_dt_to_units_expr,
+    _timer_carry_lines,
 )
 
 
@@ -412,7 +412,7 @@ def _compile_drum_instruction(
     if not isinstance(instr, EventDrumInstruction):
         clear_time = [
             f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
-            f"_mem[{f'_frac:{instr.accumulator.name}'!r}] = 0.0",
+            f"_mem[{f'_frac:{instr.accumulator.name}'!r}] = 0",
         ]
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
@@ -643,11 +643,8 @@ def _drum_tick_lines(
         max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
         lines.extend(
             [
-                "_dt = float(_mem.get('_dt', 0.0))",
-                f"_frac = float(_mem.get({frac_key!r}, 0.0))",
-                f"_dt_units = {_timer_dt_to_units_expr(instr.unit, '_dt', '_frac')}",
-                "_int_units = int(_dt_units)",
-                f"_mem[{frac_key!r}] = _dt_units - _int_units",
+                *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
+                f"_mem[{frac_key!r}] = _new_frac",
                 f"_acc = min(_acc + _int_units, {max_acc})",
             ]
         )

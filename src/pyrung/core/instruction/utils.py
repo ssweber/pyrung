@@ -6,11 +6,28 @@ from collections.abc import Callable, Iterable
 from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from pyrung.core.time_mode import dt_to_ns
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 if TYPE_CHECKING:
+    from fractions import Fraction
+
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.tag import Tag, TagType
+    from pyrung.core.time_mode import TimeUnit
+
+
+def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fraction]:
+    """This scan's *dt*, added to what ``_frac:<acc>`` carries: whole units and what is left.
+
+    The carry is the nanoseconds since the accumulator's last whole unit, so no time is lost
+    however many scans it takes to make a unit.  It is a fraction of a unit (a float) in
+    memory saved before carries were nanoseconds.
+    """
+    if carry.__class__ is float:
+        carry = round(carry * unit.ns)
+    return divmod(carry + dt_to_ns(dt), unit.ns)
 
 
 def guard_oneshot_execution(func: F) -> F:

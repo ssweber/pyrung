@@ -49,7 +49,7 @@ from ._primitives import (
     _copy_clamp_condition,
     _copy_converter_target_info,
     _copy_converter_write_lines,
-    _timer_dt_to_units_expr,
+    _timer_carry_lines,
 )
 
 
@@ -183,13 +183,10 @@ def _compile_on_delay_instruction(
     frac_key = f"_frac:{instr.accumulator.name}"
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
-    lines: list[str] = [
-        f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
-    ]
+    lines: list[str] = []
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
@@ -197,7 +194,7 @@ def _compile_on_delay_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
+                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0',
                 f"{' ' * (indent + 4)}{done_write} = False",
                 f"{' ' * (indent + 4)}{acc_write} = 0",
                 f"{sp}else:",
@@ -212,15 +209,12 @@ def _compile_on_delay_instruction(
             f"{' ' * (inner + 4)}_preset = int({preset})",
             f"{' ' * (inner + 4)}_acc = _bb_tick(_mem, {instr.accumulator.name!r},"
             f" int({acc_read}), _preset)",
-            f"{' ' * (inner + 4)}_new_frac = 0.0",
+            f"{' ' * (inner + 4)}_new_frac = 0",
         ]
     else:
         tick = [
-            f'{" " * (inner + 4)}_dt = float(_mem.get("_dt", 0.0))',
             f"{' ' * (inner + 4)}_acc = int({acc_read})",
-            f"{' ' * (inner + 4)}_dt_units = {unit_expr}",
-            f"{' ' * (inner + 4)}_int_units = int(_dt_units)",
-            f"{' ' * (inner + 4)}_new_frac = _dt_units - _int_units",
+            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, " " * (inner + 4)),
             f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
             f"{' ' * (inner + 4)}_preset = int({preset})",
         ]
@@ -239,7 +233,7 @@ def _compile_on_delay_instruction(
         lines.extend(
             [
                 f"{isp}else:",
-                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0.0',
+                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0',
                 f"{' ' * (inner + 4)}{done_write} = False",
                 f"{' ' * (inner + 4)}{acc_write} = 0",
             ]
@@ -272,7 +266,6 @@ def _compile_off_delay_instruction(
     timing_key = tof_timing_key(instr.accumulator.name)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
@@ -282,12 +275,11 @@ def _compile_off_delay_instruction(
     # Done False, Acc 0 rests (never enabled) unless the timer's own last scan
     # left it there while timing (see tof_timing_key).
     lines = [
-        f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
         f'{sp}_tof_timing = _mem.get("{timing_key}", False)',
         f"{sp}if {enabled_expr}:",
         f"{sp4}if _tof_timing:",
         f'{sp8}_mem["{timing_key}"] = False',
-        f'{sp4}_mem["{frac_key}"] = 0.0',
+        f'{sp4}_mem["{frac_key}"] = 0',
         f"{sp4}{done_write} = True",
         f"{sp4}{acc_write} = 0",
         f"{sp}else:",
@@ -297,14 +289,11 @@ def _compile_off_delay_instruction(
             [
                 f"{sp8}_preset = int({preset})",
                 f"{sp8}_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _preset)",
-                f"{sp8}_new_frac = 0.0",
+                f"{sp8}_new_frac = 0",
             ]
             if ctx.abstract_timers
             else [
-                f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
-                f"{sp8}_dt_units = {unit_expr}",
-                f"{sp8}_int_units = int(_dt_units)",
-                f"{sp8}_new_frac = _dt_units - _int_units",
+                *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
                 f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
                 f"{sp8}_preset = int({preset})",
             ]

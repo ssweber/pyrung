@@ -118,10 +118,10 @@ def _stepped_from_the_start(fork: PLC) -> PLC:
 @pytest.mark.parametrize(
     ("first", "second", "unit", "scans"),
     [
-        (3, 2, "min", 30_001),
-        (6, 4, "min", 60_001),
-        (12, 8, "min", 120_001),
-        (20, 10, "min", 180_001),
+        (3, 2, "min", 29_999),
+        (6, 4, "min", 59_999),
+        (12, 8, "min", 119_999),
+        (20, 10, "min", 179_999),
         (1200, 1, "sec", 120_099),
         (2, 2, "h", 1_439_999),
     ],
@@ -173,7 +173,7 @@ def test_one_timer_stepped_from_the_start_lands_there_too(coil: Any) -> None:
     path = _how(prog, goal)
     assert path.reachable, str(path)
     fork = path.fork
-    assert fork.state.scan_id == 30_002
+    assert fork.state.scan_id == 30_001
     stepped = _stepped_from_the_start(fork)
     assert stepped.state.scan_id == fork.state.scan_id
     assert stepped.state.tags == fork.state.tags
@@ -184,7 +184,7 @@ def test_one_timer_stepped_from_the_start_lands_there_too(coil: Any) -> None:
 @pytest.mark.parametrize(
     ("build", "landing"),
     [
-        pytest.param(lambda: _chain(3, 2, "min"), 30_002, id="chain"),
+        pytest.param(lambda: _chain(3, 2, "min"), 30_000, id="chain"),
         pytest.param(_soak, 12_001, id="soak"),
         pytest.param(_soak_beside_an_oscillator, 6_001, id="osc_soak"),
         pytest.param(_drum, 6_003, id="drum"),

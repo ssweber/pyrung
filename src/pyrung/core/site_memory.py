@@ -45,6 +45,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.time_mode import TimeUnit
+
 if TYPE_CHECKING:
     from pyrung.core.instruction.base import Instruction
     from pyrung.core.rung import Rung
@@ -110,6 +112,10 @@ class Site:
     """An edge's row as source text: the contacts and instructions of its
     top-level rung.  Reload matches on it too, so a rung inserted with the same
     contact never takes this one's memory."""
+    carries: tuple[tuple[str, int], ...] = ()
+    """``(_frac key, nanoseconds to a unit)`` for each accumulator a timed instruction
+    ticks.  A carry is no site's own memory (it follows its accumulator's name), but reload
+    has only this table to learn the unit of the program it is moving to."""
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,17 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         slots.append(("_drum_event_prev", False))
         slots.append(("_drum_last_step", 0))
     return tuple(slots)
+
+
+def _timer_carries(instr: Instruction) -> tuple[tuple[str, int], ...]:
+    """``(_frac key, nanoseconds to a unit)`` for each accumulator *instr* ticks."""
+    unit = getattr(instr, "unit", None)
+    if not isinstance(unit, TimeUnit):
+        return ()
+    accumulators = (
+        getattr(instr, f, None) for f in ("accumulator", "on_acc", "off_acc", "timer_acc")
+    )
+    return tuple((f"_frac:{acc.name}", unit.ns) for acc in accumulators if acc is not None)
 
 
 def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
@@ -471,6 +488,7 @@ class _Binder:
                 memory=tuple(
                     (f"{prefix}:{key}", default) for prefix, default in instruction_memory(instr)
                 ),
+                carries=_timer_carries(instr),
             )
         )
 
@@ -1018,7 +1036,9 @@ def remap_site_memory(
     :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
     sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
     for the new program.  Edge memory (``_edge:e{N}``) is site memory like any
-    other.  Other memory (timer fractions, system memory) is kept as is.
+    other.  Other memory (timer carries, system memory) is kept as is, except that a
+    carry is cut to below one unit of its timer in *new*: it is less than a unit by what
+    it means, and an edit to the timer's unit must not finish the timer.
     Returns ``(memory, dropped keys)``.
     """
     owned: dict[str, tuple[str, str]] = {}
@@ -1047,6 +1067,11 @@ def remap_site_memory(
             dropped.append(name)
             continue
         out[new_name] = value
+    if new is not None:
+        for site in new.sites:
+            for name, unit_ns in site.carries:
+                if name in out:
+                    out[name] %= unit_ns
     return out, tuple(dropped)
 
 
