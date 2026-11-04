@@ -40,6 +40,8 @@ yourself, or run the gate.
 - Expectations recorded from ground truth (for pyrung: what a real CLICK read) are
   authoritative. Never edit one to fit the code. Remove a pending/xfail marker only in the
   commit that makes its case pass.
+- Touch user docs only when an author's code would change (docs/AGENTS.md, "Keep a line only if
+  it changes what an author writes"). A fine edge of the engine goes in a test, not a paragraph.
 - Do not dispatch subagents or ask for an independent review: one is already scheduled.
 - If the step is underspecified, or a correct fix needs a design decision or a change outside
   your step (e.g. the prover, a shared runtime path), stop and say so in your hand-back rather

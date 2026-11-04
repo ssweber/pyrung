@@ -37,7 +37,8 @@ the builder's handoff: judge the code, not the story.
   that wrote the old side (a stale copy of a file overwriting the base). CHANGELOG entries
   that vanish are the usual tell.
 - Docs and changelog match the code; the repo's output rules (pyrung: ASCII-only
-  pyrung-authored text, "pyrung" lowercase).
+  pyrung-authored text, "pyrung" lowercase). Added docs lines earn their place (docs/AGENTS.md,
+  "Keep a line only if it changes what an author writes"): name the ones that don't.
 - Do not trust stated rationales in comments or commit messages; a rationale never downgrades
   a finding.
 
