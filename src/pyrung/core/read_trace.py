@@ -125,11 +125,12 @@ class _TracedState(SystemState):
     ``items()``, equality, hashing, ``repr``, copying and evolving all come through these
     properties or the recording tag map in the ``tags`` slot.  The ``scan_id``,
     ``timestamp`` and ``memory`` slots stay empty, so a read past the properties raises,
-    and a predicate that raises keeps the coast interpreted.
+    and a predicate that lets the raise out keeps the coast interpreted.
 
-    It does not see a predicate that names private attributes (``s.tags._buckets``) or
-    unbound base methods (``PMap.__getitem__(s.tags, key)``), or that branches on the type
-    or identity of the state or map, which are not those of the real ones.
+    It does not see a predicate that names private attributes (``s.tags._buckets``),
+    unbound base methods (``PMap.__getitem__(s.tags, key)``), or a slot descriptor whose
+    AttributeError it catches, or that branches on the type or identity of the state or
+    map, which are not those of the real ones.
     """
 
     __slots__ = ("_untraced",)
