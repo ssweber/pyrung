@@ -382,7 +382,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "compare": {
         "DS": (range(3920, 3921), range(3924, 3926)),
         "DH": range(70, 71),
-        "TXT": range(761, 777),
+        "TXT": range(771, 777),
     },
     "out_more": {
         "C": (range(1702, 1711), range(1712, 1720)),
