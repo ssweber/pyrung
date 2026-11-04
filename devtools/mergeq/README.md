@@ -45,6 +45,10 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
   `cancel` still gets them (the parent tree is walked first), but if the runner itself is
   killed such escapees survive: `ps --all` / `reap --unmanaged` find them. `uv run ...`
   stays contained.
+- **The desktop stays usable under load (Windows).** Every command starts at below-normal
+  priority and its descendants inherit it, so a gate gives way to the terminal and anything
+  else running at normal priority. Stage timeouts are wall-clock, so heavy desktop use can
+  slow a gate towards them.
 - **Agents can't start heavy suites, and every test run is timed and killable.** `hook.py`
   (PreToolUse on Bash/PowerShell/Write/Edit, wired in `.claude/settings.json`):
   - refuses non-light stage commands and `[hook].heavy_extra` in subagents, and requires the

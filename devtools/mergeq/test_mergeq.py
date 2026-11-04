@@ -230,6 +230,34 @@ def test_nested_run_takes_no_slot(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="priority classes are Windows-only")
+def test_run_and_its_descendants_are_below_normal(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import ctypes, subprocess, sys\n"
+        "k32 = ctypes.WinDLL('kernel32')\n"
+        "k32.GetCurrentProcess.restype = ctypes.c_void_p\n"
+        "k32.GetPriorityClass.argtypes = [ctypes.c_void_p]\n"
+        "print(k32.GetPriorityClass(k32.GetCurrentProcess()), flush=True)\n"
+        "if len(sys.argv) > 1:\n"
+        "    subprocess.run([sys.executable, __file__], check=True)\n",
+        encoding="utf-8",
+    )
+    only = _Slots(tmp_path, 1)
+    result = subprocess.run(
+        [*only.argv("--timeout", "60", "--"), sys.executable, str(probe), "spawn"],
+        env=only.env(60),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        # This suite may itself run below normal, and the run would inherit that without the fix.
+        creationflags=subprocess.NORMAL_PRIORITY_CLASS,
+    )
+    assert result.returncode == 0, result.stderr
+    below_normal = str(subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+    assert result.stdout.split() == [below_normal, below_normal]
+
+
 def test_lock_status_counts_slots_in_use(slots: _Slots) -> None:
     def status() -> str:
         argv = [sys.executable, "-I", str(HERE / "mergeq.py"), "lock", "status"]

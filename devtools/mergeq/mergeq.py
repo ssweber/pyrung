@@ -116,6 +116,8 @@ def _resolve_cmd(cmd: list[str]) -> list[str]:
 # Windows: a named Job Object with KILL_ON_JOB_CLOSE; the child starts suspended, joins the
 # job, then resumes, so every grandchild is in the job. Closing the handle (normal exit, crash,
 # or this process being killed) kills the whole tree. Elsewhere: a new session + killpg.
+# On Windows the child starts below normal priority so the desktop stays responsive under a
+# gate. Descendants inherit that from their parent, including any that break away from the job.
 
 if IS_WINDOWS:
     import ctypes
@@ -262,7 +264,11 @@ if IS_WINDOWS:
                 env=env,
                 stdout=stdout,
                 stderr=subprocess.STDOUT if stdout is not None else None,
-                creationflags=_CREATE_SUSPENDED | _CREATE_NEW_PROCESS_GROUP,
+                creationflags=(
+                    _CREATE_SUSPENDED
+                    | _CREATE_NEW_PROCESS_GROUP
+                    | subprocess.BELOW_NORMAL_PRIORITY_CLASS
+                ),
             )
             handle = int(vars(self.proc)["_handle"])  # Windows-only Popen attribute
             if not _k32.AssignProcessToJobObject(self.job, handle):
