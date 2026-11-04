@@ -20,6 +20,7 @@ from pyrung.core import (
 )
 from pyrung.core.harness import _parse_link_spec, format_link_spec
 from pyrung.core.physical import Physical, Pulse, Ramp
+from pyrung.core.synthesis import plant_timer
 
 # --- Fixtures: Physical declarations ---
 
@@ -397,6 +398,166 @@ class TestPulseSpec:
 
         plc.run_for(0.100)  # never enabled → rests low
         assert _fb(plc, dev[1].Fb_Pulse) is False
+
+
+# --- Delays longer than a millisecond timer counts ---
+
+
+def _long_delay_plc(physical: Physical, *, dt: float = 0.25, default: bool = False):
+    Cmd = Bool("Cmd", default=default)
+    En = Bool("En")
+    Fb = Bool("Fb", physical=physical, link="En")
+    Seen = Bool("Seen")
+    with Program(strict=False) as logic:
+        with Rung(Cmd):
+            out(En)
+        with Rung(Fb):
+            out(Seen)
+    plc = PLC(logic, dt=dt)
+    Harness(plc).install()
+    return plc, Cmd, Fb
+
+
+def _whole_state(plc) -> tuple:
+    s = plc.current_state
+    return s.scan_id, s.timestamp, dict(s.tags), dict(s.memory)
+
+
+class TestDelaysPastTheMillisecondRange:
+    """A plant timer's accumulator stops at 32767, 32.767 s in milliseconds."""
+
+    @pytest.mark.parametrize(
+        ("delay_ms", "expected"),
+        [
+            (0, (0, "Tms", 1)),
+            (32_767, (32_767, "Tms", 1)),
+            (32_768, (33, "Ts", 1_000)),
+            (60_000, (60, "Ts", 1_000)),
+            (32_767_000, (32_767, "Ts", 1_000)),
+            (32_767_001, (547, "Tm", 60_000)),
+            (86_400_000, (1_440, "Tm", 60_000)),
+            (32_767 * 60_000 + 1, (547, "Th", 3_600_000)),
+            (32_767 * 3_600_000 + 1, (1_366, "Td", 86_400_000)),
+            (32_767 * 86_400_000, (32_767, "Td", 86_400_000)),
+        ],
+    )
+    def test_the_finest_unit_that_can_count_the_delay(self, delay_ms, expected):
+        assert plant_timer(delay_ms) == expected
+
+    def test_a_delay_no_timer_can_count_says_so(self):
+        with pytest.raises(ValueError, match="longer than a timer can count"):
+            plant_timer(32_767 * 86_400_000 + 1)
+
+    @pytest.mark.parametrize("delay", ["30s", "33s", "60s", "10min"])
+    def test_on_delay_rises(self, delay):
+        physical = Physical("Slow", on_delay=delay)
+        plc, Cmd, Fb = _long_delay_plc(physical, dt=0.25)
+        plc.patch({Cmd: True})
+        # One scan to command the enable, then ceil(delay / dt) held scans: the count
+        # a millisecond timer gives a delay it can hold (30 s here).
+        expected = physical.on_delay_ms // 250 + 1
+        plc.run(expected - 1)
+        assert _fb(plc, Fb) is False
+        plc.step()
+        assert _fb(plc, Fb) is True
+
+    def test_off_delay_holds_then_drops(self):
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", off_delay="60s"), dt=0.25)
+        plc.patch({Cmd: True})
+        plc.run(5)
+        assert _fb(plc, Fb) is True
+        plc.force(Cmd, False)
+        plc.run(238)
+        assert _fb(plc, Fb) is True
+        plc.run(5)
+        assert _fb(plc, Fb) is False
+
+    def test_a_long_pulse_flips_both_ways(self):
+        physical = Physical("Flow", profile=Pulse(on_dwell="60s", off_dwell="40s"))
+        plc, Cmd, Fb = _long_delay_plc(physical, dt=0.25)
+        plc.patch({Cmd: True})
+        flips = []
+        last = _fb(plc, Fb)
+        for _ in range(1_000):
+            plc.step()
+            value = _fb(plc, Fb)
+            if value != last:
+                flips.append((plc.current_state.scan_id, value))
+                last = value
+        assert [value for _scan, value in flips][:4] == [True, False, True, False]
+        gaps = [later - earlier for (earlier, _), (later, _) in zip(flips, flips[1:], strict=False)]
+        # 60 s high and 40 s low at 4 scans a second, give or take the scan a pair of
+        # timers takes to hand over.
+        assert gaps[0] == pytest.approx(240, abs=2)
+        assert gaps[1] == pytest.approx(160, abs=2)
+
+    def test_a_delay_in_the_millisecond_range_keeps_its_timer(self):
+        plc, _Cmd, _Fb = _long_delay_plc(Physical("Fast", on_delay="32s500ms"))
+        ton = plc._synthesis.plant[0]._instructions[0]
+        assert (ton.preset, ton.unit.name) == (32_500, "Tms")
+
+    def test_pending_ms_counts_down_past_the_millisecond_range(self):
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", on_delay="60s"), dt=0.25)
+        harness = plc._harness
+        plc.patch({Cmd: True})
+        plc.run(5)
+        before = harness.pending_ms()[Fb.name]
+        plc.run(40)
+        after = harness.pending_ms()[Fb.name]
+        assert 59_000 <= before <= 60_000
+        assert after == before - 10_000
+
+    def test_an_enable_already_on_at_install_settles_without_dropping(self):
+        En = Bool("En", default=True)
+        Fb = Bool("Fb", physical=Physical("Slow", on_delay="60s"), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.25)
+        Harness(plc).install()
+        plc.run(10)
+        assert _fb(plc, Fb) is True
+
+    @pytest.mark.parametrize(
+        ("physical", "scans"),
+        [
+            (Physical("Slow", on_delay="60s"), 300),
+            (Physical("Slow", on_delay="60s", off_delay="60s"), 300),
+            (Physical("Flow", profile=Pulse(on_dwell="60s", off_dwell="40s")), 700),
+        ],
+        ids=["on", "on-off", "pulse"],
+    )
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_a_long_run_equals_stepping(self, physical, scans, dt):
+        stepped, stepped_cmd, _ = _long_delay_plc(physical, dt=dt)
+        stepped.patch({stepped_cmd: True})
+        for _ in range(scans):
+            stepped.step()
+
+        run, run_cmd, _ = _long_delay_plc(physical, dt=dt)
+        run.patch({run_cmd: True})
+        run.run(scans)
+
+        assert _whole_state(run) == _whole_state(stepped)
+
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_run_until_lands_on_the_stepped_flip(self, dt):
+        physical = Physical("Slow", on_delay="60s")
+        stepped, stepped_cmd, stepped_fb = _long_delay_plc(physical, dt=dt)
+        stepped.patch({stepped_cmd: True})
+        for _ in range(2_000):
+            stepped.step()
+            if _fb(stepped, stepped_fb):
+                break
+        assert _fb(stepped, stepped_fb) is True
+
+        run, run_cmd, run_fb = _long_delay_plc(physical, dt=dt)
+        run.patch({run_cmd: True})
+        run.run_until(run_fb, max_cycles=2_000)
+
+        assert _whole_state(run) == _whole_state(stepped)
 
 
 # --- Value-Trigger Fixtures ---

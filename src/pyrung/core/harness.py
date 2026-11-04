@@ -24,6 +24,7 @@ from pyrung.core.physical import (
     Ramp,
     profile_to_token,
 )
+from pyrung.core.synthesis import plant_timer
 from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
@@ -351,10 +352,11 @@ class Harness:
             if not self._bool_mid_transition(c, snap):
                 continue
             if snap.get(c.fb_name, False):
-                remaining = c.off_delay_ms - int(snap.get(c.tof_acc_name, 0) or 0)
+                delay_ms, acc_name = c.off_delay_ms, c.tof_acc_name
             else:
-                remaining = c.on_delay_ms - int(snap.get(c.ton_acc_name, 0) or 0)
-            left[c.fb_name] = max(0, remaining)
+                delay_ms, acc_name = c.on_delay_ms, c.ton_acc_name
+            preset, _unit, unit_ms = plant_timer(delay_ms)
+            left[c.fb_name] = max(0, (preset - int(snap.get(acc_name, 0) or 0)) * unit_ms)
         return left
 
     @property
@@ -591,7 +593,8 @@ class Harness:
         previous commit's command).  The on-delay accumulates while the enable
         matches (``on_delay`` preset, in ms); the off-delay, driven by its done
         bit, holds the feedback for ``off_delay`` after the enable drops.  Presets
-        are the declared delays in ms with a ms accumulator unit, so a held enable
+        are the declared delays, in ms unless one is too long for it (see
+        :func:`~pyrung.core.synthesis.plant_timer`), so a held enable
         crosses after ``ceil(delay_ms / dt_ms)`` scans (``delay_ms == 0`` ⇒ the
         program sees the feedback next scan, from the scan boundary).
 
@@ -742,7 +745,7 @@ class Harness:
             en_raw = snap.get(c.en_name, False)
             en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
             if en_on:
-                seed[c.ton_acc_name] = c.on_delay_ms
+                seed[c.ton_acc_name] = plant_timer(c.on_delay_ms)[0]
                 seed[c.ton_done_name] = True
                 seed[c.fb_name] = True
         if seed:

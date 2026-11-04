@@ -218,6 +218,8 @@ Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), sc
 
 Feedback is an **input**: the plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan — with `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model: a sensor can't respond to an output before it's written.)
 
+A delay longer than 32.767 s counts in whole seconds, rounded up, and past about 9 hours in whole minutes. The same goes for a `Pulse` dwell.
+
 Multiple `Fb` fields linked to the same `En` are independent timers, each with its own `Physical` timing. A vacuum gripper's `Fb_Contact` (5ms) and `Fb_Vacuum` (80ms) assert at different scans from the same `En` edge.
 
 ### How profile-driven feedback works
