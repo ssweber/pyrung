@@ -1170,3 +1170,37 @@ _add("composite", "composite/relational", _comp_relational)
 _add("composite", "composite/timer acc >= 5 s", _comp_timer_acc, fast=False)
 _add("composite", "composite/dwell And sensor", _comp_dwell_and_sensor, fast=False)
 _add("composite", "composite/dwell multi sensor", _comp_dwell_multi, fast=False)
+
+
+# --------------------------------------------------------------------------- truth rows
+# A held enable with a long wait: the plan is what the session does by itself, so stepping can
+# say when the goal holds.  Both decline on dev today; the rows pin that a decline stays a decline
+# or turns into a correct REACHED (a REACHED plan is checked against stepping).
+
+
+def _held_wait(first, second, unit, scans):
+    def build():
+        en, lamp = Bool("En"), Bool("Lamp")
+        t1, t2 = Timer.clone("Tw1"), Timer.clone("Tw2")
+        with Program(strict=False) as prog:
+            with Rung(en):
+                on_delay(t1, first, unit)
+            if second is None:
+                with Rung(t1.Done):
+                    latch(lamp)
+            else:
+                with Rung(t1.Done):
+                    on_delay(t2, second, unit)
+                with Rung(t2.Done):
+                    latch(lamp)
+        plc = PLC(prog, dt=0.01)
+        plc.patch({"En": True})
+        plc.run(scans)
+        return dict(plc=plc, targets=(lamp,), goal=_tag_goal(lamp))
+
+    return build
+
+
+_add("truth", "truth/held enable 120s dt .01", _held_wait(120, None, "s", 1))
+_add("truth", "truth/held enable 120s dt .01 mid-count", _held_wait(120, None, "s", 3000))
+_add("truth", "truth/held chain 3+2 min no harness", _held_wait(3, 2, "min", 1))

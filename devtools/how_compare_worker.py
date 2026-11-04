@@ -58,6 +58,9 @@ import how_compare_programs as programs  # noqa: E402
 SELECTED = [
     c for c in programs.CASES if (args.full or c.fast) and (not args.only or args.only in c.name)
 ]
+if not SELECTED:
+    print("no case selected", flush=True)
+    sys.exit(3)
 if args.list:
     for c in SELECTED:
         print(c.group, c.name)
@@ -131,9 +134,9 @@ def watchdog():
         CURRENT["peak_mb"] = max(CURRENT["peak_mb"], mb)
         why = None
         if mb > args.mem_mb:
-            why, code = f"memory {mb:.0f} MB over {args.mem_mb}", 97
+            why, code = "memory over limit", 97
         elif time.perf_counter() > CURRENT["deadline"]:
-            why, code = f"time over {CURRENT['deadline'] - CURRENT['started']:.0f} s", 98
+            why, code = "time over limit", 98
         if why:
             with LOCK:
                 if CURRENT["name"] == name:
@@ -142,6 +145,8 @@ def watchdog():
                             "case": name,
                             "status": "ABORT",
                             "reason": why,
+                            "detail": f"{mb:.0f} MB of {args.mem_mb}; "
+                            f"{time.perf_counter() - CURRENT['started']:.0f} s",
                             "secs": round(time.perf_counter() - CURRENT["started"], 1),
                         }
                     )
@@ -212,6 +217,7 @@ def run_row(case):
     if avoid is not None:
         kwargs["avoid"] = avoid
     row["session_scan"] = plc.state.scan_id
+    row["step_check"] = "unchecked: no goal given"
 
     plan = None
     try:
@@ -238,6 +244,9 @@ def run_row(case):
             reason=(str(plan.reason)[:240] if plan.reason else None),
             plan_hash=digest([str(j) for j in plan.journal]),
         )
+        row["anchor"] = plan.anchor_scan
+        if status == "REACHED" and plan.fork is None:
+            row["no_fork"] = True
         if plan.fork is not None and status == "REACHED":
             reached = True
             fork = plan.fork
@@ -252,7 +261,26 @@ def run_row(case):
             if goal is not None:
                 row["goal_at_tip"] = safe_goal(goal, dict(fork.state.tags))
 
+    # Flags that need no goal.
+    flags = []
+    if row.get("no_fork"):
+        flags.append("NO_FORK status REACHED but the plan has no fork to check")
+    if reached:
+        span = row["tip"] - row["session_scan"]
+        if row.get("anchor") == row["session_scan"] and row["total"] != span:
+            flags.append(
+                f"TOTAL_VS_TIP plan.total_scans is {row['total']}, its fork is {span} scans past the session"
+            )
+        if row.get("replay_equal") is False:
+            flags.append("REPLAY_DIFFERS")
+        if row.get("stepped_equal") is False:
+            flags.append("STEPPED_DIFFERS")
+        if row.get("goal_at_tip") is False:
+            flags.append("GOAL_FALSE_AT_TIP the plan's fork does not satisfy the goal")
+
     # Independent of the plan: does stepping the session itself reach the goal, and when?
+    # Checked against the plan only where the plan has no input and no hold, because only then is
+    # the plan what the session does by itself.  Every other reached row says why it is unchecked.
     if goal is not None:
         cap = args.step_cap
         if reached:
@@ -263,36 +291,28 @@ def run_row(case):
         row["step_reach"] = None if beyond else hit
         if isinstance(hit, str) and not beyond:
             row["step_note"] = hit
-        flags = []
-        # A plan with no input and no hold must be what the session does by itself.  When the
-        # plan is longer than the stepping cap, there is nothing to compare it with.
         quiet = reached and row.get("inputs") == 0 and row.get("holds") == 0
-        if beyond:
-            row["step_note"] = (
-                f"plan is {row['tip'] - row['session_scan']} scans, beyond the {cap}-scan stepping cap"
+        if not reached:
+            row["step_check"] = "stepping only (no plan to compare)"
+        elif beyond:
+            row["step_check"] = f"unchecked: plan beyond the {cap}-scan stepping cap"
+        elif not quiet:
+            row["step_check"] = (
+                f"unchecked: plan uses {row.get('inputs')} input(s), {row.get('holds')} hold(s)"
             )
-            quiet = False
-        if reached and quiet and isinstance(hit, int) and hit != row["tip"]:
-            flags.append(f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping reaches {hit}")
-        elif reached and quiet and hit is None:
-            flags.append(
-                f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping never reaches in {cap} scans"
-            )
-        if reached and row.get("goal_at_tip") is False:
-            flags.append("GOAL_FALSE_AT_TIP the plan's fork does not satisfy the goal")
-        if reached and row.get("replay_equal") is False:
-            flags.append("REPLAY_DIFFERS")
-        if reached and row.get("stepped_equal") is False:
-            flags.append("STEPPED_DIFFERS")
-        if (
-            plan is not None
-            and not reached
-            and isinstance(hit, int)
-            and row["status"] in ("STOPPED", "CANNOT_REACH")
-        ):
-            if row.get("inputs", 0) == 0:
-                flags.append(f"MISSED stepping reaches at scan {hit}, how() says {row['status']}")
-        row["flags"] = flags
+        else:
+            row["step_check"] = "checked against stepping"
+            if isinstance(hit, int) and hit != row["tip"]:
+                flags.append(f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping reaches {hit}")
+            elif hit is None:
+                flags.append(
+                    f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping never reaches in {cap} scans"
+                )
+        # how() declined or raised, with no avoid in the way, where the session reaches by itself
+        declined = (not reached) and (plan is None or row["status"] in ("STOPPED", "CANNOT_REACH"))
+        if declined and isinstance(hit, int) and avoid is None and row.get("inputs", 0) == 0:
+            flags.append(f"MISSED stepping reaches at scan {hit}, how() says {row['status']}")
+    row["flags"] = flags
     row["secs"] = round(time.perf_counter() - began, 2)
     return row
 
@@ -308,6 +328,7 @@ def main():
                 done = {r["case"] for r in prior["rows"]}
         except (OSError, ValueError):
             pass
+    DOC["selected"] = [c.name for c in SELECTED]
     save()
     threading.Thread(target=watchdog, daemon=True).start()
     todo = [c for c in SELECTED if c.name not in done]
