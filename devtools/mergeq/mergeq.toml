@@ -7,6 +7,8 @@ worktree_root = "../pyrung-wt"      # `mergeq worktree new <name>` -> <root>/<na
 branch_prefix = "bob/"              # ... on branch <prefix><name>
 lock_file = "../pyrung-wt/.heavy.lock"
 lock_wait = 10800                   # seconds a heavy run waits for the lock
+targeted_slots = 2                  # `run` without --heavy (every hook-wrapped pytest, reviewers' scripts) at once; the rest wait. A gate takes 6 of 8 cores. 0 = no limit
+targeted_wait = 1800                # seconds a targeted run waits for a slot, then exits 125
 job_memory_mb = 12288               # cap per job, all its processes (Windows Job Object); 0 = no cap. Largest gate stage peak so far is 2.5 GB on 6 pytest workers; well above pytest's 4096 MB per-process cap, so that cap fires first and the run names the test
 install = { cmd = ["make", "install"], timeout = 900 }
 

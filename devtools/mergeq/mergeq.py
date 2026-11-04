@@ -70,6 +70,8 @@ class Config:
         self.branch_prefix: str = raw.get("branch_prefix", "")
         self.lock_file = (self.repo / raw.get("lock_file", "../.mergeq-heavy.lock")).resolve()
         self.lock_wait: int = int(raw.get("lock_wait", 3 * 3600))
+        self.targeted_slots: int = int(raw.get("targeted_slots", 0))
+        self.targeted_wait: int = int(raw.get("targeted_wait", 1800))
         self.job_memory_mb: int = int(raw.get("job_memory_mb", 0))
         self.install: dict | None = raw.get("install")
         self.stages: dict[str, dict] = raw.get("stages", {})
@@ -450,26 +452,46 @@ def run_group(
 # that process exits or dies, so a stale lock cannot exist. <lock>.owner is only a label.
 
 
+def _try_file_lock(path: Path):
+    """The open, locked file, or None if another holder has it. Never blocks."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = path.open("a+b")
+    try:
+        if IS_WINDOWS:
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def _release_file_lock(fh) -> None:
+    try:
+        if IS_WINDOWS:
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    fh.close()
+
+
 class HeavyLock:
     def __init__(self, label: str) -> None:
         self.label = label
         self.fh = None
 
     def try_acquire(self) -> bool:
-        CFG.lock_file.parent.mkdir(parents=True, exist_ok=True)
-        fh = CFG.lock_file.open("a+b")
-        try:
-            if IS_WINDOWS:
-                import msvcrt
-
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            fh.close()
+        fh = _try_file_lock(CFG.lock_file)
+        if fh is None:
             return False
         self.fh = fh
         _owner_file().write_text(
@@ -496,15 +518,68 @@ class HeavyLock:
             return
         try:
             _owner_file().write_text("", encoding="utf-8")
-            if IS_WINDOWS:
-                import msvcrt
-
-                self.fh.seek(0)
-                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
         except OSError:
             pass
-        self.fh.close()
+        _release_file_lock(self.fh)
         self.fh = None
+
+
+# Targeted runs (`run` without --heavy) share targeted_slots slots, each its own OS file lock,
+# so builders and reviewers cannot pile onto the cores a gate leaves free. A waiter holds
+# nothing, and a slot frees when its holder exits or dies. Not first-come-first-served: whoever
+# polls next takes a freed slot. A run started inside a held slot or the heavy lock takes none.
+IN_SLOT_ENV = "MERGEQ_IN_SLOT"
+
+
+def _slot_file(index: int) -> Path:
+    return CFG.lock_file.with_name(f".targeted.{index}.lock")
+
+
+class TargetedSlot:
+    def __init__(self) -> None:
+        self.fh = None
+
+    def try_acquire(self) -> bool:
+        for index in range(CFG.targeted_slots):
+            fh = _try_file_lock(_slot_file(index))
+            if fh is not None:
+                self.fh = fh
+                return True
+        return False
+
+    def acquire(self, wait: int) -> bool:
+        if CFG.targeted_slots <= 0 or os.environ.get(IN_SLOT_ENV):
+            return True
+        deadline = time.monotonic() + wait
+        announced = False
+        while not self.try_acquire():
+            if time.monotonic() > deadline:
+                return False
+            if not announced:
+                print(
+                    f"mergeq: waiting for a targeted slot ({CFG.targeted_slots} in use, "
+                    "`mergeq ps` shows them); --timeout starts once it has one",
+                    file=sys.stderr,
+                )
+                announced = True
+            time.sleep(2)
+        return True
+
+    def release(self) -> None:
+        if self.fh is not None:
+            _release_file_lock(self.fh)
+            self.fh = None
+
+
+def _slots_in_use() -> int:
+    used = 0
+    for index in range(CFG.targeted_slots):
+        fh = _try_file_lock(_slot_file(index))
+        if fh is None:
+            used += 1
+        else:
+            _release_file_lock(fh)
+    return used
 
 
 def _owner_file() -> Path:
@@ -850,11 +925,24 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.heavy and not lock.acquire(CFG.lock_wait):
         print(f"mergeq: heavy lock wait expired (held by {lock_owner()})", file=sys.stderr)
         return 125
+    slot = TargetedSlot()
+    if not args.heavy and not slot.acquire(CFG.targeted_wait):
+        print(
+            f"mergeq: no targeted slot after {CFG.targeted_wait}s; nothing ran, try again",
+            file=sys.stderr,
+        )
+        return 125
     try:
         rc, secs, timed_out, peak = run_group(
-            cmd, name=name, cwd=cwd, timeout=args.timeout, heavy=args.heavy
+            cmd,
+            name=name,
+            cwd=cwd,
+            timeout=args.timeout,
+            env={**os.environ, IN_SLOT_ENV: "1"},
+            heavy=args.heavy,
         )
     finally:
+        slot.release()
         lock.release()
     if timed_out:
         print(
@@ -993,6 +1081,8 @@ def cmd_lock(_args: argparse.Namespace) -> int:
         print(f"free ({CFG.lock_file})")
     else:
         print(f"held by {lock_owner()} ({CFG.lock_file})")
+    if CFG.targeted_slots > 0:
+        print(f"targeted slots: {_slots_in_use()} of {CFG.targeted_slots} in use")
     return 0
 
 

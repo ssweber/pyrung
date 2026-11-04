@@ -43,6 +43,9 @@ the builder's handoff: judge the code, not the story.
 
 Targeted tests under a hard timeout are fine to confirm a finding. No heavy suites and no
 conformance runs against the local soft PLC (the queue uses it); in-process checks are fine.
+Only a few test runs and scripts go at once and the rest wait, and the wait counts against your
+tool's own timeout: use `run_in_background`, or a tool timeout well above the run's limit. Exit
+125 means it never got a turn and nothing ran: run it again.
 
 ## Output
 

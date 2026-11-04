@@ -20,6 +20,9 @@ yourself, or run the gate.
 - Iterate on targeted tests: single files or `-k`. Use Bash; a hook runs every pytest under
   a hard timeout and a named process group (a leading `timeout 300` sets the limit, default
   600 s). In PowerShell use `python -I devtools/mergeq/mergeq.py run --timeout 300 -- <cmd>`.
+  Only a few runs go at once and the rest wait, and the wait counts against your tool's own
+  timeout: use `run_in_background`, or a tool timeout well above the test's limit. Exit 125
+  means it never got a turn and nothing ran: run it again.
   Heavy suites (the non-light stages in `devtools/mergeq/mergeq.toml`) are refused for agents
   by a hook: the queue runs them. Do not take the heavy lock.
 - A new test file: also run it once under `--fold-check` (`timeout 300 uv run pytest --fold-check

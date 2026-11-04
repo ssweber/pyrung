@@ -21,10 +21,10 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
 | `next` | run the oldest job: merge onto the base in a scratch worktree, `install`, then stages cheapest first under the heavy lock, stop at the first failure. One job per call: launch it in the background to be notified. Exit 0 pass, 1 fail, 2 conflict (`conflict_branch` names it), 3 empty, 4 error |
 | `land --id X` | fast-forward the base to `refs/mergeq/X`, the exact merge that passed. Refuses if the base or a branch moved since the test, or the main checkout has tracked changes on the base |
 | `status` / `cancel --id X` | queue state and the lock; cancel kills a running job's process trees and cleans up. The runner's pid file also records its creation time: a stale file (process gone, or the pid reused after a reboot) is reported and removed, and kills nothing |
-| `run [--heavy] [--timeout S] [--name N] [--cwd D] -- CMD` | run CMD as a kill-on-close process group (Windows Job Object; process group elsewhere). `--heavy` waits for and holds the machine-wide lock. Exit = CMD's, 124 timeout, 125 lock wait expired |
+| `run [--heavy] [--timeout S] [--name N] [--cwd D] -- CMD` | run CMD as a kill-on-close process group (Windows Job Object; process group elsewhere). `--heavy` waits for and holds the machine-wide lock; without it the run takes one of `targeted_slots`. `--timeout` starts once it has either. Exit = CMD's, 124 timeout, 125 lock or slot wait expired |
 | `ps [--all]` | mergeq-run groups (runner pid, process count, peak memory, cwd); `--all` adds test processes mergeq did not start |
 | `reap --name PREFIX` / `reap --unmanaged [--match RE] [--dry-run]` | kill every group whose name starts with PREFIX / stray processes under the repo or worktrees (language servers excluded) |
-| `lock status` | free, or who holds it |
+| `lock status` | free, or who holds it; how many targeted slots are in use |
 | `worktree new NAME [--base REF]` / `rm NAME [--force]` / `list` | `<worktree_root>/NAME` on `<branch_prefix>NAME`; `rm` refuses unless landed and clean |
 | `note --id X --kind handoff\|review\|ledger [--file F]` | append to `<home>/jobs/X/<KIND>.md` (stdin by default) |
 
@@ -34,6 +34,10 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
 - **No stale lock.** The heavy lock is an OS file lock held by the running process
   (`msvcrt.locking` / `flock`); the OS releases it when that process exits or dies.
   `<lock>.owner` is just a label.
+- **Targeted runs share a few slots.** `run` without `--heavy` takes one of `targeted_slots`
+  (OS file locks beside the heavy lock, freed the same way) and waits up to `targeted_wait`,
+  so parallel builders and reviewers queue instead of piling onto the machine. Gate stages and
+  `--heavy` runs take no slot, and neither does a run nested inside one.
 - **No orphans.** Each command runs in a Job Object with kill-on-close: a timeout, `cancel`,
   `reap`, or the runner itself dying kills the whole tree. `job_memory_mb` caps a job's memory.
   One gap: Python's Windows launchers (the WindowsApps `python` alias, a venv `python.exe`)
