@@ -19,7 +19,7 @@ is an answer.
   a zero low word (ErrorCode = 1 for the pair), and +Inf - +Inf is a NaN whose high
   word tells which NaN (Result3): 2 for 0xFFC0 (x86's default, what Python's
   subtraction leaves), 1 for 0x7FC0 (ARM's), 0 for any other; Result4 is its low word,
-  1 for zero.  The checklist's "DF holding Inf or NaN over Modbus" reads these
+  1 for zero.  The word is compared after an XOR with 0x0080, each bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these
   registers; a client (ClickNick, the sim) shows what these bits decode to.
 - ``underflow``: pyrung keeps a Real at 64 bits, so 1.0E-20 * 1.0E-20 and 1.0E-30 *
   1.0E-30 are not 0 in a compare (Result1, Result2 = 0).  A float32 CLICK reads 1E-40
@@ -31,7 +31,7 @@ is an answer.
   16777216.0: 0 in pyrung, 1 where a Dint is compared as a float32.  Controls: DF 0.1
   == 0.1 (Result3 = 1), DF 0.5 + DF 0.25 == 0.75 (Result4 = 1), exact in both widths.
 
-The cases own DF20..DF66, DH470..DH489, DD850 and TXT546..TXT557.
+The cases own DF20..DF66, DH470..DH491, DD850 and TXT546..TXT557.
 """
 
 from __future__ import annotations
@@ -119,7 +119,11 @@ def prove_non_finite_raw_bits(slot):
     _raw(slot, df[43], 486)
     class_of(slot, dh[483], [0x7F80], slot.Result1)
     class_of(slot, dh[485], [0xFF80], slot.Result2)
-    class_of(slot, dh[487], [0x7FC0, 0xFFC0], slot.Result3)
+    # By XOR 0x0080: a constant that reads C0 stops the workspace round trip (DH490).
+    with Rung(*once(slot)):
+        copy(0x80, dh[491])
+        calc(dh[487] ^ dh[491], dh[490])
+    class_of(slot, dh[490], [0x7F40, 0xFF40], slot.Result3)
     class_of(slot, dh[486], [0], slot.Result4)
     with Rung(*once(slot), dh[482] == 0, dh[484] == 0):
         copy(1, slot.ErrorCode)
@@ -129,6 +133,7 @@ def prove_non_finite_raw_bits(slot):
 def init_non_finite_raw_bits(slot):
     fill(0.0, df.select(40, 43))
     fill(0, dh.select(482, 487))
+    fill(0, dh.select(490, 491))
 
 
 def prove_underflow(slot):
