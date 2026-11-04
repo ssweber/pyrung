@@ -394,7 +394,7 @@ flag_group = Group(
 
 def prove_date_and_time_apply(slot):
     rtc = system.rtc
-    count_scans(slot, 14)
+    count_scans(slot, 15)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(rtc.year4, dd[74])
         copy(rtc.hour, dd[75])
@@ -425,7 +425,7 @@ def prove_date_and_time_apply(slot):
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
     # Back to what scan 1 saved, on every path, even if the bad date or time was taken.
-    with Rung(slot.Cmd != 0, slot.Scratch == 11):
+    with Rung(slot.Cmd != 0, slot.Scratch == 12):
         copy(dd[74], rtc.new_year4)
         copy(dd[84], rtc.new_month)
         copy(dd[85], rtc.new_day)
@@ -435,19 +435,20 @@ def prove_date_and_time_apply(slot):
     # One Out per apply bit: of several, the last rung would win.
     with Rung(
         slot.Cmd != 0,
-        Or(slot.Scratch == 1, slot.Scratch == 3, slot.Scratch == 9, slot.Scratch == 11),
+        Or(slot.Scratch == 1, slot.Scratch == 3, slot.Scratch == 9, slot.Scratch == 12),
     ):
         out(rtc.apply_date)
     with Rung(
         slot.Cmd != 0,
-        Or(slot.Scratch == 5, slot.Scratch == 7, slot.Scratch == 9, slot.Scratch == 11),
+        Or(slot.Scratch == 5, slot.Scratch == 7, slot.Scratch == 9, slot.Scratch == 12),
     ):
         out(rtc.apply_time)
     with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_date_error):
         calc(slot.Result3 + 10, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_time_error):
         calc(slot.Result3 + 1, slot.Result3)
-    # Above the set-back's effect: it applies at the end of its scan or later.
+    # Two scans after the bad apply, as a good one is read, and a scan before the set-back,
+    # so a CLICK that applies at once cannot show the restored clock here.
     with Rung(
         slot.Cmd != 0,
         slot.Scratch == 11,
@@ -458,14 +459,14 @@ def prove_date_and_time_apply(slot):
         copy(1, slot.Result4)
     with Rung(
         slot.Cmd != 0,
-        slot.Scratch == 13,
+        slot.Scratch == 14,
         rtc.year4 == dd[74],
         rtc.month == dd[84],
         rtc.day == dd[85],
         rtc.hour == dd[75],
     ):
         copy(1, slot.ErrorCode)
-    done(slot, 14)
+    done(slot, 15)
 
 
 def init_date_and_time_apply(slot):
@@ -482,7 +483,7 @@ rtc_group = Group(
             "last, every time (ErrorCode = 1)",
             ladder=prove_date_and_time_apply,
             init=init_date_and_time_apply,
-            scans=scans_for(14),
+            scans=scans_for(15),
             expect={
                 "Result1": between(0, 1),
                 "Result2": between(0, 1),

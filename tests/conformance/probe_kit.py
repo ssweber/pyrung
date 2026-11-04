@@ -16,6 +16,8 @@ reads it uses :class:`GuardedProbes`, which waits for a scan the flag starts off
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -82,9 +84,12 @@ _READINGS_HEADER = """\
 def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str) -> list[str]:
     """Append what each case asking for a reading read; a boot's next step adds its own.
 
-    Stale and skipped cases read nothing.  Returns the keys written.
+    Stale and skipped cases read nothing.  ``PYRUNG_CONFORMANCE_STEP``, if set, labels the
+    entries (``boot_read``'s procedure step).  Returns the keys written.
     """
     path = Path(path)
+    step = os.environ.get("PYRUNG_CONFORMANCE_STEP")
+    step_line = f"step = {json.dumps(step)}\n" if step else ""
     entries: list[str] = []
     keys: list[str] = []
     for r in results:
@@ -93,7 +98,7 @@ def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str)
         key = f"{r.group}/{r.case.id}"
         read = ", ".join(f"{field} = {value}" for field, value in r.actual.items())
         entries.append(
-            f'[[reading]]\ncase = "{key}"\nhash = "{r.case_hash}"\non = "{on}"\n'
+            f'[[reading]]\ncase = "{key}"\nhash = "{r.case_hash}"\non = "{on}"\n{step_line}'
             f"read = {{ {read} }}\n"
         )
         keys.append(key)

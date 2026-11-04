@@ -397,7 +397,7 @@ def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
     assert not is_confirmed(replace(passed, case_hash="h9"), record)
 
 
-def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path) -> None:
+def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, monkeypatch) -> None:
     asks = case("x", ladder=_prove_constant, expect={"Result1": between(0, 9)})
     asserts = case("x", ladder=_prove_constant, expect={"Result1": range(0, 10)})
     assert asks_for_a_reading(asks)
@@ -417,6 +417,9 @@ def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path) ->
         {"case": "g/constant", "hash": "h1", "on": "2026-11-05", "read": {"Result1": 8}},
     ]
     assert reading_lines([read, other]) == ["read g/constant {'Result1': 7}"]
+    monkeypatch.setenv("PYRUNG_CONFORMANCE_STEP", "STOP->RUN")
+    record_readings(path, [read], on="2026-11-07")
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"][-1]["step"] == "STOP->RUN"
 
 
 def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
