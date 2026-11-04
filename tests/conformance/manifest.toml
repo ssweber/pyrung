@@ -654,7 +654,7 @@ base = 3111 # Conf_Compare: DS3111..DS3140; part K, compare across types, CHAR w
 slots = 2
 
 [groups.compare.cases]
-word_and_text_order = 1
+word_and_wide_compare = 1
 char_two_char_literal = 2
 
 [groups.out_more]
