@@ -445,7 +445,8 @@ class CompiledPLC:
 
     def start(self) -> None:
         """Transition STOP -> RUN now, without executing a scan (see ``PLC.start``)."""
-        self._ensure_running()
+        if not self._running:
+            self._ensure_running()
 
     @property
     def keep_forces_on_run(self) -> bool:

@@ -3989,7 +3989,8 @@ class PLC:
         Patches and forces applied afterwards reach the first scan.  Does
         nothing in RUN mode.
         """
-        self._ensure_running()
+        if not self._running:
+            self._ensure_running()
 
     @property
     def keep_forces_on_run(self) -> bool:

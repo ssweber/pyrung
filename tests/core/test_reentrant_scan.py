@@ -11,7 +11,18 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, calc, copy, run_enabled_function, run_function
+from pyrung import (
+    Bool,
+    Int,
+    Program,
+    Rung,
+    calc,
+    call as run_subroutine,
+    copy,
+    run_enabled_function,
+    run_function,
+    subroutine,
+)
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core import compiled_run, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
@@ -200,6 +211,64 @@ def test_a_callable_that_swallows_the_refusal_changes_nothing(make):
         plain.step()
         assert _tags(plc) == _tags(plain)
     assert plc.current_state.tags["Patched"] == 7
+
+
+def test_a_callable_in_a_subroutine_is_refused(make):
+    """A body below a call is in the same scan, and a kernel knows it calls one."""
+    call = Call()
+    with Program(strict=False) as program:
+        with Rung():
+            run_subroutine("worker")
+        with subroutine("worker"):
+            with Rung():
+                run_function(call, ins={"c": Cnt}, outs={"seen": Seen})
+    plc = make(program)
+    plc.step()
+    before = plc.current_state
+    _refused_scan(plc, call, SCANNERS["step"])
+    assert plc.current_state is before
+
+
+def test_a_kernel_says_whether_it_calls_a_function():
+    """The marker is skipped on the word of this flag, so a body must never be left out."""
+    with Program(strict=False) as plain:
+        with Rung():
+            calc(Cnt + 1, Cnt)
+    assert compile_kernel(plain).calls_functions is False
+    assert compile_kernel(_program(Call())).calls_functions is True
+
+
+# -- what a callable may still do to its PLC --
+
+
+def test_start_in_run_mode_stays_a_no_op_inside_a_callable(make):
+    """start() doesn't scan, and in RUN it does nothing."""
+    plc, call = _built(make)
+    plain, _ = _built(make)
+    plc.run(3)
+    plain.run(3)
+    call.action = plc.start
+    plc.step()
+    plain.step()
+    assert _tags(plc) == _tags(plain)
+
+
+def test_a_commit_callback_may_step_the_plc():
+    """A callback runs after the commit, with no callable running, so it is no scan inside a scan."""
+    plc, _call = _built(BACKENDS["interpreted"])
+    plain, _ = _built(BACKENDS["interpreted"])
+    stepped = []
+
+    def steps_once(_state: Any) -> None:
+        if not stepped:
+            stepped.append(plc.step().scan_id)
+
+    plc.when(Cnt == 2).do(steps_once)
+    plc.run(2)
+    plain.run(3)
+    assert stepped == [3]
+    assert plc.current_state.scan_id == 3
+    assert _tags(plc) == _tags(plain)
 
 
 # -- the marker clears --
