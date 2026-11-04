@@ -83,7 +83,7 @@
 ### Fixes
 
 - A constant in an imported CLICK ladder (hex such as `FFC0h`, a Real, or quoted text) is never read as an address, so the generated `tags.py` no longer gains a stray tag like `C0 = c[0]` that fails on import.
-- Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`.
+- Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`. CLICK's Compare offers only `=` and `!=` on text, so `<`, `<=`, `>` and `>=` on a Char are a `CLK_TEXT_ORDER_COMPARE` finding that export refuses unless allowed.
 - A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - A kernel that fails to compile for a reason pyrung does not expect gives a `RuntimeWarning` and the scans run interpreted, rather than raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.

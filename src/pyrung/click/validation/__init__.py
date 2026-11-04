@@ -52,6 +52,7 @@ from .findings import (
     CLK_RAND_REAL_BOUND,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_STEP_LIMIT,
+    CLK_TEXT_ORDER_COMPARE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
@@ -87,6 +88,7 @@ from .portability import (
     _evaluate_rand_bounds,
     _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
+    _evaluate_text_order_compares,
 )
 from .resolve import _ResolutionCache
 
@@ -220,6 +222,7 @@ def validate_click_program(
         _evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode, resolver)
     )
     findings.extend(_evaluate_status_bit_usage(program, mode))
+    findings.extend(_evaluate_text_order_compares(program, mode))
     findings.extend(_evaluate_forloop_structure(program, mode))
     findings.extend(_evaluate_nested_calls(program, mode))
     findings.extend(_evaluate_step_limit(program, tag_map, mode))
@@ -337,6 +340,7 @@ __all__ = [
     "CLK_FORLOOP_COUNT_BANK",
     "CLK_RAND_REAL_BOUND",
     "CLK_RAND_EQUAL_BOUNDS",
+    "CLK_TEXT_ORDER_COMPARE",
     "ClickFinding",
     "ClickValidationReport",
 ]

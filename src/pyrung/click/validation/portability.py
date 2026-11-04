@@ -61,6 +61,7 @@ from .findings import (
     CLK_RAND_EQUAL_BOUNDS,
     CLK_RAND_REAL_BOUND,
     CLK_STATUS_BIT_NOT_PORTABLE,
+    CLK_TEXT_ORDER_COMPARE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
     ValidationMode,
@@ -839,7 +840,7 @@ def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[Cl
                     location=location_str,
                     suggestion=(
                         "Compare text with == or !=, or copy the characters into Int "
-                        "tags (to_value) and compare those."
+                        "tags (convert=to_ascii) and compare those."
                     ),
                 )
             )
