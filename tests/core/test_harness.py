@@ -455,7 +455,9 @@ class TestDelaysPastTheMillisecondRange:
         plc.patch({Cmd: True})
         # One scan to command the enable, then ceil(delay / dt) held scans: the count
         # a millisecond timer gives a delay it can hold (30 s here).
-        expected = physical.on_delay_ms // 250 + 1
+        on_delay_ms = physical.on_delay_ms
+        assert on_delay_ms is not None
+        expected = on_delay_ms // 250 + 1
         plc.run(expected - 1)
         assert _fb(plc, Fb) is False
         plc.step()
