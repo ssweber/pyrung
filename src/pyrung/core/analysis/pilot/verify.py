@@ -27,11 +27,7 @@ from pyrung.core.analysis.pilot.attempt_observation import (
     _observe_temporal_setup_occurrences,
     _route_blocker_crossings,
 )
-from pyrung.core.analysis.pilot.avoid import (
-    _avoid_scan_names,
-    _avoid_weighed_after_clear,
-    _avoid_weighed_names,
-)
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _avoid_weighed_after_clear
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     EarnedWorkReceipt,
@@ -683,13 +679,7 @@ def _verify_gates(
                 nogoods=({nogood_pair} if nogood_pair is not None else ()),
                 avoid_names=coast_avoided,
             )
-        # A trial that ran no scan still stands where it started, which may be behind how()'s
-        # start.  So does a snapshot still at the trial's source.
-        settled = (
-            _avoid_scan_names(ctx.avoid_pred, trial.snap)
-            if trial.fork.state.scan_id != trial.scan_before
-            else _avoid_weighed_names(ctx.avoid_pred, trial.snap)
-        )
+        settled = _avoid_scan_names(ctx.avoid_pred, trial.snap)
         if settled:
             gate_events.append(
                 PilotGateEvent("avoid", f"settled state matches avoid: {', '.join(settled)}")
@@ -699,6 +689,8 @@ def _verify_gates(
                 avoid_names=settled,
             )
         for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
+            # Some trials keep their source here: the values they stood on before any scan,
+            # which may be behind how()'s start, and no scan they ran.
             wink = (
                 _avoid_weighed_after_clear(ctx.avoid_pred, frame.snap, snap)
                 if snap is trial.source_snap
