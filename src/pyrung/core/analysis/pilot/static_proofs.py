@@ -27,8 +27,8 @@ preset exceeds the delay plus some scans of slop.
 
 The plant reads the enable between scans and a rung reads it mid-scan, so this holds
 only while those two agree to within a scan: an enable nothing writes, or one the
-program writes from a single ``out`` coil and nothing else moves. Over anything wider
-the argument has failed every time it was tried, so anything wider is ``STOPPED``.
+program writes from a single main-level ``out`` coil and nothing else moves. Anything
+wider is ``STOPPED``.
 
 **Mutually exclusive** (``exclusion_evidence``). ``X=a`` and ``Y=b`` cannot both
 hold at the end of a scan when no rung produces both and each rung producing one

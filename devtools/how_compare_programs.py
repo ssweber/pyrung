@@ -1272,7 +1272,8 @@ def _enable_moved_mid_scan():
     Harness(plc).install()
     plc.patch({"Go": True})
     plc.step()
-    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+    # The default budget runs out first, and base skips its proof then, hiding the false one.
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit), kwargs=dict(max_scans=30000))
 
 
 def _opaque_avoid_mid_coast(avoid_of):

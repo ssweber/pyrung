@@ -83,7 +83,7 @@
 
 ### Fixes
 
-- `how()` no longer says `Cannot reach` for a target stepping can get to: a `Pulse` on a rung's other contact, a second route to the target, a one-shot clobber, or a force or patch already on the PLC. It reaches or says `Stopped`.
+- `how()` no longer says `Cannot reach` for a target stepping can get to: a `Pulse` on a rung's other contact, a second route to the target, a one-shot clobber, a force or patch already on the PLC, or an enable the program moves mid-scan. It reaches or says `Stopped`.
 - `how()` gives a `Stopped` plan with a reason for a comparison with arithmetic in a rung (`T.Acc + 1 >= N`) and for a search that loses track of its own evidence, where each raised a Python error, and `avoid=Bank[Idx] >= 9000` reads the slot instead of counting as violated everywhere, and ends the plan on any scan it goes true.
 - `how(And(A, B))` is `how(A, B)`, and `how(Or(...))`, `how(T.Acc >= Sp + 1)` and `how(T.Acc >= Tag)` where no rung uses `Tag` raise a `ValueError` saying what to pass.
 - A `run_function()` or `run_enabled_function()` that scans, stops or reboots the PLC running it or sets its battery (`step()`, `run()`, `run_for()`, `run_until()`, a `scan_steps` scan, `stop()`, `reboot()`, `battery_present`), on `PLC` or `CompiledPLC`, raises `RuntimeError`, where the scan published a wrong state and the two backends disagreed. Set a tag through `outs=` and act on it from outside the scan, or scan another PLC or a `PLC.fork()`.
