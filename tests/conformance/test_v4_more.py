@@ -394,12 +394,13 @@ def prove_timers_at_limits(slot):
 def prove_clock_edges_in_a_body(slot):
     clock = _clock(slot, 122)
     live = (slot.Cmd != 0, clock < 500)
-    for edge_clock, plain, inner in (
-        (system.sys.clock_100ms, dd[78], dd[79]),
-        (system.sys.scan_clock_toggle, dd[80], dd[81]),
+    for edge_clock, plain, double, inner in (
+        (system.sys.clock_100ms, dd[78], dd[82], dd[79]),
+        (system.sys.scan_clock_toggle, dd[80], dd[83], dd[81]),
     ):
         with Rung(rise(edge_clock), *live):
             calc(plain + 1, plain)
+            calc(double + 2, double)
         # The For's rung is always true, so the reset reaches the body's edge.
         with Rung():
             with forloop(2):
@@ -408,11 +409,11 @@ def prove_clock_edges_in_a_body(slot):
     ready = (*once(slot), clock >= 550)
     with Rung(*ready, dd[79] == dd[78]):
         copy(1, slot.Result1)
-    with Rung(*ready, dd[79] == dd[78] * 2):
+    with Rung(*ready, dd[79] == dd[82]):
         copy(2, slot.Result1)
     with Rung(*ready, dd[81] == dd[80]):
         copy(1, slot.Result2)
-    with Rung(*ready, dd[81] == dd[80] * 2):
+    with Rung(*ready, dd[81] == dd[83]):
         copy(2, slot.Result2)
     with Rung(*ready, dd[78] >= 3, dd[78] <= 7):
         copy(1, slot.Result3)
@@ -421,7 +422,7 @@ def prove_clock_edges_in_a_body(slot):
 
 
 def init_clock_edges_in_a_body(slot):
-    fill(0, dd.select(78, 81))
+    fill(0, dd.select(78, 83))
 
 
 def init_timers_at_limits(slot):

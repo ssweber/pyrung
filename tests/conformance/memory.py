@@ -392,7 +392,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "for_more": {
         "C": range(1722, 1729),
         "DS": range(3929, 3931),
-        "DD": range(78, 82),
+        "DD": range(78, 84),
         "T": (range(122, 123), range(244, 249)),
         "CT": range(149, 150),
     },
