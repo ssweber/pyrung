@@ -12,8 +12,8 @@ true on the twin at a scan before the one where the run stopped, the run oversho
 argument (it would answer about the wrong runner on a twin) or that raises on the twin is not
 asked, and is counted.  PILOT's opaque ``avoid=`` is judged on the scans a coast really executes,
 by contract (``read_trace._reads_untraced``), so a predicate that asked one isn't held to a true
-answer between them, and that is counted too.  A mismatch raises :class:`FoldMismatch` inside the test that ran it,
-naming the scan and the differing keys.
+answer between them, and that is counted too.  A mismatch raises :class:`FoldMismatch` inside
+the test that ran it, naming the scan and the differing keys.
 
 The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
