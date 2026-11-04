@@ -111,7 +111,7 @@ class _Kernel:
 
 class TestMemoryDefaults:
     def test_unwritten_key_equals_its_default(self):
-        names = ("_drum_event_ready:i1", "_oneshot:i2")
+        names = ("_flash_idle:i1", "_oneshot:i2")
         defaults = (True, False)
 
         def key(memory: dict) -> tuple:
@@ -123,9 +123,9 @@ class TestMemoryDefaults:
                 memory_key_defaults=defaults,
             )
 
-        assert key({}) == key({"_drum_event_ready:i1": True, "_oneshot:i2": False})
-        # The drum's event latch defaults on: an off value is a different state.
-        assert key({}) != key({"_drum_event_ready:i1": False})
+        assert key({}) == key({"_flash_idle:i1": True, "_oneshot:i2": False})
+        # A flasher's idle latch defaults on: an off value is a different state.
+        assert key({}) != key({"_flash_idle:i1": False})
         assert key({}) != key({"_oneshot:i2": True})
 
 

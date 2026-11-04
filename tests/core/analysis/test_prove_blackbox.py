@@ -287,8 +287,8 @@ class TestModel:
         _assert_replays(logic, never(logic, seen_off, _opt_config=BLACKBOX), seen_off.name)
 
     def test_jumping_time_drum_flag_is_state(self):
-        """The completion flag stays on while a jump re-times steps 1 and 2:
-        the flag is held state, not a coil recomputed each scan."""
+        """The completion flag stays on through a jump to step 1: the flag is
+        held state, not a coil recomputed each scan."""
         from pyrung.core import time_drum
 
         enable, jump = Bool("BbDrEn", external=True), Bool("BbDrJump", external=True)
@@ -304,10 +304,12 @@ class TestModel:
                     accumulator=Int("BbDrAcc"),
                     completion_flag=done,
                 ).reset(Bool("BbDrReset", external=True)).jump(jump, step=1)
-        result = never(logic, done, step == 3, y3, _opt_config=BLACKBOX)
+        result = never(logic, done, step == 1, _opt_config=BLACKBOX)
         assert isinstance(result, Counterexample)
         tags = _replay(logic, result.trace).current_state.tags
-        assert (tags["BbDrDone"], tags["BbDrStep"], tags["BbDrY3"]) == (True, 3, True)
+        assert (tags["BbDrDone"], tags["BbDrStep"], tags["BbDrY3"]) == (True, 1, False)
+        # The flag stops the drum there: nothing times step 3 again.
+        assert isinstance(never(logic, done, y3, _opt_config=BLACKBOX), Proven)
 
     def test_unread_timer_never_branches(self):
         en = Bool("BbUnEn", external=True)
@@ -637,7 +639,7 @@ class TestReviewRound2:
         assert {500, 501, 7, 8} <= set(model.reps["BbR2LT_Acc"])
 
     def test_settled_on_a_completed_time_drum_replays(self):
-        # A completed drum's last-step accumulator keeps counting: settled.
+        # The tick that completes a drum moved its accumulator, and it holds from there: settled.
         en, rst = Bool("BbR2MEn", external=True), Bool("BbR2MRst", external=True)
         done, step = Bool("BbR2MDone"), Int("BbR2MStep")
         with Program(strict=False) as logic:

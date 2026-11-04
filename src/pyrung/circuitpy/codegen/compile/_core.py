@@ -360,11 +360,10 @@ from ._instructions_basic import (
 )
 from ._instructions_block import (
     _compile_blockcopy_instruction,
-    _compile_event_drum_instruction,
+    _compile_drum_instruction,
     _compile_fill_instruction,
     _compile_search_instruction,
     _compile_shift_instruction,
-    _compile_time_drum_instruction,
 )
 from ._instructions_out import (
     _compile_debounce_instruction,
@@ -427,10 +426,8 @@ def compile_instruction(
         return _compile_search_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ShiftInstruction):
         return _compile_shift_instruction(instr, enabled_expr, ctx, indent)
-    if isinstance(instr, EventDrumInstruction):
-        return _compile_event_drum_instruction(instr, enabled_expr, ctx, indent)
-    if isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
-        return _compile_time_drum_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, (EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction)):
+        return _compile_drum_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, PackBitsInstruction):
         return _compile_pack_bits_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, PackWordsInstruction):

@@ -249,7 +249,6 @@ group = Group(
             ladder=prove_paused_jog_cases,
             expect={"Result2": 2424, "Result3": 2424, "Result4": 1111, "ErrorCode": 1111},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A jump beats a jog on the last step and counts when it lands on the step "
@@ -271,7 +270,6 @@ group = Group(
             ladder=prove_jump_after_completion,
             expect={"Result2": 1414, "Result3": 1414, "Result4": 1414, "ErrorCode": 1414},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A completed drum that fires again rewrites only the flag: both complete on "
@@ -291,7 +289,6 @@ group = Group(
             ladder=prove_acc_through_jog_completion,
             expect={"Result2": 9, "Result3": 0, "Result4": 0, "ErrorCode": range(900, 1000)},
             scans=SCANS,
-            pending="DRUM",
         ),
     ],
 )

@@ -187,7 +187,7 @@ def test_one_timer_stepped_from_the_start_lands_there_too(coil: Any) -> None:
         pytest.param(lambda: _chain(3, 2, "min"), 30_002, id="chain"),
         pytest.param(_soak, 12_001, id="soak"),
         pytest.param(_soak_beside_an_oscillator, 6_001, id="osc_soak"),
-        pytest.param(_drum, 6_002, id="drum"),
+        pytest.param(_drum, 6_003, id="drum"),
     ],
 )
 def test_the_recording_stepped_from_the_start_lands_there_too(build: Any, landing: int) -> None:

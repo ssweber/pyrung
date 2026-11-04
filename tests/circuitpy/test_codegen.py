@@ -755,7 +755,7 @@ class TestInstructionCoverage:
         result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         compile(result.code, "code.py", "exec")
-        assert "_ready" in result.code
+        assert "_end_met" in result.code
         assert "_frac:" in result.code
 
     def test_off_delay_codegen_keeps_timing_at_done_false_acc_zero(self):
@@ -843,7 +843,6 @@ class TestInstructionCoverage:
         assert "_frac:" in source_code
         assert "_drum_jump_prev:i" in source_code
         assert "_drum_jog_prev:i" in source_code
-        assert "_drum_done:i" in source_code
         assert "_drum_rung_prev:i" in source_code
 
         class StubBase:

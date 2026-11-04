@@ -87,23 +87,22 @@ with rung(Running):
 
 A step ends when its time is up **and** its event is on. `None` leaves out either half: step 1 is time-only, step 2 waits for `PartPresent` alone, step 3 needs 2 s and `DrillHome`. Each step needs at least one.
 
-Events are levels, unlike `event_drum`'s rising edges: an event already on when the time comes up ends the step on that scan, and one level held across several event-only steps ends one step per scan. The accumulator times from step entry and keeps counting while a timed step waits for its event.
+Events are levels, unlike `event_drum`'s rising edges: an event already on when the time comes up ends the step on that scan, and one level held across several event-only steps ends one step per scan. The accumulator times from step entry and keeps counting while a timed step waits for its event; a step with no preset does not time.
 
 `event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
 
 ### What a drum does each scan
 
-All three drums follow the same rules:
+All three drums run the same routine:
 
-- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then. A write to the step register is not a move: the outputs stay, and the next event, time or jog acts on the step the register holds.
 - **Reset** is a level, and it wins: while it is on the drum sits on step 1 with its completion flag and **every output off**, and a jump or jog that rises on a reset scan is dropped, not saved for later.
-- **Jump and jog** act on their rising edges, even while the rung is false. The jog runs first and the jump last, so a jump and a jog on one scan land on the jump's step. A jog on the last step completes the drum, which stays on that step; a further jog there does nothing.
-- **A false rung** pauses the drum: no timing, no event steps, and its outputs stay as they were. They show the step a paused jump or jog took once the rung is true again.
-- **Completion** sets the flag and turns every output off. They stay off until the drum steps forward again, by a jog or by its own event or time. A jump moves the step but leaves them off. Only a reset clears the flag.
-- **A step register out of range** goes to step 1 the next scan the rung is true; a paused drum leaves it alone. The correction writes no output by itself.
-- A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump, a reset and a correction.
-
-After a jump, an event or time step ends a completion, as a jog does.
+- **Jump and jog** act on their rising edges, even while the rung is false. The jump comes last, so a jump and a jog on one scan land on the jump's step. A jog on the last step completes the drum at once, rung true or not, and it stays on that step; a further jog there does nothing. A step a jump or jog moves to waits for the next scan to time or end.
+- **A step register out of range** goes to step 1 the next scan the rung is true, keeping the accumulator; a paused drum leaves it alone. The correction writes no output by itself. A jog rising on a bad step leaves that scan alone, and the next scan corrects.
+- **A step's own end** needs the rung true and the completion flag off. On those scans a step with a preset times, and the step moves when its end is met: its time, its event, or both. A false rung pauses all of it, and the outputs stay as they were.
+- **The scan the rung comes back**, a reset ends, or the program starts writes the step's row and does no more: no time, no step's end, and an event drum's rising edge on that scan is spent. A jump or jog on that scan still acts.
+- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then. A write to the step register is not a move: the outputs stay, and the next event, time or jog acts on the step the register holds.
+- **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on the drum's own time and events do nothing, the accumulator holds, and a rung coming back writes nothing. A jump moves the step and leaves the outputs alone; a jog forward writes the row. A reset clears the flag, and so can any other rung: set from outside, the flag stops a drum wherever it is, and cleared from outside it frees the drum to go on from the step it is on.
+- A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump and a reset. Completing and a correction keep it.
 
 ### Variadic condition chaining
 

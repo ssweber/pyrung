@@ -410,7 +410,6 @@ group = Group(
             ladder=prove_te_event_on_return_scan,
             expect={"Result1": 1111, "Result2": 1111, "Result3": 1111, "Result4": 2222},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A drum takes no event on the scan a reset ended, its rung true all along: "
@@ -426,7 +425,6 @@ group = Group(
                 "ErrorCode": 2222,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A time & event drum takes an event on the scan after it entered a step: "
@@ -444,7 +442,6 @@ group = Group(
             ladder=prove_te_level_from_scan_1,
             expect={"Result2": 1111, "Result3": 2211, "Result4": 2211},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A drum whose time is up does not move on the scan its rung returns: paused on "
@@ -454,7 +451,6 @@ group = Group(
             ladder=prove_te_event_with_acc_staged,
             expect={"Result2": 1111, "Result3": 1111, "Result4": 2211},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A jog alone brings a jumped completed drum's row back and its own end does "
@@ -464,7 +460,6 @@ group = Group(
             ladder=prove_after_jump_jog_alone,
             expect={"Result2": 1414, "Result3": 2626, "Result4": 2626, "ErrorCode": 2626},
             scans=scans_for(AFTER_JUMP_WINDOW),
-            pending="DRUM",
         ),
         case(
             "A completed time drum's Acc holds: one completed by its time keeps 25 hundreds "
@@ -473,7 +468,6 @@ group = Group(
             ladder=prove_acc_in_completed_drum,
             expect={"Result2": 25, "Result3": 0, "Result4": 2426, "ErrorCode": 0},
             scans=scans_for(LONG_WINDOW),
-            pending="DRUM",
         ),
         case(
             "An event drum completed by a jog and jumped to step 1 does not take step 1's "
@@ -482,7 +476,6 @@ group = Group(
             ladder=prove_event_drum_after_completion,
             expect={"Result2": 2424, "Result3": 1424, "Result4": 1424, "ErrorCode": 1424},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A correction keeps a drum's Acc: step 5 and Acc 900 staged on scan 3 of a time "
@@ -498,7 +491,6 @@ group = Group(
                 "ErrorCode": range(1, 6),
             },
             scans=SCANS,
-            pending="DRUM",
         ),
     ],
 )

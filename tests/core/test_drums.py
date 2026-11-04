@@ -1,22 +1,30 @@
 from __future__ import annotations
 
+import random
+from collections.abc import Callable
+
 import pytest
 
 from pyrung.core import (
     PLC,
     Bool,
     CompiledPLC,
+    Dint,
     Int,
     Program,
     Rung,
+    Timer,
     branch,
     event_drum,
     latch,
+    on_delay,
     out,
     reset,
+    scan_trace,
     time_drum,
     time_event_drum,
 )
+from tests.core.scan_loop_counts import NEVER
 
 
 def test_event_drum_requires_reset_builder() -> None:
@@ -270,14 +278,19 @@ def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
     assert not any(runner.current_state.tags[f"Y{i}"] for i in range(1, 5))
 
     # The dropped edges are spent: held through the reset's end they do nothing.
+    # The reset's end is a return scan: it writes step 1's row and does not move.
     runner.patch({"Reset": False})
     runner.step()
-    assert runner.current_state.tags["Step"] == 2  # step 1's 0 ms preset is up
-    assert runner.current_state.tags["Y2"] is True
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Y1"] is True
 
-    # Jump and jog on one scan: the jog runs first, the jump (to 3) wins.
+    # Step 1's 0 ms preset is up on the next scan.
     runner.patch({"Jump": False, "Jog": False})
     runner.step()
+    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Y2"] is True
+
+    # Jump and jog on one scan: the jump (to 3) wins.
     runner.patch({"Jump": True, "Jog": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 3
@@ -331,9 +344,9 @@ def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
     assert runner.current_state.tags["Y2"] is True
 
 
-def test_event_drum_advance_after_a_jump_ends_completion(runner_factory) -> None:
-    """pyrung's reading (no CLICK probe yet): the drum's own step forward, like a
-    jog, ends the all-outputs-off state a completion left through a jump."""
+def test_event_drum_own_end_does_nothing_under_the_flag(runner_factory) -> None:
+    """A jump leaves a completed drum's flag on, and the flag stops its own logic:
+    the step's event does nothing (``drum_settle/event_drum_after_completion``)."""
     with Program() as logic:
         with Rung(Bool("Enable")):
             event_drum(
@@ -361,9 +374,10 @@ def test_event_drum_advance_after_a_jump_ends_completion(runner_factory) -> None
 
     runner.patch({"Jump": False, "E1": True})
     runner.step()
-    assert runner.current_state.tags["Step"] == 2
+    assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Done"] is True
-    assert runner.current_state.tags["Y2"] is True
+    assert runner.current_state.tags["Y1"] is False
+    assert runner.current_state.tags["Y2"] is False
 
 
 def test_time_drum_jump_reads_at_box_entry(runner_factory) -> None:
@@ -619,7 +633,7 @@ def test_time_event_drum_event_only_steps_follow_the_level(runner_factory) -> No
     runner.step()
     runner.step()
     assert runner.current_state.tags["Step"] == 1
-    assert runner.current_state.tags["Acc"] == 10
+    assert runner.current_state.tags["Acc"] == 0  # a step with no preset does not time
 
     # A level held across two event-only steps ends one per scan.
     runner.patch({"E1": True})
@@ -659,6 +673,9 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
 
     runner = runner_factory(logic, dt=0.010)
     runner.patch({"Enable": True, "E1": True})
+    runner.step()  # the first scan is a return scan: step 1's row, no move
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["Y1"] is True
     runner.step()
     assert runner.current_state.tags["Step"] == 2
     assert runner.current_state.tags["Y2"] is True
@@ -1042,7 +1059,9 @@ def test_jog_on_a_bad_step_leaves_that_scan_alone(kind: str, backend: type) -> N
     assert plc.current_state.tags.get("Acc", 0) == acc_before
     plc.step()
     assert _snapshot(plc) == (1, False, True, False)
-    assert plc.current_state.tags.get("Acc", 0) == 0
+    # The correction keeps Acc and times on; the frozen scan did not.
+    if kind != "event":
+        assert plc.current_state.tags["Acc"] == acc_before + 10
     plc.step()
     assert _snapshot(plc) == (1, False, True, False)
 
@@ -1079,9 +1098,9 @@ def test_jog_on_the_last_step_completes(kind: str, backend: type) -> None:
     plc.patch({"Jog": True})
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
-    # It stays on the step, and a timed step keeps its time.
+    # It stays on the step, and a timed step keeps its time, ticking no more.
     if kind != "event":
-        assert plc.current_state.tags["Acc"] > acc_before
+        assert plc.current_state.tags["Acc"] == acc_before
     plc.patch({"Jog": False})
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
@@ -1097,7 +1116,7 @@ def test_jog_on_the_last_step_of_a_paused_drum_completes(kind: str, backend: typ
     plc = _on_step_two(kind, backend)
     plc.patch({"Enable": False, "Jog": True})
     plc.step()
-    assert _snapshot(plc) == (2, False, True, True)
+    assert _snapshot(plc) == (2, False, False, True)
     plc.patch({"Enable": True, "Jog": False})
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
@@ -1124,3 +1143,211 @@ def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
     plc.patch({"B": True})
     plc.step()
     assert _snapshot(plc) == (2, False, True, True)
+
+
+# -- the same routine on both backends and in the guarded loop -------------------
+
+
+def _busy_drum(kind: str) -> Program:
+    """A 3-step drum with every pin and short times, so its own ends come often."""
+    args = {
+        "outputs": [Bool("A"), Bool("B")],
+        "pattern": [[1, 0], [0, 1], [1, 1]],
+        "current_step": Int("Step"),
+        "completion_flag": Bool("Done"),
+    }
+    with Program(strict=False) as logic:
+        with Rung(Bool("ClearA")):
+            reset(Bool("A"))
+        with Rung(Bool("Enable")):
+            if kind == "event":
+                drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **args)
+            elif kind == "time":
+                drum = time_drum(
+                    presets=[30, 50, Int("Preset", default=40)],
+                    accumulator=Int("Acc"),
+                    **args,
+                )
+            else:
+                drum = time_event_drum(
+                    presets=[30, None, Int("Preset", default=40)],
+                    events=[None, Bool("E2"), Bool("E3")],
+                    accumulator=Int("Acc"),
+                    **args,
+                )
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step=Int("Target")).jog(Bool("Jog"))
+    return logic
+
+
+def _random_patch(rng: random.Random) -> dict[str, bool | int]:
+    """What one scan finds changed: pins, events, and writes to what the drum owns."""
+    patch: dict[str, bool | int] = {}
+    for name, odds in (
+        ("Enable", 0.9),
+        ("Reset", 0.05),
+        ("Go", 0.1),
+        ("Jog", 0.15),
+        ("E1", 0.3),
+        ("E2", 0.3),
+        ("E3", 0.3),
+        ("ClearA", 0.1),
+    ):
+        patch[name] = rng.random() < odds
+    patch["Target"] = rng.randrange(0, 5)
+    if rng.random() < 0.08:
+        patch["Step"] = rng.choice([0, 1, 2, 3, 5])
+    if rng.random() < 0.05:
+        patch["Done"] = rng.random() < 0.5
+    if rng.random() < 0.05:
+        patch["Acc"] = rng.choice([0, 25, 1000])
+    if rng.random() < 0.05:
+        patch["B"] = rng.random() < 0.5
+    return patch
+
+
+def _drum_view(plc: PLC | CompiledPLC) -> dict[str, object]:
+    """The drum's tags and memory, an absent entry reading as its default."""
+    state = plc.current_state
+    view: dict[str, object] = {
+        name: state.tags.get(name, default)
+        for name, default in (
+            ("Step", 0),
+            ("Acc", 0),
+            ("Done", False),
+            ("A", False),
+            ("B", False),
+        )
+    }
+    view.update(
+        (key, value)
+        for key, value in state.memory.items()
+        if key.startswith(("_drum_", "_frac:")) and value
+    )
+    return view
+
+
+@pytest.mark.parametrize("seed", range(6))
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_backends_agree_scan_by_scan(kind: str, seed: int) -> None:
+    """Whatever a scan finds, both backends end it the same, down to the drum's memory."""
+    rng = random.Random(f"{kind}{seed}")
+    interpreted = PLC(_busy_drum(kind), dt=0.01)
+    compiled = CompiledPLC(_busy_drum(kind), dt=0.01)
+    for scan in range(300):
+        patch = _random_patch(rng)
+        interpreted.patch(patch)
+        compiled.patch(patch)
+        interpreted.step()
+        compiled.step()
+        assert _drum_view(compiled) == _drum_view(interpreted), (scan, patch)
+
+
+def _waiting_drum(kind: str, rung_above: Callable[[], None], enable: Bool) -> Program:
+    """A 2-step drum whose steps take 50 s, so a long run holds it, with a rung above it."""
+    args = {
+        "outputs": [Bool("A"), Bool("B")],
+        "pattern": [[1, 0], [0, 1]],
+        "current_step": Int("Step"),
+        "completion_flag": Bool("Done"),
+    }
+    with Program(strict=False) as logic:
+        rung_above()
+        with Rung(enable):
+            if kind == "event":
+                drum = event_drum(events=[Bool("E1"), Bool("E2")], **args)
+            elif kind == "time":
+                drum = time_drum(presets=[50_000, 50_000], accumulator=Dint("Acc"), **args)
+            else:
+                drum = time_event_drum(
+                    presets=[50_000, None],
+                    events=[Bool("E1"), Bool("E2")],
+                    accumulator=Dint("Acc"),
+                    **args,
+                )
+            drum.reset(Bool("Reset")).jog(Bool("Jog"))
+    return logic
+
+
+def _equal_stepping(
+    build: Callable[[], Program], segments: list[tuple[dict[str, bool | int], int]]
+) -> PLC:
+    """Each segment's patch, then its scans, in the loop and stepped: equal at each end."""
+    looped = PLC(build(), dt=0.01)
+    stepped = PLC(build(), dt=0.01)
+    before = scan_trace.TOTALS["loop scans"]
+    for patch, scans in segments:
+        looped.patch(patch)
+        stepped.patch(patch)
+        looped.run_until(NEVER, max_cycles=scans, jit=True)
+        stepped.run_until(NEVER, max_cycles=scans, jit=False)
+        assert looped.state.scan_id == stepped.state.scan_id
+        assert dict(looped.state.tags) == dict(stepped.state.tags)
+        assert dict(looped.state.memory) == dict(stepped.state.memory)
+    assert scan_trace.TOTALS["loop scans"] > before
+    return looped
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_long_runs_through_what_a_drum_answers_to_equal_stepping(kind: str) -> None:
+    """A return, a flag set and cleared from outside, a pause, a jog and a reset, each
+    followed by a long hold."""
+    plc = _equal_stepping(
+        lambda: _waiting_drum(kind, lambda: None, Bool("Enable")),
+        [
+            ({"Enable": True}, 300),
+            ({"Done": True}, 300),
+            ({"E1": True, "Acc": 60_000}, 300),
+            ({"Done": False}, 300),
+            ({"Enable": False, "E1": False}, 300),
+            ({"Enable": True, "E2": True}, 300),
+            ({"Jog": True}, 300),
+            ({"Jog": False, "Reset": True}, 300),
+            ({"Reset": False}, 300),
+            ({"Step": 7}, 300),
+        ],
+    )
+    assert plc.state.tags["Step"] in {1, 2}
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_a_rung_returning_inside_a_long_run_writes_the_row_on_that_scan(kind: str) -> None:
+    """The timer's Done brings the rung back inside the run: the loop must leave its hold."""
+    late = Timer.clone("Late")
+
+    def above() -> None:
+        with Rung(Bool("Start")):
+            on_delay(late, 2_000)
+
+    plc = _equal_stepping(
+        lambda: _waiting_drum(kind, above, late.Done),
+        [({"Start": True, "E1": True}, 500)],
+    )
+    assert plc.state.tags["A"] or plc.state.tags["B"]
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_a_flag_cleared_inside_a_long_run_frees_the_drum_on_that_scan(kind: str) -> None:
+    """A completed drum holds with nothing moving, until a rung clears its flag mid-run."""
+    late = Timer.clone("Late")
+
+    def above() -> None:
+        with Rung(Bool("Start")):
+            on_delay(late, 2_000)
+        with Rung(late.Done):
+            reset(Bool("Done"))
+
+    plc = _equal_stepping(
+        lambda: _waiting_drum(kind, above, Bool("Enable")),
+        [
+            ({"Enable": True}, 3),
+            ({"Jog": True}, 1),
+            ({"Jog": False}, 1),
+            ({"Jog": True}, 1),
+            ({"Jog": False, "Start": True}, 500),
+        ],
+    )
+    assert plc.state.tags["Step"] == 2
+    assert plc.state.tags["Done"] is False

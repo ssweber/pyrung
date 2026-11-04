@@ -277,7 +277,6 @@ group = Group(
                 "ErrorCode": range(1, 1000),
             },
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "The flag is what stops a completed drum: completed by a jog (2424, Result2), the "
@@ -294,7 +293,6 @@ group = Group(
             ladder=prove_flag_set_from_outside,
             expect={"Result2": 1515, "Result3": 1515, "Result4": 1515, "ErrorCode": 2626},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A rung's return writes nothing with the flag on: completed, jumped and jogged back "
@@ -303,7 +301,6 @@ group = Group(
             ladder=prove_return_after_jog_back,
             expect={"Result2": 2626, "Result3": 2424, "Result4": 2424},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A rung's return writes nothing on a completed drum: completed and jumped (1414, "
@@ -312,7 +309,6 @@ group = Group(
             ladder=prove_return_after_jump,
             expect={"Result2": 1414, "Result3": 1616, "Result4": 1616, "ErrorCode": 1616},
             scans=SCANS,
-            pending="DRUM",
         ),
         case(
             "A jog and a jump act on a return scan (2222, 1111, Result2, Result3), and the last "
@@ -322,7 +318,6 @@ group = Group(
             expect={"Result2": 2222, "Result3": 1111, "Result4": 2222, "ErrorCode": 2424},
             scans=SCANS,
             probe="time and time & event drums: a return scan's jog, jump and last step",
-            pending="DRUM",
         ),
         case(
             "A time & event drum times only a step with a time, and not once completed: a timed "
@@ -338,7 +333,6 @@ group = Group(
                 "ErrorCode": 0,
             },
             scans=SCANS,
-            pending="DRUM",
         ),
     ],
 )
