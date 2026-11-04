@@ -2975,14 +2975,18 @@ class PLC:
         self._epoch_caches.on_replay_anchor_replaced()
         self._cache_state(state)
 
-    def _edit_tip_tags(self, tags: Mapping[str, Any]) -> None:
-        """Put *tags* in the state the next scan starts from, between scans.
+    def _edit_tip_tags(
+        self, tags: Mapping[str, Any], *, memory: Mapping[str, Any] | None = None
+    ) -> None:
+        """Put *tags* and *memory* in the state the next scan starts from, between scans.
 
         The scans before the tip ran without them and stay as they ran.  The tip's
         own entries follow it, so it reads the same before and after the next scan,
         and a causal transition's first ``before`` is the value set here.
         """
         state = self._state.with_tags(dict(tags))
+        if memory:
+            state = state.with_memory(dict(memory))
         self._state = state
         scan_id = state.scan_id
         replaced = self._recent_state_cache.pop(scan_id, None)

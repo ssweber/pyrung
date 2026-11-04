@@ -24,7 +24,7 @@ from pyrung.core.physical import (
     Ramp,
     profile_to_token,
 )
-from pyrung.core.synthesis import plant_timer
+from pyrung.core.synthesis import TIMER_ACC_MAX, plant_acc_name, plant_timer
 from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
@@ -315,12 +315,14 @@ class Harness:
         any declared coupling on that feedback (or adds one); ``None`` cuts the
         declared coupling, leaving the feedback a free input.  A coupling added
         while its enable is already on starts cold: the feedback follows after
-        its on-delay, as freshly wired hardware would.
+        its on-delay, as freshly wired hardware would.  A coupling replaced keeps
+        the time its timers have counted, whatever unit the new delays count in.
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
                 raise ValueError(f"Override for {fb_name!r} drives {coupling.fb_name!r}.")
         self._overrides = dict(overrides)
+        counted_in = self._timer_accumulators()
         self._rebuild_couplings()
         if self._installed:
             # Rebuild the overlay and monitors so changed couplings take
@@ -328,10 +330,56 @@ class Harness:
             self._plc._note_plant_change()
             self._refresh_synthesis()
             self._seed_plant_defaults()
+            self._carry_counts_to_new_units(counted_in)
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
             self._install_monitors()
+
+    def _timer_accumulators(self) -> dict[tuple[str, str], tuple[str, int]]:
+        """Each plant timer's accumulator and its ms per unit, by what the timer times."""
+        timers: list[tuple[str, str, int]] = []
+        for c in self._bool_couplings:
+            timers.append(("__cpl_on", c.fb_name, c.on_delay_ms))
+            timers.append(("__cpl_off", c.fb_name, c.off_delay_ms))
+        for c in self._profile_couplings:
+            if isinstance(c.profile, Pulse):
+                timers.append(("__pls_on", c.fb_name, c.profile.on_dwell_ms))
+                timers.append(("__pls_off", c.fb_name, c.profile.off_dwell_ms))
+        return {
+            (stem, fb_name): (plant_acc_name(stem, fb_name, delay_ms), plant_timer(delay_ms)[2])
+            for stem, fb_name, delay_ms in timers
+        }
+
+    def _carry_counts_to_new_units(
+        self, counted_in: Mapping[tuple[str, str], tuple[str, int]]
+    ) -> None:
+        """Move what a timer has counted to its new accumulator when its unit changed.
+
+        A delay staying in its unit keeps its accumulator, so its count carries over
+        by itself; this makes a change of unit do the same.
+        """
+        state = self._plc._state
+        tags: dict[str, Any] = {}
+        memory: dict[str, Any] = {}
+        for timer, (new_name, new_unit_ms) in self._timer_accumulators().items():
+            old = counted_in.get(timer)
+            if old is None or old[0] == new_name:
+                continue
+            old_name, old_unit_ms = old
+            count = int(state.tags.get(old_name, 0) or 0)
+            frac = float(state.memory.get(f"_frac:{old_name}", 0.0) or 0.0)
+            elapsed_ms = (count + frac) * old_unit_ms
+            new_count = int(elapsed_ms // new_unit_ms)
+            new_frac = elapsed_ms / new_unit_ms - new_count
+            if new_count > TIMER_ACC_MAX:
+                new_count, new_frac = TIMER_ACC_MAX, 0.0
+            tags[old_name] = 0
+            memory[f"_frac:{old_name}"] = 0.0
+            tags[new_name] = new_count
+            memory[f"_frac:{new_name}"] = new_frac
+        if tags:
+            self._plc._edit_tip_tags(tags, memory=memory)
 
     def pending(self, fb_name: str) -> bool:
         """True while a bool coupling on *fb_name* is still counting toward a flip."""
@@ -626,8 +674,8 @@ class Harness:
                 else BitCondition(en_tag)
             )
             ton_done = Bool(f"__cpl_ond__{c.fb_name}", retentive=False)
-            ton_acc = Int(f"__cpl_on__{c.fb_name}", retentive=False)
-            tof_acc = Int(f"__cpl_off__{c.fb_name}", retentive=False)
+            ton_acc = Int(plant_acc_name("__cpl_on", c.fb_name, c.on_delay_ms), retentive=False)
+            tof_acc = Int(plant_acc_name("__cpl_off", c.fb_name, c.off_delay_ms), retentive=False)
             fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
             if fb_tag is None:
                 fb_tag = Bool(c.fb_name)
@@ -695,9 +743,15 @@ class Harness:
                         disable=disable,
                         fb_tag=fb_tag,
                         on_done=Bool(f"__pls_ond__{c.fb_name}", retentive=False),
-                        on_acc=Int(f"__pls_on__{c.fb_name}", retentive=False),
+                        on_acc=Int(
+                            plant_acc_name("__pls_on", c.fb_name, spec.on_dwell_ms),
+                            retentive=False,
+                        ),
                         off_done=Bool(f"__pls_offd__{c.fb_name}", retentive=False),
-                        off_acc=Int(f"__pls_off__{c.fb_name}", retentive=False),
+                        off_acc=Int(
+                            plant_acc_name("__pls_off", c.fb_name, spec.off_dwell_ms),
+                            retentive=False,
+                        ),
                         on_dwell_ms=spec.on_dwell_ms,
                         off_dwell_ms=spec.off_dwell_ms,
                     )

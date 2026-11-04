@@ -562,6 +562,173 @@ class TestDelaysPastTheMillisecondRange:
         assert _whole_state(run) == _whole_state(stepped)
 
 
+class TestALinkChangedAcrossUnits:
+    """A link changed mid-run keeps the time counted, whatever unit either delay counts in."""
+
+    @staticmethod
+    def _linked(on_delay: str, *, dt: float = 0.25, default: bool = False):
+        En = Bool("En", default=default)
+        Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=dt)
+        Harness(plc).install()
+        return plc, En, Fb
+
+    @staticmethod
+    def _relink(plc, **physical) -> None:
+        plc._harness.set_overrides({"Fb": Coupling("En", "Fb", Physical("S", **physical), None)})
+
+    @staticmethod
+    def _scans_to_flip(plc, Fb, budget: int = 1_000) -> int | None:
+        start = _fb(plc, Fb)
+        for i in range(budget):
+            plc.step()
+            if _fb(plc, Fb) != start:
+                return i + 1
+        return None
+
+    @pytest.mark.parametrize(
+        ("first", "then", "left_s"),
+        [
+            ("5s", "10s", 7.25),  # same unit, the control
+            ("5s", "60s", 57.25),
+            ("40s", "60s", 57.25),  # same unit, the control
+            ("40s", "5s", 2.25),
+        ],
+    )
+    def test_mid_count_the_time_counted_carries(self, first, then, left_s):
+        plc, En, Fb = self._linked(first)
+        plc.patch({En: True})
+        plc.run(12)  # one to command the enable, 11 held: 2.75 s counted
+        assert _fb(plc, Fb) is False
+        self._relink(plc, on_delay=then)
+        assert self._scans_to_flip(plc, Fb) == left_s * 4
+
+    @pytest.mark.parametrize(
+        ("first", "then", "holds"),
+        [
+            ("10s", "5s", True),  # same unit, the control
+            ("40s", "5s", True),
+            ("60s", "5s", True),
+            ("60s", "40s", True),  # same unit, the control
+            ("5s", "10s", False),  # same unit, the control
+            ("5s", "60s", False),
+            ("5s", "40s", False),
+            ("40s", "60s", False),  # same unit, the control
+        ],
+    )
+    def test_settled_feedback_holds_only_if_it_has_counted_the_new_delay(self, first, then, holds):
+        plc, _En, Fb = self._linked(first, default=True)
+        plc.run(4)
+        assert _fb(plc, Fb) is True
+        self._relink(plc, on_delay=then)
+        plc.run(2)
+        assert _fb(plc, Fb) is holds
+
+    def test_there_and_back_leaves_no_stale_count(self):
+        plc, En, Fb = self._linked("5s", default=True)
+        plc.run(4)
+        self._relink(plc, on_delay="60s")  # counts 5 s + 1 s in seconds
+        plc.run(4)
+        plc.force(En, False)
+        plc.run(2)  # the seconds timer drops to 0 with its enable
+        plc.unforce(En)
+        self._relink(plc, on_delay="5s")
+        assert plc.current_state.tags["__cpl_on__Fb"] == 0
+        assert plc.current_state.tags["__cpl_on_Ts__Fb"] == 0
+        plc.run(2)
+        assert _fb(plc, Fb) is False
+
+    def test_an_off_delay_carries(self):
+        plc, En, Fb = self._linked("0ms")
+        plc.patch({En: True})
+        plc.run(3)
+        self._relink(plc, off_delay="5s")
+        plc.run(1)
+        plc.force(En, False)
+        plc.run(13)  # 3 s into the off-delay
+        assert _fb(plc, Fb) is True
+        self._relink(plc, off_delay="60s")
+        assert self._scans_to_flip(plc, Fb) == pytest.approx(57 * 4, abs=2)
+
+    def test_a_pulse_dwell_carries(self):
+        En = Bool("En")
+        Fb = Bool("Fb", physical=Physical("F", profile=Pulse("5s", "5s")), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.25)
+        Harness(plc).install()
+        plc.patch({En: True})
+        plc.run(5)  # part way through the first low dwell
+        assert _fb(plc, Fb) is False
+        count = plc.current_state.tags["__pls_off__Fb"]
+        assert count > 0
+        self._relink(plc, profile=Pulse("60s", "60s"))
+        assert self._scans_to_flip(plc, Fb) == pytest.approx((60_000 - count) // 250, abs=2)
+
+    def test_a_delay_staying_in_its_unit_writes_nothing(self):
+        plc, En, _Fb = self._linked("5s")
+        plc.patch({En: True})
+        plc.run(5)
+        before = _whole_state(plc)
+        self._relink(plc, on_delay="10s", off_delay="20s")
+        assert _whole_state(plc) == before
+
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_runs_history_and_forks_equal_stepping_after_the_change(self, dt):
+        def changed(scans_after: int):
+            plc, En, Fb = self._linked("5s", dt=dt)
+            plc.patch({En: True})
+            plc.run(12)
+            self._relink(plc, on_delay="60s")
+            for _ in range(scans_after):
+                plc.step()
+            return plc
+
+        changed_at = changed(0).current_state.scan_id
+        stepped = changed(700)
+        ran = changed(0)
+        ran.run(700)
+        assert _whole_state(ran) == _whole_state(stepped)
+        assert ran.current_state.tags["Fb"] is True
+
+        reference = changed(100)
+        at = stepped.history.at(changed_at + 100)
+        assert dict(at.tags) == dict(reference.current_state.tags)
+        assert dict(at.memory) == dict(reference.current_state.memory)
+        at_change = stepped.history.at(changed_at)
+        assert dict(at_change.tags) == dict(changed(0).current_state.tags)
+
+        fork = stepped.fork(scan_id=changed_at + 100)
+        fork.run(50)
+        twin = changed(150)
+        assert dict(fork.current_state.tags) == dict(twin.current_state.tags)
+        assert dict(fork.current_state.memory) == dict(twin.current_state.memory)
+
+    def test_a_fork_from_before_the_change_does_not_misread_the_count(self):
+        plc, En, Fb = self._linked("5s")
+        plc.patch({En: True})
+        plc.run(12)
+        before = plc.current_state.scan_id
+        self._relink(plc, on_delay="60s")
+        plc.run(5)
+
+        stepped = plc.fork(scan_id=before)
+        ran = plc.fork(scan_id=before)
+        for _ in range(100):
+            stepped.step()
+        ran.run(100)
+        assert _whole_state(ran)[2:] == _whole_state(stepped)[2:]
+        assert _fb(stepped, Fb) is False
+
+
 # --- Value-Trigger Fixtures ---
 
 STATE_CHOICES = {0: "IDLE", 1: "RUNNING", 2: "SORTING"}

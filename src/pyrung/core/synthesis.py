@@ -70,7 +70,7 @@ def _rung_holding(condition: Condition | Tag | None, instruction: Any) -> Rung:
 
 
 _TIMER_UNITS_MS = (("Tms", 1), ("Ts", 1_000), ("Tm", 60_000), ("Th", 3_600_000), ("Td", 86_400_000))
-_TIMER_ACC_MAX = 32767
+TIMER_ACC_MAX = 32767
 
 
 def plant_timer(delay_ms: int) -> tuple[int, str, int]:
@@ -82,11 +82,22 @@ def plant_timer(delay_ms: int) -> tuple[int, str, int]:
     """
     for unit, unit_ms in _TIMER_UNITS_MS:
         preset = -(-delay_ms // unit_ms)
-        if preset <= _TIMER_ACC_MAX:
+        if preset <= TIMER_ACC_MAX:
             return preset, unit, unit_ms
     raise ValueError(
         f"a feedback delay of {delay_ms} ms is longer than a timer can count (32767 days)"
     )
+
+
+def plant_acc_name(stem: str, fb_name: str, delay_ms: int) -> str:
+    """The accumulator of a plant timer on *fb_name*, in the unit it counts *delay_ms* in.
+
+    A count means nothing without its unit, so a delay in another unit counts in another
+    tag, and any state reads the same whichever coupling runs on it, a fork from before
+    the link changed included.  Milliseconds have the plain name.
+    """
+    _preset, unit, _unit_ms = plant_timer(delay_ms)
+    return f"{stem}__{fb_name}" if unit == "Tms" else f"{stem}_{unit}__{fb_name}"
 
 
 def bool_feedback_rungs(
