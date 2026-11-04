@@ -18,8 +18,7 @@ Each compare is a decimal digit, 1 where it passed power.  A pair is two digits,
   something, from an earlier project, and the case reads that and not a blank.
 - ``cleared``: a TXT written "Q" and then the blank, the same four, with a never written one for
   the last: 1, 1, 10, 10, and its ASCII code 0.
-- ``blank_and_space``: a blank shows as nothing in the CLICK software, as a space does, and a model
-  could read one for the other.  Never written and cleared against " " (Result1, Result2) and a TXT
+- ``blank_and_space``: a compare could read a blank as a space.  Never written and cleared against " " (Result1, Result2) and a TXT
   holding " " (Result3, Result4): 1 where a blank is not a space, 10 where it is.  ErrorCode, a TXT
   holding " " against " ": 10, the control.
 - ``blank_literal``: ``""`` is how the exporter spells the blank.  Never written and cleared against
