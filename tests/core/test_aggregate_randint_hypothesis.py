@@ -381,7 +381,6 @@ def test_real_sum_adds_plain_left_to_right_not_compensated():
     # Stored values are 64-bit floats here; 1e8, 1, -1e8 is exact at that width
     # (and loses the 1 at a CLICK's 32-bit Real), so the separating case is 1e16:
     # builtin sum() on Python 3.12+ compensates and gives 2.0, plain adds give 0.0.
-    assert sum([1e16, 1.0, 1.0, -1e16]) in (0.0, 2.0)
     for values in ([1e16, 1.0, 1.0, -1e16], [1e8, 1.0, -1e8]):
         got = _real_sum_on_each_backend(values)
         plain = values[0]

@@ -42,10 +42,6 @@
 - `fault.division_error` (SC40) follows the last `calc()` to run, and `fault.out_of_range` (SC43) and `fault.address_error` (SC44) the last `calc()` or `copy()`, as on a CLICK (measured on hardware): one that runs without the fault clears the flag, where it used to stay on to the end of the scan. `blockcopy()`, `fill()`, `pack_*()` and `unpack_*()` follow like `copy()`, and all clear at scan start, by pyrung's choice.
 - A pointer or index expression past the end of its block is no address error in a `copy()` or `calc()`: a read gives the type's zero value with no flag and a write is dropped, while below the block it still sets `fault.address_error` and writes nothing. A CLICK raises no flag past the bank either; reading 0 is pyrung's choice, since pyrung has no memory beyond it.
 
-### Fixed
-
-- A Real range `.sum()` adds plain left to right on every backend, so the stored result no longer changes in the last bit with the Python version or between stepping, the compiled kernel and generated code.
-
 ### Features
 
 - CLICK validation refuses what the CLICK editor refuses: a `forloop()` count outside a constant, `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`), a `randint()` with a bare `Real` tag as a bound or two equal constant bounds (`CLK_RAND_REAL_BOUND`, `CLK_RAND_EQUAL_BOUNDS`), and a `SUM` over a bank it cannot read (`CLK_CALC_SUM_BANK_NOT_AVAILABLE`). `pyrung_to_ladder()` takes `allow=` to let named finding codes through.
@@ -87,6 +83,7 @@
 
 ### Fixes
 
+- A Real range `.sum()` adds plain left to right on every backend, so the stored result no longer changes in the last bit with the Python version or between stepping, the compiled kernel and generated code.
 - A `run_function()` or `run_enabled_function()` that scans, stops or reboots the PLC running it or sets its battery (`step()`, `run()`, `run_for()`, `run_until()`, a `scan_steps` scan, `stop()`, `reboot()`, `battery_present`), on `PLC` or `CompiledPLC`, raises `RuntimeError`, where the scan published a wrong state and the two backends disagreed. Set a tag through `outs=` and act on it from outside the scan, or scan another PLC or a `PLC.fork()`.
 - A constant in an imported CLICK ladder (hex such as `FFC0h`, a Real, or quoted text) is never read as an address, so the generated `tags.py` no longer gains a stray tag like `C0 = c[0]` that fails on import.
 - Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`. CLICK's Compare offers only `=` and `!=` on text, so `<`, `<=`, `>` and `>=` on a Char are a `CLK_TEXT_ORDER_COMPARE` finding that export refuses unless allowed.
