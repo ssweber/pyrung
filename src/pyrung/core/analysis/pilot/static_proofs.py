@@ -10,8 +10,9 @@ Three facts carry both proofs:
 * ``ProofFacts.producers`` lists every rung able to put a value in a tag, and
   refuses when a write can happen outside the rung's condition (a coil going
   false, a timer) or through a pointer.
-* A tag the plan, the plant or the outside may set (``free``: steerable, forced,
-  harness feedback, external, system) has no such list.
+* A tag the plan, the plant or the outside may set (``free``: steerable, forced or
+  patched in the session how() was asked from, harness feedback, external, an input
+  block's slot, system) has no such list.
 * The state how() starts from counts: a value already there needs no producer.
 
 **Blocked by a link** (``linked_feedback_block``). A value is blocked when it
@@ -47,8 +48,9 @@ from pyrung.core.analysis.write_sites import instruction_writes_tag
 from pyrung.core.crossing import CrossingContext, Literal
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.timers import OnDelayInstruction
+from pyrung.core.synthesis import plant_timer
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-from pyrung.core.tag import TagType
+from pyrung.core.tag import InputTag, TagType
 from pyrung.core.time_mode import TimeMode
 
 if TYPE_CHECKING:
@@ -71,7 +73,7 @@ class ProofFacts:
     pdg: ProgramGraph
     program: Any
     free: frozenset[str]
-    forced: frozenset[str]
+    overridden: frozenset[str]
     couplings: tuple[Coupling, ...]
     dt_ms: float | None
 
@@ -140,20 +142,25 @@ def facts_for(setup: DriveSetup) -> ProofFacts:
     work = setup.work
     harness = getattr(work, "_harness", None)
     couplings = tuple(harness.couplings()) if harness is not None else ()
-    forced = frozenset(work._forces)
+    # The fork drops the session's forces and patches, and the proof is about the session.
+    overridden = setup.session_overrides
     free = (
         frozenset(setup.steerable)
-        | forced
+        | overridden
         | {coupling.fb_name for coupling in couplings}
         | SYSTEM_TAGS_BY_NAME.keys()
-        | {name for name, tag in setup.pdg.tags.items() if tag.external}
+        | {
+            name
+            for name, tag in setup.pdg.tags.items()
+            if tag.external or isinstance(tag, InputTag)
+        }
     )
     return ProofFacts(
         snapshot=setup.diag_snapshot,
         pdg=setup.pdg,
         program=setup.program,
         free=free,
-        forced=forced,
+        overridden=overridden,
         couplings=couplings,
         dt_ms=work._dt * 1000 if work._time_mode is TimeMode.FIXED_STEP else None,
     )
@@ -194,6 +201,12 @@ def _enable_required(atoms: list[Any], coupling: Coupling) -> bool | None:
     else:
         on, off = _requires(atoms, en, on_form), _requires(atoms, en, off_form)
     return True if on and not off else False if off and not on else None
+
+
+def _plant_delay_ms(declared_ms: int | None) -> int:
+    """How long the plant really takes: its timer rounds up to a whole unit of what it counts."""
+    preset, _unit, unit_ms = plant_timer(declared_ms or 0)
+    return preset * unit_ms
 
 
 class _LinkProof:
@@ -270,7 +283,12 @@ class _LinkProof:
         ]
         if not found:
             return NotImplemented
-        if not value or len(found) != 1 or len(writers) != 1:
+        if (
+            not value
+            or len(found) != 1
+            or len(writers) != 1
+            or self.facts._writable_through_pointer(tag)
+        ):
             return None
         node_index, timer = found[0]
         node = pdg.rung_nodes[node_index]
@@ -283,6 +301,7 @@ class _LinkProof:
             or not isinstance(timer.preset, int)
             or pdg.writers_of.get(acc, frozenset()) != writers
             or acc in self.facts.free
+            or self.facts._writable_through_pointer(acc)
         ):
             return None
         per_ms = timer.unit.dt_to_units(0.001)
@@ -340,17 +359,18 @@ class _LinkProof:
         if (
             facts.dt_ms is None
             or coupling.physical.profile is not None
-            or fb in facts.forced
+            or fb in facts.overridden
             or facts.pdg.writers_of.get(fb)
+            or facts._writable_through_pointer(fb)
         ):
             return None
         driving = _enable_required(atoms, coupling)
         fb_high = _requires(atoms, fb, "xic")
         fb_low = _requires(atoms, fb, "xio")
         if driving is True and fb_low and not fb_high:
-            return True, coupling.physical.on_delay_ms or 0
+            return True, _plant_delay_ms(coupling.physical.on_delay_ms)
         if driving is False and fb_high and not fb_low:
-            return False, coupling.physical.off_delay_ms or 0
+            return False, _plant_delay_ms(coupling.physical.off_delay_ms)
         return None
 
 
@@ -435,9 +455,15 @@ def _leaves_other_off(facts: ProofFacts, node_index: int, tag: str, value: Any) 
     """How firing this node leaves *tag* off *value*, in words, or ``None``."""
     node = facts.pdg.rung_nodes[node_index]
     where = _scope_ref(node_index, node)
+    # A return may leave between this rung's write of one and its write of the other.
+    may_return = any(
+        other.guard_reads for other in facts.pdg.rung_nodes if _rung_key(other) == _rung_key(node)
+    )
     for link in _rung_chain(facts, node):
         if _reads_off(_conditions_list_to_expr(link._conditions), tag, value):
             return f"{where} reads {tag} off {value!r}"
+        if may_return:
+            continue
         for instr in link._instructions:
             if not instruction_writes_tag(instr, tag) or not instr.is_inert_when_disabled():
                 continue

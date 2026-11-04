@@ -213,6 +213,10 @@ def render_condition(cond: Condition) -> str:
         return f"rise({operand_name(cond.tag)})"
     if isinstance(cond, FallingEdgeCondition):
         return f"fall({operand_name(cond.tag)})"
+    from pyrung.core.expression import ExprCompare
+
+    if isinstance(cond, ExprCompare):
+        return f"{operand_name(cond.left)} {cond.symbol} {operand_name(cond.right)}"
     if isinstance(cond, AnyCondition):
         return f"Or({', '.join(render_condition(c) for c in cond.conditions)})"
     if isinstance(cond, AllCondition):

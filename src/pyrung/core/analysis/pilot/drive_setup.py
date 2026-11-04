@@ -57,6 +57,8 @@ class DriveSetup:
     compass: Compass
     opaque_loop: frozenset[str]
     configured_inputs: frozenset[str]
+    # Forced or patched on the PLC how() was asked of; the fork has neither.
+    session_overrides: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,7 @@ def prepare_drive(
         compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
         opaque_loop=detect_opaque_loop(pdg, program),
         configured_inputs=configured_inputs,
+        session_overrides=frozenset(plc._forces) | frozenset(plc._pending_patches),
     )
 
 

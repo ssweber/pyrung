@@ -292,8 +292,11 @@ class CoastSession:
         for member in members:
             condition = getattr(member, "condition", None)
             # Compiled members have an exact read-set. Opaque callables do not,
-            # so their contract observes the full snapshot.
-            declared_reads = tuple(sorted(member.tags)) if condition is not None else None
+            # so their contract observes the full snapshot.  A pointer or an expression
+            # names no tag it reads, so it reads the live map, where a stretch traces it.
+            names_reads = condition is not None and _exact_condition_reads(condition) is not None
+            declared_reads = tuple(sorted(member.tags)) if names_reads else None
+            reads_live = condition is not None and not names_reads
             # The start may be the state behind how()'s start, so it is only weighed.
             if _member_weighed(member.pred, start):
                 continue
@@ -302,16 +305,18 @@ class CoastSession:
                 state: Any,
                 _member: Any = member,
                 _declared_reads: tuple[str, ...] | None = declared_reads,
+                _reads_live: bool = reads_live,
             ) -> bool:
                 # A stretch refuses an opaque member its full snapshot, so the member
                 # is judged on the real scans around the stretch and not in it.
                 try:
                     tags = state.tags
-                    snapshot = (
-                        dict(tags)
-                        if _declared_reads is None
-                        else {name: tags[name] for name in _declared_reads if name in tags}
-                    )
+                    if _reads_live:
+                        snapshot = tags
+                    elif _declared_reads is None:
+                        snapshot = dict(tags)
+                    else:
+                        snapshot = {name: tags[name] for name in _declared_reads if name in tags}
                 except _NotDeclared:
                     return False
                 return _member_on_scan(_member.name, _member.pred, snapshot)

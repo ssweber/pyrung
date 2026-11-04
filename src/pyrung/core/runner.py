@@ -860,6 +860,12 @@ def _avoid_condition_predicate(condition: Any) -> Callable[[dict[str, Any]], boo
     return _predicate
 
 
+def _avoid_opaque_name(condition: Any) -> str:
+    from pyrung.core.validation.render import render_condition
+
+    return render_condition(condition)
+
+
 def _avoid_condition(spec: Any, expr: Any) -> Any | None:
     """Return the executable condition of one condition-like avoid.
 
@@ -908,7 +914,7 @@ def _compile_avoid(spec: Any) -> Any:
         condition = _avoid_condition(cond, expr)
         if expr is not None and _avoid_expr_is_opaque(expr):
             # The lowered form has no reading of these, and undecided counts as violated.
-            name = str(condition)
+            name = _avoid_opaque_name(condition)
             pred = _avoid_condition_predicate(condition)
         members.append(
             _AvoidMember(

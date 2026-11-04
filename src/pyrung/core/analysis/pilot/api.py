@@ -127,16 +127,17 @@ def _parse_targets(*conditions: Any) -> list[tuple[str, Any, Any]]:
     """Extract one ``(tag, value, predicate)`` per condition (multi-target goals)."""
     if not conditions:
         raise ValueError("pilot: how() requires at least one target condition")
+    return [_parse_one(member) for condition in conditions for member in _members(condition)]
+
+
+def _members(condition: Any) -> Iterator[Any]:
     from pyrung.core.condition import AllCondition
 
-    def flat(condition: Any) -> Iterator[Any]:
-        if isinstance(condition, AllCondition):
-            for member in condition.conditions:
-                yield from flat(member)
-        else:
-            yield condition
-
-    return [_parse_one(member) for condition in conditions for member in flat(condition)]
+    if isinstance(condition, AllCondition):
+        for member in condition.conditions:
+            yield from _members(member)
+    else:
+        yield condition
 
 
 def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
@@ -146,41 +147,31 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     return _parse_one(conditions[0])
 
 
-def _freeze_unused_operands(
-    targets: list[tuple[str, Any, Any]], setup: _drive_setup.DriveSetup
-) -> list[tuple[str, Any, Any]]:
-    """A relational operand no rung uses has one value through a search: compare with that.
-
-    The search only carries tags the program uses, so it has no live value to read.
-    """
-    frozen = []
-    for tag, value, predicate in targets:
+def _check_operands(targets: list[tuple[str, Any, Any]], setup: _drive_setup.DriveSetup) -> None:
+    """A relational operand has to have a value in the search, or the goal has no meaning."""
+    for tag, _value, predicate in targets:
         if (
             predicate is not None
             and predicate.operand_is_tag
             and predicate.operand not in setup.pdg.tags
+            and predicate.operand not in setup.diag_snapshot
         ):
-            known = setup.work._known_tags_by_name.get(predicate.operand)
-            default = known.default if known is not None else 0
-            literal = setup.diag_snapshot.get(predicate.operand, default)
-            predicate = replace(predicate, operand=literal, operand_is_tag=False)
-            value = literal
-        frozen.append((tag, value, predicate))
-    return frozen
+            raise ValueError(
+                f"pilot: how() target {tag} is compared with {predicate.operand}, and no rung "
+                "uses that tag, so a search has no value for it. Compare with a literal."
+            )
 
 
-def _goal_tags_it_cannot_read(
-    targets: list[tuple[str, Any, Any]], setup: _drive_setup.DriveSetup
-) -> list[str]:
-    """Tags a relational or joint goal names and the search does not carry.
+def _carry_goal_tags(setup: _drive_setup.DriveSetup, conditions: tuple[Any, ...]) -> None:
+    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed."""
+    from pyrung.core.tag import Tag
 
-    Such a goal is lowered to a condition on program tags, which it cannot be. A single
-    ``tag == value`` is judged by value, and stops by itself when nothing moves it.
-    """
-    if len(targets) == 1 and targets[0][2] is None:
-        return []
     known = setup.work._known_tags_by_name
-    return [tag for tag, _value, _predicate in targets if tag not in known]
+    for condition in conditions:
+        for member in _members(condition):
+            tag = member if isinstance(member, Tag) else getattr(member, "tag", None)
+            if isinstance(tag, Tag) and tag.name not in known:
+                setup.work._register_tag_no_rung_gave(tag)
 
 
 def _plan_from_outcome(
@@ -255,9 +246,10 @@ def pilot_events(
     state ends the stream with ``AvoidCheckError``.
     """
     clock = _budget.WallClock.starting_now(wall_clock_s)
-    target = _parse_target(*conditions)
+    target_tag, target_value, target_predicate = _parse_target(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    target_tag, target_value, target_predicate = _freeze_unused_operands([target], setup)[0]
+    _check_operands([(target_tag, target_value, target_predicate)], setup)
+    _carry_goal_tags(setup, conditions)
     with _avoid_errors_named():
         ctx, _route_taken = _drive_setup.prepare_target_context(
             setup,
@@ -311,21 +303,10 @@ def pilot_how(
     clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    targets = _freeze_unused_operands(targets, setup)
+    _check_operands(targets, setup)
+    _carry_goal_tags(setup, conditions)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()
-    unread = _goal_tags_it_cannot_read(targets, setup)
-    if unread:
-        return Plan(
-            reachable=False,
-            target_tag=goal.tag,
-            target_value=goal.value,
-            targets=goal_pairs,
-            target_predicate=goal.predicate,
-            reason=f"no rung uses {', '.join(unread)}, so how() has nothing to steer it with",
-            status=PlanStatus.STOPPED,
-            anchor_scan=setup.anchor_scan,
-        )
     if goal.members:
         from pyrung.core.analysis.pilot import multitarget
 

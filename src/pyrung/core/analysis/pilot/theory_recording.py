@@ -720,10 +720,10 @@ def _record_controlled_setup_attempt(
         raise TheoryInvariantError("setup-first execution has no immutable execution receipt")
     owner = execution_owner(execution.pulse.fork, execution.assertion_scan)
     if owner is None:
-        raise ValueError("setup-first execution has no exact assertion owner")
+        raise TheoryInvariantError("setup-first execution has no exact assertion owner")
     projection = execution.projection_at(execution.assertion_scan)
     if projection is None:
-        raise ValueError("setup-first execution has no owner-bound projection")
+        raise TheoryInvariantError("setup-first execution has no owner-bound projection")
     occurrences = tuple(
         (
             "write",

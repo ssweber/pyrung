@@ -237,7 +237,11 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
             raise ValueError(f"constraint {atom!r} cannot lower to a runtime condition")
         return condition
 
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
     tag = plc._known_tags_by_name.get(atom.tag)
+    if tag is None:
+        tag = SYSTEM_TAGS_BY_NAME.get(atom.tag)
     if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
 

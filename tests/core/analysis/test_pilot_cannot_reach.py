@@ -7,6 +7,7 @@ in the test. Each real proof is one no input changes.
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -14,25 +15,32 @@ import pytest
 from pyrung import (
     PLC,
     And,
+    Block,
     Bool,
     Harness,
+    InputBlock,
     Int,
     Or,
     Program,
     Pulse,
     Rung,
+    TagType,
     Timer,
     branch,
+    call,
     copy,
     latch,
     on_delay,
     out,
     reset,
+    return_early,
     rise,
+    subroutine,
 )
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.drive_setup import prepare_drive
 from pyrung.core.analysis.pilot.static_proofs import facts_for, linked_feedback_block
+from pyrung.core.harness import Coupling
 from pyrung.core.physical import Physical
 
 BOUND: dict[str, Any] = {"wall_clock_s": 30.0, "max_scans": 3000}
@@ -437,3 +445,241 @@ def test_one_register_still_proves(value: int) -> None:
     plan = PLC(program, dt=0.01).how(stage == 1, stage == 2, **BOUND)
     assert plan.status is PlanStatus.CANNOT_REACH, plan.reason
     assert "one register" in (plan.reason or "")
+
+
+# ---------------------------------------------------------------------------
+# What the proof cannot see: it gives up
+# ---------------------------------------------------------------------------
+
+
+def _watchdog_chain() -> tuple[Program, Any, Any]:
+    enable = Bool("En", external=True)
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+    hit = Bool("Hit")
+    middle = Bool("M")
+    watch = Timer.clone("W")
+    with Program(strict=False) as program:
+        with Rung(enable, ~feedback):
+            on_delay(watch, 3000)
+        with Rung(watch.Done):
+            latch(middle)
+        with Rung(middle):
+            latch(hit)
+    return program, hit, watch
+
+
+def _proved_on(plc: PLC, tag: Any, value: Any = True) -> str | None:
+    return linked_feedback_block(tag.name, value, facts_for(prepare_drive(plc, unlink=None)))
+
+
+class TestForcesAndPatchesOfTheSession:
+    """how() searches a fork, which drops both: the session itself is what the proof is about."""
+
+    def test_the_watchdog_proves_with_nothing_forced(self) -> None:
+        program, hit, _watch = _watchdog_chain()
+        assert _proved_on(_harnessed(program), hit) is not None
+
+    @pytest.mark.parametrize(
+        "forced",
+        [
+            lambda watch: ("Fb", False),
+            lambda watch: ("M", True),
+            lambda watch: (watch.Acc.name, 3100),
+        ],
+        ids=["feedback", "a tag on the way", "the count"],
+    )
+    def test_a_force_on_the_way_is_no_proof(self, forced: Callable[[Any], Any]) -> None:
+        program, hit, watch = _watchdog_chain()
+        name, value = forced(watch)
+
+        stepped = _harnessed(program)
+        stepped.force(name, value)
+        assert _step_to(stepped, hit, {"En": True}, 400) is not None
+
+        session = _harnessed(program)
+        session.force(name, value)
+        assert _proved_on(session, hit) is None
+        assert session.how(hit, **BOUND).status is not PlanStatus.CANNOT_REACH
+
+    def test_a_force_holds_both_of_an_exclusion(self) -> None:
+        go, again = Bool("Go", external=True), Bool("Ag", external=True)
+        x, y = Bool("X"), Bool("Y")
+        with Program(strict=False) as program:
+            with Rung(go):
+                latch(x)
+                reset(y)
+            with Rung(again):
+                latch(y)
+                reset(x)
+        plc = PLC(program, dt=0.01)
+        plc.force("Y", True)
+        assert plc.how(x, y, max_scans=300).status is not PlanStatus.CANNOT_REACH
+
+    def test_a_pending_patch_is_no_proof(self) -> None:
+        program, hit, watch = _watchdog_chain()
+
+        stepped = _harnessed(program)
+        stepped.patch({"En": True, watch.Acc.name: 2995})
+        assert _step_to(stepped, hit, {"En": True}, 10) is not None
+
+        session = _harnessed(program)
+        session.patch({"En": True, watch.Acc.name: 2995})
+        assert _proved_on(session, hit) is None
+        assert session.how(hit, **BOUND).status is not PlanStatus.CANNOT_REACH
+
+
+def test_a_write_after_a_possible_return_is_no_clobber() -> None:
+    go, again, skip = (Bool(name, external=True) for name in ("Go", "Ag", "Sw"))
+    x, y = Bool("X"), Bool("Y")
+    with Program(strict=False) as program:
+        with Rung():
+            call("S")
+        with subroutine("S"):
+            with Rung(go):
+                latch(x)
+                with branch(skip):
+                    return_early()
+                reset(y)
+            with Rung(again):
+                latch(y)
+                reset(x)
+
+    stepped = PLC(program, dt=0.01)
+    stepped.patch({"Ag": True})
+    stepped.step()
+    stepped.patch({"Ag": False, "Go": True, "Sw": True})
+    stepped.step()
+    assert stepped.state.tags["X"] and stepped.state.tags["Y"]
+
+    plan = PLC(program, dt=0.01).how(x, y, max_scans=300)
+    assert plan.status is not PlanStatus.CANNOT_REACH
+
+
+class TestPointerWritesOverTheCap:
+    """A pointer into a block too big to expand leaves no writer for the slot in the graph."""
+
+    def test_the_timers_done(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit, command = Bool("Hit"), Bool("Cmd", external=True)
+        bits = Block("C", TagType.BOOL, 1, 2000)
+        pointer = Int("Idx")
+        timer = SimpleNamespace(Done=bits[1], Acc=Int("Acc"))
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(timer, 3000)
+            with Rung(command):
+                copy(1, bits[pointer])
+            with Rung(bits[1]):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Cmd": True, "Idx": 1}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_the_timers_count(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit, command, done = Bool("Hit"), Bool("Cmd", external=True), Bool("Done")
+        words = Block("D", TagType.INT, 1, 2000)
+        pointer = Int("Idx")
+        timer = SimpleNamespace(Done=done, Acc=words[1])
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(timer, 3000)
+            with Rung(command):
+                copy(2995, words[pointer])
+            with Rung(done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Cmd": True, "Idx": 1, "En": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_the_feedback(self) -> None:
+        enable, command = Bool("En", external=True), Bool("Cmd", external=True)
+        bits = Block("C", TagType.BOOL, 1, 2000)
+        pointer = Int("Idx")
+        watch = Timer.clone("W")
+        hit = Bool("Hit")
+        feedback = bits[1]
+        with Program(strict=False) as program:
+            with Rung(command):
+                copy(0, bits[pointer])
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(hit)
+
+        def session() -> PLC:
+            plc = PLC(program, dt=0.01)
+            harness = Harness(plc)
+            harness.install()
+            harness.set_overrides(
+                {feedback.name: Coupling("En", feedback.name, Physical(feedback.name, on_delay="100ms"))}
+            )
+            return plc
+
+        assert _step_to(session(), hit, {"Cmd": True, "En": True, "Idx": 1}, 400) is not None
+        assert _proved_on(session(), hit) is None
+
+
+def test_an_input_block_slot_is_the_outsides_to_set() -> None:
+    go, again = Bool("Go", external=True), Bool("Ag", external=True)
+    inputs = InputBlock("I", TagType.BOOL, 1, 5)
+    with Program(strict=False) as program:
+        with Rung(go):
+            latch(inputs[1])
+            reset(inputs[2])
+        with Rung(again):
+            latch(inputs[2])
+            reset(inputs[1])
+
+    stepped = PLC(program, dt=0.01)
+    stepped.patch({inputs[1].name: True, inputs[2].name: True})
+    stepped.step()
+    assert stepped.state.tags[inputs[1].name] and stepped.state.tags[inputs[2].name]
+
+    plan = PLC(program, dt=0.01).how(inputs[1], inputs[2], max_scans=300)
+    assert plan.status is not PlanStatus.CANNOT_REACH
+
+
+class TestThePlantsOwnDelay:
+    """Past 32.767 s the plant counts whole seconds, rounded up, so it runs longer than declared."""
+
+    def test_on_delay(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="40500ms"), link="En")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(watch, 41, "s")
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program, dt=0.1), hit, {"En": True}, 800) is not None
+        assert _proved_on(_harnessed(program, dt=0.1), hit) is None
+
+    def test_off_delay(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", off_delay="40500ms"), link="En")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(~enable, feedback):
+                on_delay(watch, 41, "s")
+            with Rung(watch.Done):
+                latch(hit)
+
+        stepped = _harnessed(program, dt=0.1)
+        _step_to(stepped, hit, {"En": True}, 5)
+        assert _step_to(stepped, hit, {"En": False}, 800) is not None
+        assert _proved_on(_harnessed(program, dt=0.1), hit) is None
+
+    def test_a_delay_the_timer_clearly_outlasts_still_proves(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="40500ms"), link="En")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(watch, 60, "s")
+            with Rung(watch.Done):
+                latch(hit)
+        assert _proved_on(_harnessed(program, dt=0.1), hit) is not None
