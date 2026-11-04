@@ -150,6 +150,8 @@ class CompiledKernel:
     # Shares the runtime kernel's tags/blocks/memory with ``step_fn`` — same
     # signature — because both are compiled from one program (union templates).
     pre_step_fn: Callable[..., None] | None = None
+    # Whether its passes can call a ``run_function`` body, which could ask for a scan.
+    calls_functions: bool = True
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )

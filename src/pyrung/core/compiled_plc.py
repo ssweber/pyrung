@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 
 from pyrsistent import PMap
 
-from pyrung.core.context import ScanContext, same_stored_value
+from pyrung.core.context import ScanContext, refused_inside_its_own_scan, same_stored_value
 from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -235,6 +235,10 @@ class CompiledPLC:
         self._dt = float(dt)
         self._time_mode = TimeMode.FIXED_STEP
         self._running = True
+        # A kernel pass that can call a ``run_function`` body is running, and that body may
+        # not scan, stop or reboot this PLC or set its battery.  Nothing here can pause inside a
+        # scan, so the pass is narrow enough.
+        self._kernel_pass_open = False
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
@@ -431,6 +435,8 @@ class CompiledPLC:
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         self._battery_present = bool(value)
         self._kernel.memory[_BATTERY_PRESENT_KEY] = self._battery_present
         self._state = self._state.with_memory({_BATTERY_PRESENT_KEY: self._battery_present})
@@ -442,7 +448,8 @@ class CompiledPLC:
 
     def start(self) -> None:
         """Transition STOP -> RUN now, without executing a scan (see ``PLC.start``)."""
-        self._ensure_running()
+        if not self._running:
+            self._ensure_running()
 
     @property
     def keep_forces_on_run(self) -> bool:
@@ -459,6 +466,8 @@ class CompiledPLC:
         return MappingProxyType(self._pending_patches)
 
     def stop(self) -> None:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         if not self._running:
             return
         self._running = False
@@ -466,6 +475,8 @@ class CompiledPLC:
         self._state = self._state.with_memory({_MODE_RUN_KEY: False})
 
     def reboot(self) -> SystemState:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         tag_values = self._rebuild_tags_for_reset(
             preserve_all=self._battery_present,
             preserve_retentive=False,
@@ -497,13 +508,15 @@ class CompiledPLC:
 
     def _run_kernel_pass(self, step_fn: Any) -> None:
         """Invoke one compiled function against the already-loaded blocks."""
-        step_fn(
-            self._kernel.tags,
-            self._kernel.blocks,
-            self._kernel.memory,
-            self._kernel.prev,
-            self._dt,
-        )
+        kernel = self._kernel
+        if not self._compiled.calls_functions:
+            step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, self._dt)
+            return
+        self._kernel_pass_open = True
+        try:
+            step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, self._dt)
+        finally:
+            self._kernel_pass_open = False
 
     def _flush_blocks_tracked(self, tracked_blocks: dict[str, _TrackedList]) -> None:
         """Close the scan's block bracket: flush **only the cells written this
@@ -651,11 +664,16 @@ class CompiledPLC:
         return state
 
     def run(self, cycles: int) -> SystemState:
+        # Here as well as in step(): a run of no scans answers a body the same way.
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         for _ in range(cycles):
             self.step()
         return self._state
 
     def run_for(self, seconds: float) -> SystemState:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
             self.step()
@@ -850,6 +868,9 @@ class CompiledPLC:
         return self._mirrored_memory
 
     def _ensure_running(self) -> None:
+        # Every way into a scan comes through here first, ahead of anything it would move.
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         # A runner's states walk one recording, and a restart ends a recording: a stop
         # inside it scanned on until a later call (runner._reset_recording).
         if not self._running and not self._exact_anchor:
