@@ -128,6 +128,7 @@ ALL_GROUPS = [
     test_real_sum.group,
     test_drum_pins.group,
     test_drum_pins.branch_group,
+    test_drum_pins.limits_group,
     # After every group: its probes raise SC43 and SC46 on purpose, and a flag
     # stays up to the end of the scan, so any group after it that reads a flag
     # would see them (text/to_binary read SC43 on a scan a store probe raised it).
@@ -191,7 +192,7 @@ PARTS: dict[str, tuple[str, ...]] = {
     # The grey-area probes (probe_kit.py) go in parts of their own, so no confirmed
     # group changes.  H what Copy and Math store.
     "H": ("word_store", "real_bits", "real_sum"),
-    "I": ("drum_pins", "drum_branch"),
+    "I": ("drum_pins", "drum_branch", "drum_limits"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

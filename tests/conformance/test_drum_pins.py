@@ -1,6 +1,6 @@
 """Drum probes: a pin against a step's own end, and every other branch of the routine.
 
-Part I (``suite.PARTS``), two groups: ``drum_pins`` and ``drum_branch``.  The cases
+Part I (``suite.PARTS``), three groups: ``drum_pins``, ``drum_branch``, ``drum_limits``.  The cases
 ask what no recording in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
 ``test_drum_jump.py``, ``test_drum_settle.py``, ``test_drum_close.py`` or
 ``test_drum_idle.py`` separates.  An expectation here is a ``range`` over the candidates,
@@ -105,8 +105,16 @@ Reading at the return   2626          2626           2424
   is lost, and with the time up later and no event the drum stays, 11; one latched moves,
   22 (top drum, Result2).  The drum below has the time up first and takes a later pulse, 22
   (Result3).  Recorded: a level event, and a held event (``te_level_event_already_on``).
-- ``acc_at_int_top``: Acc 32760 on a time & event step waiting for its event, some scans
-  later: 32767 (1, stops) or negative (2, wraps), in Result2.
+  Result4: Acc 32760 on a time & event step waiting for its event, 5 scans on: 32767 (1,
+  stops), negative (2, wraps), or 0 for neither.
+- ``drum_in_loop``: a time drum in a For of 3 beside the same drum outside it, both from Acc
+  0 for 150 ms by a free TON.  Result2 = 10 * inside / outside: 30 if the body's time adds up
+  per pass, 10 if a scan's time is once.  Result3: a jog bit up once, in the loop: 2 (one
+  move; the edge is spent on the first pass) or 4 (every pass).  An event drum with an
+  event up on one scan (Result4) likewise.
+
+``drum_limits``, last in the part since a paste may refuse one:
+
 - ``preset_from_ds``: a preset in a DS lowered below Acc on a step: read live, the step ends
   that scan, 2222, read at entry it does not, 1111 (Result2, a time drum over a time & event
   drum).  Preset DS 0 (Result3) and -5 (Result4): the time drum's step ends on the next
@@ -114,11 +122,6 @@ Reading at the return   2626          2626           2424
 - ``units``: a time drum in seconds beside a free TON: Result2 is Acc after 2100 ms, 2 in
   seconds, 2100 if the unit does not reach the drum.  Result3 is the same in minutes, 0, or
   2100 likewise.  Result4 is the seconds drum on scan 3, 0 unless it starts at 1.
-- ``drum_in_loop``: a time drum in a For of 3 beside the same drum outside it, both from Acc
-  0 for 150 ms by a free TON.  Result2 = 10 * inside / outside: 30 if the body's time adds up
-  per pass, 10 if a scan's time is once.  Result3: a jog bit up once, in the loop: 2 (one
-  move; the edge is spent on the first pass) or 4 (every pass).  An event drum with an
-  event up on one scan (Result4) likewise.
 - ``single_step``: 1-step drums.  A time drum's end (Result2 on scan 3) and an event drum's
   (Result3 on scan 5) complete them, 1411 then 1414; a jog completes an event-only time &
   event drum, 14 (Result4), or does nothing, 11.  If CLICK's editor refuses a 1-step drum at
@@ -127,7 +130,7 @@ Reading at the return   2626          2626           2424
 Not asked: 16 steps and 16 outputs are the editor's limits, static; a drum twice called in
 one scan is ``call_more/drum_called_twice``.
 
-The cases own the raw memory listed in ``memory.OWNED`` under ``drum_pins``.
+The cases own the raw memory listed in ``memory.OWNED`` under these groups.
 """
 
 from __future__ import annotations
@@ -187,7 +190,7 @@ _BITS = [
 #: The C bits of each chunk of raw memory (:func:`rig`), the sides' 3 each included.
 _CHUNK_BITS = (
     10, 10, 9, 10, 10, 8, 5, 11, 9, 3, 11, 8, 11, 10, 8, 8, 9, 7,
-    10, 8, 12, 9, 10, 9, 9, 9, 5, 8, 6, 6, 9, 6, 8, 4,
+    10, 8, 12, 9, 10, 9, 9, 9, 5, 9, 6, 8, 6, 6, 8, 4,
 )  # fmt: skip
 _STEPS = [*range(4231, 4243), *range(4248, 4263), *range(4267, 4283), *range(4403, 4411)]
 _STEPS += [*range(4413, 4421), *range(4424, 4431), *range(4316, 4322)]
@@ -735,25 +738,21 @@ def prove_te_event_before_time(slot):
     track(slot, under)
     snap(slot, top, under, 5, slot.Result2)
     snap(slot, top, under, 6, slot.Result3)
-    done(slot)
-
-
-def prove_acc_at_int_top(slot):
-    r = rig(26)
-    te = r.side(0)
-    e1, e2 = r.take(2)
-    count_scans(slot)
+    # A step waiting for its event goes on timing: from 32760, to the top of an Int.
+    q = rig(26)
+    te = q.side(0)
+    e3, e4 = q.take(2)
     put(slot, 3, 32760, te.acc)
-    te_box(slot, te, [e1, e2], [LONG, LONG])
+    te_box(slot, te, [e3, e4], [LONG, LONG])
     with Rung(slot.Scratch == 8, te.acc == 32767):
-        copy(1, slot.Result2)
+        copy(1, slot.Result4)
     with Rung(slot.Scratch == 8, te.acc < 0):
-        copy(2, slot.Result2)
+        copy(2, slot.Result4)
     done(slot)
 
 
 def prove_preset_from_ds(slot):
-    r, q = rig(27), rig(28)
+    r, q = rig(29), rig(30)
     tm, te = r.side(0), r.side(1)
     zero, negative = q.side(0), q.side(1)
     e1, e2 = r.take(2)
@@ -779,7 +778,7 @@ def prove_preset_from_ds(slot):
 
 
 def prove_units(slot):
-    r = rig(29)
+    r = rig(31)
     secs, mins = r.side(0), r.side(1)
     clock = ClickTimer(_TDS[-1])
     with Rung(slot.Cmd != 0):
@@ -796,7 +795,7 @@ def prove_units(slot):
 
 
 def prove_drum_in_loop(slot):
-    r, q = rig(30), rig(31)
+    r, q = rig(27), rig(28)
     inside, outside = r.side(0), r.side(1)
     jogged, evd = q.side(0), q.side(1)
     jog, e1, e2 = r.take(3)
@@ -1089,20 +1088,37 @@ branch_group = Group(
         case(
             "A time & event step: an event pulse before the time is up is lost, and the time up "
             "later moves nothing, top digit 1 (Result2); time first, then a pulse, moves "
-            "it (Result3)",
+            "it (Result3); Acc 32760 waiting for its event, 5 scans on: 1 stops at 32767, 2 "
+            "wraps (Result4)",
             ladder=prove_te_event_before_time,
             scans=SCANS,
-            expect={"Result2": between(1111, 2222), "Result3": between(1111, 2222)},
-            probe="time & event: is an earlier pulse lost or held",
+            expect={
+                "Result2": between(1111, 2222),
+                "Result3": between(1111, 2222),
+                "Result4": between(0, 2),
+            },
+            probe="time & event: is an earlier pulse lost or held; Acc at the top of an Int",
         ),
         case(
-            "Acc 32760 on a time & event step waiting for its event, 5 scans on: 1 if it stops "
-            "at 32767, 2 if it wraps, 0 if it has not got there (Result2)",
-            ladder=prove_acc_at_int_top,
-            scans=SCANS,
-            expect={"Result2": between(0, 2)},
-            probe="a drum's Acc at the top of an Int",
+            "A drum in a For of 3 beside the same drum outside: 10 * inside Acc / outside Acc is "
+            "30 if a pass adds a scan's time, 10 if it is once (Result2); a jog bit up one scan "
+            "moves it to step 2 or step 4 (Result3), an event likewise (Result4)",
+            ladder=prove_drum_in_loop,
+            scans=60,
+            expect={
+                "Result2": between(0, 60),
+                "Result3": between(1, 4),
+                "Result4": between(1, 4),
+            },
+            probe="a drum's time and edges in a For body",
         ),
+    ],
+)
+
+
+limits_group = Group(
+    "drum_limits",
+    [
         case(
             "A preset in a DS lowered below Acc: read live, the step ends that scan, 2222; read "
             "at entry, 1111 (Result2); preset DS 0 (Result3) and -5 (Result4) end step 1 at once, "
@@ -1131,19 +1147,6 @@ branch_group = Group(
             probe="a drum's unit other than ms; none recorded",
         ),
         case(
-            "A drum in a For of 3 beside the same drum outside: 10 * inside Acc / outside Acc is "
-            "30 if a pass adds a scan's time, 10 if it is once (Result2); a jog bit up one scan "
-            "moves it to step 2 or step 4 (Result3), an event likewise (Result4)",
-            ladder=prove_drum_in_loop,
-            scans=60,
-            expect={
-                "Result2": between(0, 60),
-                "Result3": between(1, 4),
-                "Result4": between(1, 4),
-            },
-            probe="a drum's time and edges in a For body",
-        ),
-        case(
             "A 1-step drum: a time drum's end completes it, 1411 (Result2 on scan 3), an event "
             "drum's, 1414 (Result3 on scan 5), a jog on a time & event drum completes it, 14, or "
             "not, 11 (Result4).  Refused at paste is an answer",
@@ -1166,3 +1169,7 @@ def test_drum_pins():
 
 def test_drum_branch():
     assert_all_passed(run(branch_group))
+
+
+def test_drum_limits():
+    assert_all_passed(run(limits_group))

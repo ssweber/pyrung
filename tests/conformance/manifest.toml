@@ -180,8 +180,8 @@ int_math_rand_wide_bounds = 18
 int_math_real_operand_constant = 19
 
 [groups.text]
-base = 1901 # Conf_Text: DS1901..DS2100
-slots = 19
+base = 1901 # Conf_Text: DS1901..DS2060
+slots = 15
 
 [groups.text.cases]
 value_vs_ascii = 1
@@ -331,8 +331,8 @@ slots = 4
 rise_once_per_scan = 1
 
 [groups.solve_order]
-base = 3141 # Conf_SolveOrder: DS3141..DS3260
-slots = 11
+base = 3141 # Conf_SolveOrder: DS3141..DS3340
+slots = 19
 
 [groups.solve_order.cases]
 row_series_reads_rows_above = 1
@@ -555,10 +555,42 @@ non_finite_raw_bits = 3
 underflow = 4
 float32_equality = 5
 
+
 [groups.drum_pins]
-base = 2381 # Conf_DrumPins: DS2381..DS2480
+base = 3341 # Conf_DrumPins: DS3341..DS3440; part I, a pin and own end
 slots = 9
 
+[groups.drum_pins.cases]
+event_and_jog = 1
+time_and_jog = 2
+end_and_jog_on_last = 3
+last_time_and_jump = 4
+last_event_and_jump = 5
+acc_jog_completing = 6
+paused_jog_with_flag = 7
+paused_jog_with_flag_mid = 8
+paused_flag_moves = 9
+
 [groups.drum_branch]
-base = 3261 # Conf_DrumBranch: DS3261..DS3400
-slots = 13
+base = 2381 # Conf_DrumBranch: DS2381..DS2480; part I, the routine branches
+slots = 9
+
+[groups.drum_branch.cases]
+jump_to_bad_step = 1
+jump_on_bad_step = 2
+correction_with_flag = 3
+flag_cleared = 4
+reset_paths = 5
+written_and_paused_acc = 6
+event_rises_in_pause = 7
+te_event_before_time = 8
+drum_in_loop = 9
+
+[groups.drum_limits]
+base = 2061 # Conf_DrumLimits: DS2061..DS2100; part I, may be refused at paste
+slots = 3
+
+[groups.drum_limits.cases]
+preset_from_ds = 1
+units = 2
+single_step = 3
