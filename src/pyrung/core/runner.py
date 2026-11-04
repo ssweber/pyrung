@@ -2724,6 +2724,7 @@ class PLC:
         *,
         history_budget: int | float | None = None,
         inherit_log: bool = True,
+        _as_recorded: bool = False,
     ) -> PLC:
         """Create an independent runner from retained historical state.
 
@@ -2742,7 +2743,13 @@ class PLC:
         historical_owner = self._causal_lineage.owner_at(target_scan_id)
         if historical_owner is None:
             raise KeyError(target_scan_id)
-        historical_state = historical_owner.state_at(target_scan_id)
+        # A runner's first scan belongs to its parent's epoch, but this runner ran on from
+        # its own edit of that state (a harness moving a count, a tip seed).
+        historical_state = (
+            self._initial_state
+            if target_scan_id == self._initial_scan_id
+            else historical_owner.state_at(target_scan_id)
+        )
         effective_budget = (
             history_budget if history_budget is not None else self._recent_state_cache_budget
         )
@@ -2768,11 +2775,6 @@ class PLC:
         fork._search_refuses_restart = self._search_refuses_restart
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
-        if self._harness is not None:
-            # Re-install the feedback harness on the fork (it rebuilds its plant
-            # rungs against the fork's tags; accumulator state rides the inherited
-            # committed state).
-            self._harness.fork_onto(fork)
         if inherit_log:
             # Continue the parent's recording instead of starting a fresh log, so
             # a chain of execution forks accumulates the whole history —
@@ -2784,6 +2786,11 @@ class PLC:
                 self._causal_lineage.seal_through(target_scan_id),
             )
             fork._causal_initial_tags = dict(self._causal_initial_tags)
+        if self._harness is not None:
+            # Re-install the feedback harness on the fork (it rebuilds its plant
+            # rungs against the fork's tags; accumulator state rides the inherited
+            # committed state).
+            self._harness.fork_onto(fork, as_recorded=_as_recorded)
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:
@@ -2982,14 +2989,18 @@ class PLC:
         self._epoch_caches.on_replay_anchor_replaced()
         self._cache_state(state)
 
-    def _edit_tip_tags(self, tags: Mapping[str, Any]) -> None:
-        """Put *tags* in the state the next scan starts from, between scans.
+    def _edit_tip_tags(
+        self, tags: Mapping[str, Any], *, memory: Mapping[str, Any] | None = None
+    ) -> None:
+        """Put *tags* and *memory* in the state the next scan starts from, between scans.
 
         The scans before the tip ran without them and stay as they ran.  The tip's
         own entries follow it, so it reads the same before and after the next scan,
         and a causal transition's first ``before`` is the value set here.
         """
         state = self._state.with_tags(dict(tags))
+        if memory:
+            state = state.with_memory(dict(memory))
         self._state = state
         scan_id = state.scan_id
         replaced = self._recent_state_cache.pop(scan_id, None)
@@ -3027,6 +3038,20 @@ class PLC:
             if scan_id < changed_at:
                 return plant
         return None
+
+    def _run_on_the_plant_of_the_scan_after(self, scan_id: int, replay: PLC) -> None:
+        """Give *replay*, positioned at *scan_id*, the plant its next scan ran under."""
+        earlier_plant = self._earlier_plant_at(scan_id)
+        if earlier_plant is None:
+            return
+        if replay._synthesis is None:
+            from pyrung.core.synthesis import Synthesis
+
+            replay._synthesis = Synthesis()
+        replay._synthesis.plant = list(earlier_plant)
+        if replay._harness is not None:
+            # Today's couplings do not describe these rungs.
+            replay._harness._detach()
 
     def _plant_tag_defaults(self) -> dict[str, Any]:
         """Each tag the synthesis plant uses, at its default.
@@ -3296,18 +3321,9 @@ class PLC:
         """
         log = self._scan_log.snapshot()
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-        replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
+        replay = self.fork(scan_id=anchor_scan_id, inherit_log=False, _as_recorded=True)
         self._copy_current_synthesis_onto(replay)
-        earlier_plant = self._earlier_plant_at(anchor_scan_id)
-        if earlier_plant is not None:
-            if replay._synthesis is None:
-                from pyrung.core.synthesis import Synthesis
-
-                replay._synthesis = Synthesis()
-            replay._synthesis.plant = list(earlier_plant)
-            if replay._harness is not None:
-                # Today's couplings do not describe these rungs.
-                replay._harness._detach()
+        self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
@@ -3661,6 +3677,7 @@ class PLC:
                 forces=self._replay_force_map_at_scan(prev_scan, log),
                 replay_mode=True,
             )
+            self._run_on_the_plant_of_the_scan_after(prev_scan, replay)
         else:
             # ``target`` is the first reconstructable scan — nothing before it to
             # replay to; build the fork directly at the anchor.

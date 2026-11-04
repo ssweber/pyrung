@@ -218,6 +218,8 @@ Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), sc
 
 Feedback is an **input**: the plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan — with `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model: a sensor can't respond to an output before it's written.)
 
+A delay longer than 32.767 s counts in whole seconds, rounded up, and past about 9 hours in whole minutes, and may arrive one scan later than above where `dt` does not sum exactly (at `dt=0.1`, `60s` arrives on scan 602, not 601). The same goes for a `Pulse` dwell.
+
 Multiple `Fb` fields linked to the same `En` are independent timers, each with its own `Physical` timing. A vacuum gripper's `Fb_Contact` (5ms) and `Fb_Vacuum` (80ms) assert at different scans from the same `En` edge.
 
 ### How profile-driven feedback works
@@ -235,7 +237,7 @@ PRESSURE = Physical("Pressure", profile=Ramp(up=10.0, down=-5.0))  # +10 PSI/s, 
 
 The program's own logic controls when `En` drops. A heater turns off `En` when `Fb_Temp` hits the setpoint — the ramp was climbing, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
 
-**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or a setpoint tag name:
+**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or the name of a setpoint tag (a name no rung uses and nothing has written warns at install and reads 0 until something writes it):
 
 ```python
 from pyrung import Approach
