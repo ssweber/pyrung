@@ -169,7 +169,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
             range(1591, 1593),
         )
     },
-    "numeric": {"DD": range(101, 133), "DF": range(101, 142), "DH": range(201, 223)},
+    "numeric": {"DD": (range(101, 133), range(161, 164), range(171, 173)), "DF": range(101, 142), "DH": range(201, 223)},
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
         "DS": (range(3901, 3907), range(3911, 3915), range(3921, 3924), range(3931, 3933)),
@@ -202,6 +202,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
             range(4243, 4248),
             range(4263, 4267),
             range(4283, 4293),
+            range(4303, 4312),
             range(4323, 4332),
             range(4343, 4352),
             range(4363, 4372),
@@ -387,7 +388,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "for_more": {
         "C": range(1722, 1729),
         "DS": range(3929, 3931),
-        "T": range(244, 249),
+        "DD": range(78, 82),
+        "T": (range(122, 123), range(244, 249)),
         "CT": range(149, 150),
     },
     "call_more": {

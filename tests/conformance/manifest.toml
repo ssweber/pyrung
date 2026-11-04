@@ -668,12 +668,13 @@ zero_and_below = 3
 preset_mid_phase = 4
 
 [groups.for_more]
-base = 1461 # Conf_ForMore: DS1461..DS1490; part L, one-shot For, timers at their limits
-slots = 2
+base = 1461 # Conf_ForMore: DS1461..DS1500; part L, one-shot For, timers at their limits
+slots = 3
 
 [groups.for_more.cases]
 oneshot_and_edges = 1
 timers_at_limits = 2
+clock_edges_in_a_body = 3
 
 [groups.call_more]
 base = 1281 # Conf_CallMore: DS1281..DS1300; part L, per call or per scan; main calls it twice a scan

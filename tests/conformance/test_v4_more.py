@@ -50,6 +50,11 @@ to 50 ms, as in ``out``.
   below 0 at 60-130 ms (Result4 = 1), 2 where it starts at or above 0.  A counter from a DS of
   -5, no count: done at 100-200 ms (ErrorCode = 1), 0 where -5 reads unsigned.
 
+- ``clock_edges_in_a_body``: ``system/clock_bits_toggle_at_their_rate`` reads a clock's rise in a
+  subroutine; in a For body nothing has.  rise(SC5) above a For of 2 against the same in its body,
+  over 500 ms: Result1 = 1 same count, 2 double (each pass an edge), 0 else.  The same for SC3, the
+  scan clock (Result2).  The plain count of SC5 is 3..7 (Result3 = 1), so the compare is not 0 = 0.
+
 ``call_more``, called twice a scan (``Group(calls=2)``; ``Scratch`` flips on each call):
 
 - ``called_twice``: a TON on both calls against an RTON on the second: Result1 = 1 for ahead by
@@ -80,11 +85,12 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    system,
     time_drum,
     timed,
     toggle,
 )
-from tests.conformance.memory import ClickCounter, ClickTimer, c, ctd, ds, t, td
+from tests.conformance.memory import ClickCounter, ClickTimer, c, ctd, dd, ds, t, td
 from tests.conformance.probe_kit import between, once
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -385,6 +391,39 @@ def prove_timers_at_limits(slot):
     _end(slot, clock, 650)
 
 
+def prove_clock_edges_in_a_body(slot):
+    clock = _clock(slot, 122)
+    live = (slot.Cmd != 0, clock < 500)
+    for edge_clock, plain, inner in (
+        (system.sys.clock_100ms, dd[78], dd[79]),
+        (system.sys.scan_clock_toggle, dd[80], dd[81]),
+    ):
+        with Rung(rise(edge_clock), *live):
+            calc(plain + 1, plain)
+        # The For's rung is always true, so the reset reaches the body's edge.
+        with Rung():
+            with forloop(2):
+                with Rung(rise(edge_clock), *live):
+                    calc(inner + 1, inner)
+    ready = (*once(slot), clock >= 550)
+    with Rung(*ready, dd[79] == dd[78]):
+        copy(1, slot.Result1)
+    with Rung(*ready, dd[79] == dd[78] * 2):
+        copy(2, slot.Result1)
+    with Rung(*ready, dd[81] == dd[80]):
+        copy(1, slot.Result2)
+    with Rung(*ready, dd[81] == dd[80] * 2):
+        copy(2, slot.Result2)
+    with Rung(*ready, dd[78] >= 3, dd[78] <= 7):
+        copy(1, slot.Result3)
+    with Rung(*ready):
+        copy(1, slot.Fired)
+
+
+def init_clock_edges_in_a_body(slot):
+    fill(0, dd.select(78, 81))
+
+
 def init_timers_at_limits(slot):
     fill(0, ds.select(3929, 3930))
     copy(0, td[248])
@@ -415,6 +454,15 @@ for_group = Group(
             keep=[t[247], td[247]],
             expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1, "ErrorCode": 1},
             probe="a timer across a skipped body; presets and an Acc below 0",
+        ),
+        case(
+            "A clock's rise in a For of 2 fires as often as outside it: SC5 (Result1 = 1), SC3 "
+            "(Result2 = 1); SC5 rose 3..7 times in 500 ms (Result3 = 1)",
+            ladder=prove_clock_edges_in_a_body,
+            init=init_clock_edges_in_a_body,
+            scans=200,
+            expect={"Result1": 1, "Result2": 1, "Result3": 1},
+            probe="a clock's edge in a For body, read by hardware only outside one",
         ),
     ],
 )

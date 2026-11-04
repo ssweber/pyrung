@@ -36,7 +36,7 @@ none.
 ``flag_scan``, ahead of ``store_probe`` so that no flag it raises reaches a reader's scan:
 
 - ``math_flags_over_a_scan``: ``_clear_transient_status`` clears SC40 and SC46 at scan start.  Each op
-  is the last Math of its scan (the case waits 100 scans for its neighbours), read on the next scan
+  is the last Math of its scan (the case starts last and waits 40 scans for its neighbours), read on the next scan
   above the case's own count, the first Math there.  Result1 = 1 for SC40 still on (0 cleared),
   Result2 = 1 for SC46 still on (0 cleared).  ``ErrorCode`` = 11 is the control: SC40 (tens) and
   SC46 (units) were each on right after the op.  SC43 and SC44 are not asked: main's hash Copy on every scan settles them.
@@ -336,7 +336,7 @@ wide_group = Group(
 
 
 #: Scans a case waits for its neighbours' Math to have stopped.
-_WAIT = 100
+_WAIT = 40
 
 
 def prove_math_flags_over_a_scan(slot):

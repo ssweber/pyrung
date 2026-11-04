@@ -48,11 +48,11 @@ right after its op.
   >> 16 (Result4): 1 for 0, 2 for unchanged.  ErrorCode: SC43 after the first shift, bit 1,
   after 0xFFFF + 1, bit 2, after 1 - 2, bit 4.
 - ``rotates_and_bits``: LRO 0x8001 by 1 (Result1, 1 for 0x0003), by 16 (Result2, 1 for itself,
-  2 for 0), by 17 (Result3, 1 for 0x0003).  RRO 0x8001 by 1 (Result4, 1 for 0xC000).
+  2 for 0), by 17 (Result3, 1 for 0x0003).  RRO 0x8001 by 2 (Result4, 1 for 0x6000).
   ErrorCode digits: units, 0xFFFF MOD 0x0100 (1 for 0x00FF, unsigned); tens, 0xF0F0 AND 0xFF00
   XOR 0x0F00 (1 for 0xFF00); hundreds, 0xFFFF / 0 SC40 with 0 (1).
 
-The cases own DD4..DD40, DF151..DF180 and DH5..DH60, and C503..C518 for the guarded ones.
+The cases own DD4..DD25, DF151..DF169 and DH5..DH33, and C503..C510 for the guarded ones.
 """
 
 from __future__ import annotations
@@ -306,7 +306,7 @@ def prove_rotates_and_bits(slot):
         calc(lro(dh[20], 1), dh[26])
         calc(lro(dh[20], 16), dh[27])
         calc(lro(dh[20], 17), dh[28])
-        calc(rro(dh[20], 1), dh[29])
+        calc(rro(dh[20], 2), dh[29])
         calc(dh[21] % dh[22], dh[30])
         calc(dh[23] & dh[24] ^ dh[25], dh[31])
         copy(0x1234, dh[32])
@@ -316,7 +316,7 @@ def prove_rotates_and_bits(slot):
     class_of(slot, dh[26], [0x0003], slot.Result1)
     class_of(slot, dh[27], [0x8001, 0], slot.Result2)
     class_of(slot, dh[28], [0x0003], slot.Result3)
-    class_of(slot, dh[29], [0xC000], slot.Result4)
+    class_of(slot, dh[29], [0x6000], slot.Result4)
     with Rung(*once(slot), dh[30] == 0x00FF):
         calc(slot.ErrorCode + 1, slot.ErrorCode)
     with Rung(*once(slot), dh[31] == 0xFF00):
@@ -429,7 +429,7 @@ hex_group = Group(
         ),
         case(
             "Hex rotates: LRO 0x8001 by 1 is 0x0003 (Result1 = 1), by 16 itself (Result2 = 1), by "
-            "17 as by 1 (Result3 = 1); RRO by 1 is 0xC000 (Result4 = 1); hex MOD is unsigned, AND "
+            "17 as by 1 (Result3 = 1); RRO by 2 is 0x6000 (Result4 = 1); hex MOD is unsigned, AND "
             "and XOR, and / 0 is 0 with SC40 (ErrorCode = 111)",
             ladder=prove_rotates_and_bits,
             init=init_rotates_and_bits,

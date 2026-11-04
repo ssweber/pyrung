@@ -57,7 +57,7 @@ so 6197 is "15" (49, 53); a NUL reads 0.
   1.  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1.  A refusal at paste
   is the answer too, which is why this case comes last.
 
-The cases own TXT570..TXT640, DS3915..DS3930, DD59..DD70, DF192..DF200, DH67..DH90, C528..C537.
+The cases own what ``memory.OWNED`` lists under these groups.
 """
 
 from __future__ import annotations

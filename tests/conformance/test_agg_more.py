@@ -31,7 +31,7 @@ MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN
   the value live.
 pyrung refuses ``randint`` in a For body, so a draw per iteration is not asked here.
 
-The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66 and C522..C526.
+The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66, C522..C526 and C1586..C1590.
 """
 
 from __future__ import annotations
