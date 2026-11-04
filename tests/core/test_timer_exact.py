@@ -29,20 +29,21 @@ from pyrung.core import (
     Rung,
     Timer,
     calc,
+    compiled_run,
     copy,
     debounce,
     flasher,
     latch,
     off_delay,
     on_delay,
+    scan_trace,
     time_drum,
     timed,
 )
-from pyrung.core import compiled_run, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.site_memory import remap_site_memory
 from pyrung.core.state import SystemState
-from pyrung.core.time_mode import TimeUnit, dt_to_ns
+from pyrung.core.time_mode import TimeMode, TimeUnit, dt_to_ns
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_scan_time_and_stop import _BoardClock, _hw
 from tests.circuitpy.test_system_points import _StubBase
@@ -496,6 +497,22 @@ def test_a_ratio_dt_stays_out_of_the_loop_however_short_the_run(dt: float) -> No
     _assert_same(ran, _stepped(prog, dt, 400))
 
 
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("dt", [1 / 3, 1 / 60])
+def test_a_ratio_dt_leaves_the_loop_when_a_timer_starts(dt: float) -> None:
+    """Idle scans may run in the loop, with no carry yet to stop them.  A tick may not."""
+    Ton = Timer.clone("Ton")
+    Scans = Dint("Scans", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Scans + 1, Scans)
+        with Rung(Scans > 100):
+            on_delay(Ton, preset=3, unit="Ts")
+    ran = PLC(prog, dt=dt)
+    assert 0 < _in_the_long_run(ran, 400) <= 100
+    _assert_same(ran, _stepped(prog, dt, 400))
+
+
 def test_sub_millisecond_dt_keeps_the_fraction_of_a_millisecond() -> None:
     prog = _on_delay_program(10, "Tms")
     for dt, expect in ((0.0005, 20), (0.0001, 100), (0.00025, 40)):
@@ -579,8 +596,6 @@ def test_a_saved_fraction_of_no_timer_the_kernel_knows_reads_as_nothing() -> Non
 
 
 def test_changing_dt_mid_count_keeps_the_time() -> None:
-    from pyrung.core.time_mode import TimeMode
-
     prog = _on_delay_program(1, "Ts")
     plc = PLC(prog, dt=0.1)
     plc.run(5)
@@ -594,8 +609,6 @@ def test_changing_dt_mid_count_keeps_the_time() -> None:
 
 @pytest.mark.usefixtures("loop_from_first_scan")
 def test_changing_dt_between_long_runs_keeps_the_time() -> None:
-    from pyrung.core.time_mode import TimeMode
-
     prog = _on_delay_program(1, "Ts")
     plc = PLC(prog, dt=0.1)
     assert _in_the_long_run(plc, 5) > 0
@@ -603,7 +616,7 @@ def test_changing_dt_between_long_runs_keeps_the_time() -> None:
     assert _in_the_long_run(plc, 9) > 0
     assert plc.current_state.tags["Ton_Acc"] == 0
     assert plc.current_state.memory["_frac:Ton_Acc"] == 950_000_000
-    assert _in_the_long_run(plc, 1) >= 0
+    _in_the_long_run(plc, 1)
     assert plc.current_state.tags["Ton_Acc"] == 1
     assert plc.current_state.memory["_frac:Ton_Acc"] == 0
 

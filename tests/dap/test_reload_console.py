@@ -6,6 +6,8 @@ import io
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
@@ -101,7 +103,7 @@ def _setup(tmp_path: Path, script: str = BASIC_SCRIPT) -> tuple[DAPAdapter, io.B
 
 
 TIMER_SCRIPT = (
-    "from pyrung.core import Bool, Int, PLC, Program, Rung, Timer, on_delay\n"
+    "from pyrung.core import PLC, Program, Rung, Timer, on_delay\n"
     "\n"
     "ton = Timer.clone('Ton')\n"
     "\n"
@@ -122,16 +124,19 @@ class TestReloadChangingATimersUnit:
         assert state.memory["_frac:Ton_Acc"] == 59_000_000_000
         return adapter, out, script_path
 
-    def test_a_carry_read_by_a_shorter_unit_does_not_finish_the_timer(self, tmp_path: Path):
+    @pytest.mark.parametrize(("unit", "acc"), [("Tms", 100), ("Ts", 0)])
+    def test_a_carry_read_by_a_shorter_unit_does_not_finish_the_timer(
+        self, tmp_path: Path, unit: str, acc: int
+    ):
         adapter, out, script_path = self._after_59_seconds_of_a_minute(tmp_path)
-        script_path.write_text(TIMER_SCRIPT.format(preset=2000, unit="Tms"), encoding="utf-8")
+        script_path.write_text(TIMER_SCRIPT.format(preset=2000, unit=unit), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=11)
         assert resp["success"] is True
         assert adapter._runner.current_state.memory["_frac:Ton_Acc"] == 0
 
         _repl(adapter, out, "step 1", seq=12)
         state = adapter._runner.current_state
-        assert state.tags["Ton_Acc"] == 100
+        assert state.tags["Ton_Acc"] == acc
         assert state.tags["Ton_Done"] is False
 
     def test_a_carry_of_the_same_unit_is_untouched(self, tmp_path: Path):
