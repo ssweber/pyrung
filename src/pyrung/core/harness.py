@@ -232,6 +232,11 @@ class Harness:
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
 
     def install(self) -> None:
+        """Put the plant on the runner, a feedback whose enable is on as long since settled."""
+        self._install(settle=True)
+
+    def _install(self, *, settle: bool) -> None:
+        """Without *settle* a feedback stays as the state has it, its timers counting from there."""
         if self._installed:
             return
         self._installed = True
@@ -242,7 +247,8 @@ class Harness:
         self._refresh_synthesis()
         self._seed_plant_defaults()
         self._carry_counts_to_current_units()
-        self._seed_bool_state()
+        if settle:
+            self._seed_bool_state()
         self._install_monitors()
         self._plc._harness = self
 

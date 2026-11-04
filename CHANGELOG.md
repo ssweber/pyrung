@@ -195,6 +195,7 @@
 - An interpreted `rng.sum()` reads a slot's declared default when nothing else has put the slot in memory, where it used to read 0, matching the compiled kernel and generated CircuitPython.
 - A harness `on_delay`, `off_delay` or `Pulse` dwell longer than 32.767 s elapses, where the feedback never flipped because its millisecond timer stopped counting at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
 - `how()` with a callable `avoid=` that is true at the start of a dwell returns a `STOPPED` plan naming the avoid, where it raised `ValueError` out of `how()`.
+- `how()` on a harness feedback partway through its delay plans the wait from the count so far, where it answered `REACHED` with no scans.
 - `how()` under a harness link answers when the scan before it shows a step on the route, where it raised `TheoryInvariantError`. A scan run before a harness link changed replays on the plant that ran it, where `how()` and causal history saw it under the new link.
 - A harness plant on a block slot only a pointer reaches uses the slot and its default, where a stand-in tag ran from 0 and changed what the program read. An `Approach` whose setpoint tag no rung names and nothing has written warns at install that it starts from 0.
 

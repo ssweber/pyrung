@@ -25,7 +25,7 @@ from pyrung.core import (
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.harness import _parse_link_spec, format_link_spec, link_problem
 from pyrung.core.physical import Approach, Physical, Pulse, Ramp
-from pyrung.core.synthesis import plant_timer
+from pyrung.core.synthesis import plant_acc_name, plant_timer
 
 # --- Fixtures: Physical declarations ---
 
@@ -1012,6 +1012,192 @@ class TestHowAroundALinkChange:
 
         assert plan.status is PlanStatus.REACHED
         assert plan.total_scans == 0
+
+
+class TestHowFromASessionMidCount:
+    """A plan starts from the session's own counts: stepping the session is the truth."""
+
+    @staticmethod
+    def _program(on_delay, *, default=False):
+        En = Bool("En", default=default)
+        Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
+        Lost = Bool("Lost")
+        with Program(strict=False) as program:
+            with Rung(En):
+                out(Bool("Seen"))
+            with Rung(Fb):
+                latch(Lost)
+        return program, En, Fb, Lost
+
+    def _counting(self, on_delay, scans):
+        """A session with its harness on and the enable held for *scans* scans."""
+        program, En, _Fb, Lost = self._program(on_delay)
+        plc = PLC(program, dt=0.25)
+        Harness(plc).install()
+        plc.patch({En: True})
+        plc.run(scans)
+        return plc, Lost
+
+    @staticmethod
+    def _relink(plc, on_delay):
+        coupling = Coupling("En", "Fb", Physical("S", on_delay=on_delay))
+        plc._harness.set_overrides({"Fb": coupling})
+
+    @staticmethod
+    def _scans_to_reach(plc, tag, budget=2_000):
+        session = plc.fork()
+        for scans in range(budget + 1):
+            if session.state.tags[tag.name]:
+                return scans
+            session.step()
+        pytest.fail(f"{tag.name} not reached stepping {budget} scans")
+
+    def _assert_plan_is_the_session(self, plc, target):
+        stepped = self._scans_to_reach(plc, target)
+
+        plan = plc.how(target, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == stepped
+        assert plan.replay().state.tags == plan.fork.state.tags
+        session = plc.fork()
+        for _ in range(plan.total_scans):
+            session.step()
+        assert session.state.tags[target.name] is True
+
+    @pytest.mark.parametrize(
+        ("on_delay", "scans"),
+        [("5s", 4), ("5s", 12), ("20s", 4), ("40s", 4), ("40s", 100), ("60s", 8)],
+    )
+    def test_under_a_held_enable(self, on_delay, scans):
+        plc, Lost = self._counting(on_delay, scans)
+
+        self._assert_plan_is_the_session(plc, Lost)
+
+    @pytest.mark.parametrize(
+        ("declared", "bench"),
+        [("5s", "10s"), ("5s", "60s"), ("60s", "5s"), ("40s", "60s"), ("60s", "40s")],
+    )
+    @pytest.mark.parametrize("scans_since", [0, 2])
+    def test_on_a_bench_link(self, declared, bench, scans_since):
+        plc, Lost = self._counting(declared, 8)
+        self._relink(plc, bench)
+        plc.run(scans_since)
+
+        self._assert_plan_is_the_session(plc, Lost)
+
+    @pytest.mark.parametrize(("declared", "bench"), [("5s", "60s"), ("60s", "5s")])
+    def test_on_a_fork_whose_count_moved(self, declared, bench):
+        plc, Lost = self._counting(declared, 8)
+        before_the_change = plc.current_state.scan_id - 1
+        self._relink(plc, bench)
+        plc.run(2)
+        fork = plc.fork(scan_id=before_the_change)
+
+        self._assert_plan_is_the_session(fork, Lost)
+
+    def test_the_feedback_itself(self):
+        plc, _Lost = self._counting("5s", 4)
+        Fb = plc._known_tags_by_name["Fb"]
+
+        self._assert_plan_is_the_session(plc, Fb)
+
+    def test_a_cut_link_stays_cut(self):
+        plc, Lost = self._counting("5s", 4)
+        plc._harness.set_overrides({"Fb": None})
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans < 17
+
+    @pytest.mark.parametrize(
+        ("on_delay", "scans"),
+        [("5s", 20), ("40s", 160)],
+    )
+    def test_a_session_with_no_harness_counts_the_delay(self, on_delay, scans):
+        program, En, _Fb, Lost = self._program(on_delay)
+        plc = PLC(program, dt=0.25)
+        plc.patch({En: True})
+        plc.run(4)
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == scans
+
+    def test_a_session_with_no_harness_and_the_enable_on_from_cold_counts_the_delay(self):
+        program, _En, _Fb, Lost = self._program("5s", default=True)
+        plc = PLC(program, dt=0.25)
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == 20
+
+    def test_how_leaves_the_session_alone(self):
+        plc, Lost = self._counting("5s", 4)
+        before = plc.current_state.tags
+
+        plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plc.current_state.tags == before
+
+
+class TestADirectInstallSettles:
+    """``Harness(plc).install()`` takes a held enable as long since settled."""
+
+    @staticmethod
+    def _program(*, default):
+        En = Bool("En", default=default)
+        Fb = Bool("Fb", physical=Physical("S", on_delay="5s"), link="En")
+        Lost = Bool("Lost")
+        with Program(strict=False) as program:
+            with Rung(En):
+                out(Bool("Seen"))
+            with Rung(Fb):
+                latch(Lost)
+        return program, En, Lost
+
+    @staticmethod
+    def _assert_settled(tags):
+        assert tags["Fb"] is True
+        assert tags[plant_acc_name("__cpl_on", "Fb", 5000)] == plant_timer(5000)[0]
+
+    def test_from_cold(self):
+        program, _En, Lost = self._program(default=True)
+        plc = PLC(program, dt=0.25)
+
+        Harness(plc).install()
+
+        self._assert_settled(plc.current_state.tags)
+        self._assert_settled(plc.fork().state.tags)
+        plc.step()
+        assert plc.current_state.tags["Fb"] is True
+        assert plc.current_state.tags[Lost.name] is True
+
+    def test_on_a_running_session(self):
+        program, En, Lost = self._program(default=False)
+        plc = PLC(program, dt=0.25)
+        plc.patch({En: True})
+        plc.run(4)
+        assert plc.current_state.tags["Fb"] is False
+
+        Harness(plc).install()
+
+        self._assert_settled(plc.current_state.tags)
+        plc.step()
+        assert plc.current_state.tags[Lost.name] is True
+
+    def test_a_plan_starts_from_the_settled_session(self):
+        program, _En, Lost = self._program(default=True)
+        plc = PLC(program, dt=0.25)
+        Harness(plc).install()
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == 1
 
 
 class TestPlantOnASlotOnlyAPointerReaches:
