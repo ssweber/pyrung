@@ -1605,7 +1605,7 @@ class PLC:
             # Forks start from this runner's own (already migrated) states.
             self._state = migrate_legacy_edge_memory(self._state, self._site_table)
         # Mutable read mirror for ordinary interpreted scans.  The committed
-        # state remains an immutable PMap; this avoids repeated HAMT bucket
+        # tag map remains an immutable PMap; this avoids repeated HAMT bucket
         # walks while a scan reads its unchanged input image.  Capturing/debug
         # scans bypass it because they retain ConditionViews after commit.
         self._state_tags_read_cache: dict[str, Any] | None = None

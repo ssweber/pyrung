@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrsistent import PMap
 
-from pyrung.core.state import SystemState, _build
+from pyrung.core.state import SystemState, _put_tags
 
 _PMAP: Any = PMap  # its bucket accessors are private API
 
@@ -62,7 +62,7 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
 # predicate read no value it moves (it then takes the same path and returns the
 # same answer on every scan in between).
 _READ_TRACES: list[set[str]] = []
-_READ_ALL = "*"  # iterated or compared the whole tag map
+_READ_ALL = "*"  # iterated, compared, counted or evolved the whole tag map
 _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
 
 
@@ -107,38 +107,64 @@ class _TracedTags(PMap):
 
 
 def _recorded_field(name: str) -> Any:
-    """A property over a state's slot that records each read of the field."""
-    slot: Any = getattr(SystemState, name)
+    """A property that records each read of a field of the state being traced."""
     read = _FIELD_READ + name
 
-    def get(self: SystemState) -> Any:
+    def get(self: Any) -> Any:
         if _READ_TRACES:
             _READ_TRACES[-1].add(read)
-        return slot.__get__(self)
+        return getattr(self._untraced, name)
 
     return property(get)
-
-
-_TAGS_SLOT: Any = SystemState.tags
 
 
 class _TracedState(SystemState):
     """A SystemState whose field reads (and tag reads) are recorded.
 
-    Every way into a state's fields goes through these properties: subscripts,
-    ``items()``, equality, hashing and ``repr`` all read the attributes.
+    Every read through the state and map API is recorded: attributes, subscripts,
+    ``items()``, equality, hashing, ``repr``, copying and evolving all come through these
+    properties or the recording tag map in the ``tags`` slot.  The ``scan_id``,
+    ``timestamp`` and ``memory`` slots stay empty, so a read past the properties raises,
+    and a predicate that raises keeps the coast interpreted.
+
+    It does not see a predicate that names private attributes (``s.tags._buckets``) or
+    unbound base methods (``PMap.__getitem__(s.tags, key)``), or that branches on the type
+    or identity of the state or map, which are not those of the real ones.
     """
 
-    __slots__ = ()
+    __slots__ = ("_untraced",)
 
     scan_id = _recorded_field("scan_id")
     timestamp = _recorded_field("timestamp")
     memory = _recorded_field("memory")
 
-    @property
-    def tags(self) -> Any:
-        value = _TAGS_SLOT.__get__(self)
-        return _PMAP.__new__(_TracedTags, value._size, value._buckets)
+    def __new__(cls, **fields: Any) -> Any:
+        # What ``copy`` and ``type(s)(...)`` make: a plain state, from fields they read.
+        return SystemState(**fields)
+
+    def scanned(self, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> SystemState:
+        # The same check as the base, then a plain state: these comparisons record the
+        # fields, and a read of the result is a read of values already recorded.
+        if (
+            scan_id is self.scan_id
+            and timestamp is self.timestamp
+            and tags is self.tags
+            and memory is self.memory
+        ):
+            return self
+        return SystemState(scan_id=scan_id, timestamp=timestamp, tags=tags, memory=memory)
+
+
+_put_untraced: Any = cast(Any, _TracedState)._untraced.__set__
+
+
+def _traced_state(state: SystemState) -> _TracedState:
+    """A state answering as *state* does, recording what is read of it."""
+    tags: Any = state.tags
+    traced = object.__new__(_TracedState)
+    _put_tags(traced, _PMAP.__new__(_TracedTags, tags._size, tags._buckets))
+    _put_untraced(traced, state)
+    return traced
 
 
 @contextmanager
@@ -165,7 +191,7 @@ def _traced_call(
     predicate that reads ``plc.state`` instead of its argument is traced too.
     """
     state = runner._state
-    traced = _build(_TracedState, state.scan_id, state.timestamp, state.tags, state.memory)
+    traced = _traced_state(state)
     reads: set[str] = set()
     _READ_TRACES.append(reads)
     runner._state = traced

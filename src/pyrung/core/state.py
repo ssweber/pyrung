@@ -10,7 +10,15 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from pyrsistent import PMap, PTypeError, pmap
-from pyrsistent._checked_types import _restore_pickle
+
+try:
+    # What a state pickled through when it was a PRecord: keeping it keeps the format.
+    from pyrsistent._checked_types import _restore_pickle
+except ImportError:  # private to pyrsistent, which may move it
+
+    def _restore_pickle(cls: Any, data: Any) -> Any:
+        return cls.create(data, _factory_fields=set())
+
 
 _EMPTY: PMap = pmap()
 _FIELD_TYPES: dict[str, type] = {"scan_id": int, "timestamp": float, "tags": PMap, "memory": PMap}

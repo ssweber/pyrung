@@ -4,13 +4,16 @@ TDD: Write tests first, then implement to pass.
 """
 
 import copy
+import importlib.util
 import pickle
+import sys
 import weakref
 from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
-from pyrsistent import PMap, PTypeError, pmap
+from pyrsistent import PMap, PRecord, PTypeError, field, freeze, pmap, thaw
+from pyrsistent import _checked_types as pyrsistent_checked_types
 from pyrsistent._checked_types import _restore_pickle
 
 
@@ -176,6 +179,20 @@ def _full_state():
     from pyrung.core import SystemState
 
     return SystemState(scan_id=3, timestamp=1.5, tags=pmap({"A": 1}), memory=pmap({"m": 2}))
+
+
+def _old_format_state():
+    from pyrung.core import SystemState
+
+    return SystemState(scan_id=3, timestamp=1.5, tags=pmap({"A": 1}), memory=pmap({"m": 3}))
+
+
+PRECORD_PICKLE = (
+    b"\x80\x04\x95\xc6\x00\x00\x00\x00\x00\x00\x00\x8c\x19pyrsistent._checked_types\x94\x8c\x0f_restore_pickle"
+    b"\x94\x93\x94\x8c\x11pyrung.core.state\x94\x8c\x0bSystemState\x94\x93\x94}\x94(\x8c\x06memory\x94\x8c\x10pyr"
+    b"sistent._pmap\x94\x8c\x04pmap\x94\x93\x94}\x94\x8c\x01m\x94K\x03s\x85\x94R\x94\x8c\x07scan_id\x94K\x03\x8c\ttimest"
+    b"amp\x94G?\xf8\x00\x00\x00\x00\x00\x00\x8c\x04tags\x94h\n}\x94\x8c\x01A\x94K\x01s\x85\x94R\x94u\x86\x94R\x94."
+)
 
 
 def _fields_of(state) -> dict[str, Any]:
@@ -366,8 +383,36 @@ class TestMappingSurface:
         # Reported in the CHANGELOG: a state reads as a mapping, it no longer is a PMap.
         state = _full_state()
         assert not isinstance(state, PMap)
-        for name in ("remove", "discard", "transform", "evolver", "update_with", "serialize"):
+        for name in (
+            "remove",
+            "discard",
+            "transform",
+            "evolver",
+            "update_with",
+            "serialize",
+            "copy",
+            "iterkeys",
+            "itervalues",
+            "iteritems",
+            "__add__",
+            "__or__",
+        ):
             assert not hasattr(state, name)
+
+    def test_the_rest_of_what_the_changelog_reports(self):
+        from pyrung.core import SystemState
+
+        state = _full_state()
+        assert not isinstance(state, PRecord)
+        assert thaw(state) is state
+        assert freeze(state) is state
+
+        class WithAField(SystemState):
+            __slots__ = ()
+            extra = field(type=int, initial=0)
+
+        with pytest.raises(AttributeError, match="extra"):
+            WithAField(extra=2)
 
     def test_repr_names_every_field(self):
         text = repr(_full_state())
@@ -402,6 +447,34 @@ class TestCopying:
         assert cls is SystemState
         assert fields == _fields_of(state)
         assert _restore_pickle(SystemState, _fields_of(state)) == state
+
+    def test_a_pickle_written_when_a_state_was_a_precord_loads(self):
+        # Written by pyrung at 6b7bca0, the last with the PRecord, at protocol 4.
+        assert pickle.loads(PRECORD_PICKLE) == _old_format_state()
+
+    def test_a_pickle_the_precord_could_load_names_what_it_named(self):
+        text = pickle.dumps(_old_format_state(), protocol=4)
+        assert b"pyrsistent._checked_types" in text and b"_restore_pickle" in text
+        assert b"pyrung.core.state" in text and b"SystemState" in text
+
+    def test_without_pyrsistents_private_restore_the_module_has_its_own(self, monkeypatch):
+        from pyrung.core import state as real
+
+        monkeypatch.delattr(pyrsistent_checked_types, "_restore_pickle")
+        spec = importlib.util.spec_from_file_location("state_without_restore", real.__file__)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, spec.name, module)
+        spec.loader.exec_module(module)
+
+        assert module._restore_pickle.__module__ == spec.name
+        fields = _fields_of(_full_state())
+        assert module._restore_pickle(real.SystemState, fields) == _full_state()
+        state = module.SystemState(**fields)
+        assert module._restore_pickle(module.SystemState, fields) == state
+        loaded = pickle.loads(pickle.dumps(state))
+        assert type(loaded) is module.SystemState
+        assert loaded == state
 
     def test_a_weak_reference_can_hold_a_state(self):
         state = _full_state()

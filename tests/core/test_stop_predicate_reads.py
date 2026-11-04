@@ -7,6 +7,8 @@ predicate that reads only tags has to stay in the loop.
 
 from __future__ import annotations
 
+import copy
+import pickle
 from typing import Any
 
 import pytest
@@ -66,6 +68,9 @@ READS: dict[str, tuple[Any, set[str]]] = {
     "whole tag map": (lambda s: dict(s.tags), {_READ_ALL, "Lamp", "Run"}),
     "tag map equality": (lambda s: s.tags == pmap(), {_READ_ALL}),
     "tag map iterated": (lambda s: list(s.tags), {_READ_ALL}),
+    "tag map keys": (lambda s: list(s.tags.keys()), {_READ_ALL}),
+    "tag map values": (lambda s: list(s.tags.values()), {_READ_ALL}),
+    "tag map items": (lambda s: list(s.tags.items()), {_READ_ALL}),
     "tag map counted": (lambda s: len(s.tags), {_READ_ALL}),
     "tag map truth": (lambda s: bool(s.tags), {_READ_ALL}),
     "tag map set": (lambda s: s.tags.set("z", 1), {_READ_ALL}),
@@ -82,6 +87,11 @@ READS: dict[str, tuple[Any, set[str]]] = {
     "state values": (lambda s: list(s.values()) == [], EVERY_FIELD),
     "state as a dict": (lambda s: dict(s) == {}, EVERY_FIELD),
     "state repr": (lambda s: repr(s) == "", EVERY_FIELD),
+    "state copied": (lambda s: copy.copy(s), EVERY_FIELD),
+    "state deep copied": (lambda s: copy.deepcopy(s), EVERY_FIELD),
+    "state pickled": (lambda s: pickle.dumps(s), EVERY_FIELD),
+    "state set": (lambda s: s.set(scan_id=0), EVERY_FIELD),
+    "state with tags": (lambda s: s.with_tags({"z": 1}), EVERY_FIELD),
 }
 
 
@@ -125,11 +135,12 @@ def test_the_tip_comes_back_when_the_predicate_raises() -> None:
 
 
 def _stepped_until(predicate: Any) -> PLC:
+    # A scan first, as a coast does: it does not judge the state it starts from.
     plc = _plc()
     for _ in range(SCANS):
+        plc.step()
         if predicate(plc.state):
             break
-        plc.step()
     return plc
 
 
@@ -181,12 +192,82 @@ def test_a_predicate_reading_plc_state_stays_in_the_loop() -> None:
         pytest.param(lambda s: (s.tags + {"z": 1})[ACC] >= 20, id="map plus"),
         pytest.param(lambda s: s.tags.evolver()[ACC] >= 20, id="map evolver"),
         pytest.param(lambda s: s.tags.transform(["z"], 1)[ACC] >= 20, id="map transform"),
+        pytest.param(lambda s: any(k == ACC and s.tags[k] >= 20 for k in s.tags.keys()), id="keys"),
+        pytest.param(lambda s: dict(s.tags.items())[ACC] >= 20, id="map items"),
+        pytest.param(lambda s: 20 in s.tags.values(), id="map values"),
+        pytest.param(lambda s: copy.copy(s).tags[ACC] >= 20, id="state copied"),
+        pytest.param(lambda s: copy.deepcopy(s).tags[ACC] >= 20, id="state deep copied"),
+        pytest.param(lambda s: pickle.loads(pickle.dumps(s)).tags[ACC] >= 20, id="state pickled"),
+        pytest.param(lambda s: s.set(scan_id=0).tags[ACC] >= 20, id="state set"),
+        pytest.param(lambda s: s.with_tags({"z": 1}).tags[ACC] >= 20, id="state with tags"),
+        pytest.param(lambda s: s.next_scan(0.01).tags[ACC] >= 20, id="state next scan"),
+        pytest.param(lambda s: type(s)(tags=s.tags).tags[ACC] >= 20, id="state rebuilt"),
     ],
 )
 def test_a_predicate_reading_what_moves_lands_as_stepping(predicate: Any) -> None:
     plc = _plc()
     assert coast_until(plc, predicate, budget=SCANS) is True
     _assert_landed_as_stepping(plc, _stepped_until(predicate))
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param(lambda s: SystemState.tags.__get__(s)[ACC] >= 20, id="tags slot"),
+        pytest.param(lambda s: SystemState.scan_id.__get__(s) >= 1777, id="scan_id slot"),
+        pytest.param(lambda s: SystemState.timestamp.__get__(s) >= 17.77, id="timestamp slot"),
+        pytest.param(lambda s: len(SystemState.memory.__get__(s)) > 99, id="memory slot"),
+        pytest.param(
+            lambda s: (
+                super(type(s), s).tags[ACC] >= 20
+                if type(s) is not SystemState
+                else s.tags[ACC] >= 20
+            ),
+            id="tags past the traced class",
+        ),
+        pytest.param(
+            lambda s: (
+                super(type(s), s).scan_id >= 1777
+                if type(s) is not SystemState
+                else s.scan_id >= 1777
+            ),
+            id="scan_id past the traced class",
+        ),
+    ],
+)
+def test_a_read_of_the_slots_themselves_lands_as_stepping(predicate: Any) -> None:
+    plc = _plc()
+    coast_until(plc, predicate, budget=SCANS)
+    _assert_landed_as_stepping(plc, _stepped_until(predicate))
+
+
+def test_the_tags_slot_records_and_the_others_refuse() -> None:
+    plc = _plc()
+    assert _traced_call(lambda s: SystemState.tags.__get__(s)["Lamp"], plc)[1] == {"Lamp"}
+    for name in FIELD:
+        slot: Any = getattr(SystemState, name)
+        with pytest.raises(AttributeError):
+            _traced_call(slot.__get__, plc)
+
+
+def test_what_evolving_a_traced_state_makes_answers_as_the_real_one_does() -> None:
+    plc = _plc()
+    state = plc.state
+
+    def same(made: Any) -> bool:
+        return (made.scan_id, made.timestamp, dict(made.tags), made.memory) == (
+            state.scan_id,
+            state.timestamp,
+            dict(state.tags),
+            state.memory,
+        )
+
+    assert _traced_call(lambda s: s.set() is s, plc)[0] is True
+    assert _traced_call(lambda s: same(copy.copy(s)), plc)[0] is True
+    assert _traced_call(lambda s: same(copy.deepcopy(s)), plc)[0] is True
+    assert _traced_call(lambda s: same(pickle.loads(pickle.dumps(s))), plc)[0] is True
+    assert _traced_call(lambda s: same(s.set(tags=pmap(dict(s.tags)))), plc)[0] is True
+    assert _traced_call(lambda s: s.next_scan(0.5).scan_id == state.scan_id + 1, plc)[0] is True
 
 
 def test_a_predicate_hashing_the_state_lands_as_stepping() -> None:
