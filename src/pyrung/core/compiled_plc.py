@@ -675,10 +675,7 @@ class CompiledPLC:
         self._kernel = self._compiled.create_kernel()
         self._stored_system_tags_bound = False
         self._steady_system_key = None
-        # One copy serves the kernel (``update`` copies it in) and the commit
-        # baseline below, which is only read and later replaced, never mutated.
-        committed_tags = snapshot_dict(state.tags)
-        self._kernel.tags.update(committed_tags)
+        self._kernel.tags.update(snapshot_dict(state.tags))
         self._kernel.memory.update(dict(state.memory))
         self._kernel.scan_id = state.scan_id
         self._kernel.timestamp = state.timestamp
@@ -702,7 +699,7 @@ class CompiledPLC:
         # Plain-dict mirror of the committed tags, baseline for the next
         # commit's diff.  ``state.tags`` is already in committed form (no
         # derived tags; live-block tags only), so it seeds directly.
-        self._prev_committed_tags: dict[str, Any] = committed_tags
+        self._prev_committed_tags: dict[str, Any] = snapshot_dict(state.tags)
         self._mirrored_memory: PMap | None = None
         self._memory_mirror: dict[str, Any] = {}
         self._extra_commit_tag_names = {
