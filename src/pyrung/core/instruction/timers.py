@@ -113,6 +113,8 @@ class OnDelayInstruction(Instruction):
             condition_view
         )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
+        frac = ctx.get_memory(frac_key, 0)
+        dt = ctx.get_memory("_dt", 0.0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
@@ -125,7 +127,7 @@ class OnDelayInstruction(Instruction):
                 }
             )
         elif enabled:
-            int_units, new_frac = elapsed_units(ctx, frac_key, self.unit)
+            int_units, new_frac = elapsed_units(frac, dt, self.unit)
             acc_value = min(acc_value + int_units, 32767)
             ctx.set_memory(frac_key, new_frac)
             done_value = acc_value >= sp
@@ -278,7 +280,9 @@ class OffDelayInstruction(Instruction):
             sp = resolve_preset_ctx(self.preset, ctx)
 
             # Always count while disabled (accumulator continues to max int)
-            int_units, new_frac = elapsed_units(ctx, frac_key, self.unit)
+            dt = ctx.get_memory("_dt", 0.0)
+            frac = ctx.get_memory(frac_key, 0)
+            int_units, new_frac = elapsed_units(frac, dt, self.unit)
 
             # Update accumulator, clamp at INT16_MAX (32767)
             acc_value = min(acc_value + int_units, 32767)

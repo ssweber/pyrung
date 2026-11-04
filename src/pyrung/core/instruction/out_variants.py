@@ -47,7 +47,8 @@ def _coil_tag(target: Tag | ImmediateRef) -> Tag:
 
 def _tick(ctx: ScanContext, acc: Tag, unit: TimeUnit) -> tuple[int, int | Fraction]:
     """Advance *acc* by this scan's dt; return the new value and remainder."""
-    int_units, rem = elapsed_units(ctx, f"_frac:{acc.name}", unit)
+    frac = ctx.get_memory(f"_frac:{acc.name}", 0)
+    int_units, rem = elapsed_units(frac, ctx.get_memory("_dt", 0.0), unit)
     return min(ctx.get_tag(acc.name, 0) + int_units, _ACC_MAX), rem
 
 

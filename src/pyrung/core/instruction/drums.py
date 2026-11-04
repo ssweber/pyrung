@@ -460,7 +460,8 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
             return 0
         frac_key = f"_frac:{self.accumulator.name}"
         acc = _read_step_tag_value(ctx, self.accumulator, fallback=0)
-        int_units, frac = elapsed_units(ctx, frac_key, self.unit)
+        dt = ctx.get_memory("_dt", 0.0)
+        int_units, frac = elapsed_units(ctx.get_memory(frac_key, 0), dt, self.unit)
         acc = min(acc + int_units, self._acc_max())
         ctx.set_tag(self.accumulator.name, acc)
         ctx.set_memory(frac_key, frac)

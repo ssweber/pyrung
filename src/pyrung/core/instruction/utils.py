@@ -18,17 +18,16 @@ if TYPE_CHECKING:
     from pyrung.core.time_mode import TimeUnit
 
 
-def elapsed_units(ctx: ScanContext, frac_key: str, unit: TimeUnit) -> tuple[int, int | Fraction]:
-    """This scan's time, added to what ``_frac:<acc>`` carries: whole units and what is left.
+def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fraction]:
+    """This scan's *dt*, added to what ``_frac:<acc>`` carries: whole units and what is left.
 
-    The carry is the nanoseconds since *acc*'s last whole unit, so no time is lost however
-    many scans it takes to make a unit.  It is a fraction of a unit (a float) in memory
-    saved before carries were nanoseconds.
+    The carry is the nanoseconds since the accumulator's last whole unit, so no time is lost
+    however many scans it takes to make a unit.  It is a fraction of a unit (a float) in
+    memory saved before carries were nanoseconds.
     """
-    carry = ctx.get_memory(frac_key, 0)
     if carry.__class__ is float:
         carry = round(carry * unit.ns)
-    return divmod(carry + dt_to_ns(ctx.get_memory("_dt", 0.0)), unit.ns)
+    return divmod(carry + dt_to_ns(dt), unit.ns)
 
 
 def guard_oneshot_execution(func: F) -> F:
