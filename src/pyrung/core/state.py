@@ -20,7 +20,7 @@ def snapshot_dict(mapping: Mapping[str, Any]) -> dict[str, Any]:
     6x faster on a few thousand keys).  Any other mapping takes ``dict()``.
     """
     if isinstance(mapping, PMap):
-        return dict(mapping.iteritems())
+        return cast("dict[str, Any]", dict(mapping.iteritems()))
     return dict(mapping)
 
 
