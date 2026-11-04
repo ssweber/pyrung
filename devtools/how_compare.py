@@ -259,6 +259,10 @@ def run_kind(row: dict) -> str:
     return f"SETUP_ERROR:{str(row.get('reason'))[:80]}"
 
 
+def is_budget(row: dict) -> bool:
+    return row.get("step_reach") == "n/a:step budget"
+
+
 def flag_kind(text: str) -> str:
     return text.split()[0]
 
@@ -371,6 +375,8 @@ def main() -> int:
                 diffs.append((c, "run", vb, vn))
             continue
         for field in FIELDS:
+            if field == "step_reach" and (is_budget(rb) or is_budget(rn)):
+                continue  # one side stopped stepping at its time budget: no evidence either way
             if rb.get(field) != rn.get(field):
                 diffs.append((c, field, rb.get(field), rn.get(field)))
     # flags: by kind and row, never by text
@@ -453,6 +459,12 @@ def main() -> int:
     gone = [c for c in names_ok if kinds[c][0] - kinds[c][1]]
     if gone:
         print(f"FLAGS ON BASE ONLY (gone on the tree): {gone}")
+    budget = [c for c in names_ok if is_budget(b[c]) or is_budget(n[c])]
+    if budget:
+        print(f"stepping stopped by budget (a MISSED here could not be seen): {len(budget)} rows")
+        for c in budget:
+            sides = [s for s, r in (("base", b[c]), ("tree", n[c])) if is_budget(r)]
+            print(f"    {c}  ({', '.join(sides)})")
     goalless = [c for c in names_ok if b[c].get("step_check") == "unchecked: no goal given"]
     if goalless:
         print(f"rows with no goal function, never checked against stepping: {len(goalless)}")
