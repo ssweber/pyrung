@@ -229,9 +229,7 @@ def test_a_predicate_reading_plc_state_stays_in_the_loop() -> None:
             lambda s: PMap._getitem(object.__getattribute__(s.tags, "_buckets"), ACC) >= 20,
             id="map buckets past getattr",
         ),
-        pytest.param(
-            lambda s: s.__class__ is SystemState and s.tags[ACC] >= 20, id="state class"
-        ),
+        pytest.param(lambda s: s.__class__ is SystemState and s.tags[ACC] >= 20, id="state class"),
         pytest.param(lambda s: s.tags.__class__ is PMap and s.tags[ACC] >= 20, id="map class"),
         pytest.param(
             lambda s: type(s).__name__ == "SystemState" and s.tags[ACC] >= 20, id="state type name"
@@ -254,7 +252,9 @@ def test_a_predicate_reading_what_moves_lands_as_stepping(predicate: Any) -> Non
         pytest.param(lambda s: SystemState.scan_id.__get__(s) >= 1777, id="scan_id slot"),
         pytest.param(lambda s: SystemState.timestamp.__get__(s) >= 17.77, id="timestamp slot"),
         pytest.param(lambda s: len(SystemState.memory.__get__(s)) > 99, id="memory slot"),
-        pytest.param(lambda s: PMap._getitem(PMap._buckets.__get__(s.tags), ACC) >= 20, id="map slot"),
+        pytest.param(
+            lambda s: PMap._getitem(PMap._buckets.__get__(s.tags), ACC) >= 20, id="map slot"
+        ),
         pytest.param(
             lambda s: (
                 super(type(s), s).tags[ACC] >= 20

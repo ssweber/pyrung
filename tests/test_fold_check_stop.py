@@ -76,8 +76,23 @@ def test_the_twin_is_asked_on_the_plain_state() -> None:
         )
 
 
+def test_a_predicate_naming_a_module_is_asked() -> None:
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
+    ):
+        fold_check._checked(
+            "run_until",
+            plc,
+            _stepper(plc, 9),
+            lambda s: threading.active_count() > 0 and s.tags["N"] >= 5,
+        )
+
+
 def test_a_trace_that_misreads_a_predicate_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Reads no tag and answers False: the coast runs past the stop, and the trace can't say so.
+    # Reads no tag and answers False: the coast runs past a stop that holds for a while, then
+    # goes on to its budget, so only a twin asked past the trace can say so.
     run = Bool("Run")
     timer = Timer.clone("MisreadT")
     with Program() as prog:
@@ -90,12 +105,11 @@ def test_a_trace_that_misreads_a_predicate_is_caught(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(read_trace._TracedTags, "__getitem__", lambda _self, _key: False)
 
     def predicate(s: Any) -> bool:
-        return s.tags[acc] >= 20
+        return s.tags[acc] == 20
 
-    assert predicate(plc.state) is False
     with (
         fold_check.deliberate(),
-        pytest.raises(FoldMismatch, match="stop predicate true at scan"),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 2000, folded run stopped"),
     ):
         fold_check._checked(
             "coast",

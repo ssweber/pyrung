@@ -137,7 +137,7 @@ class _TracedTags(PMap):
 
     __slots__ = ("_untraced",)
 
-    __class__ = property(lambda _self: PMap)  # ty: ignore[assignment]
+    __class__ = property(lambda _self: PMap)
     _buckets = _whole_map_read("_buckets")
     _size = _whole_map_read("_size")
 
@@ -184,7 +184,7 @@ class _TracedState(SystemState):
 
     __slots__ = ("_untraced",)
 
-    __class__ = property(lambda _self: SystemState)  # ty: ignore[assignment]
+    __class__ = property(lambda _self: SystemState)
     scan_id = _recorded_field("scan_id")
     timestamp = _recorded_field("timestamp")
     memory = _recorded_field("memory")

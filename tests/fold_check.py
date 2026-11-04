@@ -5,9 +5,10 @@ Enabled by ``--fold-check`` (``make test-fold``).  The entry points
 twin is built from the same tip state, forces, pending patches and synthesis overlay; after
 the run, the twin steps the same number of scans one by one, and every state the run itself
 produced (executed scans and landings, as cached) must equal the twin's state at that scan,
-tags, memory and timestamp exactly.  A driver with a stop predicate also hands it to the twin:
-if it is true on the twin at a scan before the one where the run stopped, the run overshot
-and :class:`FoldMismatch` says so.  A predicate that reads the real runner instead of its
+tags, memory and timestamp exactly.  A driver with a stop predicate also hands it to the twin,
+on its plain state and not through the read trace, which is what is being checked: if it is
+true on the twin at a scan before the one where the run stopped, the run overshot and
+:class:`FoldMismatch` says so.  A predicate that reads the real runner instead of its
 argument (it would answer about the wrong runner on a twin) or that raises on the twin is not
 asked, and is counted.  A mismatch raises :class:`FoldMismatch` inside the test that ran it,
 naming the scan and the differing keys.
@@ -786,8 +787,8 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
     A stateful predicate (a call counter, a recorder, ``rise()``'s edge memory) must
     not be advanced by the twin's extra calls, and must meet the twin's scans from the
     state it had when the folded run began.  So it is deep-copied before the folded
-    run starts (functions included, cell by cell); the runner itself is shared, not
-    copied.  An uncopyable predicate is not asked.
+    run starts (functions included, cell by cell); the runner and any module it names
+    are shared, not copied.  An uncopyable predicate is not asked.
     """
     import copy
     import types
@@ -831,7 +832,7 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
     for obj in _reachable(predicate, plc, shared_types):
         if isinstance(obj, shared_types):
             memo[id(obj)] = obj
-    shared = (type(plc),)
+    shared = (type(plc), types.ModuleType)
     table = copy._deepcopy_dispatch  # type: ignore[attr-defined]
     saved = {t: table.get(t) for t in (types.FunctionType, *shared)}
     table[types.FunctionType] = clone_function
