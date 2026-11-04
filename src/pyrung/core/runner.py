@@ -1614,8 +1614,9 @@ class PLC:
         self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
         # How many of this PLC's ``run_function`` bodies are running now: none of them may
-        # scan, stop or reboot it (ScanContext.call_user_function).  Not "a scan is open": a
-        # paused scan_steps generator has one open, and doing those beside it is legal.
+        # scan, stop or reboot it or set its battery (ScanContext.call_user_function).  Not "a
+        # scan is open": a paused scan_steps generator has one open, and doing those beside it
+        # is legal.
         self._user_calls_running = 0
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
@@ -4027,6 +4028,7 @@ class PLC:
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
+        self._refuse_inside_a_call()
         new_value = bool(value)
         if new_value == self._battery_present:
             return

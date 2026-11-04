@@ -236,8 +236,8 @@ class CompiledPLC:
         self._time_mode = TimeMode.FIXED_STEP
         self._running = True
         # A kernel pass that can call a ``run_function`` body is running, and that body may
-        # not scan, stop or reboot this PLC.  Nothing here can pause inside a scan, so the pass
-        # is narrow enough.
+        # not scan, stop or reboot this PLC or set its battery.  Nothing here can pause inside a
+        # scan, so the pass is narrow enough.
         self._kernel_pass_open = False
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
@@ -435,6 +435,8 @@ class CompiledPLC:
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         self._battery_present = bool(value)
         self._kernel.memory[_BATTERY_PRESENT_KEY] = self._battery_present
         self._state = self._state.with_memory({_BATTERY_PRESENT_KEY: self._battery_present})
@@ -662,11 +664,16 @@ class CompiledPLC:
         return state
 
     def run(self, cycles: int) -> SystemState:
+        # Here as well as in step(): a run of no scans answers a body the same way.
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         for _ in range(cycles):
             self.step()
         return self._state
 
     def run_for(self, seconds: float) -> SystemState:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
             self.step()

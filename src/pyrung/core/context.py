@@ -39,10 +39,11 @@ _MISSING = object()
 
 
 def refused_inside_its_own_scan() -> RuntimeError:
-    """What a PLC raises when a function its scan is calling asks it to scan, stop or reboot."""
+    """What a PLC raises when a function its scan is calling asks for what only fits between scans."""
     return RuntimeError(
         "A run_function called step(), run(), run_for(), run_until(), start(), stop() or "
-        "reboot() on the PLC running it, which a PLC can't do in the middle of its own scan. "
+        "reboot(), or set battery_present, on the PLC running it, which a PLC can't do in the "
+        "middle of its own scan. "
         "Set a tag through outs= and act on it from outside the scan. To scan from inside the "
         "function, use another PLC or CompiledPLC; a PLC can make one with fork()."
     )
@@ -349,8 +350,8 @@ class ScanContext:
                 set — the firing log is consumed by the simulator's own
                 analysis APIs, which by definition don't ask about unread
                 tags.  ``None`` bypasses the filter (escape hatch).  It
-                also refuses to scan, stop or reboot during
-                :meth:`call_user_function`.
+                also refuses to scan, stop, reboot or set its battery
+                during :meth:`call_user_function`.
             replay_io: When replaying, a pair of (submits, drains)
                 for this scan.  ``None`` during live execution.
         """
@@ -503,7 +504,7 @@ class ScanContext:
                 summary[0] = value
 
     def call_user_function(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-        """Call a ``run_function`` body; meanwhile this scan's PLC won't scan, stop or reboot.
+        """Call a ``run_function`` body; meanwhile this scan's PLC refuses what only fits between scans.
 
         Only for the call: a paused ``scan_steps`` generator sits between prepare and
         commit with no user code running, and stepping beside it is legal.  A count, since

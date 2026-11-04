@@ -176,6 +176,7 @@ def test_both_paths_raise_the_same_words():
     assert "outs=" in messages[0]
     assert "stop()" in messages[0]
     assert "reboot()" in messages[0]
+    assert "battery_present" in messages[0]
 
 
 def test_the_review_case_leaves_nothing_to_diverge(make):
@@ -431,6 +432,137 @@ def test_a_commit_callback_may_reboot_the_plc():
     assert plc.current_state.scan_id == 0
     assert plc.current_state.tags["Cnt"] == 2
     assert plc.step().scan_id == 1
+
+
+# -- the battery: the scan's commit lands on top of this too --
+
+
+def _set_battery(plc: Any, value: bool) -> None:
+    plc.battery_present = value
+
+
+# True is what it already holds: the refusal doesn't depend on the value changing.
+battery_values = pytest.mark.parametrize("value", [False, True], ids=["removed", "unchanged"])
+
+
+@battery_values
+def test_a_callable_may_not_set_its_plcs_battery(make, value):
+    plc, call = _built(make)
+    plain, _ = _built(make)
+    plc.run(3)
+    plain.run(3)
+    before = plc.current_state
+
+    _refused_scan(plc, call, lambda target: _set_battery(target, value))
+    assert plc.current_state is before
+    assert plc.battery_present is True
+
+    plc.step()
+    plain.step()
+    assert _tags(plc) == _tags(plain)
+    assert plc.battery_present is True
+
+
+@battery_values
+def test_swallowing_the_battery_refusal_changes_nothing(make, value):
+    plc, call = _built(make)
+    plain, _ = _built(make)
+    plc.run(3)
+    plain.run(3)
+
+    def tries() -> None:
+        with pytest.raises(RuntimeError, match=REFUSAL):
+            _set_battery(plc, value)
+
+    call.action = tries
+    plc.step()
+    plain.step()
+    assert _tags(plc) == _tags(plain)
+    assert plc.battery_present is True
+
+
+def test_battery_refusal_in_a_kernels_plant_pass():
+    call = Call()
+    program = _program(call)
+    plc = CompiledPLC(program, dt=0.01, compiled=compile_kernel(program, split_after=2))
+    plc.run(3)
+    before = plc.current_state
+    _refused_scan(plc, call, lambda target: _set_battery(target, False))
+    assert plc.current_state is before
+    assert plc.battery_present is True
+
+
+def test_a_callable_may_read_its_plcs_battery(make):
+    plc, call = _built(make)
+    read: list[bool] = []
+    call.action = lambda: read.append(plc.battery_present)
+    plc.step()
+    assert read == [True]
+
+
+def test_setting_the_battery_outside_a_callable_stays_legal(make):
+    plc, call = _built(make)
+    plc.run(3)
+    _refused_scan(plc, call, lambda target: _set_battery(target, False))
+    _set_battery(plc, False)  # The marker has cleared, so the same call now goes through.
+    assert plc.battery_present is False
+    plc.step()
+    assert plc.battery_present is False
+    _set_battery(plc, True)
+    plc.step()
+    assert plc.battery_present is True
+
+
+@pytest.mark.parametrize("inner_backend", sorted(BACKENDS))
+def test_a_callable_may_set_a_different_plcs_battery(make, inner_backend):
+    other, _ = _built(BACKENDS[inner_backend])
+    other.run(2)
+    plc, call = _built(make)
+    call.action = lambda: _set_battery(other, False)
+    assert plc.step().scan_id == 1
+    assert other.battery_present is False
+    assert plc.battery_present is True
+
+
+@pytest.mark.parametrize("debug", [False, True], ids=["scan_steps", "scan_steps_debug"])
+def test_setting_the_battery_beside_a_paused_scan_stays_legal(debug):
+    plc, _call = _built(BACKENDS["interpreted"])
+    plc.run(2)
+    gen = _paused_past_the_callable(plc, debug=debug)
+    _set_battery(plc, False)
+    assert plc.battery_present is False
+    gen.close()
+    plc.debug.abandon_scan()
+
+
+# -- a run of no scans --
+
+
+ZERO_LENGTH: dict[str, Callable[[Any], Any]] = {
+    "run": lambda plc: plc.run(0),
+    "run_for": lambda plc: plc.run_for(0),
+}
+zero_length = pytest.mark.parametrize("act", ZERO_LENGTH.values(), ids=ZERO_LENGTH.keys())
+
+
+@zero_length
+def test_a_run_of_no_scans_is_refused_inside_a_callable(make, act):
+    """Both backends answer the call, not the number of scans it would have run."""
+    plc, call = _built(make)
+    plc.run(3)
+    before = plc.current_state
+    _refused_scan(plc, call, act)
+    assert plc.current_state is before
+
+
+@zero_length
+def test_a_run_of_no_scans_outside_a_callable_is_a_no_op(make, act):
+    plc, _call = _built(make)
+    plc.run(3)
+    before = plc.current_state
+    assert act(plc) is before
+    assert plc.current_state is before
+    assert plc.mode == "run"
 
 
 # -- what a callable may still do to its PLC --
