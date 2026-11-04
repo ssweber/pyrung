@@ -84,6 +84,8 @@
 ### Fixes
 
 - A `run_function()` or `run_enabled_function()` that scans, stops or reboots the PLC running it or sets its battery (`step()`, `run()`, `run_for()`, `run_until()`, a `scan_steps` scan, `stop()`, `reboot()`, `battery_present`), on `PLC` or `CompiledPLC`, raises `RuntimeError`, where the scan published a wrong state and the two backends disagreed. Set a tag through `outs=` and act on it from outside the scan, or scan another PLC or a `PLC.fork()`.
+- A constant in an imported CLICK ladder (hex such as `FFC0h`, a Real, or quoted text) is never read as an address, so the generated `tags.py` no longer gains a stray tag like `C0 = c[0]` that fails on import.
+- Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`. CLICK's Compare offers only `=` and `!=` on text, so `<`, `<=`, `>` and `>=` on a Char are a `CLK_TEXT_ORDER_COMPARE` finding that export refuses unless allowed.
 - A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - A kernel that fails to compile for a reason pyrung does not expect gives a `RuntimeWarning` and the scans run interpreted, rather than raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.

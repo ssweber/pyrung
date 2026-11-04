@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterator
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -31,9 +32,34 @@ _OPERAND_PREFIXES: list[tuple[str, str, str]] = [
     ("T", "Bool", "t"),
 ]
 
-_OPERAND_RE = re.compile(
-    r"(?:CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\d+",
+# An address stands alone: the tail of ``FFC0h`` or ``0xFFC0`` is not ``C0``.
+_OPERAND_PATTERN = (
+    r"(?<![A-Za-z0-9_])(?:CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\d+(?![A-Za-z0-9_])"
 )
+
+_OPERAND_RE = re.compile(_OPERAND_PATTERN)
+
+# Quoted text is skipped whole, so a text constant such as ``"C1"`` never reads
+# as an address.  Raw CSV doubles its quotes and treats backslash as plain; the
+# Python-rendered form uses backslash escapes.
+_CSV_OPERAND_OR_TEXT_RE = re.compile(rf'"(?:[^"]|"")*"|(?P<operand>{_OPERAND_PATTERN})')
+_PY_OPERAND_OR_TEXT_RE = re.compile(rf'"(?:[^"\\]|\\.)*"|(?P<operand>{_OPERAND_PATTERN})')
+
+
+def _operand_matches(text: str) -> Iterator[re.Match[str]]:
+    """Operand matches in raw CSV ``text``, leaving out anything inside quoted text."""
+    for match in _CSV_OPERAND_OR_TEXT_RE.finditer(text):
+        if match.group("operand") is not None:
+            yield match
+
+
+def _sub_operands(text: str, replace: Callable[[str], str]) -> str:
+    """Replace each operand in Python-rendered ``text``; quoted text is untouched."""
+    return _PY_OPERAND_OR_TEXT_RE.sub(
+        lambda m: replace(m.group("operand")) if m.group("operand") is not None else m.group(0),
+        text,
+    )
+
 
 # Matches a range like DS100..DS102
 _RANGE_RE = re.compile(

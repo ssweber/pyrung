@@ -61,6 +61,7 @@ from .findings import (
     CLK_RAND_EQUAL_BOUNDS,
     CLK_RAND_REAL_BOUND,
     CLK_STATUS_BIT_NOT_PORTABLE,
+    CLK_TEXT_ORDER_COMPARE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
     ValidationMode,
@@ -786,6 +787,73 @@ def _evaluate_status_bit_usage(
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
             _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
 
+    return findings
+
+
+def _is_char_operand(operand: Any) -> bool:
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import Tag
+
+    if isinstance(operand, Tag):
+        return operand.type == TagType.CHAR
+    if isinstance(operand, (IndirectRef, IndirectExprRef)):
+        return operand.block.type == TagType.CHAR
+    return False
+
+
+def _text_order_compares(condition: Any, out: list[str]) -> None:
+    """Collect the operators of ``<``, ``<=``, ``>`` and ``>=`` on a Char operand."""
+    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt, Condition
+
+    symbols = {CompareLt: "<", CompareLe: "<=", CompareGt: ">", CompareGe: ">="}
+    if not isinstance(condition, Condition):
+        return
+    symbol = symbols.get(type(condition))
+    if symbol is not None and (
+        _is_char_operand(getattr(condition, "tag", None))
+        or _is_char_operand(getattr(condition, "value", None))
+    ):
+        out.append(symbol)
+    for attr_name in ("condition", "conditions"):
+        attr = getattr(condition, attr_name, None)
+        for item in attr if isinstance(attr, (list, tuple)) else [attr]:
+            _text_order_compares(item, out)
+
+
+def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[ClickFinding]:
+    """CLICK's Compare offers only = and != on text (TXT)."""
+    findings: list[ClickFinding] = []
+
+    def _walk_rung(rung: Any, location_str: str) -> None:
+        symbols: list[str] = []
+        for cond in rung._conditions:
+            _text_order_compares(cond, symbols)
+        for symbol in symbols:
+            findings.append(
+                ClickFinding(
+                    code=CLK_TEXT_ORDER_COMPARE,
+                    severity=_route_severity(CLK_TEXT_ORDER_COMPARE, mode),
+                    message=(
+                        f"A text (Char) comparison with '{symbol}' at {location_str}; "
+                        "the CLICK Compare dialog offers only = and != on text."
+                    ),
+                    location=location_str,
+                    suggestion=(
+                        "Compare text with == or !=, or copy the characters into Int "
+                        "tags (convert=to_ascii) and compare those."
+                    ),
+                )
+            )
+        for branch in rung._branches:
+            _walk_rung(branch, location_str)
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung, location_str)
+
+    for rung_index, rung in enumerate(program.rungs):
+        _walk_rung(rung, f"main rung {rung_index}")
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
     return findings
 
 

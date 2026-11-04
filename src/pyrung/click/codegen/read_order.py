@@ -34,7 +34,9 @@ from pyrung.click.codegen.constants import _RANGE_RE
 from pyrung.click.codegen.utils import _strip_quoted_strings
 from pyrung.core.validation.order_dependence import SolveRow, reads_after_write
 
-_ADDRESS_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|XD|YD|X|Y|C|T)(\d+)u?")
+_ADDRESS_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|XD|YD|X|Y|C|T)(\d+)u?(?![A-Za-z0-9_])"
+)
 _POINTER_RE = re.compile(r"([A-Z]+)\[")
 _BANK_RE = re.compile(r"[A-Z]+")
 _PAIR_RE = re.compile(r"(CTD|CT|TD|T)(\d+)")
