@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 
 from pyrsistent import PMap
 
-from pyrung.core.context import ScanContext, same_stored_value, scan_inside_its_own_scan
+from pyrung.core.context import ScanContext, refused_inside_its_own_scan, same_stored_value
 from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -236,7 +236,8 @@ class CompiledPLC:
         self._time_mode = TimeMode.FIXED_STEP
         self._running = True
         # A kernel pass that can call a ``run_function`` body is running, and that body may
-        # not scan this PLC.  Nothing here can pause inside a scan, so the pass is narrow enough.
+        # not scan, stop or reboot this PLC.  Nothing here can pause inside a scan, so the pass
+        # is narrow enough.
         self._kernel_pass_open = False
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
@@ -463,6 +464,8 @@ class CompiledPLC:
         return MappingProxyType(self._pending_patches)
 
     def stop(self) -> None:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         if not self._running:
             return
         self._running = False
@@ -470,6 +473,8 @@ class CompiledPLC:
         self._state = self._state.with_memory({_MODE_RUN_KEY: False})
 
     def reboot(self) -> SystemState:
+        if self._kernel_pass_open:
+            raise refused_inside_its_own_scan()
         tag_values = self._rebuild_tags_for_reset(
             preserve_all=self._battery_present,
             preserve_retentive=False,
@@ -858,7 +863,7 @@ class CompiledPLC:
     def _ensure_running(self) -> None:
         # Every way into a scan comes through here first, ahead of anything it would move.
         if self._kernel_pass_open:
-            raise scan_inside_its_own_scan()
+            raise refused_inside_its_own_scan()
         # A runner's states walk one recording, and a restart ends a recording: a stop
         # inside it scanned on until a later call (runner._reset_recording).
         if not self._running and not self._exact_anchor:

@@ -1,4 +1,4 @@
-"""A ``run_function`` that scans the PLC running it raises, on the interpreter and on a kernel.
+"""A ``run_function`` that scans, stops or reboots the PLC running it raises, on both backends.
 
 The refusal sits around the user's callable, not around the scan: a paused ``scan_steps``
 generator lies between prepare and commit, and stepping beside it stays legal.
@@ -33,7 +33,7 @@ from pyrung.core.runner import PLC, _may_be_called_again
 Cnt, X, Seen, Patched = Int("Cnt"), Int("X"), Int("Seen"), Int("Patched")
 NEVER = Bool("Never")
 
-REFUSAL = "a run_function called step"
+REFUSAL = "run_function called step"
 
 SCANNERS: dict[str, Callable[[Any], Any]] = {
     "step": lambda plc: plc.step(),
@@ -172,7 +172,10 @@ def test_both_paths_raise_the_same_words():
     assert messages[0] == messages[1]
     assert messages[0].isascii()
     assert "fork()" in messages[0]
-    assert "outs" in messages[0]
+    assert "CompiledPLC" in messages[0]
+    assert "outs=" in messages[0]
+    assert "stop()" in messages[0]
+    assert "reboot()" in messages[0]
 
 
 def test_the_review_case_leaves_nothing_to_diverge(make):
@@ -238,6 +241,196 @@ def test_a_kernel_says_whether_it_calls_a_function():
             calc(Cnt + 1, Cnt)
     assert compile_kernel(plain).calls_functions is False
     assert compile_kernel(_program(Call())).calls_functions is True
+
+
+# -- stop and reboot: no scan, but the scan's commit would land on top of them --
+
+
+LIFECYCLE: dict[str, Callable[[Any], Any]] = {
+    "stop": lambda plc: plc.stop(),
+    "reboot": lambda plc: plc.reboot(),
+}
+lifecycle = pytest.mark.parametrize("act", LIFECYCLE.values(), ids=LIFECYCLE.keys())
+
+
+@lifecycle
+def test_a_callable_may_not_stop_or_reboot_its_plc(make, act):
+    plc, call = _built(make)
+    plain, _ = _built(make)
+    plc.run(3)
+    plain.run(3)
+    before = plc.current_state
+
+    _refused_scan(plc, call, act)
+    assert plc.current_state is before
+    assert plc.mode == "run"
+
+    # Nothing of it stays behind: the same scan then runs as it would have.
+    plc.step()
+    plain.step()
+    assert _tags(plc) == _tags(plain)
+    assert plc.current_state.scan_id == plain.current_state.scan_id
+
+
+@lifecycle
+def test_swallowing_the_lifecycle_refusal_changes_nothing(make, act):
+    plc, call = _built(make)
+    plain, _ = _built(make)
+    plc.run(3)
+    plain.run(3)
+
+    def tries() -> None:
+        with pytest.raises(RuntimeError, match=REFUSAL):
+            act(plc)
+
+    call.action = tries
+    plc.step()
+    plain.step()
+    assert _tags(plc) == _tags(plain)
+    assert plc.current_state.scan_id == plain.current_state.scan_id
+    assert plc.mode == "run"
+
+
+@lifecycle
+def test_lifecycle_refusal_in_a_kernels_plant_pass(act):
+    call = Call()
+    program = _program(call)
+    plc = CompiledPLC(program, dt=0.01, compiled=compile_kernel(program, split_after=2))
+    plc.run(3)
+    before = plc.current_state
+    _refused_scan(plc, call, act)
+    assert plc.current_state is before
+    assert plc.mode == "run"
+
+
+@lifecycle
+def test_a_long_run_raises_on_a_lifecycle_call_too(act):
+    """No kernel can run this body, so stepped is the path; jit=True takes it past the gate.
+
+    Stepped here because --fold-check's twin runs the same closure, whose ``plc`` is then
+    another PLC, on which the call is legal.  The gate itself is tested above.
+    """
+
+    def inner(c: int) -> dict[str, int]:
+        if c == 20:
+            act(plc)
+        return {"seen": c}
+
+    with Program(strict=False) as program:
+        with Rung():
+            run_function(inner, ins={"c": Cnt}, outs={"seen": Seen})
+        with Rung():
+            calc(Cnt + 1, Cnt)
+    plc = PLC(program, dt=0.01)
+    assert plc._compiled_replay_supported_kernel() is None
+    with pytest.raises(RuntimeError, match=REFUSAL):
+        plc.run_for(1.0, jit=False)
+    assert plc.current_state.scan_id == 20
+    assert plc.mode == "run"
+
+
+@lifecycle
+def test_lifecycle_calls_outside_a_callable_stay_legal(make, act):
+    plc, call = _built(make)
+    plc.run(3)
+    _refused_scan(plc, call, act)  # The marker has cleared, so the same call now goes through.
+    act(plc)
+    if act is LIFECYCLE["stop"]:
+        assert plc.mode == "stop"
+        assert plc.current_state.scan_id == 3
+    else:
+        assert plc.mode == "run"
+        assert plc.current_state.scan_id == 0
+
+
+@lifecycle
+@pytest.mark.parametrize("inner_backend", sorted(BACKENDS))
+def test_a_callable_may_stop_or_reboot_a_different_plc(make, inner_backend, act):
+    other, _ = _built(BACKENDS[inner_backend])
+    other.run(2)
+    plc, call = _built(make)
+    call.action = lambda: act(other)
+    assert plc.step().scan_id == 1
+    if act is LIFECYCLE["stop"]:
+        assert other.mode == "stop"
+    else:
+        assert other.current_state.scan_id == 0
+
+
+@lifecycle
+@pytest.mark.parametrize("debug", [False, True], ids=["scan_steps", "scan_steps_debug"])
+def test_lifecycle_calls_beside_a_paused_or_abandoned_scan_stay_legal(act, debug):
+    paused, _ = _built(BACKENDS["interpreted"])
+    paused.run(2)
+    gen = _paused_past_the_callable(paused, debug=debug)
+    act(paused)
+    assert paused.mode == ("stop" if act is LIFECYCLE["stop"] else "run")
+    gen.close()
+    paused.debug.abandon_scan()
+
+    abandoned, _ = _built(BACKENDS["interpreted"])
+    abandoned.run(2)
+    gen = _paused_past_the_callable(abandoned, debug=debug)
+    gen.close()
+    abandoned.debug.abandon_scan()
+    act(abandoned)
+    assert abandoned.mode == paused.mode
+    assert abandoned.current_state.scan_id == paused.current_state.scan_id
+    assert _tags(abandoned) == _tags(paused)
+
+
+@pytest.mark.parametrize("debug", [False, True], ids=["scan_steps", "scan_steps_debug"])
+def test_a_paused_scans_callable_may_not_stop_it_even_once_stopped(debug):
+    """The refusal doesn't depend on the mode: a stopped PLC's paused scan gets the same answer."""
+    plc, call = _built(BACKENDS["interpreted"])
+    plc.run(3)
+    gen = plc.debug.scan_steps_debug() if debug else plc.debug.scan_steps()
+    next(gen)
+    plc.stop()
+    call.action = plc.stop
+    with pytest.raises(RuntimeError, match=REFUSAL):
+        for _ in gen:
+            pass
+    assert plc.mode == "stop"
+    plc.debug.abandon_scan()
+
+
+def test_a_commit_callback_may_stop_the_plc():
+    """After the commit, as it always was: the scan stands and the mode is STOP."""
+    plc, _call = _built(BACKENDS["interpreted"])
+    fired: list[int] = []
+
+    def stops(state: Any) -> None:
+        if not fired:
+            fired.append(state.scan_id)
+            plc.stop()
+
+    plc.when(Cnt == 2).do(stops)
+    plc.run(2)
+    assert fired == [2]
+    assert plc.mode == "stop"
+    assert plc.current_state.scan_id == 2
+    assert plc.current_state.tags["Cnt"] == 2
+    assert plc.step().scan_id == 1  # The next step restarts.
+
+
+def test_a_commit_callback_may_reboot_the_plc():
+    """After the commit, as it always was: a battery keeps the tags and the scan id restarts."""
+    plc, _call = _built(BACKENDS["interpreted"])
+    fired: list[int] = []
+
+    def reboots(state: Any) -> None:
+        if not fired:
+            fired.append(state.scan_id)
+            plc.reboot()
+
+    plc.when(Cnt == 2).do(reboots)
+    plc.run(2)
+    assert fired == [2]
+    assert plc.mode == "run"
+    assert plc.current_state.scan_id == 0
+    assert plc.current_state.tags["Cnt"] == 2
+    assert plc.step().scan_id == 1
 
 
 # -- what a callable may still do to its PLC --

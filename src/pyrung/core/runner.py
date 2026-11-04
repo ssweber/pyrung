@@ -35,7 +35,7 @@ from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
 from pyrung.core.condition_trace import ConditionTraceEngine
-from pyrung.core.context import ConditionView, RungId, ScanContext, scan_inside_its_own_scan
+from pyrung.core.context import ConditionView, RungId, ScanContext, refused_inside_its_own_scan
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.executor import (
@@ -728,11 +728,11 @@ class _DebugNamespace:
     # -- DebugRunner protocol (used by PLCDebugger) --
 
     def prepare_scan(self) -> tuple[ScanContext, float]:
-        self._plc._refuse_scan_inside_a_call()
+        self._plc._refuse_inside_a_call()
         return self._plc._prepare_scan()
 
     def commit_scan(self, ctx: ScanContext, dt: float) -> None:
-        self._plc._refuse_scan_inside_a_call()
+        self._plc._refuse_inside_a_call()
         self._plc._commit_scan(ctx, dt)
 
     def iter_top_level_rungs(self) -> Iterable[Rung]:
@@ -1614,8 +1614,8 @@ class PLC:
         self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
         # How many of this PLC's ``run_function`` bodies are running now: none of them may
-        # scan it (ScanContext.call_user_function).  Not "a scan is open": a paused
-        # scan_steps generator has one open, and stepping beside it is legal.
+        # scan, stop or reboot it (ScanContext.call_user_function).  Not "a scan is open": a
+        # paused scan_steps generator has one open, and doing those beside it is legal.
         self._user_calls_running = 0
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
@@ -4009,6 +4009,7 @@ class PLC:
 
     def stop(self) -> None:
         """Transition PLC to STOP mode."""
+        self._refuse_inside_a_call()
         if not self._running:
             return
         self._running = False
@@ -4050,6 +4051,7 @@ class PLC:
         replay-addressable — users who need that should ``fork()``
         before rebooting.
         """
+        self._refuse_inside_a_call()
         tag_values = self._rebuild_tags_for_reset(
             preserve_all=self._battery_present,
             preserve_retentive=False,
@@ -4330,15 +4332,15 @@ class PLC:
         self._pending_patches.update(restored)
         self._this_scan_drained_patches = {}
 
-    def _refuse_scan_inside_a_call(self) -> None:
+    def _refuse_inside_a_call(self) -> None:
         if self._user_calls_running:
-            raise scan_inside_its_own_scan()
+            raise refused_inside_its_own_scan()
 
     def _ensure_running(self) -> None:
         # Every way into a scan comes through here first, ahead of anything it would move.
-        # Not through _refuse_scan_inside_a_call: every scan pays for this line.
+        # Not through _refuse_inside_a_call: every scan pays for this line.
         if self._user_calls_running:
-            raise scan_inside_its_own_scan()
+            raise refused_inside_its_own_scan()
         # A replay walks one recording, and a restart ends a recording: a stop inside
         # it scanned on until a later call, which is past the end of this log.
         if not self._running and not self._replay_mode:
@@ -5017,7 +5019,7 @@ class PLC:
             yield i, rung, ctx
 
         # This generator can be resumed from anywhere, a callable included.
-        self._refuse_scan_inside_a_call()
+        self._refuse_inside_a_call()
         self._commit_scan(ctx, dt)
 
     def _scan_steps_debug(self) -> Generator[ScanStep, None, None]:
