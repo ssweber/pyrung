@@ -239,23 +239,32 @@ def test_an_opaque_avoid_true_at_the_start_of_a_dwell_stops_naming_it(check) -> 
     plan = plc.how(tags["state"] == 7, avoid=check, max_scans=2_000, wall_clock_s=60)
 
     assert plan.status is PlanStatus.STOPPED
-    assert "avoid excludes" in plan.reason
+    assert plan.total_scans == 0
+    assert plan.reason.startswith("The setup this route needs was rejected: avoid excludes")
 
 
 @pytest.mark.parametrize(
-    "check",
+    ("check", "reason"),
     [
-        lambda s: s["DwellPilotRotateSensor"] is True,
-        lambda s: s["DwellPilotRotateSensor"] is False,
-        lambda s: s["DwellPilotRotateState"] == 8,
+        (lambda s: s["DwellPilotRotateSensor"] is True, "No productive next action was found;"),
+        (
+            lambda s: s["DwellPilotRotateSensor"] is False,
+            "No productive next action was found: avoid excludes",
+        ),
+        (
+            lambda s: s["DwellPilotRotateState"] == 8,
+            "No productive next action was found: avoid excludes",
+        ),
     ],
     ids=["sensor-on", "sensor-off", "other-leg"],
 )
-def test_an_opaque_avoid_on_a_dwell_setup_does_not_raise(check) -> None:
+def test_an_opaque_avoid_on_a_dwell_setup_stops_with_no_route(check, reason) -> None:
     program, tags = _delayed_rotate_sensor_state_program()
     plc = PLC(program, dt=0.010)
     plc.step()
 
     plan = plc.how(tags["state"] == 7, avoid=check, max_scans=2_000, wall_clock_s=60)
 
-    assert plan.status in {PlanStatus.REACHED, PlanStatus.STOPPED}
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.total_scans == 0
+    assert plan.reason.startswith(reason)

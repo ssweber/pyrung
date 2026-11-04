@@ -1382,8 +1382,10 @@ def _search_events(
         attempt = transition.attempt
         assert attempt is not None
         controlled_setup_attempt = None
-        setup_never_ran = controlling_setup_request is not None and attempt.executed_attempt is None
-        if controlling_setup_request is not None and not setup_never_ran:
+        setup_has_no_execution = (
+            controlling_setup_request is not None and attempt.executed_attempt is None
+        )
+        if controlling_setup_request is not None and not setup_has_no_execution:
             assert theory_source_checkpoint is not None
             controlled_setup_attempt = _theory_recording._record_controlled_setup_attempt(
                 state,
@@ -1395,10 +1397,10 @@ def _search_events(
         if controlled_setup_attempt is not None and attempt.trial is not None:
             transition = _attempt_transition.adopt_deferred_transition(transition, state, ctx)
         if attempt.trial is None:
-            if setup_never_ran:
-                # A gate refused the setup before it ran (avoid=, or a value its tag
-                # cannot hold): there is no execution to record and no requirement to
-                # refine.  As when an executed setup is rejected, the theory ends here.
+            if setup_has_no_execution:
+                # Rejected with no execution to record and no requirement to refine: a
+                # gate refused the setup before it ran (avoid=, or a value its tag cannot
+                # hold).  As when an executed setup is rejected, the theory ends here.
                 theory = active_theory(state.theory_state)
                 if theory is None:
                     raise ValueError("rejected temporal attempt lost its theory")
@@ -1516,7 +1518,7 @@ def _search_events(
                 # with it; otherwise a later Compass read inherits temporary
                 # logic that has no successful World-change receipt.
                 state.load_world(prerequisite_source_world)
-            if setup_never_ran:
+            if setup_has_no_execution:
                 assert controlling_source_world is not None
                 state.load_world(controlling_source_world)
                 yield from _stopped_events(
@@ -1524,7 +1526,7 @@ def _search_events(
                     ctx,
                     frame,
                     _with_avoid_reason(
-                        "The setup this route needs was refused before it ran",
+                        "The setup this route needs was rejected",
                         state,
                         ctx,
                         frame,
