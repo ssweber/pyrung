@@ -97,6 +97,15 @@ def plant_acc_name(stem: str, fb_name: str, delay_ms: int) -> str:
     the link changed included.  Milliseconds have the plain name.
     """
     _preset, unit, _unit_ms = plant_timer(delay_ms)
+    return _acc_name_in(unit, stem, fb_name)
+
+
+def plant_acc_registers(stem: str, fb_name: str) -> tuple[tuple[str, int], ...]:
+    """Each accumulator a plant timer on *fb_name* could count in, and its ms per unit."""
+    return tuple((_acc_name_in(unit, stem, fb_name), ms) for unit, ms in _TIMER_UNITS_MS)
+
+
+def _acc_name_in(unit: str, stem: str, fb_name: str) -> str:
     return f"{stem}__{fb_name}" if unit == "Tms" else f"{stem}_{unit}__{fb_name}"
 
 

@@ -758,12 +758,51 @@ class TestALinkChangedAcrossUnits:
         assert dict(fork.current_state.tags) == dict(twin.current_state.tags)
         assert dict(fork.current_state.memory) == dict(twin.current_state.memory)
 
-    def test_a_fork_from_before_the_change_does_not_misread_the_count(self):
-        plc, En, Fb = self._linked("5s")
+    @pytest.mark.parametrize(
+        ("first", "then", "left_s"),
+        [
+            ("5s", "10s", 7.25),  # same unit, the control
+            ("5s", "60s", 57.25),
+            ("40s", "60s", 57.25),  # same unit, the control
+            ("40s", "5s", 2.25),
+        ],
+    )
+    def test_a_fork_from_before_the_change_keeps_the_time_counted(self, first, then, left_s):
+        plc, En, Fb = self._linked(first)
         plc.patch({En: True})
         plc.run(12)
-        before = plc.current_state.scan_id
-        self._relink(plc, on_delay="60s")
+        before = plc.current_state.scan_id - 1  # the tip itself takes the change
+        self._relink(plc, on_delay=then)
+        plc.run(5)
+
+        assert self._scans_to_flip(plc.fork(scan_id=before), Fb) == left_s * 4 + 1
+
+    @pytest.mark.parametrize(
+        ("declared", "bench"), [("30s", "5s"), ("40s", "5s"), ("60s", "5s")]
+    )  # 30 s stays in its unit, the control
+    def test_a_fork_from_before_a_narrowing_keeps_settled_feedback(self, declared, bench):
+        plc, En, Fb = self._linked(declared)
+        plc.patch({En: True})
+        plc.run(250)
+        before = plc.current_state.scan_id - 1
+        self._relink(plc, on_delay=bench)
+        plc.run(100)
+
+        fork = plc.fork(scan_id=before)
+        assert _fb(fork, Fb) is True
+        for _ in range(30):
+            fork.step()
+            assert _fb(fork, Fb) is True
+
+    @pytest.mark.parametrize(("first", "then"), [("40s", "5s"), ("5s", "60s"), ("5s", "10s")])
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_a_fork_from_before_the_change_runs_as_it_steps(self, first, then, dt):
+        plc, En, _Fb = self._linked(first, dt=dt)
+        plc.patch({En: True})
+        plc.run(12)
+        before = plc.current_state.scan_id - 1
+        recorded = plc.history.at(before)
+        self._relink(plc, on_delay=then)
         plc.run(5)
 
         stepped = plc.fork(scan_id=before)
@@ -771,8 +810,133 @@ class TestALinkChangedAcrossUnits:
         for _ in range(100):
             stepped.step()
         ran.run(100)
-        assert _whole_state(ran)[2:] == _whole_state(stepped)[2:]
-        assert _fb(stepped, Fb) is False
+        assert _whole_state(ran) == _whole_state(stepped)
+
+        # The session's record is untouched, and a fork of the fork goes the same way.
+        assert dict(plc.history.at(before).tags) == dict(recorded.tags)
+        at_its_start = stepped.fork(scan_id=before)
+        at_its_start.run(100)
+        assert _whole_state(at_its_start) == _whole_state(stepped)
+        inside = stepped.fork(scan_id=before + 40)
+        inside.run(60)
+        assert _whole_state(inside) == _whole_state(stepped)
+        tip = stepped.fork()
+        assert _whole_state(tip) == _whole_state(stepped)
+
+    @pytest.mark.parametrize(("first", "then"), [("40s", "5s"), ("5s", "60s")])
+    def test_a_fork_with_a_moved_count_replays_what_it_ran(self, first, then):
+        plc, En, _Fb = self._linked(first)
+        plc.patch({En: True})
+        plc.run(12)
+        before = plc.current_state.scan_id - 1
+        self._relink(plc, on_delay=then)
+        plc.run(5)
+
+        def forked(scans: int):
+            fork = plc.fork(scan_id=before)
+            for _ in range(scans):
+                fork.step()
+            return fork
+
+        fork = forked(50)
+        reference = forked(25)
+        for replayed in (fork.replay_to(before + 25), fork._replay_to_interpreted(before + 25)):
+            assert dict(replayed.current_state.tags) == dict(reference.current_state.tags)
+            assert dict(replayed.current_state.memory) == dict(reference.current_state.memory)
+
+    def test_a_replay_from_before_the_change_starts_from_what_it_recorded(self):
+        def session(change: bool):
+            plc, En, _Fb = self._linked("40s")
+            plc.patch({En: True})
+            plc.run(12)
+            if change:
+                self._relink(plc, on_delay="5s")
+                plc.run(5)
+            return plc
+
+        replayed = session(True)._replay_to_interpreted(8)
+        reference = session(False).fork(scan_id=8)
+        assert dict(replayed.current_state.tags) == dict(reference.current_state.tags)
+        assert dict(replayed.current_state.memory) == dict(reference.current_state.memory)
+
+    def test_a_fork_with_its_counts_in_place_changes_nothing(self):
+        plc, En, _Fb = self._linked("5s")
+        plc.patch({En: True})
+        plc.run(12)
+        self._relink(plc, on_delay="60s")
+        plc.run(5)
+        assert _whole_state(plc.fork()) == _whole_state(plc)
+
+    @pytest.mark.parametrize(
+        ("first", "then", "left_s"),
+        [
+            ("5s", "5s", 2.25),  # same unit, the control
+            ("5s", "10s", 7.25),  # same unit, the control
+            ("5s", "60s", 57.25),
+            ("60s", "5s", 2.25),
+        ],
+    )
+    def test_cut_and_linked_again_resumes(self, first, then, left_s):
+        def cut_and_linked(scans_after: int):
+            plc, En, Fb = self._linked(first)
+            plc.patch({En: True})
+            plc.run(12)
+            plc._harness.set_overrides({"Fb": None})
+            plc.run(5)
+            self._relink(plc, on_delay=then)
+            for _ in range(scans_after):
+                plc.step()
+            return plc, Fb
+
+        plc, Fb = cut_and_linked(0)
+        assert self._scans_to_flip(plc, Fb) == left_s * 4
+        stepped, _Fb = cut_and_linked(40)
+        ran, _Fb = cut_and_linked(0)
+        ran.run(40)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+    @staticmethod
+    def _off_delaying(off_delay: str):
+        En = Bool("En")
+        Fb = Bool("Fb", physical=Physical("S", on_delay="0ms", off_delay=off_delay), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        return logic, En, Fb
+
+    def _after_a_reload_to(self, off_delay: str, then: str) -> tuple:
+        """A new program and runner on the old state, as a reload is: enable off 2 s."""
+        logic, En, _Fb = self._off_delaying(off_delay)
+        old = PLC(logic, dt=0.25)
+        Harness(old).install()
+        old.patch({En: True})
+        old.run(10)
+        old.patch({En: False})
+        old.run(8)
+        new_logic, _En, Fb = self._off_delaying(then)
+        new = PLC(new_logic, initial_state=old.current_state, dt=0.25)
+        Harness(new).install()
+        return new, Fb
+
+    def test_a_reload_across_units_continues_a_running_off_delay(self):
+        same_unit, Fb = self._after_a_reload_to("10s", "5s")
+        left = self._scans_to_flip(same_unit, Fb)
+        assert left == 13  # the control
+
+        narrowed, Fb = self._after_a_reload_to("60s", "5s")
+        assert self._scans_to_flip(narrowed, Fb) == left
+        widened, Fb = self._after_a_reload_to("5s", "60s")
+        assert self._scans_to_flip(widened, Fb) == left + 55 * 4
+
+    def test_a_reload_across_units_runs_as_it_steps(self):
+        stepped, _Fb = self._after_a_reload_to("5s", "60s")
+        for _ in range(100):
+            stepped.step()
+        ran, _Fb = self._after_a_reload_to("5s", "60s")
+        ran.run(100)
+        assert _whole_state(ran) == _whole_state(stepped)
 
 
 class TestHowAroundALinkChange:
@@ -919,7 +1083,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
                 out(Bool("Seen"))
         return logic, En, Lamp
 
-    # Temp after 500 scans of dt 0.01 toward a setpoint, from 20.0: the first only arms it.
+    # Temp after 500 scans of dt 0.01 toward a setpoint, from 20.0: it moves on 499.
     @staticmethod
     def _temp_toward(setpoint: float) -> float:
         return setpoint - (setpoint - 20.0) * (1 - 0.3 * 0.01) ** 499

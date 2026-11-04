@@ -25,7 +25,12 @@ from pyrung.core.physical import (
     Ramp,
     profile_to_token,
 )
-from pyrung.core.synthesis import TIMER_ACC_MAX, plant_acc_name, plant_timer
+from pyrung.core.synthesis import (
+    TIMER_ACC_MAX,
+    plant_acc_name,
+    plant_acc_registers,
+    plant_timer,
+)
 from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
@@ -213,6 +218,7 @@ class Harness:
     _overrides: dict[str, Coupling | None] = field(default_factory=dict, init=False)
     _monitors: list[Any] = field(default_factory=list, init=False)
     _installed: bool = field(default=False, init=False)
+    _other_unit_registers: tuple[str, ...] | None = field(default=None, init=False)
 
     def __init__(self, plc: PLC) -> None:
         self._plc = plc
@@ -222,6 +228,7 @@ class Harness:
         self._overrides: dict[str, Coupling | None] = {}
         self._monitors: list[Any] = []
         self._installed = False
+        self._other_unit_registers = None
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
 
     def install(self) -> None:
@@ -234,11 +241,12 @@ class Harness:
         self._plc._note_plant_change()
         self._refresh_synthesis()
         self._seed_plant_defaults()
+        self._carry_counts_to_current_units()
         self._seed_bool_state()
         self._install_monitors()
         self._plc._harness = self
 
-    def fork_onto(self, plc: PLC) -> Harness:
+    def fork_onto(self, plc: PLC, *, as_recorded: bool = False) -> Harness:
         """Create a copy of this harness installed on *plc*.
 
         The fork inherits the parent's committed state — including each bool
@@ -246,6 +254,10 @@ class Harness:
         re-seed; only the (stateless) timer instructions and the fractional
         remainder are copied.  This is the seam the synthesis-overlay install
         grows into.
+
+        A state from before a link changed may hold a count in another unit's register,
+        and it moves here unless *as_recorded*: a replay of the scans as they ran keeps
+        the state they ran from.
         """
         from copy import copy
 
@@ -256,6 +268,7 @@ class Harness:
         clone._declared = list(self._declared)
         clone._overrides = dict(self._overrides)
         clone._installed = True
+        clone._other_unit_registers = self._other_unit_registers
         clone._monitors = []
         clone.on_patches_applied = None
         # Rebuild the synthesis overlay on the fork (fresh, stateless timer
@@ -264,6 +277,8 @@ class Harness:
         # re-seed.  The brackets survive the fork as a program reference — feedback
         # (bool and analog) is entirely plant rungs now, no private callback.
         clone._refresh_synthesis()
+        if not as_recorded:
+            clone._carry_counts_to_current_units()
         clone._install_monitors()
         plc._harness = clone
         return clone
@@ -315,16 +330,16 @@ class Harness:
 
         Each key is a feedback tag name.  A ``Coupling`` value runs instead of
         any declared coupling on that feedback (or adds one); ``None`` cuts the
-        declared coupling, leaving the feedback a free input.  A coupling added
-        while its enable is already on starts cold: the feedback follows after
-        its on-delay, as freshly wired hardware would.  A coupling replaced keeps
-        the time its timers have counted, whatever unit the new delays count in.
+        declared coupling, leaving the feedback a free input.  A coupling on a
+        feedback no timer has counted for starts cold: under a held enable the feedback
+        follows after its on-delay, as freshly wired hardware would.  A coupling
+        replaced, or cut and linked again, keeps the time its timers have counted,
+        whatever unit the new delays count in.
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
                 raise ValueError(f"Override for {fb_name!r} drives {coupling.fb_name!r}.")
         self._overrides = dict(overrides)
-        counted_in = self._timer_accumulators()
         self._rebuild_couplings()
         if self._installed:
             # Rebuild the overlay and monitors so changed couplings take
@@ -333,7 +348,7 @@ class Harness:
             self._plc._note_plant_change()
             self._refresh_synthesis()
             self._seed_plant_defaults()
-            self._carry_counts_to_new_units(counted_in)
+            self._carry_counts_to_current_units()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
@@ -358,52 +373,59 @@ class Harness:
                 stacklevel=3,
             )
 
-    def _timer_accumulators(self) -> dict[tuple[str, str], tuple[str, int]]:
-        """Each plant timer's accumulator and its ms per unit, by what the timer times."""
-        timers: list[tuple[str, str, int]] = []
+    def _plant_timers(self) -> Iterator[tuple[str, str, int]]:
+        """``(stem, feedback, delay in ms)`` of each plant timer the couplings run."""
         for c in self._bool_couplings:
-            timers.append(("__cpl_on", c.fb_name, c.on_delay_ms))
-            timers.append(("__cpl_off", c.fb_name, c.off_delay_ms))
+            yield "__cpl_on", c.fb_name, c.on_delay_ms
+            yield "__cpl_off", c.fb_name, c.off_delay_ms
         for c in self._profile_couplings:
             if isinstance(c.profile, Pulse):
-                timers.append(("__pls_on", c.fb_name, c.profile.on_dwell_ms))
-                timers.append(("__pls_off", c.fb_name, c.profile.off_dwell_ms))
-        return {
-            (stem, fb_name): (plant_acc_name(stem, fb_name, delay_ms), plant_timer(delay_ms)[2])
-            for stem, fb_name, delay_ms in timers
-        }
+                yield "__pls_on", c.fb_name, c.profile.on_dwell_ms
+                yield "__pls_off", c.fb_name, c.profile.off_dwell_ms
 
-    def _carry_counts_to_new_units(
-        self, counted_in: Mapping[tuple[str, str], tuple[str, int]]
-    ) -> None:
-        """Move what a timer has counted to its new accumulator when its unit changed.
+    def _carry_counts_to_current_units(self) -> None:
+        """Move a count sitting in another unit's register to the one its timer uses now.
 
-        A delay staying in its unit keeps its accumulator, so its count carries over
-        by itself; this makes a change of unit do the same.  A move leaves the old
-        accumulator at zero, so an empty one has nothing to give: a harness installed
-        afresh on this state (how()'s fork) and given the same links changes nothing.
+        A delay staying in its unit finds its count where it is, however the state got
+        here: a link replaced, cut and linked again, a reload, a fork from before a
+        change.  This makes a change of unit do the same, from the state alone.  A move
+        leaves zero behind, so a zero has nothing to give, and a state with its counts in
+        place is not touched.  Were two registers to hold a count, the longer time stands.
         """
         state = self._plc._state
+        # Every fork comes through here, and almost never has anything to move.
+        if self._other_unit_registers is None:
+            self._other_unit_registers = tuple(
+                name
+                for stem, fb_name, delay_ms in self._plant_timers()
+                for name, _unit_ms in plant_acc_registers(stem, fb_name)
+                if name != plant_acc_name(stem, fb_name, delay_ms)
+            )
+        if not any(name in state.tags for name in self._other_unit_registers):
+            return
         tags: dict[str, Any] = {}
         memory: dict[str, Any] = {}
-        for timer, (new_name, new_unit_ms) in self._timer_accumulators().items():
-            old = counted_in.get(timer)
-            if old is None or old[0] == new_name:
+        for stem, fb_name, delay_ms in self._plant_timers():
+            current = plant_acc_name(stem, fb_name, delay_ms)
+            counted_ms: dict[str, float] = {}
+            for name, unit_ms in plant_acc_registers(stem, fb_name):
+                count = int(state.tags.get(name, 0) or 0)
+                frac = float(state.memory.get(f"_frac:{name}", 0.0) or 0.0)
+                if count != 0 or frac != 0.0:
+                    counted_ms[name] = (count + frac) * unit_ms
+            if not counted_ms.keys() - {current}:
                 continue
-            old_name, old_unit_ms = old
-            count = int(state.tags.get(old_name, 0) or 0)
-            frac = float(state.memory.get(f"_frac:{old_name}", 0.0) or 0.0)
-            if count == 0 and frac == 0.0:
-                continue
-            elapsed_ms = (count + frac) * old_unit_ms
-            new_count = int(elapsed_ms // new_unit_ms)
-            new_frac = elapsed_ms / new_unit_ms - new_count
+            for name in counted_ms:
+                tags[name] = 0
+                memory[f"_frac:{name}"] = 0.0
+            elapsed_ms = max(counted_ms.values())
+            _preset, _unit, unit_ms = plant_timer(delay_ms)
+            new_count = int(elapsed_ms // unit_ms)
+            new_frac = elapsed_ms / unit_ms - new_count
             if new_count > TIMER_ACC_MAX:
                 new_count, new_frac = TIMER_ACC_MAX, 0.0
-            tags[old_name] = 0
-            memory[f"_frac:{old_name}"] = 0.0
-            tags[new_name] = new_count
-            memory[f"_frac:{new_name}"] = new_frac
+            tags[current] = new_count
+            memory[f"_frac:{current}"] = new_frac
         if tags:
             self._plc._edit_tip_tags(tags, memory=memory)
 
@@ -624,6 +646,7 @@ class Harness:
 
     def _rebuild_couplings(self) -> None:
         """Lower the declared couplings plus overrides into the working lists."""
+        self._other_unit_registers = None
         self._bool_couplings = []
         self._profile_couplings = []
         for c in self._declared:
