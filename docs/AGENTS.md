@@ -21,6 +21,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **Respect the reader's time.** If we've explained `dt=` determinism in the quickstart, don't re-explain it in concepts. Link, don't repeat.
 - **State the rule, not its history.** No release narration, dated readings or "measured on hardware"; `CHANGELOG.md` holds what changed.
 - **Don't document every edge case.** The conformance suite is the source of truth for CLICK behaviour. Docs cover what a program author needs, plus a reference area for gotchas; a corner that only a conformance case reaches can stay there.
+- **Keep a line only if it changes what an author writes.** Keep it if they would write different code after reading it and couldn't find it out by running it against pyrung. A fine edge of the engine is answered by testing it. Where pyrung differs from CLICK, prefer a validation finding to a paragraph. Conformance detail doesn't belong in user docs. A change touches docs only when an author's code would change, and a review asks "what can go?" as well as "is it right?".
 
 ## API design decisions (implemented)
 
