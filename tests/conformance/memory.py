@@ -58,7 +58,16 @@ STAGING_DS = range(3901, 4501)
 #: group that outgrew its first one.  A group listed before it has cases is
 #: reserved for the group that will have them.
 OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
-    "rungs": {"C": (range(1601, 1603), range(1611, 1614), range(1621, 1623), range(1631, 1633), range(1634, 1661)), "CT": range(151, 161)},
+    "rungs": {
+        "C": (
+            range(1601, 1603),
+            range(1611, 1614),
+            range(1621, 1623),
+            range(1631, 1633),
+            range(1634, 1661),
+        ),
+        "CT": range(151, 161),
+    },
     # DD4.., DF20.. and DH5.. are the grey-area probes' (the math cases use none).
     "math": {
         "DS": (
@@ -131,7 +140,17 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
     "out": {"C": range(1801, 1852), "T": range(301, 313)},
-    "loop": {"C": (range(1701, 1702), range(1711, 1712), range(1720, 1722), range(1729, 1732), range(1741, 1751)), "T": range(201, 212), "CT": (range(201, 212), range(215, 251))},
+    "loop": {
+        "C": (
+            range(1701, 1702),
+            range(1711, 1712),
+            range(1720, 1722),
+            range(1729, 1732),
+            range(1741, 1751),
+        ),
+        "T": range(201, 212),
+        "CT": (range(201, 212), range(215, 251)),
+    },
     "timers": {"C": (range(1471, 1472), range(1481, 1482), range(1491, 1492)), "T": range(1, 101)},
     # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
     # cases use none of them).
@@ -234,10 +253,18 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     # The grey-area probes, parts H.. (tests/conformance/probe_kit.py).  Their memory is
     # what the groups above leave unused.
-    "word_store": {"DD": range(810, 850), "DF": range(434, 450), "DH": range(422, 470),
-                   "DS": (range(4312, 4316), range(4322, 4323))},
-    "real_bits": {"DD": range(850, 860), "DF": range(20, 70), "DH": range(470, 500),
-                  "TXT": range(546, 570)},
+    "word_store": {
+        "DD": range(810, 850),
+        "DF": range(434, 450),
+        "DH": range(422, 470),
+        "DS": (range(4312, 4316), range(4322, 4323)),
+    },
+    "real_bits": {
+        "DD": range(850, 860),
+        "DF": range(20, 70),
+        "DH": range(470, 500),
+        "TXT": range(546, 570),
+    },
     # tests/conformance/test_drum_pins.py: from what other groups' cases never used.
     "drum_pins": {
         "C": (
@@ -342,7 +369,11 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DF": range(200, 201),
         "TXT": range(751, 754),
     },
-    "coil_range": {"C": (range(1623, 1631), range(1633, 1634)), "DD": range(77, 78), "DH": range(72, 77)},
+    "coil_range": {
+        "C": (range(1623, 1631), range(1633, 1634)),
+        "DD": range(77, 78),
+        "DH": range(72, 77),
+    },
     "compare": {
         "DS": (range(3920, 3921), range(3924, 3926)),
         "DH": range(70, 71),
@@ -366,7 +397,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "CT": (range(148, 149), range(150, 151)),
     },
     "boot_read": {
-        "C": (range(1603, 1611), range(1614, 1621)),
+        "C": (range(1603, 1607), range(1609, 1611), range(1614, 1621)),
         "DS": (range(4017, 4018), range(4019, 4021)),
         "DD": range(65, 74),
         "DF": range(203, 204),

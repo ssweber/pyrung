@@ -55,7 +55,6 @@ The cases own what ``memory.OWNED`` lists under these groups.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core.expression import sqrt
 from pyrung.core import (
     Or,
     Rung,
@@ -74,7 +73,21 @@ from pyrung.core import (
     timed,
     toggle,
 )
-from tests.conformance.memory import ClickCounter, ClickTimer, c, ct, ctd, dd, df, dh, ds, t, td, txt
+from pyrung.core.expression import sqrt
+from tests.conformance.memory import (
+    ClickCounter,
+    ClickTimer,
+    c,
+    ct,
+    ctd,
+    dd,
+    df,
+    dh,
+    ds,
+    t,
+    td,
+    txt,
+)
 from tests.conformance.probe_kit import between, once
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -143,14 +156,7 @@ def prove_what_survives(slot):
 
 def prove_first_scan_edges(slot):
     mask = dd[68]
-    tog, shot_out, pulse, shot_for, shift_a, flash = (
-        c[1604],
-        c[1605],
-        c[1606],
-        c[1607],
-        c[1608],
-        c[1609],
-    )
+    tog, shot_out, pulse, flash = c[1604], c[1605], c[1606], c[1609]
     high = c[1610]
     a, b, flag = c[1614], c[1615], c[1616]
     shot_copy, for_copy = dd[69], dd[70]
@@ -245,8 +251,6 @@ boot_group = Group(
                 c[1604],
                 c[1605],
                 c[1606],
-                c[1607],
-                c[1608],
                 c[1609],
                 c[1610],
                 c[1614],
@@ -456,4 +460,3 @@ def test_flag_scan():
 
 def test_rtc_set():
     assert_all_passed(run(rtc_group))
-

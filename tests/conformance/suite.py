@@ -40,13 +40,12 @@ from pyrung.conformance import (
 )
 from tests.conformance import (
     test_agg_more,
-    test_boot_read,
-    test_copy_more,
-    test_v4_more,
     test_block,
+    test_boot_read,
     test_call_twice,
     test_coils,
     test_cont_box,
+    test_copy_more,
     test_counters,
     test_drum,
     test_drum_close,
@@ -61,9 +60,9 @@ from tests.conformance import (
     test_for_count,
     test_loop,
     test_loop_call,
-    test_math_more,
     test_math,
     test_math_error,
+    test_math_more,
     test_numeric,
     test_out,
     test_past_bank_write,
@@ -80,6 +79,7 @@ from tests.conformance import (
     test_system,
     test_text,
     test_timers,
+    test_v4_more,
     test_word_store,
 )
 

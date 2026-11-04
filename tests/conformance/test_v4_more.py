@@ -308,7 +308,10 @@ group = Group(
 def prove_oneshot_and_edges(slot):
     count_scans(slot)
     rung, skip, bit, toggled = c[1722], c[1723], c[1724], c[1725]
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 4, slot.Scratch == 5, slot.Scratch == 7)):
+    with Rung(
+        slot.Cmd != 0,
+        Or(slot.Scratch == 3, slot.Scratch == 4, slot.Scratch == 5, slot.Scratch == 7),
+    ):
         out(rung)
     with Rung(rung):
         with forloop(2, oneshot=True):
