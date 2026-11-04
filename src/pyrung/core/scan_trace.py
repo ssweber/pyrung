@@ -109,6 +109,7 @@ from pyrung.core.system_points import (
     clock_high,
     system,
 )
+from pyrung.core.time_mode import dt_to_ns
 
 if TYPE_CHECKING:
     from pyrung.core.compiled_plc import CompiledPLC
@@ -544,6 +545,7 @@ _PURE_BUILTINS: dict[str, _Pure] = {
     "isinstance": _Pure("isinstance", isinstance, returns_bool=True, total=True),
     "type": _Pure("type", type, total=True),
     "frozenset": _Pure("frozenset", frozenset),
+    "_dt_to_ns": _Pure("_dt_to_ns", dt_to_ns),
 }
 _PURE_MATH: dict[str, _Pure] = {
     "isfinite": _Pure("math.isfinite", math.isfinite, returns_bool=True),

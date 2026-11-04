@@ -268,6 +268,8 @@ class CodegenContext:
     function_sources: dict[str, str] = field(default_factory=dict)
     function_globals: dict[str, set[str]] = field(default_factory=dict)
     used_helpers: set[str] = field(default_factory=set)
+    # Nanoseconds to a unit of each accumulator the compiled timers tick.
+    timer_unit_ns: dict[str, int] = field(default_factory=dict)
     symbol_table: dict[str, str] = field(default_factory=dict)
 
     block_symbols: dict[int, str] = field(default_factory=dict)

@@ -40,7 +40,7 @@ from ._primitives import (
     _range_item_read_expr,
     _range_item_write_expr,
     _search_compare_expr,
-    _timer_dt_to_units_expr,
+    _timer_carry_lines,
 )
 
 
@@ -686,7 +686,6 @@ def _compile_time_drum_instruction(
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
         instr.reset_condition, ctx
     )
-    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
 
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
@@ -734,7 +733,7 @@ def _compile_time_drum_instruction(
     lines.append("_was_done = _done")
     lines.extend(_compile_drum_bad_step_lines(instr, step_write, step_count, timed=True))
     lines.append(f"_acc = int({accumulator_read})")
-    lines.append(f"_frac = float(_mem.get({frac_key!r}, 0.0))")
+    lines.append(f"_new_frac = _mem.get({frac_key!r}, 0)")
     if ctx.abstract_timers:
         # The step's preset is the tick's limit; an event-only step has none.
         enabled_body = [
@@ -745,14 +744,11 @@ def _compile_time_drum_instruction(
                 value_exprs=[expr if expr is not None else "None" for expr in preset_exprs],
             ),
             f"_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _limit)",
-            "_frac = 0.0",
+            "_new_frac = 0",
         ]
     else:
         enabled_body = [
-            "_dt = float(_mem.get('_dt', 0.0))",
-            f"_dt_units = {unit_expr}",
-            "_int_units = int(_dt_units)",
-            "_frac = _dt_units - _int_units",
+            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
             f"_acc = min(_acc + _int_units, {max_acc})",
         ]
     if timed_event:
@@ -812,7 +808,7 @@ def _compile_time_drum_instruction(
         [
             "if _reset_step_data:",
             "    _acc = 0",
-            "    _frac = 0.0",
+            "    _new_frac = 0",
         ]
     )
 
@@ -820,12 +816,12 @@ def _compile_time_drum_instruction(
         [
             "if (_enabled and (not _hold)) or _reset_active or _step_changed or _reset_step_data:",
             f"    {accumulator_write} = _acc",
-            f"    _mem[{frac_key!r}] = _frac",
+            f"    _mem[{frac_key!r}] = _new_frac",
         ]
     )
     if timed_event:
         # Every scan, as the interpreter writes it.
-        lines.append(f"_mem[{frac_key!r}] = _frac")
+        lines.append(f"_mem[{frac_key!r}] = _new_frac")
     lines.append(f"_mem[{done_key!r}] = _done")
     lines.append(f"_mem[{rung_prev_key!r}] = _enabled and (not _reset_active)")
 

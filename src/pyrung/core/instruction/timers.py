@@ -11,6 +11,7 @@ from pyrung.core.time_mode import _parse_time_unit
 from .advance import AdvanceProfile, ConditionDemand, monotone_profile
 from .base import Instruction
 from .utils import (
+    elapsed_units,
     instruction_condition_view,
     resolve_preset_ctx,
     to_condition,
@@ -112,12 +113,10 @@ class OnDelayInstruction(Instruction):
             condition_view
         )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
-        frac = ctx.get_memory(frac_key, 0.0)
-        dt = ctx.get_memory("_dt", 0.0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
-            ctx.set_memory(frac_key, 0.0)
+            ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
                     self.done_bit.name: False,
@@ -126,9 +125,7 @@ class OnDelayInstruction(Instruction):
                 }
             )
         elif enabled:
-            dt_units = self.unit.dt_to_units(dt) + frac
-            int_units = int(dt_units)
-            new_frac = dt_units - int_units
+            int_units, new_frac = elapsed_units(ctx, self.accumulator, self.unit)
             acc_value = min(acc_value + int_units, 32767)
             ctx.set_memory(frac_key, new_frac)
             done_value = acc_value >= sp
@@ -140,7 +137,7 @@ class OnDelayInstruction(Instruction):
                 }
             )
         elif not self.has_reset:
-            ctx.set_memory(frac_key, 0.0)
+            ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
                     self.done_bit.name: False,
@@ -258,7 +255,7 @@ class OffDelayInstruction(Instruction):
             # While enabled: done = True, acc = 0
             if timing_at_zero:
                 ctx.set_memory(timing_key, False)
-            ctx.set_memory(frac_key, 0.0)
+            ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
                     self.done_bit.name: True,
@@ -281,12 +278,7 @@ class OffDelayInstruction(Instruction):
             sp = resolve_preset_ctx(self.preset, ctx)
 
             # Always count while disabled (accumulator continues to max int)
-            dt = ctx.get_memory("_dt", 0.0)
-            frac = ctx.get_memory(frac_key, 0.0)
-
-            dt_units = self.unit.dt_to_units(dt) + frac
-            int_units = int(dt_units)
-            new_frac = dt_units - int_units
+            int_units, new_frac = elapsed_units(ctx, self.accumulator, self.unit)
 
             # Update accumulator, clamp at INT16_MAX (32767)
             acc_value = min(acc_value + int_units, 32767)

@@ -7,7 +7,7 @@ what its arithmetic has to give, written from the rule and not from the code.
 
 Scans are numbered from 1, the first scan the rung is held (or, off-delay, the first it
 is false).  The generated code's first scan has no time behind it (its dt is the clock
-since boot, 0 here), so everything on it lands one scan later.
+since boot, 0 here), so a count that starts on it lands one scan later.
 """
 
 from __future__ import annotations
@@ -45,7 +45,13 @@ from tests.circuitpy.test_scan_time_and_stop import _BoardClock, _hw
 from tests.circuitpy.test_system_points import _StubBase
 
 DTS = ("0.001", "0.003", "0.01", "0.02", "0.05", "0.1", "0.2", "0.25", "0.5")
-UNIT_SECONDS = {"Tms": Fraction(1, 1000), "Ts": Fraction(1), "Tm": Fraction(60), "Th": Fraction(3600), "Td": Fraction(86400)}
+UNIT_SECONDS = {
+    "Tms": Fraction(1, 1000),
+    "Ts": Fraction(1),
+    "Tm": Fraction(60),
+    "Th": Fraction(3600),
+    "Td": Fraction(86400),
+}
 PRESETS = (
     (1000, "Tms"),
     (5000, "Tms"),
@@ -108,8 +114,6 @@ def _off_delay_program(preset: int, unit: str) -> Program:
         with Rung(~Armed):
             off_delay(Tof, preset=preset, unit=unit)
         with Rung(Armed):
-            off_delay(Tof, preset=preset, unit=unit)
-        with Rung(Armed):
             calc(Scans + 1, Scans)
         with Rung(Armed, ~Tof.Done, ~Seen):
             copy(Scans, First)
@@ -123,7 +127,7 @@ def _drum_program(preset: int, unit: str) -> Program:
     Scans = Dint("Scans", retentive=False)
     First = Dint("First", retentive=False)
     Seen = Bool("Seen", retentive=False)
-    Step = Int("Step", retentive=False)
+    Step = Int("Step", retentive=False, default=1)
     Acc = Int("Acc", retentive=False)
     Flag = Bool("Flag", retentive=False)
     Reset = Bool("Reset", retentive=False)
@@ -215,8 +219,10 @@ def test_the_kernel_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
 def test_the_generated_code_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
     preset, unit, dt = row
     expect = want(preset, unit, dt)
-    # One later: its first scan has no time behind it (module docstring).
-    assert _generated_first(PROGRAMS[kind](preset, unit), dt, expect + 4) == expect + 1
+    # One later: its first scan has no time behind it (module docstring).  The off-delay's
+    # first scan is the one its rung is true on, so it times all of them.
+    late = 0 if kind == "off" else 1
+    assert _generated_first(PROGRAMS[kind](preset, unit), dt, expect + 4) == expect + late
 
 
 @pytest.mark.parametrize("kind", ["on", "off", "drum"])
@@ -431,12 +437,10 @@ def test_fork_and_history_keep_the_carry() -> None:
 
 @pytest.mark.parametrize(
     ("unit", "old", "ns"),
-    [("Ts", 0.5, 500_000_000), ("Tm", 0.25, 15_000_000_000), ("Tms", 0.5, 500_000)],
+    [("Ts", 0.5, 500_000_000), ("Tm", 0.75, 45_000_000_000), ("Tms", 0.5, 500_000)],
 )
 @pytest.mark.parametrize("engine", ["interpreter", "kernel"])
-def test_a_saved_float_fraction_still_counts(
-    engine: str, unit: str, old: float, ns: int
-) -> None:
+def test_a_saved_float_fraction_still_counts(engine: str, unit: str, old: float, ns: int) -> None:
     """An old state's ``_frac`` is a float fraction of the unit: it reads as that much time."""
     preset = {"Ts": 1, "Tm": 1, "Tms": 1}[unit]
     prog = _on_delay_program(preset, unit)

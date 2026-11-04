@@ -5,7 +5,7 @@ analyses that dispatch on ``OutInstruction`` read it as "the coil equals its
 rung", which no variant is.  The variants keep their state in tags: the target
 bit and the owned Timers' accumulators (CLICK's TD).  The one exception is
 toggle's previous rung state, a memory key written every scan.  Timed phases
-carry the usual ``_frac:<Acc>`` remainder.
+carry the usual ``_frac:<Acc>`` remainder, in nanoseconds.
 
 None of them writes a Timer's ``Done`` bit (CLICK's T), ``EN`` or ``TT``.  A
 CLICK Out coil claims the whole timer number but reads its phases from the TDs
@@ -25,9 +25,11 @@ from pyrung.core.time_mode import _parse_time_unit
 
 from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, constraint_holds
 from .base import Instruction
-from .utils import resolve_preset_ctx, to_condition, validate_preset
+from .utils import elapsed_units, resolve_preset_ctx, to_condition, validate_preset
 
 if TYPE_CHECKING:
+    from fractions import Fraction
+
     from pyrung.core.context import ScanContext
     from pyrung.core.crossing import Constraint
     from pyrung.core.instruction.advance import Snapshot
@@ -43,13 +45,10 @@ def _coil_tag(target: Tag | ImmediateRef) -> Tag:
     return tag
 
 
-def _tick(ctx: ScanContext, acc: Tag, unit: TimeUnit) -> tuple[int, float]:
+def _tick(ctx: ScanContext, acc: Tag, unit: TimeUnit) -> tuple[int, int | Fraction]:
     """Advance *acc* by this scan's dt; return the new value and remainder."""
-    frac = ctx.get_memory(f"_frac:{acc.name}", 0.0)
-    dt = ctx.get_memory("_dt", 0.0)
-    dt_units = unit.dt_to_units(dt) + frac
-    int_units = int(dt_units)
-    return min(ctx.get_tag(acc.name, 0) + int_units, _ACC_MAX), dt_units - int_units
+    int_units, rem = elapsed_units(ctx, acc, unit)
+    return min(ctx.get_tag(acc.name, 0) + int_units, _ACC_MAX), rem
 
 
 def _target_plan(
@@ -163,7 +162,7 @@ class DebounceInstruction(Instruction):
             acc_value, frac = _tick(ctx, acc, self.unit)
             is_done = acc_value >= resolve_preset_ctx(preset, ctx)
         else:
-            acc_value, frac, is_done = 0, 0.0, False
+            acc_value, frac, is_done = 0, 0, False
         ctx.set_memory(f"_frac:{acc.name}", frac)
         tags[acc.name] = acc_value
         return is_done
@@ -254,7 +253,7 @@ class FlasherInstruction(Instruction):
             # whatever it froze at until the on phase ends.
             on_acc = 0
             ctx.set_tags({self.on_acc.name: 0})
-            ctx.set_memory(on_frac, 0.0)
+            ctx.set_memory(on_frac, 0)
         off_phase = on_acc >= resolve_preset_ctx(self.on_preset, ctx) and off_acc < (
             resolve_preset_ctx(self.off_preset, ctx)
         )
@@ -264,8 +263,8 @@ class FlasherInstruction(Instruction):
         first = restarting or (
             on_acc == 0
             and off_acc == 0
-            and ctx.get_memory(on_frac, 0.0) == 0.0
-            and ctx.get_memory(off_frac, 0.0) == 0.0
+            and ctx.get_memory(on_frac, 0) == 0
+            and ctx.get_memory(off_frac, 0) == 0
         )
         if not off_phase:
             acc_value, frac = _tick(ctx, self.on_acc, self.unit)
@@ -273,22 +272,22 @@ class FlasherInstruction(Instruction):
             if acc_value >= resolve_preset_ctx(self.on_preset, ctx):
                 off_phase = True
                 tags[self.off_acc.name] = 0
-                ctx.set_memory(on_frac, 0.0)
-                ctx.set_memory(off_frac, 0.0)
+                ctx.set_memory(on_frac, 0)
+                ctx.set_memory(off_frac, 0)
             else:
                 ctx.set_memory(on_frac, frac)
-                ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0.0))
+                ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0))
         else:
             acc_value, frac = _tick(ctx, self.off_acc, self.unit)
             tags[self.off_acc.name] = acc_value
             if acc_value >= resolve_preset_ctx(self.off_preset, ctx):
                 off_phase = False
                 tags[self.on_acc.name] = 0
-                ctx.set_memory(on_frac, 0.0)
-                ctx.set_memory(off_frac, 0.0)
+                ctx.set_memory(on_frac, 0)
+                ctx.set_memory(off_frac, 0)
             else:
                 ctx.set_memory(off_frac, frac)
-                ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0.0))
+                ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
         tags[self.target.name] = first or not off_phase
         ctx.set_tags(tags)
 
@@ -346,12 +345,12 @@ class TimedInstruction(Instruction):
         # remainder having) tells a timed-out coil from an idle one when the
         # preset is 0.
         timed_out = acc >= resolve_preset_ctx(self.on_preset, ctx) and (
-            acc != 0 or ctx.get_memory(frac_key, 0.0) != 0.0
+            acc != 0 or ctx.get_memory(frac_key, 0) != 0
         )
         if timed_out:
             if enabled:
                 # Timed out with the rung still true: wait for it to go false.
-                ctx.set_memory(frac_key, ctx.get_memory(frac_key, 0.0))
+                ctx.set_memory(frac_key, ctx.get_memory(frac_key, 0))
                 ctx.set_tag(self.target.name, self.maintained)
                 return
         elif enabled or ctx.get_tag(self.target.name, False):
@@ -368,7 +367,7 @@ class TimedInstruction(Instruction):
                 }
             )
             return
-        ctx.set_memory(frac_key, 0.0)
+        ctx.set_memory(frac_key, 0)
         ctx.set_tags({self.target.name: False, self.timer_acc.name: 0})
 
     def advance_profile(self) -> AdvanceProfile | None:

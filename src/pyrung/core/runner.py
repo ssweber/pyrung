@@ -71,7 +71,7 @@ from pyrung.core.system_points import (
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
 )
-from pyrung.core.time_mode import TimeMode
+from pyrung.core.time_mode import TimeMode, dt_to_ns
 from pyrung.core.trace_formatter import TraceFormatter
 from pyrung.core.validation._common import _collect_write_sites, walk_instructions
 from pyrung.core.validation.readonly_write import _any_write_targets
@@ -4724,6 +4724,7 @@ class PLC:
         dt = self._calculate_dt()
         if self._state.memory.get("_dt", _SENTINEL) != dt:
             ctx.set_memory("_dt", dt)
+            ctx.set_memory("_dt_ns", dt_to_ns(dt))
         if self._synthesis is not None:
             # ``plant`` (pre / input-read): read the PREVIOUS commit's settled
             # command and synthesize feedback as *this* scan's input image —

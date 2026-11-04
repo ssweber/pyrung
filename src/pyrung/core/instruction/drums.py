@@ -21,7 +21,7 @@ from .advance import (
     scalar_boundary,
 )
 from .base import Instruction
-from .utils import instruction_condition_view, to_condition
+from .utils import elapsed_units, instruction_condition_view, to_condition
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -698,7 +698,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac_key = f"_frac:{self.accumulator.name}"
-        frac = float(ctx.get_memory(frac_key, 0.0))
+        frac = ctx.get_memory(frac_key, 0)
 
         if reset_active:
             step = 1
@@ -708,10 +708,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             self._apply_reset(ctx)
         else:
             if enabled and not hold:
-                dt = float(ctx.get_memory("_dt", 0.0))
-                dt_units = self.unit.dt_to_units(dt) + frac
-                int_units = int(dt_units)
-                frac = dt_units - int_units
+                int_units, frac = elapsed_units(ctx, self.accumulator, self.unit)
                 acc_value = min(acc_value + int_units, self._acc_max())
                 preset = _resolve_preset_value(self.presets[step - 1], ctx)
                 if acc_value >= preset:
@@ -745,7 +742,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
 
         if reset_step_data:
             acc_value = 0
-            frac = 0.0
+            frac = 0
 
         if (enabled and not hold) or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})
@@ -959,7 +956,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
 
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac_key = f"_frac:{self.accumulator.name}"
-        frac = float(ctx.get_memory(frac_key, 0.0))
+        frac = ctx.get_memory(frac_key, 0)
 
         if reset_active:
             step = 1
@@ -969,10 +966,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
             self._apply_reset(ctx)
         else:
             if enabled and not hold:
-                dt = float(ctx.get_memory("_dt", 0.0))
-                dt_units = self.unit.dt_to_units(dt) + frac
-                int_units = int(dt_units)
-                frac = dt_units - int_units
+                int_units, frac = elapsed_units(ctx, self.accumulator, self.unit)
                 acc_value = min(acc_value + int_units, self._acc_max())
                 if self._step_ready(step, acc_value, ctx, condition_view):
                     if step < self.step_count:
@@ -1005,7 +999,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
 
         if reset_step_data:
             acc_value = 0
-            frac = 0.0
+            frac = 0
 
         if (enabled and not hold) or reset_active or step_changed or reset_step_data:
             ctx.set_tags({self.accumulator.name: acc_value, self.current_step.name: step})

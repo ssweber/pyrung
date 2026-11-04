@@ -32,6 +32,7 @@ from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
+from pyrung.core.time_mode import dt_to_ns
 
 
 def _collect_materialized_tag_names(
@@ -134,7 +135,11 @@ def compile_kernel(
     )
     source, lock_source = _render_kernel_source(ctx, split_after=split_after)
 
-    namespace: dict[str, Any] = {**ctx.function_objects, **ctx.function_constants}
+    namespace: dict[str, Any] = {
+        **ctx.function_objects,
+        **ctx.function_constants,
+        "_dt_to_ns": dt_to_ns,
+    }
     code = compile(source, "<kernel>", "exec", dont_inherit=True)
     exec(code, namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
@@ -170,6 +175,7 @@ def compile_kernel(
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
         materialized_tag_names=_collect_materialized_tag_names(program, ctx),
+        timer_unit_ns=dict(ctx.timer_unit_ns),
     )
 
 
@@ -425,6 +431,9 @@ def _render_step_function(
             '    memory["_dt"] = dt',
         ]
     )
+    # A timer counts in the ns the board's clock gives it: here, from dt.
+    if ctx.timer_unit_ns:
+        lines.append('    memory["_dt_ns"] = _dt_to_ns(dt)')
 
     if main_body:
         lines.extend(main_body)
