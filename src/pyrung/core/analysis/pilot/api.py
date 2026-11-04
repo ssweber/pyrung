@@ -188,8 +188,8 @@ def pilot_events(
 
     ``unlink`` frees the named harness-feedback tags for fault injection (see
     :func:`pilot_how`). ``avoid_pred`` excludes routes, actions, and observed
-    states the same way ``how(avoid=...)`` does, and one that raises ends the
-    stream with ``AvoidCheckError``.
+    states the same way ``how(avoid=...)`` does, and one that raises on a real
+    state ends the stream with ``AvoidCheckError``.
     """
     clock = _budget.WallClock.starting_now(wall_clock_s)
     target_tag, target_value, target_predicate = _parse_target(*conditions)
@@ -222,7 +222,7 @@ def pilot_how(
     ``tag == value``) PILOT starts with a deterministic preferred route and
     records the route that actually reached the goal on ``Plan.route``;
     ``avoid_pred`` excludes a reported route so PILOT can take another. One that
-    raises on a state ends the search with ``AvoidCheckError``.
+    raises on a real state ends the search with ``AvoidCheckError``.
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
