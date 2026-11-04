@@ -194,6 +194,7 @@
 - A `select()` with tag bounds across a gap of a sparse block skips the gap on every engine, as a static `select()` does, where compiled replay and generated CircuitPython set `fault.address_error`; so `always()` and `never()` no longer report `Proven` on what the simulator did not do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan on every engine.
 - An interpreted `rng.sum()` reads a slot's declared default when nothing else has put the slot in memory, where it used to read 0, matching the compiled kernel and generated CircuitPython.
 - A harness `on_delay`, `off_delay` or `Pulse` dwell longer than 32.767 s elapses, where the feedback never flipped because its millisecond timer stopped counting at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
+- `how()` with a callable `avoid=` that is true at the start of a dwell returns a `STOPPED` plan naming the avoid, where it raised `ValueError` out of `how()`.
 
 ## v0.15.2 (2026-10-11)
 
