@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pyrsistent import PMap
 
 from pyrung import (
     PLC,
@@ -27,7 +28,7 @@ from pyrung import (
     rise,
     run_function,
 )
-from pyrung.core import Timer, compiled_run, scan_trace
+from pyrung.core import SystemState, Timer, coast_run, compiled_run, read_trace, scan_trace
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Approach, Physical
 from pyrung.core.system_points import system
@@ -58,6 +59,51 @@ def test_a_late_stop_is_caught() -> None:
         pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
     ):
         fold_check._checked("run_until", plc, _stepper(plc, 9), lambda s: s.tags["N"] >= 5)
+
+
+def test_the_twin_is_asked_on_the_plain_state() -> None:
+    # A predicate that reads a traced state differently is judged as a user's would read it.
+    plc = _plc()
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
+    ):
+        fold_check._checked(
+            "run_until",
+            plc,
+            _stepper(plc, 9),
+            lambda s: type(s) is SystemState and type(s.tags) is PMap and s.tags["N"] >= 5,
+        )
+
+
+def test_a_trace_that_misreads_a_predicate_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reads no tag and answers False: the coast runs past the stop, and the trace can't say so.
+    run = Bool("Run")
+    timer = Timer.clone("MisreadT")
+    with Program() as prog:
+        with Rung(run):
+            on_delay(timer, 30, "s")
+    plc = PLC(prog, dt=0.01)
+    plc.patch({run: True})
+    plc.step()
+    acc = timer.Acc.name
+    monkeypatch.setattr(read_trace._TracedTags, "__getitem__", lambda _self, _key: False)
+
+    def predicate(s: Any) -> bool:
+        return s.tags[acc] >= 20
+
+    assert predicate(plc.state) is False
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan"),
+    ):
+        fold_check._checked(
+            "coast",
+            plc,
+            lambda: coast_run.coast_until(plc, predicate, budget=5_000),
+            predicate,
+            budget=5_000,
+        )
 
 
 def test_a_stop_on_the_first_true_scan_passes() -> None:
