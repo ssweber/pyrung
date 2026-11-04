@@ -431,9 +431,6 @@ def _render_step_function(
             '    memory["_dt"] = dt',
         ]
     )
-    # A timer counts in the ns the board's clock gives it: here, from dt.
-    if ctx.timer_unit_ns:
-        lines.append('    memory["_dt_ns"] = _dt_to_ns(dt)')
 
     if main_body:
         lines.extend(main_body)

@@ -218,7 +218,7 @@ def _diff(
         if before != after:
             out[name] = (after, before)
     for key in set(fresh.memory) | set(now.memory):
-        if key in ("_dt", "_dt_ns") or key.startswith("_sys."):
+        if key == "_dt" or key.startswith("_sys."):
             continue
         keyed_by = edge_tags.get(key, key.rsplit(":", 1)[-1])
         if keyed_by in kept or keyed_by in SYSTEM_TAGS_BY_NAME:

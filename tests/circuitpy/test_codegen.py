@@ -668,7 +668,7 @@ class TestInstructionCoverage:
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "_frac:" in source_code
-        assert "_dt_units" in source_code
+        assert "_int_units" in source_code
         assert "_delta" in source_code
         assert "_store_int(" in source_code
         assert "_wrap_int(" in source_code

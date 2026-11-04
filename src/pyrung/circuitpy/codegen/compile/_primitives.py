@@ -966,11 +966,12 @@ def _timer_carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -
     """This scan's time into ``_int_units`` whole units and a ``_new_frac`` remainder.
 
     Integer nanoseconds, as ``instruction.utils.elapsed_units``.  A board's clock reads them
-    directly, and its floats are too short to hold a time.
+    directly, and its floats are too short to hold a time.  The kernel has only ``dt``.
     """
     ctx.timer_unit_ns[acc.name] = unit.ns
+    dt_ns = '_dt_to_ns(_mem.get("_dt", 0.0))' if ctx.kernel_runtime else '_mem.get("_dt_ns", 0)'
     return [
-        f'{sp}_carry = _mem.get("_frac:{acc.name}", 0) + _mem.get("_dt_ns", 0)',
+        f'{sp}_carry = _mem.get("_frac:{acc.name}", 0) + {dt_ns}',
         f"{sp}_int_units = _carry // {unit.ns}",
         f"{sp}_new_frac = _carry % {unit.ns}",
     ]

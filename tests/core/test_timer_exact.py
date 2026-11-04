@@ -475,7 +475,6 @@ def test_changing_dt_mid_count_keeps_the_time() -> None:
     plc.run(1)
     assert plc.current_state.tags["Ton_Acc"] == 1
     assert plc.current_state.memory["_frac:Ton_Acc"] == 0
-    assert plc.current_state.memory["_dt_ns"] == 250_000_000
 
 
 def test_a_realtime_dt_counts_in_whole_ns() -> None:
@@ -484,7 +483,6 @@ def test_a_realtime_dt_counts_in_whole_ns() -> None:
     plc.step()
     plc.step()
     assert type(plc.current_state.memory["_frac:Ton_Acc"]) is int
-    assert plc.current_state.memory["_dt_ns"] == dt_to_ns(plc.current_state.memory["_dt"])
 
 
 # --- The v4 timed coils carry the same way -------------------------------------------------
