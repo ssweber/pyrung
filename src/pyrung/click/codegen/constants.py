@@ -33,7 +33,9 @@ _OPERAND_PREFIXES: list[tuple[str, str, str]] = [
 ]
 
 # An address stands alone: the tail of ``FFC0h`` or ``0xFFC0`` is not ``C0``.
-_OPERAND_PATTERN = r"(?<![A-Za-z0-9_])(?:CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\d+(?![A-Za-z0-9_])"
+_OPERAND_PATTERN = (
+    r"(?<![A-Za-z0-9_])(?:CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\d+(?![A-Za-z0-9_])"
+)
 
 _OPERAND_RE = re.compile(_OPERAND_PATTERN)
 
@@ -57,6 +59,7 @@ def _sub_operands(text: str, replace: Callable[[str], str]) -> str:
         lambda m: replace(m.group("operand")) if m.group("operand") is not None else m.group(0),
         text,
     )
+
 
 # Matches a range like DS100..DS102
 _RANGE_RE = re.compile(

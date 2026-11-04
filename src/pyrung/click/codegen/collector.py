@@ -13,10 +13,10 @@ from pyrung.click.codegen.constants import (
     _COPY_CONVERTERS,
     _FUNC_RE,
     _INSTRUCTION_NAMES,
-    _operand_matches,
     _OUT_VARIANT_TIMER_INSTRUCTIONS,
     _RANGE_RE,
     _ascending_range_str,
+    _operand_matches,
 )
 from pyrung.click.codegen.models import (
     RungRole,

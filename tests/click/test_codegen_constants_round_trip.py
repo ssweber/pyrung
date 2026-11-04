@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung_project, pyrung_to_ladder
-from pyrung.core import Block, Bool, Char, Dint, Int, Program, Real, TagType, Word, rung
-from pyrung.core.program import copy, out
+from pyrung.core import Block, Bool, Program, Real, TagType, Word, rung
+from pyrung.core.program import copy
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 

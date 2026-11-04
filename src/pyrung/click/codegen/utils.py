@@ -16,9 +16,9 @@ from pyrung.click.codegen.constants import (
     _FUNC_RE,
     _OPERAND_PREFIXES,
     _OPERAND_RE,
-    _sub_operands,
     _RANGE_RE,
     _STRING_KWARGS,
+    _sub_operands,
 )
 from pyrung.click.codegen.models import _OperandCollection
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
