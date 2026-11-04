@@ -58,7 +58,7 @@ STAGING_DS = range(3901, 4501)
 #: group that outgrew its first one.  A group listed before it has cases is
 #: reserved for the group that will have them.
 OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
-    "rungs": {"C": (range(1601, 1603), range(1612, 1614), range(1620, 1661)), "CT": range(151, 161)},
+    "rungs": {"C": (range(1601, 1603), range(1611, 1614), range(1621, 1623), range(1631, 1633), range(1634, 1661)), "CT": range(151, 161)},
     # DD4.., DF20.. and DH5.. are the grey-area probes' (the math cases use none).
     "math": {
         "DS": (
@@ -131,7 +131,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
     "out": {"C": range(1801, 1852), "T": range(301, 313)},
-    "loop": {"C": range(1701, 1751), "T": range(201, 212), "CT": (range(201, 212), range(215, 251))},
+    "loop": {"C": (range(1701, 1702), range(1711, 1712), range(1720, 1722), range(1729, 1732), range(1741, 1751)), "T": range(201, 212), "CT": (range(201, 212), range(215, 251))},
     "timers": {"C": (range(1471, 1472), range(1481, 1482), range(1491, 1492)), "T": range(1, 101)},
     # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
     # cases use none of them).
@@ -153,7 +153,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "numeric": {"DD": range(101, 133), "DF": range(101, 142), "DH": range(201, 223)},
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
-        "DS": (range(3901, 3907), range(3915, 3933)),
+        "DS": (range(3901, 3907), range(3911, 3915), range(3921, 3924), range(3931, 3933)),
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
@@ -208,7 +208,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     # C582..C660 are drum_settle's (the solve_order cases use none of them).
     "solve_order": {
-        "C": (range(501, 503), range(511, 522), range(527, 528), range(534, 535), range(564, 582), range(661, 662), range(681, 682)),
+        "C": (range(501, 503), range(511, 522), range(527, 582), range(661, 662), range(681, 682)),
         "T": range(151, 161),
         "CT": range(161, 171),
     },
@@ -322,51 +322,52 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "hex_math": {"DH": range(5, 34)},
     "agg_more": {
-        "C": range(522, 527),
-        "DS": range(3911, 3915),
+        "C": (range(522, 527), range(1586, 1591)),
+        "DS": range(4318, 4322),
         "DD": range(41, 57),
         "DF": range(170, 192),
         "DH": range(61, 67),
     },
     "real_sum": {"DF": (range(70, 101), range(142, 151))},
     "copy_more": {
-        "C": range(528, 531),
+        "C": range(1737, 1738),
         "DD": range(59, 61),
         "DF": range(192, 200),
         "DH": range(67, 70),
         "TXT": (range(570, 571), range(571, 751)),
     },
     "block_more": {
-        "C": range(531, 534),
+        "C": range(1738, 1741),
         "DS": range(3915, 3920),
         "DF": range(200, 201),
         "TXT": range(751, 754),
     },
+    "coil_range": {"C": (range(1623, 1631), range(1633, 1634)), "DD": range(77, 78), "DH": range(72, 77)},
     "compare": {
         "DS": (range(3920, 3921), range(3924, 3926)),
         "DH": range(70, 71),
         "TXT": range(761, 777),
     },
     "out_more": {
-        "C": range(535, 552),
+        "C": (range(1702, 1711), range(1712, 1720)),
         "DS": range(3926, 3929),
         "T": (range(113, 116), range(225, 243)),
     },
     "for_more": {
-        "C": (range(552, 558), range(563, 564)),
+        "C": range(1722, 1729),
         "DS": range(3929, 3931),
         "T": range(244, 249),
         "CT": range(149, 150),
     },
     "call_more": {
-        "C": range(558, 563),
+        "C": range(1732, 1737),
         "DS": range(4016, 4017),
         "T": (range(243, 244), range(249, 251)),
         "CT": (range(148, 149), range(150, 151)),
     },
     "boot_read": {
-        "C": (range(1603, 1612), range(1614, 1620)),
-        "DS": (range(4017, 4020), range(4318, 4320)),
+        "C": (range(1603, 1611), range(1614, 1621)),
+        "DS": (range(4017, 4018), range(4019, 4021)),
         "DD": range(65, 74),
         "DF": range(203, 204),
         "DH": range(71, 72),

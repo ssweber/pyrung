@@ -128,7 +128,7 @@ Reading at the return   2626          2626           2424
   paste, that is the answer and the case comes out.
 
 Not asked: 16 steps and 16 outputs are the editor's limits, static; a drum twice called in
-one scan is ``call_more/drum_called_twice``.
+one scan is ``call_more/called_twice``.
 
 The cases own the raw memory listed in ``memory.OWNED`` under these groups.
 """

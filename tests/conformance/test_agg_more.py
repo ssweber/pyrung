@@ -31,7 +31,7 @@ MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN
   the value live.
 pyrung refuses ``randint`` in a For body, so a draw per iteration is not asked here.
 
-The cases own DD41..DD56, DS3911..DS3914, DF170..DF191, DH61..DH66 and C522..C526.
+The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66 and C522..C526.
 """
 
 from __future__ import annotations
@@ -48,9 +48,9 @@ SC43 = system.fault.out_of_range
 
 def prove_sum_int_wrap(slot):
     with Rung(*once(slot)):
-        copy(32767, ds[3911])
-        copy(1, ds[3912])
-        calc(ds.select(3911, 3912).sum(), slot.Result1)
+        copy(32767, ds[4318])
+        copy(1, ds[4319])
+        calc(ds.select(4318, 4319).sum(), slot.Result1)
     flag_bit(slot, SC43, slot.Result2, 1)
     with Rung(*once(slot)):
         copy(2147483647, dd[41])
@@ -58,7 +58,7 @@ def prove_sum_int_wrap(slot):
         calc(dd.select(41, 42).sum(), dd[43])
     flag_bit(slot, SC43, slot.Result2, 2)
     with Rung(*once(slot)):
-        calc(ds.select(3911, 3912).sum(), dd[44])
+        calc(ds.select(4318, 4319).sum(), dd[44])
         copy(0xFFFF, dh[61])
         copy(1, dh[62])
         calc(dh.select(61, 62).sum(), dh[63])
@@ -70,7 +70,7 @@ def prove_sum_int_wrap(slot):
 
 
 def init_sum_int_wrap(slot):
-    fill(0, ds.select(3911, 3912))
+    fill(0, ds.select(4318, 4319))
     fill(0, dd.select(41, 44))
     fill(0, dh.select(61, 63))
 
@@ -82,7 +82,7 @@ def prove_sum_bits(slot):
         latch(c[525])
         calc(c.select(522, 526).sum(), slot.Result1)
         calc(c.select(522, 526).sum(), df[170])
-        calc(c.select(527, 531).sum(), slot.Result3)
+        calc(c.select(1586, 1590).sum(), slot.Result3)
     class_of(slot, df[170], [3.0], slot.Result2)
     finish(slot)
 
@@ -95,10 +95,10 @@ def init_sum_bits(slot):
 
 def prove_agg_signed(slot):
     with Rung(*once(slot)):
-        copy(-5, ds[3913])
-        copy(3, ds[3914])
-        calc(ds.select(3913, 3914).max(), slot.Result1)
-        calc(ds.select(3913, 3914).min(), slot.Result2)
+        copy(-5, ds[4320])
+        copy(3, ds[4321])
+        calc(ds.select(4320, 4321).max(), slot.Result1)
+        calc(ds.select(4320, 4321).min(), slot.Result2)
         copy(-100000, dd[45])
         copy(3, dd[46])
         calc(dd.select(45, 46).max(), dd[47])
@@ -118,7 +118,7 @@ def prove_agg_signed(slot):
 
 
 def init_agg_signed(slot):
-    fill(0, ds.select(3913, 3914))
+    fill(0, ds.select(4320, 4321))
     fill(0, dd.select(45, 50))
     fill(0, dh.select(64, 66))
 

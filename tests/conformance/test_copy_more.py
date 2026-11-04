@@ -34,6 +34,16 @@ so 6197 is "15" (49, 53); a NUL reads 0.
   past it: 12 with 1 or 3.  Fill: DF 2.7 into a DS range: 2 truncated, 3 rounded (Result3).  Fill
   of 2 into a C range: on, by any nonzero (Result4 = 1), off by the low bit.
 
+``coil_range``:
+
+- ``ranges_and_search``: nothing reads Out, Set or Reset over a range.  An Out over C1623..C1625, read
+  on its true scan 3: first +100, last +10, the bit past it +1, so Result1 = 110; 100 for the first
+  bit only.  After its rung falls on scan 4: Result2 = 0, each bit counted, where all follow it.  Set
+  over 3 bits, Reset over the first 2: the bits read 100s, 10s, 1s, Result3 = 1; 111 where Reset
+  takes one bit.  A search above 0x8000 over a DH holding 5, 0xFFFF, 7 (Result4): 73 for an
+  unsigned compare, -1 for a signed one, where ``search`` read no Word table.  A one-shot search, its
+  table moved after the first scan, its rung held: ErrorCode = 1 kept the first hit, 2 searched again.
+
 ``compare``, the last group of its part:
 
 - ``word_and_text_order``: DH 0xFFFF against DS -1 (Result1): 0 by value (65535 and -1), pyrung's
@@ -59,8 +69,11 @@ from pyrung.core import (
     calc,
     copy,
     fill,
+    latch,
+    out,
     pack_text,
     reset,
+    search,
     system,
     to_ascii,
     to_text,
@@ -68,6 +81,7 @@ from pyrung.core import (
 )
 from tests.conformance.memory import c, dd, df, dh, ds, txt
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
+from tests.conformance.scans import count_scans, done, scans_for
 
 SC43 = system.fault.out_of_range
 SC44 = system.fault.address_error
@@ -83,15 +97,15 @@ def _pair(slot, first, second, into):
 
 def prove_across_types(slot):
     with Rung(*once(slot)):
-        copy(2, c[528])
+        copy(2, c[1737])
         copy(2.7, slot.ErrorCode)
-    with Rung(*once(slot), c[528]):
+    with Rung(*once(slot), c[1737]):
         copy(1, slot.Result1)
     finish(slot)
 
 
 def init_across_types(slot):
-    reset(c[528])
+    reset(c[1737])
 
 
 def prove_pointer_limits(slot):
@@ -234,11 +248,11 @@ def prove_block_forms(slot):
         calc(ds[3915] * 10 + ds[3917], slot.Result1)
         copy(2.7, df[200])
         fill(df[200], ds.select(3918, 3919))
-        fill(2, c.select(531, 533))
+        fill(2, c.select(1738, 1740))
     class_of(slot, ds[3916], [0, 99, 17], slot.Result2)
     with Rung(*once(slot)):
         copy(ds[3918], slot.Result3)
-    with Rung(*once(slot), c[532]):
+    with Rung(*once(slot), c[1739]):
         copy(1, slot.Result4)
     finish(slot)
 
@@ -246,8 +260,57 @@ def prove_block_forms(slot):
 def init_block_forms(slot):
     fill(0, ds.select(3915, 3919))
     copy(0.0, df[200])
-    fill(False, c.select(531, 533))
+    fill(False, c.select(1738, 1740))
     fill("\x00", txt.select(751, 753))
+
+
+def prove_ranges_and_search(slot):
+    count_scans(slot)
+    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 3):
+        out(c.select(1623, 1625))
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1623]):
+        calc(slot.Result1 + 100, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1625]):
+        calc(slot.Result1 + 10, slot.Result1)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1626]):
+        calc(slot.Result1 + 1, slot.Result1)
+    for bit in (1623, 1624, 1625):
+        with Rung(slot.Cmd != 0, slot.Scratch == 4, c[bit]):
+            calc(slot.Result2 + 1, slot.Result2)
+    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+        latch(c.select(1627, 1629))
+        copy(5, dh[72])
+        copy(0xFFFF, dh[73])
+        copy(7, dh[74])
+        copy(9, dh[75])
+    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+        reset(c.select(1627, 1628))
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1627]):
+        calc(slot.Result3 + 100, slot.Result3)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1628]):
+        calc(slot.Result3 + 10, slot.Result3)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1629]):
+        calc(slot.Result3 + 1, slot.Result3)
+    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+        search(dh.select(72, 74) > 0x8000, result=slot.Result4, found=c[1630])
+    # The table moves after the search's first scan, its rung still true.
+    with Rung(slot.Cmd != 0, slot.Scratch >= 2):
+        search(dh.select(75, 76) == 9, result=dd[77], found=c[1633], oneshot=True)
+    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        copy(0, dh[75])
+        copy(9, dh[76])
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, dd[77] == 75):
+        copy(1, slot.ErrorCode)
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, dd[77] == 76):
+        copy(2, slot.ErrorCode)
+    done(slot)
+
+
+def init_ranges_and_search(slot):
+    fill(False, c.select(1627, 1630))
+    reset(c[1633])
+    fill(0, dh.select(72, 76))
+    copy(0, dd[77])
 
 
 def prove_word_and_text_order(slot):
@@ -371,6 +434,22 @@ block_group = Group(
     ],
 )
 
+range_group = Group(
+    "coil_range",
+    [
+        case(
+            "Out, Set and Reset over a range take each bit: Result1 = 110, Result2 = 0, Result3 = "
+            "1; a search over a Word table reads it unsigned (Result4 = 73); a one-shot search "
+            "keeps its first hit (ErrorCode = 1)",
+            ladder=prove_ranges_and_search,
+            init=init_ranges_and_search,
+            scans=scans_for(),
+            expect={"Result1": 110, "Result2": 0, "Result3": 1, "Result4": 73, "ErrorCode": 1},
+            probe="a coil over a range; a search over a Word table, and one-shot",
+        ),
+    ],
+)
+
 compare_group = Group(
     "compare",
     [
@@ -400,6 +479,10 @@ def test_copy_more():
 
 def test_block_more():
     assert_all_passed(run(block_group))
+
+
+def test_coil_range():
+    assert_all_passed(run(range_group))
 
 
 def test_compare():

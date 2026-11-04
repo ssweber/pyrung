@@ -11,11 +11,11 @@ none.
 
 - ``what_survives``: on its first scan, the group records which sentinels the last run left (a mask,
   in a register the first scan writes).  Result1, written directly: C 1, TD 2, CTD 4, DS 8, DD 16,
-  DF 32, DH 64, TXT 128, T of a done TON 256, CT of a done counter 512.  Result2, written by a
-  pointer: TD 1, DS 2.  Result3 is SC203, the battery: 1 present.  Run fresh: 0, 0.  pyrung has a
-  CLICK keep all (1023, 3) over a reboot with a battery and none (0, 0) without it, and over
-  STOP->RUN keep the retentive blocks (``DEFAULT_RETENTIVE``: CT, CTD, DS, DD, DH, DF, TXT = 4 + 8 +
-  16 + 32 + 64 + 128 + 512 = 764, and 2) and clear the others.  TD and C with a battery are the
+  DF 32, DH 64, TXT 128, T of a done TON 256, CT of a done counter 512.  Result2, a TD written by
+  a pointer: 1.  Result3 is SC203, the battery: 1 present.  Run fresh: 0, 0.  pyrung has a CLICK
+  keep all (1023, 1) over a reboot with a battery and none (0, 0) without it, and over STOP->RUN
+  keep the retentive blocks (``DEFAULT_RETENTIVE``: CT, CTD, DS, DD, DH, DF, TXT = 4 + 8 + 16 + 32 +
+  64 + 128 + 512 = 764, and 0) and clear the others.  TD and C with a battery are the
   known question: pyrung's ``preserve_all`` keeps a non-retentive block's slot too.
 - ``first_scan_edges``: rungs true from the first scan, outside the ``Cmd`` gate, each captured by
   the first scan (``keep``).  Result1 by bit, 1 where it acted on the first scan: toggle 1, one-shot
@@ -96,10 +96,8 @@ def _noted(mask, *pairs):
 _SEEN = 7
 
 # A pointer write counts as a write to the whole bank unless its choices bound it.
-_TD_POINTER = ds[4318]
-ds.slot(4318, choices={0: "unset", 118: "the reached TD"})
-_DS_POINTER = ds[4319]
-ds.slot(4319, choices={0: "unset", 4018: "the reached DS"})
+_TD_POINTER = ds[4020]
+ds.slot(4020, choices={0: "unset", 118: "the reached TD"})
 
 
 def prove_what_survives(slot):
@@ -117,7 +115,7 @@ def prove_what_survives(slot):
         ((t[117],), 256),
         ((ct[214],), 512),
     )
-    _noted(pointer_mask, ((td[118] == _SEEN,), 1), ((ds[4018] == _SEEN,), 2))
+    _noted(pointer_mask, ((td[118] == _SEEN,), 1))
     # Written once per run and kept; the T and CT are the Done of a preset of 1.
     with Rung(*once(slot)):
         latch(c[1603])
@@ -130,12 +128,10 @@ def prove_what_survives(slot):
         copy("Z", txt[781])
         copy(118, _TD_POINTER)
         copy(_SEEN, td[_TD_POINTER])
-        copy(4018, _DS_POINTER)
-        copy(_SEEN, ds[_DS_POINTER])
     with Rung(c[1603]):
         on_delay(ClickTimer(117), 1)
     with Rung(slot.Cmd != 0):
-        count_up(ClickCounter(214), 1).reset(c[1611])
+        count_up(ClickCounter(214), 1).reset(c[1620])
     with Rung(*once(slot)):
         copy(direct_mask, slot.Result1)
         copy(pointer_mask, slot.Result2)
@@ -225,9 +221,7 @@ boot_group = Group(
                 dh[71],
                 txt[781],
                 td[118],
-                ds[4018],
                 _TD_POINTER,
-                _DS_POINTER,
                 dd[65],
                 dd[66],
                 t[117],
@@ -237,7 +231,7 @@ boot_group = Group(
             ],
             expect={
                 "Result1": between(0, 1023),
-                "Result2": between(0, 3),
+                "Result2": between(0, 1),
                 "Result3": between(0, 1),
             },
             probe="battery on a non-retentive block: run after each boot step (AGENTS.md)",

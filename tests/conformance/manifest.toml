@@ -276,8 +276,8 @@ out_of_range_int_vs_other_instructions = 14
 # no 70 registers left in one run, so the part F probes (flag_probe,
 # past_write) take them.  Their case lines are gone with the entries:
 # sqrt_negative, ln_zero, ln_negative, log_zero were slot 1 each.  The same goes
-# for DS2981..DS3020 (stop_log_neg, stop_asin; log_negative and asin_above_1 were
-# slot 1 each): part M's for_wide and rtc_set take them.
+# for DS2981..DS3040 (stop_log_neg, stop_asin, stop_acos; log_negative, asin_above_1
+# and acos_above_1 were slot 1 each): for_wide, rtc_set and coil_range take them.
 
 [groups.flag_probe]
 base = 2901 # Conf_FlagProbe: DS2901..DS2960; part F, the fault-flag model's unmeasured choices
@@ -311,12 +311,12 @@ slots = 1
 [groups.rtc_set.cases]
 date_and_time_apply = 1
 
-[groups.stop_acos]
-base = 3021 # Conf_StopAcos: DS3021..DS3040; retired
+[groups.coil_range]
+base = 3021 # Conf_CoilRange: DS3021..DS3040; part K, a coil over a range, a search over a Word table
 slots = 1
 
-[groups.stop_acos.cases]
-acos_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
+[groups.coil_range.cases]
+ranges_and_search = 1
 
 [groups.math_error]
 base = 3041 # Conf_MathError: DS3041..DS3060

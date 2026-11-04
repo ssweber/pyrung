@@ -106,7 +106,7 @@ def _end(slot, clock, ms):
 
 def prove_toggle_and_timed(slot):
     count_scans(slot)
-    coil, rung = c[535], c[536]
+    coil, rung = c[1702], c[1703]
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3, slot.Scratch >= 6)):
         out(rung)
     with Rung(rung):
@@ -118,12 +118,12 @@ def prove_toggle_and_timed(slot):
     with Rung(slot.Cmd != 0, slot.Scratch == 7, coil):
         calc(slot.Result1 + 1, slot.Result1)
     clock = _clock(slot, 226)
-    pulse_rung, pulse, held = c[537], c[538], c[539]
+    pulse_rung, pulse, held = c[1704], c[1705], c[1706]
     with Rung(slot.Cmd != 0, Or(clock < 100, clock >= 500)):
         out(pulse_rung)
     with Rung(slot.Cmd != 0, clock >= 150, clock < 250):
-        out(c[549])
-    with Rung(Or(pulse_rung, c[549]), clock < 700):
+        out(c[1717])
+    with Rung(Or(pulse_rung, c[1717]), clock < 700):
         timed(pulse, ClickTimer(227), 300)
     with Rung(*_at(slot, clock, 360, 440), pulse):
         copy(1, slot.Result2)
@@ -145,12 +145,12 @@ def prove_toggle_and_timed(slot):
 
 
 def init_toggle_and_timed(slot):
-    reset(c[535])
+    reset(c[1702])
 
 
 def prove_timed_maintained(slot):
     clock = _clock(slot, 229)
-    dropped, held = c[540], c[541]
+    dropped, held = c[1707], c[1708]
     with Rung(slot.Cmd != 0, clock < 100):
         timed(dropped, ClickTimer(230), 400, maintained=True)
     with Rung(slot.Cmd != 0, clock < 600):
@@ -167,7 +167,7 @@ def prove_timed_maintained(slot):
 
 
 def prove_zero_and_below(slot):
-    rung, deb, fla, pulse, neg = c[542], c[543], c[544], c[545], c[546]
+    rung, deb, fla, pulse, neg = c[1709], c[1710], c[1712], c[1713], c[1714]
     window = (slot.Cmd != 0, slot.Scratch >= 1, slot.Scratch <= 8)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
@@ -201,7 +201,7 @@ def init_zero_and_below(slot):
 
 def prove_preset_mid_phase(slot):
     clock = _clock(slot, 238)
-    fla, deb, fla2, deb2 = c[547], c[548], c[550], c[551]
+    fla, deb, fla2, deb2 = c[1715], c[1716], c[1718], c[1719]
     with Rung(slot.Cmd != 0, clock < 150):
         copy(1000, ds[3927])
         copy(200, ds[3928])
@@ -282,7 +282,7 @@ group = Group(
             "off TD holds into the next on phase (Result3 = 1), a debounce's on TD clears (Result4 = 1)",
             ladder=prove_preset_mid_phase,
             init=init_preset_mid_phase,
-            ready=lambda slot: ~c[548],
+            ready=lambda slot: ~c[1716],
             scans=200,
             keep=[
                 t[239],
@@ -307,7 +307,7 @@ group = Group(
 
 def prove_oneshot_and_edges(slot):
     count_scans(slot)
-    rung, skip, bit, toggled = c[552], c[553], c[554], c[555]
+    rung, skip, bit, toggled = c[1722], c[1723], c[1724], c[1725]
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 4, slot.Scratch == 5, slot.Scratch == 7)):
         out(rung)
     with Rung(rung):
@@ -337,7 +337,7 @@ def prove_oneshot_and_edges(slot):
 
 
 def init_oneshot_and_edges(slot):
-    reset(c[555])
+    reset(c[1725])
 
 
 def prove_timers_at_limits(slot):
@@ -345,7 +345,7 @@ def prove_timers_at_limits(slot):
     with Rung(slot.Cmd != 0, clock < 50):
         copy(-5, ds[3929])
         copy(100, ds[3930])
-        out(c[556])
+        out(c[1726])
     with Rung(slot.Cmd != 0, clock >= 300):
         copy(1000, ds[3930])
     # The For's rung is true with Cmd at 0, so the reset reaches the TON.
@@ -361,21 +361,21 @@ def prove_timers_at_limits(slot):
         on_delay(ClickTimer(246), ds[3929])
     with Rung(*_at(slot, clock, 100, 200), t[246]):
         copy(1, slot.Result2)
-    with Rung(c[556]):
+    with Rung(c[1726]):
         off_delay(ClickTimer(247), ds[3930])
     with Rung(*_at(slot, clock, 400, 600), t[247]):
         copy(1, slot.Result3)
     # Below its TON, once the rung is true: a false rung clears the TD.
     with Rung(slot.Cmd != 0, clock >= 50):
         on_delay(ClickTimer(248), 30000)
-    with Rung(slot.Cmd != 0, clock >= 50, ~c[563]):
+    with Rung(slot.Cmd != 0, clock >= 50, ~c[1728]):
         copy(-100, td[248])
-        latch(c[563])
+        latch(c[1728])
     with Rung(*_at(slot, clock, 60, 130), td[248] < 0):
         copy(1, slot.Result4)
     with Rung(*_at(slot, clock, 60, 130), td[248] >= 0):
         copy(2, slot.Result4)
-    with Rung(c[557]):
+    with Rung(c[1727]):
         count_up(ClickCounter(149), ds[3929]).reset(slot.Cmd == 0)
     with Rung(*_at(slot, clock, 100, 200), ClickCounter(149).Done):
         copy(1, slot.ErrorCode)
@@ -385,7 +385,7 @@ def prove_timers_at_limits(slot):
 def init_timers_at_limits(slot):
     fill(0, ds.select(3929, 3930))
     copy(0, td[248])
-    reset(c[563])
+    reset(c[1728])
 
 
 for_group = Group(
@@ -426,7 +426,7 @@ def prove_called_twice(slot):
         on_delay(ClickTimer(249), 30000)
     with Rung(slot.Cmd != 0, second):
         on_delay(ClickTimer(250), 30000).reset(slot.Cmd == 0)
-    held, late, a, b, flag = c[558], c[559], c[560], c[561], c[562]
+    held, late, a, b, flag = c[1732], c[1733], c[1734], c[1735], c[1736]
     with Rung(slot.Cmd != 0):
         out(held)
     with Rung(slot.Cmd != 0, second):

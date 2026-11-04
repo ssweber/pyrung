@@ -4,8 +4,8 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as six
-projects, one part each (``PARTS``; there is no part D)::
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as
+twelve projects, one part each (``PARTS``; there is no part D)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
@@ -13,6 +13,7 @@ projects, one part each (``PARTS``; there is no part D)::
     make conformance-export PART=E OUT=path/to/e
     make conformance-export PART=F OUT=path/to/f
     make conformance-export PART=G OUT=path/to/g
+    make conformance-export PART=H OUT=path/to/h  (and I, J, K, L, M)
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -148,6 +149,7 @@ ALL_GROUPS = [
     test_boot_read.boot_group,
     test_boot_read.wide_group,
     test_boot_read.rtc_group,
+    test_copy_more.range_group,
     test_copy_more.compare_group,
     test_boot_read.flag_group,
     test_store_probe.group,
@@ -212,7 +214,7 @@ PARTS: dict[str, tuple[str, ...]] = {
     "H": ("word_store", "real_bits", "real_sum"),
     "I": ("drum_pins", "drum_branch", "drum_limits"),
     "J": ("math_more", "hex_math", "agg_more"),
-    "K": ("copy_more", "block_more", "compare"),
+    "K": ("copy_more", "block_more", "coil_range", "compare"),
     "L": ("out_more", "for_more", "call_more"),
     "M": ("boot_read", "for_wide", "rtc_set", "flag_scan"),
 }
