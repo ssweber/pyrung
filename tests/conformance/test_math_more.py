@@ -12,11 +12,6 @@ right after its op.
   the half, 6 if integer division cuts it.  * 10 instead (Result2): 35 or 30.  7 / 2 into a
   DF, then * 10 (Result3): 35 or 30.  DD 7 / 2 * 2 (Result4): 7 or 6.  Bare 7 / 2 into an Int
   (ErrorCode): 3 truncating, 4 rounding.
-- ``wide_constant_into_dint``: recorded for an Int destination (``numeric/int_math_wide_
-  constant``).  Into a DD: DD 131072 / 65536 is 2, or 0 with SC40 where the constant is cut to
-  16 bits (Result1 = 1 for 2, 2 for 0; ErrorCode bit 1 is SC40); DD 2 * 40000 is 80000 (1) or
-  -51072 (2) (Result2); the same into a DF (Result3); 3000000000 / DD 1000 is 3000000 (1) or
-  -1294967 (2) (Result4).
 - ``real_past_int``: a Real past an Int's range, by Math.  DF 40000.0 reads -25536 wrapped;
   DF 1.0E10 -7168, DF -1.0E10 7168 (Result1..3); a clamp reads 32767, 32767, -32768; 0 for no
   store.  Result4 bits 1, 2, 4 are SC43 after each.  DF 1.0E10 into a DD (ErrorCode): 1 for
@@ -30,7 +25,8 @@ right after its op.
   floored, -15 truncated.
 - ``power_edges``: 0 ^ 0 (Result1): 1 (0 where a CLICK takes it for an error).  (-2) ^ 3
   (Result2): -8; 2 ^ -1 into a DF * 10 (Result3): 5.  2 ^ -1 into an Int (Result4): 0 cut, 1
-  rounded.  2 ^ 40 into an Int (ErrorCode): 0 wrapped, 32767 clamped.
+  rounded.  2 ^ 40 into an Int (ErrorCode): 0 wrapped, 32767 clamped.  Each of those two starts at
+  99, which stays where the store is refused.
 - ``math_errors``: what errors the recorded seven leave out, each on a scan its flag starts
   off (``GuardedProbes``), the destination staged at 99: 0 ^ -1 into a DF (Result1, by 1: 0 or
   99 kept); -8.0 ^ 0.5 (Result2); 7 MOD 0 (Result3); 7.5 MOD 0.0 (Result4).  ErrorCode bits: 1
@@ -39,11 +35,16 @@ right after its op.
 - ``functions``: radians or degrees, and which log.  SIN(1), COS(1), TAN(1), ATAN(1) and LN(10),
   each * 1000: 841, 540, 1557, 785, 2302 in radians.  In degrees 17, 999, 17, 785 and the rest
   tells.  ``log`` is LN (2302) and not LOG (1000).
-
+- ``wide_constant_into_dint`` (last of the group: the editor may refuse 3000000000, past a DD's
+  range, at paste, and a refusal costs only this case): recorded for an Int destination (``numeric/int_math_wide_
+  constant``).  Into a DD: DD 131072 / 65536 is 2, or 0 with SC40 where the constant is cut to
+  16 bits (Result1 = 1 for 2, 2 for 0; ErrorCode bit 1 is SC40); DD 2 * 40000 is 80000 (1) or
+  -51072 (2) (Result2); the same into a DF (Result3); 3000000000 / DD 1000 is 3000000 (1) or
+  -1294967 (2) (Result4).
 ``hex_math`` (WORD only: ``numeric`` reads hex Math's store, not these):
 
-- ``shifts``: LSH on a DH: 0x8001 << 1 (Result1, 2 where the top bit leaves, 3 where it stays
-  in a wider word, by class); << 16 and << 17 (Result2, by digits: 1 for 0 and 2 for
+- ``shifts``: LSH on a DH: 0x8001 << 1 (Result1: 1 for 0x0002, the top bit gone; 2 for 0x0003, a
+  rotate; 0 for any other); << 16 and << 17 (Result2, by digits: 1 for 0 and 2 for
   anything else); RSH 0xFFFF >> 1 (Result3): 1 logical 0x7FFF, 2 arithmetic 0xFFFF; RSH 0x8000
   >> 16 (Result4): 1 for 0, 2 for unchanged.  ErrorCode: SC43 after the first shift, bit 1,
   after 0xFFFF + 1, bit 2, after 1 - 2, bit 4.
@@ -180,6 +181,8 @@ def prove_power_edges(slot):
         copy(2, dd[21])
         copy(-1, dd[22])
         copy(40, dd[23])
+        copy(99, slot.Result4)
+        copy(99, slot.ErrorCode)
         calc(dd[19] ** dd[19], slot.Result1)
         calc(dd[20] ** 3, slot.Result2)
         calc(dd[21] ** dd[22], df[158])
@@ -340,18 +343,9 @@ group = Group(
             probe="does a Math's integer division keep the half mid-formula",
         ),
         case(
-            "A constant past 16 bits into a DD or DF is whole: 131072 / 65536 is 2 (Result1 = 1, "
-            "no SC40, ErrorCode = 0), 2 * 40000 is 80000 into a DD and a DF (Result2, Result3 = "
-            "1), 3000000000 / 1000 is 3000000 (Result4 = 1)",
-            ladder=prove_wide_constant_into_dint,
-            init=init_wide_constant_into_dint,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1, "ErrorCode": 0},
-            probe="does a wide constant reach a Dint or Real Math whole",
-        ),
-        case(
             "A Real past an Int's range by Math wraps: 40000.0 is -25536 (Result1), 1.0E10 is "
             "-7168 (Result2), -1.0E10 is 7168 (Result3), SC43 each (Result4 = 7); into a DD "
-            "1410064128 is neither clamp nor 0 (ErrorCode)",
+            "1410065408 is neither clamp nor 0 (ErrorCode)",
             ladder=prove_real_past_int,
             init=init_real_past_int,
             expect={
@@ -411,6 +405,15 @@ group = Group(
                 "ErrorCode": 2302,
             },
             probe="radians or degrees; a Math's log forms",
+        ),
+        case(
+            "A constant past 16 bits into a DD or DF is whole: 131072 / 65536 is 2 (Result1 = 1, "
+            "no SC40, ErrorCode = 0), 2 * 40000 is 80000 into a DD and a DF (Result2, Result3 = "
+            "1), 3000000000 / 1000 is 3000000 (Result4 = 1)",
+            ladder=prove_wide_constant_into_dint,
+            init=init_wide_constant_into_dint,
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1, "ErrorCode": 0},
+            probe="does a wide constant reach a Dint or Real Math whole",
         ),
     ],
 )

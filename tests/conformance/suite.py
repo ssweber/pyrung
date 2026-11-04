@@ -86,6 +86,8 @@ from tests.conformance import (
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
 #: Cases that passed on a real CLICK, as they are now (``record_confirmations``).
 CONFIRMED_PATH = Path(__file__).with_name("confirmed.toml")
+#: What the probes with no answer yet read on a real CLICK (``probe_kit.record_readings``).
+READINGS_PATH = Path(__file__).with_name("readings.toml")
 #: The ClickNick workspace linked to the conformance CLICK project.
 WORKSPACE_PATH = Path(__file__).with_name("workspace")
 
@@ -144,8 +146,8 @@ ALL_GROUPS = [
     test_v4_more.for_group,
     test_v4_more.call_group,
     test_boot_read.boot_group,
-    test_boot_read.wide_group,
     test_boot_read.rtc_group,
+    test_boot_read.wide_group,
     test_copy_more.range_group,
     test_copy_more.compare_group,
     test_boot_read.flag_group,
@@ -216,7 +218,7 @@ PARTS: dict[str, tuple[str, ...]] = {
     "J": ("math_more", "hex_math", "agg_more"),
     "K": ("copy_more", "block_more", "coil_range", "compare"),
     "L": ("out_more", "for_more", "call_more"),
-    "M": ("boot_read", "for_wide", "rtc_set", "flag_scan"),
+    "M": ("boot_read", "rtc_set", "for_wide", "flag_scan"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

@@ -1,8 +1,10 @@
 """What a boot leaves behind, flags across a scan and a For past 16 bits: part M.
 
-The groups ``boot_read``, ``for_wide``, ``flag_scan`` and ``rtc_set``.  None of them is on a
-clock, because ``for_wide`` may make a scan of about 1.1 s (``loop/negative_count_reads_unsigned``
-measured that for 65535 runs of one Math), which every wall-clock case beside it would see.
+The groups ``boot_read``, ``rtc_set``, ``for_wide`` and ``flag_scan``.  ``for_wide`` may make a
+scan of about 1.1 s (``loop/negative_count_reads_unsigned`` measured that for 65535 runs of one
+Math), or trip the watchdog, so it holds its long loops for a second, by when the others have
+fired.  It stays above ``flag_scan`` in the program, because that case needs no Math below its op
+on the scan, and a scan count is a Math.
 
 ``boot_read`` needs a person; ``tests/conformance/AGENTS.md`` has the procedure.  A run writes
 sentinels and reads what the previous boot's first scan found.  Its fields are ranges: what it
@@ -20,18 +22,20 @@ none.
 - ``first_scan_edges``: rungs true from the first scan, outside the ``Cmd`` gate, each captured by
   the first scan (``keep``).  Result1 by bit, 1 where it acted on the first scan: toggle 1, one-shot
   Copy 2, one-shot Out 4, a timed coil 8, one-shot For 16, an event drum's rising event 32, a shift's
-  clock 64.  Result2 is SD9 on the first scan.  Result3 counts scans ``first_scan`` was true, read
-  once it has had 10 scans.  Result4 the flasher on its first scan (1).  pyrung: 95 (all but the
-  drum, which starts on step 1 that scan), 0, 1, 1.
-  0 in a bit of Result1 reads as a rung taken to have been high before.  Passing again with no boot
-  in between reads the same, since nothing moves past the first scan.
+  clock 64.  Result2 is SD9 on the first scan.  Result3 counts scans ``first_scan`` was true since the last run, read
+  once it has had 10 scans, and the read starts it over.  Result4 the flasher on its first scan (1).
+  pyrung: 95 (all but the drum, which starts on step 1 that scan), 0, 1, 1.
+  0 in a bit of Result1 reads as a rung taken to have been high before.  Result3 = 0 means no first
+  scan since the last run: a run with no boot before it, or a boot ``first_scan`` missed, and then
+  the other fields are the boot before's.
 
 ``for_wide``:
 
 - ``count_forms``: a For's count from a DD past 16 bits.  65537 runs 1 (Result1 = 1, the low word), 2
   for 65537, and 3 for 1 scan at the watchdog (a separate reading: the run stops).  65536 runs none
   (Result2 = 1), 2 for 65536.  A DD counts, since an Int would wrap back onto 1.  A TD at 3 (Result3)
-  and a CTD at 3 (Result4) as counts.  Whole, those two For loops take about 2.2 s.
+  and a CTD at 3 (Result4) as counts.  Whole, those two For loops take about 2.2 s, and the case
+  starts them 1 s after its ``Cmd``.
 
 ``flag_scan``, ahead of ``store_probe`` so that no flag it raises reaches a reader's scan:
 
@@ -46,8 +50,9 @@ none.
 - ``date_and_time_apply``: a date set by SC53 and a time by SC55 (each from a coil on one scan), read
   2 scans later, then set back.  Year 2030 applied: Result1 = 1.  Hour moved: Result2 = 1.  A bad date
   (month 13) raises SC54 and a bad time (hour 25) SC56 (Result3 = 11), and neither moves the clock
-  (Result4 = 1).  Backends that keep no settable clock read 0s, so each field is a range.  A CLICK's
-  date and hour come back as they were; a minute that turns over in those scans comes through.
+  (Result4 = 1).  Last, whatever those read, the date and time go back to what scan 1 saved, in case a
+  bad one was taken; ErrorCode = 1 reads them back.  Backends that keep no settable clock read 0s, so
+  each field is a range.  A minute that turns over in those scans comes through.
 
 The cases own what ``memory.OWNED`` lists under these groups.
 """
@@ -195,6 +200,8 @@ def prove_first_scan_edges(slot):
         ((ds[4019] == 2,), 32),
         ((c[1618],), 64),
     )
+    with Rung(FIRST):
+        copy(0, dd[71])
     with Rung(FIRST, flash):
         copy(1, dd[71])
     with Rung(FIRST):
@@ -202,11 +209,14 @@ def prove_first_scan_edges(slot):
     with Rung(FIRST):
         calc(dd[73] + 1, dd[73])
     count_scans(slot, 10)
-    with Rung(slot.Cmd != 0, slot.Scratch == 11):
+    # Scratch holds at 11; Fired comes up on this scan, so this reads once.  The count
+    # starts over, so the next run counts the boot between them and no other.
+    with Rung(slot.Cmd != 0, slot.Scratch == 11, slot.Fired == 0):
         copy(mask, slot.Result1)
         copy(dd[72], slot.Result2)
         copy(dd[73], slot.Result3)
         copy(dd[71], slot.Result4)
+        copy(0, dd[73])
     done(slot, 10)
 
 
@@ -275,7 +285,7 @@ boot_group = Group(
             expect={
                 "Result1": between(0, 127),
                 "Result2": between(0, 1),
-                "Result3": between(0, 2),
+                "Result3": between(0, 100),
                 "Result4": between(0, 1),
             },
             probe="each edge's memory on the first scan; first_scan and SD9 at boot",
@@ -285,7 +295,10 @@ boot_group = Group(
 
 
 def prove_count_forms(slot):
-    count_scans(slot, 3)
+    with Rung(slot.Cmd != 0):
+        on_delay(ClickTimer(123), 1000)
+    with Rung(slot.Cmd != 0, slot.Scratch <= 3, t[123]):
+        calc(slot.Scratch + 1, slot.Scratch)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(65537, dd[61])
         copy(65536, dd[62])
@@ -327,7 +340,7 @@ wide_group = Group(
             "none (Result2 = 1); a TD (Result3 = 3) and a CTD (Result4 = 3) count",
             ladder=prove_count_forms,
             init=init_count_forms,
-            scans=scans_for(3),
+            scans=120,
             expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 3},
             probe="a For count past 16 bits, and from a TD and a CTD",
         ),
@@ -381,10 +394,12 @@ flag_group = Group(
 
 def prove_date_and_time_apply(slot):
     rtc = system.rtc
-    count_scans(slot, 12)
+    count_scans(slot, 14)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(rtc.year4, dd[74])
         copy(rtc.hour, dd[75])
+        copy(rtc.month, dd[84])
+        copy(rtc.day, dd[85])
         copy(2030, rtc.new_year4)
         copy(rtc.month, rtc.new_month)
         copy(rtc.day, rtc.new_day)
@@ -407,22 +422,55 @@ def prove_date_and_time_apply(slot):
         copy(2030, rtc.new_year4)
         copy(13, rtc.new_month)
         copy(25, rtc.new_hour)
+        copy(rtc.minute, rtc.new_minute)
+        copy(rtc.second, rtc.new_second)
+    # Back to what scan 1 saved, on every path, even if the bad date or time was taken.
+    with Rung(slot.Cmd != 0, slot.Scratch == 11):
+        copy(dd[74], rtc.new_year4)
+        copy(dd[84], rtc.new_month)
+        copy(dd[85], rtc.new_day)
+        copy(dd[75], rtc.new_hour)
+        copy(rtc.minute, rtc.new_minute)
+        copy(rtc.second, rtc.new_second)
     # One Out per apply bit: of several, the last rung would win.
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch == 3, slot.Scratch == 9)):
+    with Rung(
+        slot.Cmd != 0,
+        Or(slot.Scratch == 1, slot.Scratch == 3, slot.Scratch == 9, slot.Scratch == 11),
+    ):
         out(rtc.apply_date)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 7, slot.Scratch == 9)):
+    with Rung(
+        slot.Cmd != 0,
+        Or(slot.Scratch == 5, slot.Scratch == 7, slot.Scratch == 9, slot.Scratch == 11),
+    ):
         out(rtc.apply_time)
     with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_date_error):
         calc(slot.Result3 + 10, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_time_error):
         calc(slot.Result3 + 1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 11, rtc.year4 == dd[74], rtc.hour == dd[75]):
+    # Above the set-back's effect: it applies at the end of its scan or later.
+    with Rung(
+        slot.Cmd != 0,
+        slot.Scratch == 11,
+        rtc.year4 == dd[74],
+        rtc.month == dd[84],
+        rtc.hour == dd[75],
+    ):
         copy(1, slot.Result4)
-    done(slot, 12)
+    with Rung(
+        slot.Cmd != 0,
+        slot.Scratch == 13,
+        rtc.year4 == dd[74],
+        rtc.month == dd[84],
+        rtc.day == dd[85],
+        rtc.hour == dd[75],
+    ):
+        copy(1, slot.ErrorCode)
+    done(slot, 14)
 
 
 def init_date_and_time_apply(slot):
     fill(0, dd.select(74, 76))
+    fill(0, dd.select(84, 85))
 
 
 rtc_group = Group(
@@ -430,15 +478,17 @@ rtc_group = Group(
     [
         case(
             "A date set by SC53 applies (Result1 = 1), a time by SC55 (Result2 = 1); a bad one raises "
-            "SC54 and SC56 (Result3 = 11) and leaves the clock (Result4 = 1)",
+            "SC54 and SC56 (Result3 = 11) and leaves the clock (Result4 = 1); the clock is set back "
+            "last, every time (ErrorCode = 1)",
             ladder=prove_date_and_time_apply,
             init=init_date_and_time_apply,
-            scans=scans_for(12),
+            scans=scans_for(14),
             expect={
                 "Result1": between(0, 1),
                 "Result2": between(0, 1),
                 "Result3": between(0, 11),
                 "Result4": between(0, 1),
+                "ErrorCode": between(0, 1),
             },
             probe="RTC set from the ladder: moved and set back, a bad value refused",
         ),

@@ -2,8 +2,7 @@
 
 Part H (``suite.PARTS``).  CLICK's SUM over a DF range adds in some order at some
 width.  pyrung's interpreter reads ``sum()``, compensated from Python 3.12, its
-kernel adds left to right (``test_real_sum_is_the_same_on_both_backends`` on
-``bob/hypothesis-v4``); the ruling is plain left to right on all backends, and a
+kernel adds left to right; the ruling is plain left to right on all backends, and a
 recording overrides the ruling.  Each case sums three orderings of one set into a
 DF and reads each sum, truncated, into an Int.
 
@@ -44,7 +43,7 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill
 from tests.conformance.memory import df
-from tests.conformance.probe_kit import finish, once
+from tests.conformance.probe_kit import between, finish, once
 
 
 def _orderings(slot, first, big, fields):
@@ -122,7 +121,7 @@ group = Group(
             "1, compensated 1, 1, 1 (Result1..3)",
             ladder=prove_f64_row,
             init=init_f64_row,
-            expect={"Result1": range(0, 2), "Result2": range(0, 2), "Result3": range(0, 2)},
+            expect={"Result1": between(0, 1), "Result2": between(0, 1), "Result3": between(0, 1)},
             probe="a compensated SUM or a plain one; pyrung's backends differ",
         ),
         case(

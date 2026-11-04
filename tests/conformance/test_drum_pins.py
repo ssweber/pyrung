@@ -4,10 +4,9 @@ Part I (``suite.PARTS``), three groups: ``drum_pins``, ``drum_branch``, ``drum_l
 ask what no recording in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
 ``test_drum_jump.py``, ``test_drum_settle.py``, ``test_drum_close.py`` or
 ``test_drum_idle.py`` separates.  An expectation here is a ``range`` over the candidates,
-so neither answer is asserted and the case passes on the old drum routine and on the
-one on ``bob/drum-fix``; a run over Modbus prints the reading (``read <case> ...`` from
-``test_modbus.py``), and the reading is the answer.  What pyrung reads in-process
-says nothing about a CLICK.  An exact expectation in these cases is a control: it
+so neither answer is asserted, whichever routine pyrung has; a run over Modbus prints
+the reading (``read <case> ...``) and a CLICK's goes in ``readings.toml``, and the reading is
+the answer.  What pyrung reads in-process says nothing about a CLICK.  An exact expectation in these cases is a control: it
 must read that way under every candidate.
 
 Snapshots as in ``test_drum_settle``: two digits a drum, ``S`` then ``4 * flag + 2 * B +
@@ -25,7 +24,7 @@ Case                     M1           M2           Read
 ``end_and_jog_on_last``  2222         2424         Result2, Result3
 ``last_time_and_jump``   1111         1414         Result2, Result3
 ``last_event_and_jump``  1111         1414         Result2, Result3
-``acc_jog_completing``   0, 0         above 0      Result2, Result4; Result3 above 0
+``acc_jog_completing``   0, 0         above 0      Result2, Result4; Result3 the scan
 =======================  ===========  ===========  ============================
 
 - ``event_and_jog``: an event drum over a time & event drum whose steps are event-only,
@@ -43,8 +42,8 @@ Case                     M1           M2           Read
 - ``acc_jog_completing``: Acc staged at 900 on the scan of a jog that completes the drum,
   the rung true; Acc - 900 on that scan is 0 if the jog takes the scan, a scan's time if
   own logic ticks first.  Result2 for a time drum, Result4 for a timed time & event drum.
-  Result3 is the control, a time drum with no jog: above 0 on any candidate, which says
-  a scan's time shows in the first place.
+  Result3 is the control, a time drum with no jog: what a scan's time shows.  Above 0, the
+  readings above tell; 0, on a scan under a ms, they do not.
 
 A jump that is not on the last step does not separate them: step 1's end and a jump to 3
 read 33 under both, a jump to 1 reads 11 under both.
@@ -917,12 +916,12 @@ group = Group(
             "Q1: Acc 900 staged on the scan of a jog that completes the drum, the rung true: "
             "Acc - 900 is 0 if the jog takes the scan, a scan's time if own logic ticks first "
             "(Result2 time drum, Result4 time & event); a drum with no jog shows a scan's time "
-            "(Result3 above 0); 2422 (ErrorCode)",
+            "(Result3; 0 on a scan under a ms, and then 0 above tells nothing); 2422 (ErrorCode)",
             ladder=prove_acc_jog_completing,
             scans=SCANS,
             expect={
                 "Result2": between(0, 900),
-                "Result3": range(1, 901),
+                "Result3": between(0, 900),
                 "Result4": between(0, 900),
                 "ErrorCode": 2422,
             },

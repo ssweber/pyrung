@@ -20,7 +20,6 @@ import pytest
 from pyrung.click import ClickBlocks
 from pyrung.conformance import (
     BuildMismatchError,
-    CaseResult,
     CircuitPySim,
     ConformanceError,
     ConformanceProgram,
@@ -40,23 +39,11 @@ from pyrung.conformance import (
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
 from pyrung.core import Rung, calc, copy
 from tests.conformance import suite, test_system
+from tests.conformance.probe_kit import asks_for_a_reading, reading_lines, record_readings
 
 ds = ClickBlocks().ds
 
 pytestmark = pytest.mark.conformance
-
-
-def range_readings(results: list[CaseResult]) -> list[str]:
-    """A ``read`` line for each case that expects a range: its reading is the answer.
-
-    A probe whose answer is unknown expects a range over the candidates, so a PASS says
-    nothing of which, and the report prints a reading only on a FAIL.
-    """
-    return [
-        f"read {r.group}/{r.case.id} {r.actual}"
-        for r in results
-        if any(isinstance(value, range) for value in r.case.expect.values())
-    ]
 
 
 def test_all_groups_over_modbus(
@@ -76,13 +63,20 @@ def test_all_groups_over_modbus(
             wait_for_scan_counter_wrap(conformance_endpoint)
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     if conformance_endpoint is not None:
-        # A real CLICK: record what passed, drop what failed (confirmed.toml).
+        # A real CLICK: record what passed, drop what failed (confirmed.toml).  A case
+        # whose range holds every candidate answers nothing by passing: it records what
+        # it read instead (readings.toml).
+        today = date.today().isoformat()
         added, dropped = record_confirmations(
-            suite.CONFIRMED_PATH, results, on=date.today().isoformat()
+            suite.CONFIRMED_PATH,
+            [r for r in results if not asks_for_a_reading(r.case)],
+            on=today,
         )
         print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
+        read = record_readings(suite.READINGS_PATH, results, on=today)
+        print(f"readings.toml: {len(read)} read")
     print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
-    for line in range_readings(results):
+    for line in reading_lines(results):
         print(line)
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in loaded)

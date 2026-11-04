@@ -412,9 +412,13 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "CT": range(213, 215),
         "TXT": range(781, 782),
     },
-    "for_wide": {"DD": range(61, 65), "T": range(125, 126), "CT": range(212, 213)},
+    "for_wide": {
+        "DD": range(61, 65),
+        "T": (range(123, 124), range(125, 126)),
+        "CT": range(212, 213),
+    },
     "flag_scan": {"DF": range(204, 205)},
-    "rtc_set": {"DD": range(74, 77)},
+    "rtc_set": {"DD": (range(74, 77), range(84, 86))},
 }
 
 

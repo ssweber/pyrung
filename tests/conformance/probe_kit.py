@@ -17,8 +17,10 @@ reads it uses :class:`GuardedProbes`, which waits for a scan the flag starts off
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
+from pyrung.conformance import Case, CaseResult
 from pyrung.core import Rung, calc, copy, latch, out
 
 
@@ -46,9 +48,59 @@ def flag_bit(slot: Any, flag: Any, into: Any, bit: int = 1) -> None:
         calc(into + bit, into)
 
 
+#: Every range :func:`between` gave, each told from an asserted range by identity.
+_CANDIDATES: list[range] = []
+
+
 def between(*values: int) -> range:
     """Every candidate reading of a field, so that none is asserted."""
-    return range(min(values), max(values) + 1)
+    candidates = range(min(values), max(values) + 1)
+    _CANDIDATES.append(candidates)
+    return candidates
+
+
+def asks_for_a_reading(case: Case) -> bool:
+    """A field of *case* came from :func:`between`: a pass answers nothing, what it read does.
+
+    Not every range: ``system/rtc_seconds_advance`` asserts one.
+    """
+    return any(value is known for value in case.expect.values() for known in _CANDIDATES)
+
+
+def reading_lines(results: Iterable[CaseResult]) -> list[str]:
+    """A ``read`` line for each case asking for a reading: the report prints one only on a FAIL."""
+    return [f"read {r.group}/{r.case.id} {r.actual}" for r in results if asks_for_a_reading(r.case)]
+
+
+_READINGS_HEADER = """\
+# What the probes with no answer yet read on a real CLICK, oldest first, written by
+# `make test-conformance PLC=...`.  A case here is not confirmed: its range holds every
+# candidate, so a pass says nothing.  hash: the case's exported rows when it read this.
+"""
+
+
+def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str) -> list[str]:
+    """Append what each case asking for a reading read; a boot's next step adds its own.
+
+    Stale and skipped cases read nothing.  Returns the keys written.
+    """
+    path = Path(path)
+    entries: list[str] = []
+    keys: list[str] = []
+    for r in results:
+        if r.stale or r.skipped is not None or not r.case_hash or not asks_for_a_reading(r.case):
+            continue
+        key = f"{r.group}/{r.case.id}"
+        read = ", ".join(f"{field} = {value}" for field, value in r.actual.items())
+        entries.append(
+            f'[[reading]]\ncase = "{key}"\nhash = "{r.case_hash}"\non = "{on}"\n'
+            f"read = {{ {read} }}\n"
+        )
+        keys.append(key)
+    if entries:
+        text = path.read_text(encoding="utf-8") if path.exists() else _READINGS_HEADER
+        path.write_text(text + "\n" + "\n".join(entries), encoding="utf-8")
+    return keys
 
 
 class GuardedProbes:
