@@ -1,7 +1,7 @@
 """A timer counts whole time exactly, whichever unit it counts in.
 
 At a fixed dt, the scan a timer is Done on is ``ceil(delay / dt)`` for every unit, on
-the interpreter, the kernel and the generated code, and ``run()`` lands on what stepping
+the interpreter, the kernel and the generated code, and a long run lands on what stepping
 lands on.  The carry is whole nanoseconds (``time_mode.dt_to_ns``); these tables are
 what its arithmetic has to give, written from the rule and not from the code.
 
