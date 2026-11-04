@@ -138,9 +138,6 @@ ALL_GROUPS = [
     test_math_more.group,
     test_math_more.hex_group,
     test_agg_more.group,
-    # After every group: its probes raise SC43 and SC46 on purpose, and a flag
-    # stays up to the end of the scan, so any group after it that reads a flag
-    # would see them (text/to_binary read SC43 on a scan a store probe raised it).
     test_copy_more.group,
     test_copy_more.block_group,
     test_v4_more.group,
@@ -152,6 +149,9 @@ ALL_GROUPS = [
     test_copy_more.range_group,
     test_copy_more.compare_group,
     test_boot_read.flag_group,
+    # After every group: its probes raise SC43 and SC46 on purpose, and a flag
+    # stays up to the end of the scan, so any group after it that reads a flag
+    # would see them (text/to_binary read SC43 on a scan a store probe raised it).
     test_store_probe.group,
     # After the store probes too: they raise flags on purpose (and leave them up to
     # the end of the scan), so no group that reads one may run after them.
