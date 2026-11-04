@@ -83,9 +83,9 @@
 
 ### Fixes
 
-- `how()` says `Cannot reach` only on a proof: a harness link blocks a target only when every way there needs a timer to finish before the link ends the disagreement, and two targets are mutually exclusive only when every writer of each leaves the other off. A `Pulse` on a rung's other contact, a second route, or a one-shot clobber now reaches or says `Stopped`.
-- `how()` gives a `Stopped` plan with a reason for a comparison with arithmetic in a rung (`T.Acc + 1 >= N`) and for a search that loses track of its own evidence, where each raised a Python error, and `avoid=Bank[Idx] >= 9000` reads the slot instead of counting as violated everywhere.
-- `how(And(A, B))` is `how(A, B)`, `how(T.Acc >= Tag)` works when no rung uses `Tag`, and `how(Or(...))` and `how(T.Acc >= Sp + 1)` raise a `ValueError` saying what to pass.
+- `how()` no longer says `Cannot reach` for a target stepping can get to: a `Pulse` on a rung's other contact, a second route to the target, a one-shot clobber, or a force or patch already on the PLC. It reaches or says `Stopped`.
+- `how()` gives a `Stopped` plan with a reason for a comparison with arithmetic in a rung (`T.Acc + 1 >= N`) and for a search that loses track of its own evidence, where each raised a Python error, and `avoid=Bank[Idx] >= 9000` reads the slot instead of counting as violated everywhere, and ends the plan on any scan it goes true.
+- `how(And(A, B))` is `how(A, B)`, and `how(Or(...))`, `how(T.Acc >= Sp + 1)` and `how(T.Acc >= Tag)` where no rung uses `Tag` raise a `ValueError` saying what to pass.
 - A `run_function()` or `run_enabled_function()` that scans, stops or reboots the PLC running it or sets its battery (`step()`, `run()`, `run_for()`, `run_until()`, a `scan_steps` scan, `stop()`, `reboot()`, `battery_present`), on `PLC` or `CompiledPLC`, raises `RuntimeError`, where the scan published a wrong state and the two backends disagreed. Set a tag through `outs=` and act on it from outside the scan, or scan another PLC or a `PLC.fork()`.
 - A constant in an imported CLICK ladder (hex such as `FFC0h`, a Real, or quoted text) is never read as an address, so the generated `tags.py` no longer gains a stray tag like `C0 = c[0]` that fails on import.
 - Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`. CLICK's Compare offers only `=` and `!=` on text, so `<`, `<=`, `>` and `>=` on a Char are a `CLK_TEXT_ORDER_COMPARE` finding that export refuses unless allowed.

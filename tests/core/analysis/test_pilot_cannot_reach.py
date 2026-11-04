@@ -589,7 +589,9 @@ class TestPointerWritesOverTheCap:
                 copy(2995, words[pointer])
             with Rung(done):
                 latch(hit)
-        assert _step_to(_harnessed(program), hit, {"Cmd": True, "Idx": 1, "En": True}, 5) is not None
+        assert (
+            _step_to(_harnessed(program), hit, {"Cmd": True, "Idx": 1, "En": True}, 5) is not None
+        )
         assert _proved_on(_harnessed(program), hit) is None
 
     def test_the_feedback(self) -> None:
@@ -612,7 +614,11 @@ class TestPointerWritesOverTheCap:
             harness = Harness(plc)
             harness.install()
             harness.set_overrides(
-                {feedback.name: Coupling("En", feedback.name, Physical(feedback.name, on_delay="100ms"))}
+                {
+                    feedback.name: Coupling(
+                        "En", feedback.name, Physical(feedback.name, on_delay="100ms")
+                    )
+                }
             )
             return plc
 

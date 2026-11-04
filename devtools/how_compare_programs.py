@@ -22,6 +22,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
     avoid      avoid forms: condition, callable index, callable .get, raising on a real scan
     drums      time drums
     goal       the goal is already true
+    truth      what stepping says against a proof or a decline: true and false CANNOT_REACH,
+               long held waits, an opaque avoid mid-coast, And and range-written slots
     composite  several targets, And(), relational targets
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
@@ -42,6 +44,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from pyrung import (  # noqa: E402
     PLC,
     And,
+    Block,
     Bool,
     Dint,
     Int,
@@ -49,8 +52,10 @@ from pyrung import (  # noqa: E402
     Program,
     Pulse,
     Rung,
+    TagType,
     Timer,
     copy,
+    fill,
     latch,
     off_delay,
     on_delay,
@@ -1204,3 +1209,130 @@ def _held_wait(first, second, unit, scans):
 _add("truth", "truth/held enable 120s dt .01", _held_wait(120, None, "s", 1))
 _add("truth", "truth/held enable 120s dt .01 mid-count", _held_wait(120, None, "s", 3000))
 _add("truth", "truth/held chain 3+2 min no harness", _held_wait(3, 2, "min", 1))
+
+
+def _proof_watchdog():
+    enable = Bool("En", external=True)
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+    hit, watch = Bool("Hit"), Timer.clone("Watch")
+    with Program(strict=False) as prog:
+        with Rung(enable, ~feedback):
+            on_delay(watch, 3000)
+        with Rung(watch.Done):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    Harness(plc).install()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+
+
+def _proof_fill_station():
+    if ROOT not in sys.path:
+        sys.path.append(ROOT)
+    from examples import fill_station as fs
+
+    plc = PLC(fs.logic, dt=0.01)
+    Harness(plc).install()
+    return dict(plc=plc, targets=(fs.FlowAlarm,), goal=_tag_goal(fs.FlowAlarm))
+
+
+def _pulse_other_contact(*, held):
+    enable = Bool("En", external=True)
+    feedback = Bool(
+        "Fb",
+        physical=Physical("Fb", profile=Pulse(on_dwell="500ms", off_dwell="500ms")),
+        link="En",
+    )
+    hit = Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung(enable, feedback):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    Harness(plc).install()
+    if held:
+        plc.patch({"En": True})
+        plc.step()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+
+
+def _opaque_avoid_mid_coast(avoid_of):
+    def build():
+        timer, bank = Timer.clone("T"), Block("B", TagType.INT, 1, 3)
+        plain, index = Int("A"), Int("Idx", external=True, default=1)
+        run, hit = Bool("Run", external=True), Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung(run):
+                on_delay(timer, 2000)
+            with Rung(timer.Acc >= 500, timer.Acc < 600):
+                copy(9, bank[1])
+                copy(9, plain)
+            with Rung(timer.Acc >= 600):
+                copy(0, bank[1])
+                copy(0, plain)
+            with Rung(timer.Done):
+                latch(hit)
+        return dict(
+            plc=PLC(prog, dt=0.01),
+            targets=(hit,),
+            goal=_tag_goal(hit),
+            avoid=avoid_of(bank, plain, index),
+        )
+
+    return build
+
+
+def _and_with_a_contact_off():
+    go, again, x, y = Bool("Go", external=True), Bool("Ag", external=True), Bool("X"), Bool("Y")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            latch(x)
+        with Rung(again):
+            latch(y)
+    return dict(
+        plc=PLC(prog, dt=0.01),
+        targets=(And(x, ~y),),
+        goal=lambda tags: bool(tags.get("X")) and not tags.get("Y"),
+    )
+
+
+def _joint_on_a_slot(write_of):
+    def build():
+        go, done = Bool("Go", external=True), Bool("X")
+        bank, index = Block("B", TagType.INT, 1, 5), Int("Idx", external=True, default=2)
+        with Program(strict=False) as prog:
+            with Rung(go):
+                write_of(bank, index)
+                latch(done)
+        return dict(
+            plc=PLC(prog, dt=0.01),
+            targets=(bank[2] == 7, done),
+            goal=lambda tags: tags.get("B2") == 7 and bool(tags.get("X")),
+        )
+
+    return build
+
+
+_add("truth", "truth/proof watchdog", _proof_watchdog)
+_add("truth", "truth/proof fill station FlowAlarm", _proof_fill_station)
+_add("truth", "truth/pulse on the other contact", lambda: _pulse_other_contact(held=False))
+_add("truth", "truth/pulse on the other contact held", lambda: _pulse_other_contact(held=True))
+_add(
+    "truth",
+    "truth/pointer avoid true mid-coast",
+    _opaque_avoid_mid_coast(lambda bank, plain, index: bank[index] >= 5),
+)
+_add(
+    "truth",
+    "truth/expression avoid true mid-coast",
+    _opaque_avoid_mid_coast(lambda bank, plain, index: plain + 1 >= 6),
+)
+_add("truth", "truth/And with a contact off", _and_with_a_contact_off)
+_add(
+    "truth",
+    "truth/joint goal on a filled slot",
+    _joint_on_a_slot(lambda bank, index: fill(7, bank.select(1, 3))),
+)
+_add(
+    "truth",
+    "truth/joint goal on a pointer slot",
+    _joint_on_a_slot(lambda bank, index: copy(7, bank[index])),
+)
