@@ -82,6 +82,7 @@
 
 ### Fixes
 
+- A `run_function()` or `run_enabled_function()` that scans the PLC running it (`step()`, `run()`, `run_for()`, `run_until()`, a `scan_steps` scan), on `PLC` or `CompiledPLC`, raises `RuntimeError`, where the scan published a wrong state. Hand values back through `outs=`, or step a `fork()` or another PLC.
 - A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - A kernel that fails to compile for a reason pyrung does not expect gives a `RuntimeWarning` and the scans run interpreted, rather than raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.

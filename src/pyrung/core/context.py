@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from pyrsistent import PMap, pmap
 
 if TYPE_CHECKING:
+    from pyrung.core.runner import PLC
     from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
     from pyrung.core.state import SystemState
 
@@ -35,6 +36,15 @@ WriteOccurrenceSink = Callable[
 # pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
 # and probe them a single time via try/except instead of ``in`` + ``[]``.
 _MISSING = object()
+
+
+def scan_inside_its_own_scan() -> RuntimeError:
+    """What a PLC raises when a function its scan is calling asks it to scan."""
+    return RuntimeError(
+        "A scan can't scan its own PLC: a run_function called step(), run(), run_for() or "
+        "run_until() on the PLC running it. Hand values back through outs= for the next scan "
+        "to read, or step another PLC, such as a fork()."
+    )
 
 
 def same_stored_value(old: Any, new: Any) -> bool:
@@ -307,7 +317,7 @@ class ScanContext:
         "_rung_firing_varied",
         "_node_firings",
         "_node_firing_varied",
-        "_consumed_tags_getter",
+        "_runner",
         "_io_submit_staging",
         "_io_drain_staging",
         "_replay_io_submits",
@@ -322,7 +332,7 @@ class ScanContext:
         *,
         resolver: TagResolver | None = None,
         read_only_tags: frozenset[str] = frozenset(),
-        consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
+        runner: PLC | None = None,
         replay_io: tuple[Mapping[str, IoSubmitRecord], Mapping[str, IoResultRecord]] | None = None,
         state_tags_read: Mapping[str, Any] | None = None,
     ) -> None:
@@ -332,13 +342,13 @@ class ScanContext:
             state: The current system state to build upon.
             resolver: Optional fallback for unresolved tag reads.
             read_only_tags: System points that must not be written.
-            consumed_tags_getter: Optional callable returning the set of
-                tag names that at least one rung reads.  When provided
-                and non-None, :meth:`capturing_rung` drops writes to
-                tags outside the set — the firing log is consumed by
-                the simulator's own analysis APIs, which by definition
-                don't ask about unread tags.  Returning ``None`` from
-                the callable bypasses the filter (escape hatch).
+            runner: The PLC this scan belongs to, if any.  It says which
+                tag names at least one rung reads: when that is non-None,
+                :meth:`capturing_rung` drops writes to tags outside the
+                set — the firing log is consumed by the simulator's own
+                analysis APIs, which by definition don't ask about unread
+                tags.  ``None`` bypasses the filter (escape hatch).  It
+                also refuses to scan during :meth:`call_user_function`.
             replay_io: When replaying, a pair of (submits, drains)
                 for this scan.  ``None`` during live execution.
         """
@@ -387,7 +397,7 @@ class ScanContext:
         self._rung_firing_varied: dict[int, frozenset[str]] = {}
         self._node_firings: dict[RungId, dict[str, Any]] = {}
         self._node_firing_varied: dict[RungId, frozenset[str]] = {}
-        self._consumed_tags_getter = consumed_tags_getter
+        self._runner = runner
         self._io_submit_staging: dict[str, IoSubmitRecord] = {}
         self._io_drain_staging: dict[str, IoResultRecord] = {}
         self._is_replay_io: bool = replay_io is not None
@@ -489,6 +499,22 @@ class ScanContext:
                 if summary[0] != value:
                     summary[1] = True
                 summary[0] = value
+
+    def call_user_function(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        """Call a ``run_function`` body; while it runs, this scan's PLC refuses to scan.
+
+        Only for the call: a paused ``scan_steps`` generator sits between prepare and
+        commit with no user code running, and stepping beside it is legal.  A count, since
+        a body can resume a paused scan of its PLC, which can call a body in turn.
+        """
+        runner = self._runner
+        if runner is None:
+            return fn(*args, **kwargs)
+        runner._user_calls_running += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            runner._user_calls_running -= 1
 
     def set_tag(self, name: str, value: Any) -> None:
         """Set a tag value (batched, committed at end of scan).
@@ -785,7 +811,7 @@ class ScanContext:
         varied = {name for name, summary in journal.items() if summary[1]}
         if retain_all_writes:
             return attempted_writes, varied
-        consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
+        consumed = self._runner._consumed_tags_for_capture() if self._runner is not None else None
         if consumed is None:
             return attempted_writes, varied
         retained = {name: val for name, val in attempted_writes.items() if name in consumed}

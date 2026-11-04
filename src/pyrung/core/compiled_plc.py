@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 
 from pyrsistent import PMap
 
-from pyrung.core.context import ScanContext, same_stored_value
+from pyrung.core.context import ScanContext, same_stored_value, scan_inside_its_own_scan
 from pyrung.core.expression import randint_sites
 from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
@@ -235,6 +235,9 @@ class CompiledPLC:
         self._dt = float(dt)
         self._time_mode = TimeMode.FIXED_STEP
         self._running = True
+        # A kernel pass that can call a ``run_function`` body is running, and that body may
+        # not scan this PLC.  Nothing here can pause inside a scan, so the pass is narrow enough.
+        self._kernel_pass_open = False
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
@@ -497,13 +500,15 @@ class CompiledPLC:
 
     def _run_kernel_pass(self, step_fn: Any) -> None:
         """Invoke one compiled function against the already-loaded blocks."""
-        step_fn(
-            self._kernel.tags,
-            self._kernel.blocks,
-            self._kernel.memory,
-            self._kernel.prev,
-            self._dt,
-        )
+        kernel = self._kernel
+        if not self._compiled.calls_functions:
+            step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, self._dt)
+            return
+        self._kernel_pass_open = True
+        try:
+            step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, self._dt)
+        finally:
+            self._kernel_pass_open = False
 
     def _flush_blocks_tracked(self, tracked_blocks: dict[str, _TrackedList]) -> None:
         """Close the scan's block bracket: flush **only the cells written this
@@ -850,6 +855,9 @@ class CompiledPLC:
         return self._mirrored_memory
 
     def _ensure_running(self) -> None:
+        # Every way into a scan comes through here first, ahead of anything it would move.
+        if self._kernel_pass_open:
+            raise scan_inside_its_own_scan()
         # A runner's states walk one recording, and a restart ends a recording: a stop
         # inside it scanned on until a later call (runner._reset_recording).
         if not self._running and not self._exact_anchor:

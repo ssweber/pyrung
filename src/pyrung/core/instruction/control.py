@@ -63,7 +63,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
-        result = self._fn(**kwargs)
+        result = ctx.call_user_function(self._fn, **kwargs)
         if not self._outs:
             return
         if result is None:
@@ -104,7 +104,7 @@ class EnabledFunctionCallInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
-        result = self._fn(enabled, **kwargs)
+        result = ctx.call_user_function(self._fn, enabled, **kwargs)
         if not self._outs:
             return
         if result is None:
