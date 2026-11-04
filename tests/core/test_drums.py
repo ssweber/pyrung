@@ -1145,6 +1145,68 @@ def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
     assert _snapshot(plc) == (2, False, True, True)
 
 
+# -- a pin and the step's own end on one scan ------------------------------------
+#
+# Unmeasured until the next hardware round (the grey-probes branch carries the
+# probes).  No recorded case tells these from own logic running before the pins,
+# which would read step 3 and a completed flag.  They name what pyrung does, the
+# routine's order with a pin's move taking the scan; the backend comparison below
+# would pass a shared error.
+
+
+def _three_step_drum_with_events(kind: str) -> Program:
+    """A 3-step drum whose steps end by E1, E2, E3; a jump goes to step 1."""
+    args = {
+        "outputs": [Bool("A"), Bool("B")],
+        "pattern": [[1, 0], [0, 1], [1, 1]],
+        "current_step": Int("Step"),
+        "completion_flag": Bool("Done"),
+    }
+    events = [Bool("E1"), Bool("E2"), Bool("E3")]
+    with Program(strict=False) as logic:
+        with Rung(Bool("Enable")):
+            if kind == "event":
+                drum = event_drum(events=events, **args)
+            else:
+                drum = time_event_drum(
+                    presets=[None, None, None],
+                    events=events,
+                    accumulator=Int("Acc"),
+                    **args,
+                )
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step=1).jog(Bool("Jog"))
+    return logic
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["event", "time_event"])
+def test_an_event_and_a_jog_on_one_scan_move_one_step(kind: str, backend: type) -> None:
+    plc = backend(_three_step_drum_with_events(kind), dt=0.01)
+    plc.patch({"Enable": True})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+    plc.patch({"E1": True, "Jog": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["event", "time_event"])
+def test_a_jump_and_a_last_step_event_on_one_scan_do_not_complete(kind: str, backend: type) -> None:
+    plc = backend(_three_step_drum_with_events(kind), dt=0.01)
+    plc.patch({"Enable": True})
+    plc.step()
+    for _ in range(2):
+        plc.patch({"Jog": True})
+        plc.step()
+        plc.patch({"Jog": False})
+        plc.step()
+    assert _snapshot(plc) == (3, True, True, False)
+    plc.patch({"E3": True, "Go": True})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+
+
 # -- the same routine on both backends and in the guarded loop -------------------
 
 

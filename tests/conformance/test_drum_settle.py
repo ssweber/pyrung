@@ -4,9 +4,8 @@ Part G of the CLICK project (``suite.PARTS``).  The 2026-11-02 run of ``drum_rul
 ``drum_jump`` and ``drum_idle`` left two kinds of question.  A time & event drum
 did not move on a one-scan event on the harness's scan 1, though the same pulse
 moves it on later scans; and a completed drum did not take a jump, its own time or
-its own event as pyrung does.  These cases told the readings apart, on a CLICK the
-same day, and all but ``te_event_on_entry`` are pending DRUM: their expectations are
-what the CLICK read.
+its own event as pyrung then did.  These cases told the readings apart, on a CLICK
+the same day: their expectations are what the CLICK read.
 
 Snapshots as in ``test_drum_rule``: two digits a drum, ``S`` then ``4 * flag + 2 *
 B + A``, and the drum named first above the other, so 2211 is the first on step 2
