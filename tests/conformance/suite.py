@@ -61,6 +61,8 @@ from tests.conformance import (
     test_out,
     test_past_bank_write,
     test_paste_risk,
+    test_real_bits,
+    test_real_sum,
     test_ret_branch,
     test_row_solve,
     test_rung_semantics,
@@ -71,6 +73,7 @@ from tests.conformance import (
     test_system,
     test_text,
     test_timers,
+    test_word_store,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
@@ -117,6 +120,11 @@ ALL_GROUPS = [
     test_drum_idle.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
+    # The grey-area probes (probe_kit.py): each reads a flag right after its own op, or
+    # waits for a scan it starts off (SC46), so nothing they raise reaches a group above.
+    test_word_store.group,
+    test_real_bits.group,
+    test_real_sum.group,
     # After every group: its probes raise SC43 and SC46 on purpose, and a flag
     # stays up to the end of the scan, so any group after it that reads a flag
     # would see them (text/to_binary read SC43 on a scan a store probe raised it).
@@ -177,6 +185,9 @@ PARTS: dict[str, tuple[str, ...]] = {
     # writes past the DD bank on a CLICK, is the project's last group so it can be
     # left out: nothing depends on it.
     "F": ("store_probe", "flag_probe", "past_write"),
+    # The grey-area probes (probe_kit.py) go in parts of their own, so no confirmed
+    # group changes.  H what Copy and Math store.
+    "H": ("word_store", "real_bits", "real_sum"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

@@ -59,11 +59,12 @@ STAGING_DS = range(3901, 4501)
 #: reserved for the group that will have them.
 OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "rungs": {"C": range(1601, 1661), "CT": range(151, 161)},
+    # DD4.., DF20.. and DH5.. are the grey-area probes' (the math cases use none).
     "math": {
         "DS": range(4401, 4439),
-        "DD": range(1, 101),
-        "DF": range(1, 101),
-        "DH": range(1, 101),
+        "DD": range(1, 4),
+        "DF": range(1, 20),
+        "DH": range(1, 5),
     },
     "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
     # S6 probes (tests/conformance/test_drum_rule.py, test_drum_jump.py,
@@ -131,7 +132,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # cases use none of them).
     "counters": {"C": (range(1301, 1331), range(1383, 1401)), "CT": range(1, 147)},
     "coils": {"C": range(1501, 1601)},
-    "numeric": {"DD": range(101, 201), "DF": range(101, 201), "DH": range(201, 301)},
+    "numeric": {"DD": range(101, 133), "DF": range(101, 142), "DH": range(201, 223)},
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
         "DS": range(3901, 3933),
@@ -153,7 +154,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DS": (
             range(4203, 4208),
             range(4223, 4226),
-            range(4231, 4332),
+            range(4231, 4293),
+            range(4323, 4332),
             range(4343, 4352),
             range(4363, 4372),
             range(4383, 4395),
@@ -202,6 +204,13 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "CT": range(196, 201),
         "DF": range(411, 421),
     },
+    # The grey-area probes, parts H.. (tests/conformance/probe_kit.py).  Their memory is
+    # what the groups above leave unused.
+    "word_store": {"DD": range(810, 850), "DF": range(434, 450), "DH": range(422, 470),
+                   "DS": range(4312, 4323)},
+    "real_bits": {"DD": range(850, 860), "DF": range(20, 70), "DH": range(470, 500),
+                  "TXT": range(546, 570)},
+    "real_sum": {"DF": (range(70, 101), range(142, 151))},
 }
 
 
