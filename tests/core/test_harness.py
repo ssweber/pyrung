@@ -6,6 +6,7 @@ import pytest
 
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     Char,
     Coupling,
@@ -15,11 +16,13 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    TagType,
+    copy,
     out,
     udt,
 )
-from pyrung.core.harness import _parse_link_spec, format_link_spec
-from pyrung.core.physical import Physical, Pulse, Ramp
+from pyrung.core.harness import _parse_link_spec, format_link_spec, link_problem
+from pyrung.core.physical import Approach, Physical, Pulse, Ramp
 from pyrung.core.synthesis import plant_timer
 
 # --- Fixtures: Physical declarations ---
@@ -748,6 +751,148 @@ class TestALinkChangedAcrossUnits:
         ran.run(100)
         assert _whole_state(ran)[2:] == _whole_state(stepped)[2:]
         assert _fb(stepped, Fb) is False
+
+
+class TestPlantOnASlotOnlyAPointerReaches:
+    """The plant reads and writes the program's slot, with the slot's own default."""
+
+    @staticmethod
+    def _approach_program():
+        En = Bool("En")
+        Ptr = Int("Ptr", default=2)
+        Sps = Block("Sps", TagType.REAL, 1, 3)
+        Sps.slot(2, default=100.0)
+        Temp = Real(
+            "Temp",
+            default=20.0,
+            physical=Physical("T", profile=Approach(toward="Sps2", rate=0.3)),
+            link="En",
+        )
+        CopySp = Real("CopySp")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Temp > 1000.0):
+                out(Bool("Seen"))
+            with Rung():
+                copy(Sps[Ptr], CopySp)
+        return logic, En
+
+    def test_approach_runs_toward_the_slots_default(self):
+        logic, En = self._approach_program()
+        plc = PLC(logic, dt=0.01)
+        Harness(plc).install()
+        plc.patch({En: True})
+        plc.run(500)
+        tags = plc.current_state.tags
+        assert tags["Sps2"] == 100.0
+        assert tags["CopySp"] == 100.0
+        assert tags["Temp"] == pytest.approx(100.0 - 80.0 * (1 - 0.3 * 0.01) ** 499, rel=1e-3)
+
+    def test_approach_equals_stepping(self):
+        def started():
+            logic, En = self._approach_program()
+            plc = PLC(logic, dt=0.01)
+            Harness(plc).install()
+            plc.patch({En: True})
+            return plc
+
+        stepped = started()
+        for _ in range(500):
+            stepped.step()
+        ran = started()
+        ran.run(500)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+    def test_a_setpoint_no_rung_names_refuses_at_install(self):
+        En = Bool("En")
+        Temp = Real(
+            "Temp", physical=Physical("T", profile=Approach(toward="Sp", rate=0.3)), link="En"
+        )
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Temp > 1000.0):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        with pytest.raises(ValueError, match="unknown tag: Sp"):
+            harness.install()
+        assert plc._harness is None
+        assert "Sp" not in plc.current_state.tags
+
+    def test_a_setpoint_no_rung_names_refuses_a_bench_link(self):
+        En, Temp = Bool("En"), Real("Temp")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Temp > 1000.0):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        harness.install()
+        coupling = Coupling(
+            "En", "Temp", Physical("T", profile=Approach(toward="Sp", rate=0.3)), None
+        )
+        assert link_problem(plc, coupling) == "unknown tag: Sp"
+        with pytest.raises(ValueError, match="unknown tag: Sp"):
+            harness.set_overrides({"Temp": coupling})
+        assert harness.overrides == {}
+        assert "Sp" not in plc.current_state.tags
+
+    def test_a_setpoint_only_a_pointer_reaches_passes_link_problem(self):
+        logic, _En = self._approach_program()
+        plc = PLC(logic, dt=0.01)
+        coupling = Coupling(
+            "En", "Temp", Physical("T", profile=Approach(toward="Sps2", rate=0.3)), None
+        )
+        assert link_problem(plc, coupling) is None
+
+    def test_a_bench_ramp_starts_from_the_slots_default(self):
+        En = Bool("En")
+        Ptr = Int("Ptr", default=4)
+        Temps = Block("Temps", TagType.REAL, 1, 5)
+        Temps.slot(4, default=20.0)
+        Seen = Real("Seen")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung():
+                copy(Temps[Ptr], Seen)
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        harness.install()
+        plc.run(5)
+        assert plc.current_state.tags["Seen"] == 20.0
+        harness.set_overrides(
+            {"Temps4": Coupling("En", "Temps4", Physical("T", profile=Ramp(up=1.0)), None)}
+        )
+        assert plc.current_state.tags["Temps4"] == 20.0
+        plc.run(5)
+        assert plc.current_state.tags["Seen"] == 20.0
+        plc.patch({En: True})
+        plc.run(101)
+        assert plc.current_state.tags["Temps4"] == pytest.approx(21.0, abs=0.02)
+
+    def test_a_bench_bool_link_keeps_the_slots_default(self):
+        En = Bool("En", default=False)
+        Ptr = Int("Ptr", default=2)
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+        Bits.slot(2, default=True)
+        Seen = Bool("Seen")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Bits[Ptr] == True):  # noqa: E712
+                out(Seen)
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        harness.install()
+        plc.run(2)
+        assert plc.current_state.tags["Seen"] is True
+        link = Coupling("En", "Bits2", Physical("S", on_delay="10ms"), None)
+        harness.set_overrides({"Bits2": link})
+        assert plc.current_state.tags["Bits2"] is True
 
 
 # --- Value-Trigger Fixtures ---

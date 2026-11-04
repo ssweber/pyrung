@@ -165,7 +165,18 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
     writer = _program_writer(plc, coupling.fb_name)
     if writer is not None:
         return f"{coupling.fb_name} is written by the program at {writer}"
-    return None
+    return _setpoint_problem(plc, coupling.physical)
+
+
+def _setpoint_problem(plc: PLC, physical: Physical) -> str | None:
+    """Why an ``Approach`` cannot read its setpoint tag: it must be one the rungs name or reach."""
+    profile = physical.profile
+    if not isinstance(profile, Approach) or not isinstance(profile.toward, str):
+        return None
+    name = profile.toward
+    if name in plc._known_tags_by_name or plc._tags_rungs_reach.holds(name):
+        return None
+    return f"unknown tag: {name}"
 
 
 def _program_writer(plc: PLC, tag_name: str) -> str | None:
@@ -226,8 +237,10 @@ class Harness:
     def install(self) -> None:
         if self._installed:
             return
-        self._installed = True
         self._discover_couplings()
+        for coupling in self._declared:
+            self._refuse_unknown_setpoint(coupling)
+        self._installed = True
         self._rebuild_couplings()
         self._plc._note_plant_change()
         self._refresh_synthesis()
@@ -321,6 +334,8 @@ class Harness:
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
                 raise ValueError(f"Override for {fb_name!r} drives {coupling.fb_name!r}.")
+            if coupling is not None:
+                self._refuse_unknown_setpoint(coupling)
         self._overrides = dict(overrides)
         counted_in = self._timer_accumulators()
         self._rebuild_couplings()
@@ -335,6 +350,11 @@ class Harness:
                 handle.remove()
             self._monitors.clear()
             self._install_monitors()
+
+    def _refuse_unknown_setpoint(self, coupling: Coupling) -> None:
+        problem = _setpoint_problem(self._plc, coupling.physical)
+        if problem is not None:
+            raise ValueError(f"{coupling.fb_name} cannot approach its setpoint: {problem}")
 
     def _timer_accumulators(self) -> dict[tuple[str, str], tuple[str, int]]:
         """Each plant timer's accumulator and its ms per unit, by what the timer times."""
@@ -678,7 +698,7 @@ class Harness:
             ton_done = Bool(f"__cpl_ond__{c.fb_name}", retentive=False)
             ton_acc = Int(plant_acc_name("__cpl_on", c.fb_name, c.on_delay_ms), retentive=False)
             tof_acc = Int(plant_acc_name("__cpl_off", c.fb_name, c.off_delay_ms), retentive=False)
-            fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+            fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
                 fb_tag = Bool(c.fb_name)
             c.ton_done_name = ton_done.name
@@ -701,7 +721,7 @@ class Harness:
             en_tag = self._plc._known_tags_by_name.get(c.en_name)
             if en_tag is None:
                 continue
-            fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+            fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
                 fb_tag = Bool(c.fb_name) if isinstance(spec, Pulse) else Real(c.fb_name)
             if c.trigger_value is not None:
@@ -727,8 +747,9 @@ class Harness:
                 toward = spec.toward
                 toward_operand: Any = toward
                 if isinstance(toward, str):
-                    known_toward = self._plc._known_tags_by_name.get(toward)
-                    toward_operand = Real(toward) if known_toward is None else known_toward
+                    toward_operand = self._tag_rungs_know(toward)
+                    if toward_operand is None:
+                        raise ValueError(f"unknown tag: {toward}")
                 plant.extend(
                     analog_approach_rung(
                         enable=enable,
@@ -769,6 +790,17 @@ class Harness:
         self._plc._compiled_replay_kernel = None
         self._plc._soft_exec_program_cache = None
         self._plc._causal_lineage.invalidate_current_epoch()
+
+    def _tag_rungs_know(self, name: str) -> Any | None:
+        """The program's tag for *name*, a slot only a pointer reaches included.
+
+        A stand-in in its place would seed the slot with the wrong default, and the
+        program's own read of the slot would change with it.
+        """
+        tag = self._plc._tag_known_or_reached(name)
+        if tag is not None:
+            self._plc._register_known_tag(tag)
+        return tag
 
     def _seed_plant_defaults(self) -> None:
         """Put each tag the plant uses in the state, at its default."""

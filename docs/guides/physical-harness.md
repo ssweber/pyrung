@@ -237,7 +237,7 @@ PRESSURE = Physical("Pressure", profile=Ramp(up=10.0, down=-5.0))  # +10 PSI/s, 
 
 The program's own logic controls when `En` drops. A heater turns off `En` when `Fb_Temp` hits the setpoint — the ramp was climbing, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
 
-**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or a setpoint tag name:
+**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or the name of a setpoint tag the rungs use (a name they don't raises `ValueError` at install):
 
 ```python
 from pyrung import Approach
