@@ -914,18 +914,17 @@ def _filled(cell: Any) -> bool:
 def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) -> bool | None:
     """``predicate`` as the twin sees it, or None when the twin cannot answer it.
 
-    Reuses the read trace's ``_traced_call`` (it swaps the twin's tip for the traced
-    state, so a predicate reading ``twin.state`` works).  The real runner's state is
-    poisoned for the call: a closure over the real runner is detected, not answered.
-    A predicate that raises is unknown on this scan only (``False`` is not assumed).
+    Asked on the twin's plain state, as a user's predicate would read it, and not through
+    the read trace: the twin is the truth a trace that misreads a predicate has to answer
+    to.  The real runner's state is poisoned for the call: a closure over the real runner
+    is detected, not answered.  A predicate that raises is unknown on this scan only
+    (``False`` is not assumed).
     """
-    from pyrung.core.read_trace import _traced_call
-
     real = plc._state
     poison = _PoisonedState()
     plc._state = poison
     try:
-        hit = _traced_call(predicate, twin)[0]
+        hit = bool(predicate(twin._state))
     except _NotTheTwin:
         return None
     except Exception as exc:
