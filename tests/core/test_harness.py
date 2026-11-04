@@ -503,11 +503,32 @@ class TestDelaysPastTheMillisecondRange:
         harness = plc._harness
         plc.patch({Cmd: True})
         plc.run(5)
-        before = harness.pending_ms()[Fb.name]
+        # One scan to command the enable, then each held scan counts a quarter second,
+        # most of which sits in the timer's fraction, not its whole seconds.
+        assert harness.pending_ms()[Fb.name] == 60_000 - 4 * 250
         plc.run(40)
-        after = harness.pending_ms()[Fb.name]
-        assert 59_000 <= before <= 60_000
-        assert after == before - 10_000
+        assert harness.pending_ms()[Fb.name] == 60_000 - 44 * 250
+        plc.run(1)
+        assert harness.pending_ms()[Fb.name] == 60_000 - 45 * 250
+
+    def test_pending_ms_counts_a_falling_delay_the_same(self):
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", off_delay="60s"), dt=0.25)
+        harness = plc._harness
+        plc.patch({Cmd: True})
+        plc.run(4)
+        plc.force(Cmd, False)
+        plc.run(3)
+        first = harness.pending_ms()[Fb.name]
+        plc.run(3)
+        assert harness.pending_ms()[Fb.name] == first - 3 * 250
+
+    def test_pending_ms_is_when_the_timer_will_flip(self):
+        # 32.768 s counts in whole seconds, so the flip comes at 33 s.
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", on_delay="32768ms"), dt=0.25)
+        harness = plc._harness
+        plc.patch({Cmd: True})
+        plc.run(2)
+        assert harness.pending_ms()[Fb.name] == 33_000 - 250
 
     def test_an_enable_already_on_at_install_settles_without_dropping(self):
         En = Bool("En", default=True)

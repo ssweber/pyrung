@@ -394,7 +394,8 @@ class Harness:
         Keyed by feedback name; a feedback that agrees with its enable is
         absent. Rising, the on-delay is counting; falling, the off-delay is.
         """
-        snap = self._plc.current_state.tags
+        state = self._plc.current_state
+        snap = state.tags
         left: dict[str, int] = {}
         for c in self._bool_couplings:
             if not self._bool_mid_transition(c, snap):
@@ -404,7 +405,8 @@ class Harness:
             else:
                 delay_ms, acc_name = c.on_delay_ms, c.ton_acc_name
             preset, _unit, unit_ms = plant_timer(delay_ms)
-            left[c.fb_name] = max(0, (preset - int(snap.get(acc_name, 0) or 0)) * unit_ms)
+            counted = int(snap.get(acc_name, 0) or 0) + state.memory.get(f"_frac:{acc_name}", 0.0)
+            left[c.fb_name] = max(0, round((preset - counted) * unit_ms))
         return left
 
     @property
