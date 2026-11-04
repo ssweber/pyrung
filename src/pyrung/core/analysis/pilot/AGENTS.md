@@ -235,10 +235,11 @@ around causal reads means only "no evidence" and cannot turn one of those into a
 An avoid check that raises travels the same way (`_AvoidCheckRaised`, from `avoid.py`), and
 `api.py` names it `AvoidCheckError` for the caller: a check that raised has not said a state
 is clear, so no gate may read it as a pass. Evaluate avoid through `avoid.py`, not by calling
-it. The resting baseline has only the steerable inputs, so a check that raises there is asked
-again on the real state the search is judging the hold from, with resting filling only what
-that state lacks (`_resting_violations`). A raise there reaches the caller, though what the
-check was asked about is that state with the hold laid over it, which no scan has produced.
+it. The resting baseline has only the steerable inputs, so a check that raises there gives no
+denial: the action gate and the scan gate judge real values when the hold goes on. It is still
+asked on the values the search holds, often a failed attempt's landing that the corrected route
+may never reach, with resting filling only what they lack (`_resting_violations`), and a raise
+there reaches the caller.
 
 ## Attempt transaction
 

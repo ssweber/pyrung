@@ -4,7 +4,8 @@ A check that raises on a real state reaches the caller as a named error, whichev
 gate met it: the route gate before the drive, the action gate, the scan gate, a
 trial coast, a terminal reason.  It never reads as a pass and never as a verdict.
 The resting baseline holds the steerable inputs and nothing else, so a check that
-raises there is asked again with real values, and a raise there is the same error.
+raises there denies no hold.  It is asked again on real values, where a raise is the
+same error, and the gates that judge the hold when it goes on still stop what it forces.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import PLC, And, Bool, Int, Or, Program, Rung, Timer, copy, on_delay, out
+from pyrung import PLC, And, Bool, Int, Or, Program, Rung, Timer, copy, latch, on_delay, out
 from pyrung.core import AvoidCheckError
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget, pilot_events, pilot_how
@@ -396,10 +397,11 @@ def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> Non
     [lambda s: s["Hold"] and s["Level"] > 3, lambda s: s.get("Hold") and s.get("Level") + 0 > 3],
     ids=["index", "get"],
 )
-def test_real_values_say_what_the_hold_forces(check) -> None:
+def test_a_hold_the_baseline_cannot_judge_is_not_denied_on_the_landing(check) -> None:
+    """Level 5 may only be where a failed attempt ended.  The hold goes on from elsewhere."""
     ctx = _hold_ctx(_compile_avoid(check))
 
-    assert _hold_allowed(ctx, ("Hold", True), {"Level": 5}) is False
+    assert _hold_allowed(ctx, ("Hold", True), {"Level": 5}) is True
     assert _hold_allowed(ctx, ("Hold", True), {"Level": 1}) is True
     assert _hold_allowed(ctx, ("Hold", False), {"Level": 5}) is True
 
@@ -417,45 +419,46 @@ def test_a_condition_with_a_program_owned_side_is_asked_with_real_values() -> No
         _avoid_snap_names(ctx.avoid_pred, {"Input": 5})
 
     assert _hold_allowed(ctx, ("Input", 5), {"Limit": 10}) is True
-    assert _hold_allowed(ctx, ("Input", 50), {"Limit": 10}) is False
-    # True without the hold too, so the hold is not what forces it.
+    assert _hold_allowed(ctx, ("Input", 50), {"Limit": 10}) is True
     assert _hold_allowed(ctx, ("Input", 5), {"Limit": -1}) is True
 
 
-def test_rest_does_not_hide_a_real_input_the_check_reads() -> None:
-    """Speed is 5 in the real state and 0 at rest; S sends the check to real values."""
-    resting = {"Speed": 0, "Sensor": False}
-    real = {"S": 6, "Speed": 5, "Sensor": False}
-    ctx = _hold_ctx(
-        _compile_avoid(lambda s: s["S"] == 6 and s["Speed"] > 3 and s["Sensor"]), resting
-    )
+def test_the_re_ask_is_real_values_with_the_hold_on_then_without() -> None:
+    """Real wins over rest, and rest fills only what the real values lack."""
+    asked = []
 
-    assert _hold_allowed(ctx, ("Sensor", True), real) is False
-    assert _hold_allowed(ctx, ("Sensor", True), {**real, "Speed": 1}) is True
+    def check(snapshot: dict) -> bool:
+        asked.append(dict(snapshot))
+        return snapshot["S"] == 99
 
+    ctx = _hold_ctx(_compile_avoid(check), {"Speed": 0, "Sensor": False, "Spare": 7})
 
-def test_a_condition_on_a_real_input_is_not_hidden_by_rest() -> None:
-    sensor, speed, limit = Bool("Sensor"), Int("Speed"), Int("Lim")
-    ctx = _hold_ctx(_compile_avoid(And(sensor, speed > limit)), {"Speed": 0, "Sensor": False})
-    real = {"Speed": 5, "Sensor": False, "Lim": 0}
-
-    assert _hold_allowed(ctx, ("Sensor", True), real) is False
-    assert _hold_allowed(ctx, ("Sensor", True), {**real, "Speed": -1}) is True
+    assert _hold_allowed(ctx, ("Sensor", True), {"S": 6, "Speed": 5, "Sensor": False}) is True
+    assert asked[1:] == [
+        {"S": 6, "Speed": 5, "Sensor": True, "Spare": 7},
+        {"S": 6, "Speed": 5, "Sensor": False, "Spare": 7},
+    ]
 
 
-def test_releasing_a_real_input_is_judged_from_it_being_on() -> None:
-    resting = {"Speed": 0, "Sensor": False}
-    ctx = _hold_ctx(_compile_avoid(lambda s: s["S"] == 6 and not s["Sensor"]), resting)
+@pytest.mark.parametrize("spare", [True, False], ids=["with-the-hold", "without-the-hold"])
+def test_a_raise_on_either_side_of_the_re_ask_reaches_the_caller(spare) -> None:
+    """Spare picks the side: the check raises when Hold has come to match it."""
 
-    assert _hold_allowed(ctx, ("Sensor", False), {"S": 6, "Speed": 0, "Sensor": True}) is False
+    def check(snapshot: dict) -> bool:
+        if snapshot["S"] == 6 and snapshot["Spare"] == snapshot["Hold"]:
+            raise ValueError("only on this side")
+        return False
+
+    ctx = _hold_ctx(_compile_avoid(check))
+
+    with pytest.raises(_AvoidCheckRaised):
+        _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": spare, "Hold": False})
 
 
-def test_resting_fills_only_what_the_real_state_lacks() -> None:
-    resting = {"Hold": False, "Spare": True}
-    ctx = _hold_ctx(_compile_avoid(lambda s: s["S"] == 6 and s["Spare"] and s["Hold"]), resting)
+def test_a_check_true_on_the_values_held_denies_no_hold() -> None:
+    ctx = _hold_ctx(_compile_avoid(lambda s: s["Faulted"] and s["Hold"]))
 
-    assert _hold_allowed(ctx, ("Hold", True), {"S": 6}) is False
-    assert _hold_allowed(ctx, ("Hold", True), {"S": 6, "Spare": False}) is True
+    assert _hold_allowed(ctx, ("Hold", True), {"Faulted": True}) is True
 
 
 def test_each_member_of_a_union_is_judged_on_its_own() -> None:
@@ -478,7 +481,7 @@ def test_a_bare_callable_is_asked_with_real_values() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _dwell_program(limit_from=None, limit_to=None):
+def _dwell_program(limit_from=None, limit_to=None, watching=None):
     """A sensor must be held on, then off, or a watchdog takes state 6 to 8 instead of 7."""
     sensor = Bool("HoldSensor", external=True)
     stable_on = Timer.clone("HoldStableOn")
@@ -508,6 +511,9 @@ def _dwell_program(limit_from=None, limit_to=None):
             on_delay(settle, 20, "ms")
         with Rung(settle.Done):
             copy(limit_to if limit_to is not None else limit_from or 0, limit)
+        if watching is not None:
+            with Rung(watching > 100):
+                out(Bool("WatchingHigh"))
     return prog, state, sensor, limit
 
 
@@ -519,6 +525,12 @@ def _drive(prog, target, avoid):
 
 def _holds(plan) -> int:
     return sum(len(step.rungs) for step in plan.journal)
+
+
+def _avoided_scans(plan, avoided) -> list[int]:
+    return [
+        state.scan_id for state in plan.replay().history.latest(100000) if avoided(dict(state.tags))
+    ]
 
 
 def test_the_route_needs_its_corrective_holds() -> None:
@@ -575,7 +587,117 @@ def test_input_over_a_limit_the_hold_would_cross_goes_no_further() -> None:
     plan = _drive(prog, state == 7, sensor > limit)
 
     assert plan.status is PlanStatus.STOPPED
-    assert _holds(plan) == 0
+
+
+def _armed_dwell(release_needed: bool):
+    """Start latches Armed, and the dwell runs under Armed, or under Ready once Start is off."""
+    start = Bool("Start", external=True)
+    sensor = Bool("Sensor", external=True)
+    armed = Bool("Armed")
+    ready = Bool("Ready")
+    lim = Int("Lim")
+    stable_on = Timer.clone("StableOn")
+    stable_off = Timer.clone("StableOff")
+    on_wd = Timer.clone("OnWD")
+    off_wd = Timer.clone("OffWD")
+    run = Timer.clone("RunT")
+    state = Int("St", default=6)
+    gate = ready if release_needed else armed
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(5, lim)
+        with Rung(start):
+            latch(armed)
+        with Rung(armed, ~start):
+            latch(ready)
+        with Rung(gate, state == 6, sensor):
+            on_delay(stable_on, 30, "ms")
+        with Rung(gate, state == 6, ~sensor):
+            on_delay(stable_off, 30, "ms")
+        with Rung(gate, state == 6):
+            on_delay(on_wd, 70, "ms").reset(stable_off.Done)
+        with Rung(gate, state == 6):
+            on_delay(off_wd, 70, "ms").reset(stable_on.Done)
+        with Rung(gate, state == 6, Or(on_wd.Done, off_wd.Done)):
+            copy(8, state)
+        with Rung(gate, state == 6):
+            on_delay(run, 250, "ms")
+        with Rung(gate, state == 6, run.Done):
+            copy(7, state)
+    return prog, state
+
+
+@pytest.mark.parametrize(
+    ("release_needed", "avoided"),
+    [
+        (False, lambda s: s["OffWD_Done"] and s["Start"] and s["Sensor"]),
+        (False, lambda s: s["OffWD_Done"] and s["Sensor"]),
+        (True, lambda s: s["OffWD_Done"] and s["Sensor"]),
+    ],
+    ids=["done-start-sensor", "done-sensor", "done-sensor-release"],
+)
+def test_a_check_true_only_at_the_failed_landing_keeps_the_route(release_needed, avoided) -> None:
+    """A failed attempt ends with the watchdog done.  The corrected route never gets there."""
+    prog, state = _armed_dwell(release_needed)
+
+    plan = _drive(prog, state == 7, avoided)
+
+    assert plan.status is PlanStatus.REACHED
+    assert _holds(plan) > 0
+    assert not _avoided_scans(plan, avoided)
+
+
+def test_a_check_no_scan_of_the_route_can_clear_stops_without_spending_the_budget() -> None:
+    """Armed needs Start held while the sensor is held: the action gate says so at once."""
+    prog, state = _armed_dwell(False)
+
+    plan = _drive(prog, state == 7, lambda s: s["Lim"] > 0 and s["Start"] and s["Sensor"])
+
+    assert plan.status is PlanStatus.STOPPED
+    assert "budget" not in str(plan.reason).lower()
+
+
+def _speed_dwell(start: dict):
+    """The dwell on its own, with Speed an input the route does not need."""
+    speed = Int("Speed", external=True)
+    prog, state, sensor, limit = _dwell_program(0, 0, watching=speed)
+    plc = PLC(prog, dt=0.010)
+    plc.patch(start)
+    plc.step()
+    return plc, state, sensor, speed, limit
+
+
+def test_a_hold_that_really_forces_the_check_stops() -> None:
+    """Speed really is 5, so the sensor hold the route needs is the avoided state."""
+    plc, state, *_ = _speed_dwell({"Speed": 5})
+
+    plan = plc.how(
+        state == 7,
+        avoid=lambda s: s["HoldState"] == 6 and s["Speed"] > 3 and s["HoldSensor"],
+        max_scans=2000,
+    )
+
+    assert plan.status is PlanStatus.STOPPED
+
+
+def test_a_condition_a_hold_really_forces_stops() -> None:
+    plc, state, sensor, speed, limit = _speed_dwell({"Speed": 5})
+
+    plan = plc.how(state == 7, avoid=And(sensor, speed > limit), max_scans=2000)
+
+    assert plan.status is PlanStatus.STOPPED
+
+
+def test_releasing_an_input_that_really_is_on_stops() -> None:
+    plc, state, *_ = _speed_dwell({"HoldSensor": True})
+
+    plan = plc.how(
+        state == 7,
+        avoid=lambda s: s["HoldState"] == 6 and not s["HoldSensor"],
+        max_scans=2000,
+    )
+
+    assert plan.status is PlanStatus.STOPPED
 
 
 def test_a_condition_refused_on_the_baseline_stays_refused() -> None:
@@ -646,3 +768,67 @@ def test_a_check_raising_only_with_a_hold_on_reaches_the_caller() -> None:
 
     with pytest.raises(AvoidCheckError, match="ValueError"):
         _drive(prog, state == 7, _raises_with_the_sensor_held)
+
+
+# ---------------------------------------------------------------------------
+# A check reading a tag that is not in the program
+# ---------------------------------------------------------------------------
+
+
+def _route_with_holds():
+    prog, state, *_ = _dwell_program()
+    return prog, state == 7, 0.010
+
+
+def _route_with_no_hold():
+    go = Bool("Go", external=True)
+    target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            out(target)
+    return prog, target, 0.1
+
+
+def _route_by_waiting():
+    delay = Timer.clone("Delay")
+    target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung():
+            on_delay(delay, 100, "ms")
+        with Rung(delay.Done):
+            out(target)
+    return prog, target, 0.010
+
+
+def _goal_true_at_the_start():
+    go = Bool("Go", external=True)
+    target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung():
+            out(target)
+        with Rung(go):
+            out(Bool("Other"))
+    return prog, target, 0.1
+
+
+@pytest.mark.parametrize(
+    "program",
+    [_route_with_holds, _route_with_no_hold, _route_by_waiting, _goal_true_at_the_start],
+    ids=["holds", "no-hold", "waiting", "goal-true"],
+)
+@pytest.mark.parametrize(
+    "typo",
+    [lambda s: s["Typo"], lambda s: s["Typo"] > 3, (lambda s: s["Typo"],)],
+    ids=["index", "compare", "union"],
+)
+def test_a_tag_not_in_the_program_stops_with_the_error(program, typo) -> None:
+    prog, target, dt = program()
+    plc = PLC(prog, dt=dt)
+    plc.step()
+    before = plc.current_state
+
+    with pytest.raises(AvoidCheckError, match="KeyError: 'Typo'") as raised:
+        plc.how(target, avoid=typo, max_scans=2000)
+
+    assert isinstance(raised.value.__cause__, KeyError)
+    assert plc.current_state is before

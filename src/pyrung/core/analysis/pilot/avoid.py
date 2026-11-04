@@ -57,7 +57,7 @@ def _avoid_violations(
     baseline when no snapshot is given — the neutral world a hold asserts its
     tag against) and evaluates the avoid predicate. This is the action gate's
     primitive (a candidate/hold whose overlay trips avoid depends on it).  *real* is
-    the state a judgment on the baseline falls back on (``_resting_violations``).
+    what a check the baseline cannot answer is asked on (``_resting_violations``).
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:
@@ -76,12 +76,14 @@ def _resting_violations(
     """Names of the avoid conditions *pairs* would force from the resting baseline.
 
     The baseline has the steerable inputs and nothing else, so a check can raise on it
-    for a tag every real state has.  That is no answer about the hold, so that check is
-    asked again with real values: *real*, the state the search is judging the hold from,
-    with resting filling only what it lacks.  The hold forces it if it goes true with the
-    hold on and was clear without.  A raise there is the check's own and reaches the
-    caller.  A check the baseline can answer keeps that answer, so a condition reading a
-    tag the baseline lacks still refuses the hold.
+    for a tag every real state has.  That is no answer about the hold, and *real* cannot
+    give one: it is often a failed attempt's landing, and the hold goes on from an earlier
+    checkpoint on a corrected trajectory that may never reach those values.  So the hold
+    is not denied here; the action gate and the scan gate judge real values when it goes
+    on.  The check is still asked on *real*, with and without the hold and with resting
+    filling only what *real* lacks, so that a raise on real values reaches the caller.  A
+    check the baseline can answer keeps that answer, so a condition reading a tag the
+    baseline lacks still refuses the hold.
     """
     resting = dict(getattr(ctx, "resting", {}) or {})
     held = dict(pairs)
@@ -93,9 +95,9 @@ def _resting_violations(
             return _avoid_member_true(check, pred, {**resting, **held})
         except _AvoidCheckRaised:
             now = {**resting, **real}
-            return _avoid_member_true(check, pred, {**now, **held}) and not _avoid_member_true(
-                check, pred, now
-            )
+            _avoid_member_true(check, pred, {**now, **held})
+            _avoid_member_true(check, pred, now)
+            return False
 
     return tuple(check for check, pred in checks if forces(check, pred))
 
@@ -114,7 +116,7 @@ def _hold_allowed(
     pair: tuple[str, Any],
     real: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Whether a hold of *pair* may be installed, judged from the real state *real*."""
+    """Whether a hold of *pair* may be installed.  ``_resting_violations`` says what *real* is."""
     tag, _value = pair
     compass = getattr(ctx, "compass", None)
     action_tags = getattr(compass, "action_tags", frozenset())
