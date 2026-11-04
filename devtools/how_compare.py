@@ -75,7 +75,9 @@ def die(message: str, code: int = 2):
 
 def export_ref(ref: str, cache: str) -> str:
     sha = subprocess.run(
-        ["git", "-C", REPO, "rev-parse", "--verify", ref + "^{commit}"], capture_output=True, text=True
+        ["git", "-C", REPO, "rev-parse", "--verify", ref + "^{commit}"],
+        capture_output=True,
+        text=True,
     )
     if sha.returncode:
         die(f"{ref!r} is neither a directory nor a git ref: {sha.stderr.strip()}")
@@ -83,12 +85,14 @@ def export_ref(ref: str, cache: str) -> str:
     dest = os.path.join(cache, sha)
     if os.path.isdir(os.path.join(dest, "src", "pyrung")):
         return dest
-    archive = subprocess.run(["git", "-C", REPO, "archive", "--format=tar", sha, "src"], capture_output=True)
+    archive = subprocess.run(
+        ["git", "-C", REPO, "archive", "--format=tar", sha, "src"], capture_output=True
+    )
     if archive.returncode:
         die(f"git archive {ref}: {archive.stderr.decode(errors='replace').strip()}")
     os.makedirs(dest, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        tar.extractall(dest)
+        tar.extractall(dest, filter="data")
     return dest
 
 
@@ -97,7 +101,9 @@ def resolve(spec: str, cache: str) -> tuple[str, str]:
         path = os.path.abspath(spec)
         if not os.path.isdir(os.path.join(path, "src", "pyrung")):
             die(f"{path} has no src/pyrung")
-        head = subprocess.run(["git", "-C", path, "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+        head = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+        )
         return path, f"{path} @ {head.stdout.strip() or '?'}"
     path = export_ref(spec, cache)
     return path, f"{spec} @ {os.path.basename(path)[:9]}"
@@ -134,7 +140,17 @@ def run_side(label: str, tree: str, out: str, opts) -> int:
         if opts.no_mergeq:
             wrapped, timeout = cmd, left
         else:
-            wrapped = [sys.executable, "-I", MERGEQ, "run", "--timeout", str(left), "--name", f"how-compare-{label}", "--"] + cmd
+            wrapped = [
+                sys.executable,
+                "-I",
+                MERGEQ,
+                "run",
+                "--timeout",
+                str(left),
+                "--name",
+                f"how-compare-{label}",
+                "--",
+            ] + cmd
             timeout = left + 60
         print(f"[{label}] worker start ({left} s left)", flush=True)
         try:
@@ -189,17 +205,25 @@ def load_expected(path: str | None) -> list[tuple[str, str]]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--base", required=True)
     ap.add_argument("--tree", required=True)
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--only", default="")
     ap.add_argument("--expected")
     ap.add_argument("--out", help="directory for the two result files (default: a temp dir)")
-    ap.add_argument("--timeout", type=int, default=0, help="seconds per side (default 600 fast, 3600 full)")
-    ap.add_argument("--wall", type=float, default=0, help="how() wall clock per row (default 20 fast, 60 full)")
+    ap.add_argument(
+        "--timeout", type=int, default=0, help="seconds per side (default 600 fast, 3600 full)"
+    )
+    ap.add_argument(
+        "--wall", type=float, default=0, help="how() wall clock per row (default 20 fast, 60 full)"
+    )
     ap.add_argument("--mem-mb", type=int, default=3000)
-    ap.add_argument("--no-mergeq", action="store_true", help="skip the mergeq wrapper (bounds still apply)")
+    ap.add_argument(
+        "--no-mergeq", action="store_true", help="skip the mergeq wrapper (bounds still apply)"
+    )
     opts = ap.parse_args()
     opts.timeout = opts.timeout or (3600 if opts.full else 600)
     opts.wall = opts.wall or (60 if opts.full else 20)
@@ -233,7 +257,9 @@ def main() -> int:
     print(f"      pyrung.__file__ = {base['origin']}")
     print(f"tree  {new_label}")
     print(f"      pyrung.__file__ = {new['origin']}")
-    print(f"programs: {'full' if opts.full else 'fast'} set, {len(names)} rows; elapsed {elapsed:.0f} s")
+    print(
+        f"programs: {'full' if opts.full else 'fast'} set, {len(names)} rows; elapsed {elapsed:.0f} s"
+    )
 
     # reach
     reach_b = [c for c in names if c in b and b[c].get("status") == "REACHED"]
@@ -243,7 +269,9 @@ def main() -> int:
     neither = [c for c in names if c not in reach_b and c not in reach_n]
     print()
     print(f"REACHED: base {len(reach_b)} of {len(b)} rows, tree {len(reach_n)} of {len(n)} rows")
-    print(f"REACHED and the goal, replay and stepped replay all check out: base {len(real_b)}, tree {len(real_n)}")
+    print(
+        f"REACHED and the goal, replay and stepped replay all check out: base {len(real_b)}, tree {len(real_n)}"
+    )
     print(f"reach on neither side ({len(neither)}): agreement on these is not evidence")
     for c in neither:
         sb = b.get(c, {}).get("status")
@@ -256,7 +284,14 @@ def main() -> int:
     for c in names:
         rb, rn = b.get(c), n.get(c)
         if rb is None or rn is None:
-            diffs.append((c, "row", "missing" if rb is None else "present", "missing" if rn is None else "present"))
+            diffs.append(
+                (
+                    c,
+                    "row",
+                    "missing" if rb is None else "present",
+                    "missing" if rn is None else "present",
+                )
+            )
             continue
         for field in FIELDS:
             if rb.get(field) != rn.get(field):
@@ -264,7 +299,7 @@ def main() -> int:
     print()
     print(f"DIFFERENCES: {len({d[0] for d in diffs})} rows of {len(names)}, {len(diffs)} fields")
     if diffs:
-        print(f"| case | field | base | tree | expected |")
+        print("| case | field | base | tree | expected |")
         print("|---|---|---|---|---|")
     for c, field, vb, vn in diffs:
         why = next((w for g, w in expected if fnmatch.fnmatch(c, g)), None)
@@ -276,7 +311,9 @@ def main() -> int:
     flagged = [c for c in names if (b.get(c, {}).get("flags") or n.get(c, {}).get("flags"))]
     new_flags = 0
     print()
-    print(f"FLAGS (a plan against stepping the session, regardless of agreement): {len(flagged)} rows")
+    print(
+        f"FLAGS (a plan against stepping the session, regardless of agreement): {len(flagged)} rows"
+    )
     for c in flagged:
         fb = b.get(c, {}).get("flags") or []
         fn = n.get(c, {}).get("flags") or []
@@ -289,16 +326,26 @@ def main() -> int:
             print(f"      tree: {f}{'   <-- new' if f in only_new else ''}")
 
     # aborts, setup errors, timing
-    bad = [c for c in names if n.get(c, {}).get("status") in ("ABORT", "SETUP_ERROR") or b.get(c, {}).get("status") in ("ABORT", "SETUP_ERROR")]
+    bad = [
+        c
+        for c in names
+        if n.get(c, {}).get("status") in ("ABORT", "SETUP_ERROR")
+        or b.get(c, {}).get("status") in ("ABORT", "SETUP_ERROR")
+    ]
     if bad:
         print()
         print("ABORT / SETUP_ERROR rows")
         for c in bad:
-            print(f"  {c}  base: {b.get(c, {}).get('status')} {b.get(c, {}).get('reason')}  | tree: {n.get(c, {}).get('status')} {n.get(c, {}).get('reason')}")
+            print(
+                f"  {c}  base: {b.get(c, {}).get('status')} {b.get(c, {}).get('reason')}  | tree: {n.get(c, {}).get('status')} {n.get(c, {}).get('reason')}"
+            )
     slow = [
         (c, b[c].get("secs", 0), n[c].get("secs", 0))
         for c in names
-        if c in b and c in n and n[c].get("secs", 0) > 2 and n[c].get("secs", 0) > 2.5 * max(b[c].get("secs", 0), 0.2)
+        if c in b
+        and c in n
+        and n[c].get("secs", 0) > 2
+        and n[c].get("secs", 0) > 2.5 * max(b[c].get("secs", 0), 0.2)
     ]
     if slow:
         print()
@@ -307,10 +354,14 @@ def main() -> int:
             print(f"  {c}: base {sb} s, tree {sn} s")
     peak = max([r.get("peak_mb", 0) for r in list(b.values()) + list(n.values())] or [0])
     print()
-    print(f"peak memory of any row: {peak} MB; seconds, base {sum(r.get('secs', 0) for r in b.values()):.0f}, tree {sum(r.get('secs', 0) for r in n.values()):.0f}")
+    print(
+        f"peak memory of any row: {peak} MB; seconds, base {sum(r.get('secs', 0) for r in b.values()):.0f}, tree {sum(r.get('secs', 0) for r in n.values()):.0f}"
+    )
     print(f"result files: {outdir}")
     if unexplained or new_flags or bad:
-        print(f"HOLD: {unexplained} unexplained difference field(s), {new_flags} row(s) with a new flag, {len(bad)} abort/setup row(s)")
+        print(
+            f"HOLD: {unexplained} unexplained difference field(s), {new_flags} row(s) with a new flag, {len(bad)} abort/setup row(s)"
+        )
         return 1
     print("OK: no unexplained difference, no new flag")
     return 0

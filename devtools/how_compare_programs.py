@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,7 +50,6 @@ from pyrung import (  # noqa: E402
     Pulse,
     Rung,
     Timer,
-    calc,
     copy,
     latch,
     off_delay,
@@ -202,8 +202,18 @@ for _decl, _bench, _f in (
     ("40s", "60s", False),
     ("60s", "40s", False),
 ):
-    _add("midcount", f"mid/bench {_decl}->{_bench} after 8", mid_harness(_decl, 8, bench=_bench), fast=_f)
-_add("midcount", "mid/bench 5s->10s 300 scans earlier", mid_harness("5s", 8, bench="10s", bench_scans=300), fast=False)
+    _add(
+        "midcount",
+        f"mid/bench {_decl}->{_bench} after 8",
+        mid_harness(_decl, 8, bench=_bench),
+        fast=_f,
+    )
+_add(
+    "midcount",
+    "mid/bench 5s->10s 300 scans earlier",
+    mid_harness("5s", 8, bench="10s", bench_scans=300),
+    fast=False,
+)
 _add("midcount", "mid/alarm settled 5s->10s", mid_alarm("5s", "10s", 40), fast=False)
 _add("midcount", "mid/alarm settled 60s->5s", mid_alarm("60s", "5s", 40), fast=False)
 
@@ -415,7 +425,12 @@ def _soak(seconds):
 
 
 def _off_wait(minutes):
-    go, t1, idle, seen = Bool("LwGo", external=True), Timer.clone("LwT1"), Bool("LwIdle"), Bool("LwSeen")
+    go, t1, idle, seen = (
+        Bool("LwGo", external=True),
+        Timer.clone("LwT1"),
+        Bool("LwIdle"),
+        Bool("LwSeen"),
+    )
     with Program(strict=False) as prog:
         with Rung(go):
             off_delay(t1, minutes, "min")
@@ -428,9 +443,16 @@ def _off_wait(minutes):
 
 def _harness_delay(on, off=None):
     """The program waits on a harness coupling with a long delay."""
-    physical = Physical("Slow", on_delay=on, off_delay=off) if off else Physical("Slow", on_delay=on)
+    physical = (
+        Physical("Slow", on_delay=on, off_delay=off) if off else Physical("Slow", on_delay=on)
+    )
     fb = Bool("Fb", physical=physical, link="Enable")
-    enable, go, hit, t1 = Bool("Enable"), Bool("LwGo", external=True), Bool("LwHit"), Timer.clone("LwT1")
+    enable, go, hit, t1 = (
+        Bool("Enable"),
+        Bool("LwGo", external=True),
+        Bool("LwHit"),
+        Timer.clone("LwT1"),
+    )
     with Program(strict=False) as prog:
         with Rung(go):
             out(enable)
@@ -444,7 +466,12 @@ def _harness_delay(on, off=None):
 def _pulse(on_s, off_s):
     physical = Physical("Sensor", profile=Pulse(on_dwell=f"{on_s}s", off_dwell=f"{off_s}s"))
     fb = Bool("Fb", physical=physical, link="Enable")
-    enable, go, hit, t1 = Bool("Enable"), Bool("LwGo", external=True), Bool("LwHit"), Timer.clone("LwT1")
+    enable, go, hit, t1 = (
+        Bool("Enable"),
+        Bool("LwGo", external=True),
+        Bool("LwHit"),
+        Timer.clone("LwT1"),
+    )
     with Program(strict=False) as prog:
         with Rung(go):
             out(enable)
@@ -583,7 +610,11 @@ def _fixtures():
         aborted=(f_first.logic, f_first.ProcessStep, f_first.AT_TARGET),
         alarmed=(f_alarm.logic, f_alarm.ProcessStep, f_alarm.COMPLETE),
         guard_overwrite=(f_guard.logic, f_guard.SequenceState, f_guard.TARGET),
-        guard_intermediate=(f_intermediate.logic, f_intermediate.SequenceState, f_intermediate.COMPLETE),
+        guard_intermediate=(
+            f_intermediate.logic,
+            f_intermediate.SequenceState,
+            f_intermediate.COMPLETE,
+        ),
         parent_watchdog=(f_parent.logic, f_parent.SequenceState, f_parent.ADVANCED),
         repeated_landing=(f_repeated.logic, f_repeated.SequenceState, f_repeated.COMPLETE),
         same_landing=(f_same.logic, f_same.SequenceState, f_same.COMPLETE),
@@ -630,13 +661,20 @@ def _shape_case(make, *, warm, avoid=None, dt=0.010):
 
 ENTRY_CHECKS = (
     ("none", None, True),
-    ("get system", lambda: (lambda s: s.get(FAULT, False)), True),
-    ("idx system", lambda: (lambda s: s[FAULT]), True),
-    ("typo", lambda: (lambda s: s["Typo"]), False),
-    ("typo behind", lambda: (lambda s: s.get(FAULT) is None and s["Typo"]), False),
+    ("get system", lambda: lambda s: s.get(FAULT, False), True),
+    ("idx system", lambda: lambda s: s[FAULT], True),
+    ("typo", lambda: lambda s: s["Typo"], False),
+    ("typo behind", lambda: lambda s: s.get(FAULT) is None and s["Typo"], False),
 )
 
-_ENTRY_FIXTURES = ("route_adjacent", "route_field", "aborted", "alarmed", "guard_overwrite", "guard_intermediate")
+_ENTRY_FIXTURES = (
+    "route_adjacent",
+    "route_field",
+    "aborted",
+    "alarmed",
+    "guard_overwrite",
+    "guard_intermediate",
+)
 _ENTRY_SHAPES = (("s1", _s1), ("s5", _s5), ("first", _rt_first))
 _REACH_FIXTURES = (
     "parent_watchdog",
@@ -672,7 +710,8 @@ for _warm in (0, 1, 2):
                 "reach",
                 f"reach/{_key}/w{_warm}/{_label}",
                 _fixture_case(_key, warm=_warm, avoid=_avoid),
-                fast=(_warm == 0 and _label in ("none", "idx system")) or (_warm == 1 and _label == "none"),
+                fast=(_warm == 0 and _label in ("none", "idx system"))
+                or (_warm == 1 and _label == "none"),
             )
 
 
@@ -683,7 +722,11 @@ def _alarm_pressed():
     plc.force(mod.AtTarget, True)
     plc.step()
     name = mod.ProcessStep.name
-    return dict(plc=plc, targets=(mod.ProcessStep == mod.COMPLETE,), goal=lambda tags: tags.get(name) == mod.COMPLETE)
+    return dict(
+        plc=plc,
+        targets=(mod.ProcessStep == mod.COMPLETE,),
+        goal=lambda tags: tags.get(name) == mod.COMPLETE,
+    )
 
 
 _add("entry", "entry/alarmed-pressed/w1/none", _alarm_pressed)
@@ -692,10 +735,20 @@ _add("entry", "entry/alarmed-pressed/w1/none", _alarm_pressed)
 # --------------------------------------------------------------------------- reach: holds
 
 
-_add("holds", "holds/dwell", _plain(_dwell, goal=lambda t: (lambda tags: tags.get("HoldState") == 7)))
-_add("holds", "holds/armed release", _plain(lambda: _armed(True), goal=lambda t: (lambda tags: tags.get("St") == 7)))
-_add("holds", "holds/armed no release", _plain(lambda: _armed(False), goal=lambda t: (lambda tags: tags.get("St") == 7)))
-_add("holds", "holds/timer_hold", _plain(_timer_hold, warm=1, goal=lambda t: _tag_goal(t["target"])))
+_add("holds", "holds/dwell", _plain(_dwell, goal=lambda t: lambda tags: tags.get("HoldState") == 7))
+_add(
+    "holds",
+    "holds/armed release",
+    _plain(lambda: _armed(True), goal=lambda t: lambda tags: tags.get("St") == 7),
+)
+_add(
+    "holds",
+    "holds/armed no release",
+    _plain(lambda: _armed(False), goal=lambda t: lambda tags: tags.get("St") == 7),
+)
+_add(
+    "holds", "holds/timer_hold", _plain(_timer_hold, warm=1, goal=lambda t: _tag_goal(t["target"]))
+)
 _add(
     "holds",
     "holds/timer_hold dip",
@@ -705,7 +758,7 @@ _add(
 _add(
     "holds",
     "holds/dwell warmed 1",
-    _plain(_dwell, warm=1, goal=lambda t: (lambda tags: tags.get("HoldState") == 7)),
+    _plain(_dwell, warm=1, goal=lambda t: lambda tags: tags.get("HoldState") == 7),
     fast=False,
 )
 
@@ -773,35 +826,43 @@ def _avoid_on(make, goal_of, target_key, forms, *, warm=1):
 
 
 _DWELL_FORMS = (
-    ("idx never", lambda t: (lambda s: s["HoldState"] == 9999), True),
-    ("get never", lambda t: (lambda s: s.get("HoldState") == 9999), True),
+    ("idx never", lambda t: lambda s: s["HoldState"] == 9999, True),
+    ("get never", lambda t: lambda s: s.get("HoldState") == 9999, True),
     ("cond never", lambda t: t["state"] == 9999, True),
-    ("idx St8", lambda t: (lambda s: s["HoldState"] == 8), True),
-    ("get St8", lambda t: (lambda s: s.get("HoldState") == 8), True),
+    ("idx St8", lambda t: lambda s: s["HoldState"] == 8, True),
+    ("get St8", lambda t: lambda s: s.get("HoldState") == 8, True),
     ("cond St8", lambda t: t["state"] == 8, True),
-    ("idx St8+sensor", lambda t: (lambda s: s["HoldState"] == 8 and s["HoldSensor"]), False),
-    ("raises St8+sensor", lambda t: _raising_when(lambda s: s["HoldState"] == 8 and s["HoldSensor"]), True),
+    ("idx St8+sensor", lambda t: lambda s: s["HoldState"] == 8 and s["HoldSensor"], False),
+    (
+        "raises St8+sensor",
+        lambda t: _raising_when(lambda s: s["HoldState"] == 8 and s["HoldSensor"]),
+        True,
+    ),
     ("raises on a real scan", lambda t: _raising_when(lambda s: s["HoldState"] == 7), True),
-    ("hold-only raise", lambda t: (lambda s: 1 / (s["HoldRun_Acc"] - 10) > 5 if s["HoldSensor"] else False), False),
+    (
+        "hold-only raise",
+        lambda t: lambda s: 1 / (s["HoldRun_Acc"] - 10) > 5 if s["HoldSensor"] else False,
+        False,
+    ),
 )
 for _label, _form, _f in _DWELL_FORMS:
     _add(
         "avoid",
         f"avoid/dwell {_label}",
-        _avoid_on(_dwell, lambda t: (lambda tags: tags.get("HoldState") == 7), "target", None)(_form),
+        _avoid_on(_dwell, lambda t: lambda tags: tags.get("HoldState") == 7, "target", None)(_form),
         fast=_f,
     )
 
 _TH_FORMS = (
-    ("idx never", lambda t: (lambda s: s["Rn_Acc"] < 0), True),
-    ("get never", lambda t: (lambda s: s.get("Rn_Acc", 0) < 0), True),
+    ("idx never", lambda t: lambda s: s["Rn_Acc"] < 0, True),
+    ("get never", lambda t: lambda s: s.get("Rn_Acc", 0) < 0, True),
     ("cond never", lambda t: t["run"].Acc < 0, True),
-    ("idx past 1", lambda t: (lambda s: s["Rn_Acc"] > 1), True),
+    ("idx past 1", lambda t: lambda s: s["Rn_Acc"] > 1, True),
     ("cond past 1", lambda t: t["run"].Acc > 1, True),
     ("raises on a real scan", lambda t: _raising_when(lambda s: s["Rn_Acc"] >= 500), True),
     (
         "raises only with the hold laid on a start",
-        lambda t: (lambda s: 1000 / s["Rn_Acc"] > 1e9 if s["Speed"] > 3 else False),
+        lambda t: lambda s: 1000 / s["Rn_Acc"] > 1e9 if s["Speed"] > 3 else False,
         True,
     ),
 )
@@ -814,22 +875,35 @@ for _label, _form, _f in _TH_FORMS:
     )
 
 _ARMED_FORMS = (
-    ("idx never", lambda t: (lambda s: s["St"] == 9999), True),
-    ("get never", lambda t: (lambda s: s.get("St") == 9999), True),
+    ("idx never", lambda t: lambda s: s["St"] == 9999, True),
+    ("get never", lambda t: lambda s: s.get("St") == 9999, True),
     ("raises St8+sensor", lambda t: _raising_when(lambda s: s["St"] == 8 and s["Sensor"]), True),
 )
 for _label, _form, _f in _ARMED_FORMS:
     _add(
         "avoid",
         f"avoid/armed {_label}",
-        _avoid_on(lambda: _armed(True), lambda t: (lambda tags: tags.get("St") == 7), "target", None)(_form),
+        _avoid_on(lambda: _armed(True), lambda t: lambda tags: tags.get("St") == 7, "target", None)(
+            _form
+        ),
         fast=_f,
     )
 
 # --------------------------------------------------------------------------- long waits
 
 
-def _lw(name, make, *, dt=0.01, fast=True, wall=None, warm=1, goal_key="target", patch=None, harness=False):
+def _lw(
+    name,
+    make,
+    *,
+    dt=0.01,
+    fast=True,
+    wall=None,
+    warm=1,
+    goal_key="target",
+    patch=None,
+    harness=False,
+):
     _add(
         "longwait",
         name,
@@ -861,7 +935,11 @@ def _dwell_scaled(scale):
     def make():
         sensor = Bool("HoldSensor", external=True)
         stable_on, stable_off = Timer.clone("HoldStableOn"), Timer.clone("HoldStableOff")
-        on_wd, off_wd, run = Timer.clone("HoldOnWD"), Timer.clone("HoldOffWD"), Timer.clone("HoldRun")
+        on_wd, off_wd, run = (
+            Timer.clone("HoldOnWD"),
+            Timer.clone("HoldOffWD"),
+            Timer.clone("HoldRun"),
+        )
         state = Int("HoldState", default=6)
         with Program(strict=False) as prog:
             with Rung(state == 6, sensor):
@@ -892,7 +970,7 @@ def _soak_then(unit_value, unit):
         sensor = Bool("HoldSensor", external=True)
         state = Int("HoldState", default=6)
         prep = Timer.clone("LwPrep")
-        on_wd, off_wd, run = Timer.clone("HoldOnWD"), Timer.clone("HoldOffWD"), Timer.clone("HoldRun")
+        run = Timer.clone("HoldRun")
         with Program(strict=False) as prog:
             with Rung():
                 on_delay(prep, unit_value, unit)
@@ -1047,14 +1125,20 @@ def _comp_relational():
     prog, t = _two_ways()
     plc = PLC(prog, dt=0.01)
     plc.step()
-    return dict(plc=plc, targets=(t["level"] >= 5,), goal=lambda tags: (tags.get("Level") or 0) >= 5)
+    return dict(
+        plc=plc, targets=(t["level"] >= 5,), goal=lambda tags: (tags.get("Level") or 0) >= 5
+    )
 
 
 def _comp_timer_acc():
     prog, t = _free_timer(10, "s")
     plc = PLC(prog, dt=0.01)
     plc.step()
-    return dict(plc=plc, targets=(t["timer"].Acc >= 5000,), goal=lambda tags: (tags.get("LwT1_Acc") or 0) >= 5000)
+    return dict(
+        plc=plc,
+        targets=(t["timer"].Acc >= 5000,),
+        goal=lambda tags: (tags.get("LwT1_Acc") or 0) >= 5000,
+    )
 
 
 def _comp_dwell_and_sensor():

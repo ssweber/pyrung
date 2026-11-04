@@ -29,7 +29,9 @@ ap.add_argument("--full", action="store_true")
 ap.add_argument("--only", default="")
 ap.add_argument("--wall", type=float, default=20.0, help="how() wall_clock_s per row")
 ap.add_argument("--mem-mb", type=int, default=3000, help="process memory limit per worker")
-ap.add_argument("--step-cap", type=int, default=30000, help="most scans stepped for the independent check")
+ap.add_argument(
+    "--step-cap", type=int, default=30000, help="most scans stepped for the independent check"
+)
 ap.add_argument("--list", action="store_true")
 args = ap.parse_args()
 
@@ -41,7 +43,12 @@ import pyrung  # noqa: E402
 
 ORIGIN = os.path.abspath(pyrung.__file__)
 print("pyrung.__file__", ORIGIN, flush=True)
-if os.path.normcase(os.path.realpath(ORIGIN)).startswith(os.path.normcase(os.path.realpath(TREE_SRC))) is False:
+if (
+    os.path.normcase(os.path.realpath(ORIGIN)).startswith(
+        os.path.normcase(os.path.realpath(TREE_SRC))
+    )
+    is False
+):
     print(f"WRONG TREE: wanted {TREE_SRC}", flush=True)
     sys.exit(2)
 
@@ -83,7 +90,11 @@ def rss_mb() -> float:
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         k32.GetCurrentProcess.restype = wintypes.HANDLE
         psapi = ctypes.WinDLL("psapi", use_last_error=True)
-        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(Counters),
+            wintypes.DWORD,
+        ]
         if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
             return c.PagefileUsage / 1048576
         return 0.0
@@ -126,7 +137,12 @@ def watchdog():
             with LOCK:
                 if CURRENT["name"] == name:
                     DOC["rows"].append(
-                        {"case": name, "status": "ABORT", "reason": why, "secs": round(time.perf_counter() - CURRENT["started"], 1)}
+                        {
+                            "case": name,
+                            "status": "ABORT",
+                            "reason": why,
+                            "secs": round(time.perf_counter() - CURRENT["started"], 1),
+                        }
                     )
                     save()
             print(f"ABORT {name}: {why}", flush=True)
@@ -209,7 +225,9 @@ def run_row(case):
     reached = False
     if plan is not None:
         status = plan.status.name
-        inputs = (len(plan.changes) if plan.fork is not None else 0) + sum(len(step.inputs) for step in plan.journal)
+        inputs = (len(plan.changes) if plan.fork is not None else 0) + sum(
+            len(step.inputs) for step in plan.journal
+        )
         holds = sum(len(step.rungs) for step in plan.journal)
         row.update(
             status=status,
@@ -249,19 +267,28 @@ def run_row(case):
         # plan is longer than the stepping cap, there is nothing to compare it with.
         quiet = reached and row.get("inputs") == 0 and row.get("holds") == 0
         if beyond:
-            row["step_note"] = f"plan is {row['tip'] - row['session_scan']} scans, beyond the {cap}-scan stepping cap"
+            row["step_note"] = (
+                f"plan is {row['tip'] - row['session_scan']} scans, beyond the {cap}-scan stepping cap"
+            )
             quiet = False
         if reached and quiet and isinstance(hit, int) and hit != row["tip"]:
             flags.append(f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping reaches {hit}")
         elif reached and quiet and hit is None:
-            flags.append(f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping never reaches in {cap} scans")
+            flags.append(
+                f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping never reaches in {cap} scans"
+            )
         if reached and row.get("goal_at_tip") is False:
             flags.append("GOAL_FALSE_AT_TIP the plan's fork does not satisfy the goal")
         if reached and row.get("replay_equal") is False:
             flags.append("REPLAY_DIFFERS")
         if reached and row.get("stepped_equal") is False:
             flags.append("STEPPED_DIFFERS")
-        if plan is not None and not reached and isinstance(hit, int) and row["status"] in ("STOPPED", "CANNOT_REACH"):
+        if (
+            plan is not None
+            and not reached
+            and isinstance(hit, int)
+            and row["status"] in ("STOPPED", "CANNOT_REACH")
+        ):
             if row.get("inputs", 0) == 0:
                 flags.append(f"MISSED stepping reaches at scan {hit}, how() says {row['status']}")
         row["flags"] = flags
@@ -286,7 +313,12 @@ def main():
     print(f"{len(todo)} of {len(SELECTED)} cases to run", flush=True)
     for case in todo:
         wall = case.wall or args.wall
-        CURRENT.update(name=case.name, started=time.perf_counter(), deadline=time.perf_counter() + 3 * wall + 40, peak_mb=0.0)
+        CURRENT.update(
+            name=case.name,
+            started=time.perf_counter(),
+            deadline=time.perf_counter() + 3 * wall + 40,
+            peak_mb=0.0,
+        )
         row = run_row(case)
         row["peak_mb"] = round(max(CURRENT["peak_mb"], rss_mb()))
         with LOCK:

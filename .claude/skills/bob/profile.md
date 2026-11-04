@@ -51,14 +51,42 @@ sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
 
 ## Compare gate: `how()` and history changes
 
-A branch that moves `how()` (pilot planning, `core/analysis/pilot/`) or history (seek, scan log,
-checkpoints, `core/history.py`, `core/scan_log.py`) gets an old-vs-new answers compare, and the
-compare's program set must include programs with long waits (timers and dwells of minutes to
-hours, a drum step, a `Pulse` of 60 s), not only the corpus goldens. Two debugger blockers got
-past tumbler, the 215-answer corpus compare and lockstep, because none of them held a long wait
-(2026-11-03). Put it in the builder brief (build the long-wait programs, run the compare on the
-base and the branch) and the reviewer brief (check that the set has them), and in the gate list
-for the branch: `lint,tumbler,fold` at least. Bound every compare run (machine budget below).
+A branch that moves `how()` (pilot planning, `core/analysis/pilot/`), history (seek, scan log,
+checkpoints, `core/history.py`, `core/scan_log.py`), the harness or the state record
+(`core/state.py`, `core/runner.py` forks) gets an old-vs-new answers compare. The compare is
+one tool, `devtools/how_compare.py`, with one program set (`devtools/how_compare_programs.py`).
+Do not write a per-branch compare: two branches regressed `how()` on 2026-11-04 because the
+compares of the day had no entry-requirement program (avoid-fix) and never ran a timer
+mid-count under a held enable (triage), and the 215-answer corpus and tumbler hold neither.
+
+```
+python -I devtools/mergeq/mergeq.py run --timeout 1700 --     .venv/Scripts/python.exe devtools/how_compare.py --base dev --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
+```
+
+- `--base` is a git ref (exported with `git archive`) or a directory; `--tree` is a directory
+  with `src/`. Each side runs in its own process at below-normal priority with a memory limit
+  and a per-row time limit, and prints `pyrung.__file__`, which the tool checks.
+- Fast set (default): about 125 rows, 5 minutes a side. `--full`: about 280 rows, a quarter
+  hour or more; run it for a branch that moves the planner itself.
+- The groups: a timer mid-count under a held enable (with and without a harness, bench link
+  changed), entry-requirement programs warmed 0..2 scans, programs that really reach, long
+  waits (minutes, past 32.767 s), holds, two routes, every avoid form (condition, callable index,
+  `.get`, raising on a real scan), drums, goal already true, composite targets.
+- It prints: rows that differ (case, field, base, tree); how many rows REACHED on each side and
+  which reach on neither (agreement there is no evidence); FLAGS. A flag is a plan that disagrees
+  with stepping the session itself (no inputs, no holds, plan ends at scan S, stepping reaches at
+  S'), a goal false at the plan's tip, a replay or stepped replay that differs: flagged even when
+  old and new agree.
+- Exit 1 holds the train. Record every expected difference as `<glob on the case name>  # reason`
+  in `<home>/jobs/train<N>/how-compare-expected.txt` and pass `--expected`; anything not
+  matched holds the train until it is explained or fixed. The reasons go to the user at landing.
+- Add a program when a review finds a `how()` regression the set missed (same case name never
+  reused; mark it `fast=False` unless it is cheap), and say so in the ledger.
+
+The builder brief for a `how()`/history branch says: build the programs that show the change
+(long waits, a mid-count, an entry requirement) into `how_compare_programs.py`, run the tool on
+the base and the branch. The reviewer checks that the set has them. The gate list for the
+branch is `lint,tumbler,fold` at least. Bound every compare run (machine budget below).
 
 ## Models
 

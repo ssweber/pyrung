@@ -70,6 +70,11 @@ moved), so N branches would cost N full gates in series. Instead:
    expects that the other's model changes). Anything beyond a mechanical resolution (test
    expectations changed, code added) gets a fresh reviewer on the integration commits; the
    train may gate meanwhile, but lands only once that review is clean.
+   When the train holds a `how()`/history/harness/state change (profile.md "Compare gate"), run
+   the compare on the merged tree against the base before submitting: `devtools/how_compare.py`.
+   An answer that changes without a recorded reason holds the train; a plan that disagrees with
+   stepping the session holds it even when old and new agree. Expected differences go in
+   `<home>/jobs/train<N>/how-compare-expected.txt`; the reasons go to the user at landing.
 2. `M submit --id train<N> ... --stages train`, `M next` in the background. While a train
    gates, commit nothing to the base (docs, skill edits included): `land` refuses once the base
    moves, and the whole gate reruns. Hold such commits until the train lands.
