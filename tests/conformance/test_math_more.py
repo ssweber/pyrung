@@ -41,6 +41,7 @@ right after its op.
   16 bits (Result1 = 1 for 2, 2 for 0; ErrorCode bit 1 is SC40); DD 2 * 40000 is 80000 (1) or
   -51072 (2) (Result2); the same into a DF (Result3); 3000000000 / DD 1000 is 3000000 (1) or
   -1294967 (2) (Result4).
+
 ``hex_math`` (WORD only: ``numeric`` reads hex Math's store, not these):
 
 - ``shifts``: LSH on a DH: 0x8001 << 1 (Result1: 1 for 0x0002, the top bit gone; 2 for 0x0003, a
