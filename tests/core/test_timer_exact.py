@@ -7,7 +7,9 @@ what its arithmetic has to give, written from the rule and not from the code.
 
 Scans are numbered from 1, the first scan the rung is held (or, off-delay, the first it
 is false).  The generated code's first scan has no time behind it (its dt is the clock
-since boot, 0 here), so a count that starts on it lands one scan later.
+since boot, 0 here), so a count that starts on it lands one scan later.  A time drum's step
+is a scan later everywhere: the scan a drum's rung comes back takes no time, and that is the
+same first scan the generated code has none for.
 """
 
 from __future__ import annotations
@@ -75,6 +77,10 @@ MAX_SCANS = 6100
 
 def want(preset: int, unit: str, dt: str) -> int:
     return math.ceil(preset * UNIT_SECONDS[unit] / Fraction(dt))
+
+
+def want_of(kind: str, preset: int, unit: str, dt: str) -> int:
+    return want(preset, unit, dt) + (1 if kind == "drum" else 0)
 
 
 CROSS = [
@@ -207,7 +213,7 @@ def _generated_first(prog: Program, dt: str, scans: int) -> int:
 @pytest.mark.parametrize("row", CROSS, ids=_ids)
 def test_the_interpreter_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
     preset, unit, dt = row
-    expect = want(preset, unit, dt)
+    expect = want_of(kind, preset, unit, dt)
     assert _step_interpreter(PROGRAMS[kind](preset, unit), float(dt), expect + 3) == expect
 
 
@@ -215,7 +221,7 @@ def test_the_interpreter_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> N
 @pytest.mark.parametrize("row", CROSS, ids=_ids)
 def test_the_kernel_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
     preset, unit, dt = row
-    expect = want(preset, unit, dt)
+    expect = want_of(kind, preset, unit, dt)
     assert _step_kernel(PROGRAMS[kind](preset, unit), float(dt), expect + 3) == expect
 
 
@@ -223,10 +229,11 @@ def test_the_kernel_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
 @pytest.mark.parametrize("row", CROSS, ids=_ids)
 def test_the_generated_code_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
     preset, unit, dt = row
-    expect = want(preset, unit, dt)
+    expect = want_of(kind, preset, unit, dt)
     # One later: its first scan has no time behind it (module docstring).  The off-delay's
-    # first scan is the one its rung is true on, so it times all of them.
-    late = 0 if kind == "off" else 1
+    # first scan is the one its rung is true on, so it times all of them; a drum takes no time
+    # on that scan in any engine.
+    late = 1 if kind == "on" else 0
     assert _generated_first(PROGRAMS[kind](preset, unit), dt, expect + 4) == expect + late
 
 
@@ -259,7 +266,7 @@ def _assert_same(ran: PLC, stepped: PLC) -> None:
 def test_a_long_run_equals_stepping(kind: str, row: tuple[int, str, str]) -> None:
     """Whole state and scan count, in the loop, across the scan the timer ends on."""
     preset, unit, dt = row
-    expect = want(preset, unit, dt)
+    expect = want_of(kind, preset, unit, dt)
     scans = expect + 60
     prog = PROGRAMS[kind](preset, unit)
     ran = PLC(prog, dt=float(dt))
@@ -284,7 +291,7 @@ def test_run_for_past_the_interpreted_prefix_equals_stepping(
     kind: str, preset: int, unit: str, dt: str
 ) -> None:
     """At the production settings, the timer ending well past the interpreted prefix."""
-    expect = want(preset, unit, dt)
+    expect = want_of(kind, preset, unit, dt)
     assert expect > compiled_run.INTERPRETED_PREFIX + scan_trace.MIN_RUN_SCANS
     prog = PROGRAMS[kind](preset, unit)
     ran = PLC(prog, dt=float(dt))

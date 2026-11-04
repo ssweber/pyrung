@@ -473,7 +473,7 @@ def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, mo
 
 
 def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) -> None:
-    results = [replace(r, case_hash="h") for r in run(suite.groups("O"))]
+    results = [replace(r, case_hash="h") for g in suite.groups("O") for r in run(g)]
     assert results
     assert all(r.passed and asks_for_a_reading(r.case) for r in results)
     confirmed, readings = tmp_path / "confirmed.toml", tmp_path / "readings.toml"
@@ -491,7 +491,7 @@ def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) 
 
 
 def test_a_pass_of_part_n_is_confirmed(tmp_path) -> None:
-    results = [replace(r, case_hash="h") for r in run(suite.groups("N"))]
+    results = [replace(r, case_hash="h") for g in suite.groups("N") for r in run(g)]
     added, _dropped, read = record_run(
         tmp_path / "confirmed.toml", tmp_path / "readings.toml", results, on="2026-11-04"
     )
