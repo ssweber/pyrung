@@ -22,6 +22,7 @@ from pyrung.core import (
     out,
     udt,
 )
+from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.harness import _parse_link_spec, format_link_spec, link_problem
 from pyrung.core.physical import Approach, Physical, Pulse, Ramp
 from pyrung.core.synthesis import plant_timer
@@ -772,6 +773,81 @@ class TestALinkChangedAcrossUnits:
         ran.run(100)
         assert _whole_state(ran)[2:] == _whole_state(stepped)[2:]
         assert _fb(stepped, Fb) is False
+
+
+class TestHowAroundALinkChange:
+    """how() and the replay it reads take the scans before a change as they ran."""
+
+    @staticmethod
+    def _program(on_delay: str):
+        En = Bool("En", default=True)
+        Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
+        Alarm = Bool("Alarm")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(En, ~Fb):
+                latch(Alarm)
+        plc = PLC(logic, dt=0.25)
+        Harness(plc).install()
+        plc.run(4)
+        return plc, Alarm
+
+    @staticmethod
+    def _relink(plc, on_delay: str) -> None:
+        plc._harness.set_overrides(
+            {"Fb": Coupling("En", "Fb", Physical("S", on_delay=on_delay), None)}
+        )
+
+    @pytest.mark.parametrize(
+        ("first", "then"), [("5s", "10s"), ("40s", "5s"), ("5s", "40s"), ("60s", "40s")]
+    )
+    def test_a_scan_before_the_change_replays_on_the_plant_it_ran(self, first, then):
+        plc, _Alarm = self._program(first)
+        scan = plc.current_state.scan_id
+        self._relink(plc, then)
+
+        projection = plc._replay_rung_write_projection_at(scan)
+
+        assert projection.exit_tags["Fb"] is True
+        assert projection.exit_tags["Alarm"] is False
+
+    @pytest.mark.parametrize(
+        ("first", "then"),
+        [
+            ("5s", "5s"),
+            ("10s", "5s"),
+            ("32s", "5s"),
+            ("40s", "5s"),
+            ("60s", "5s"),
+            ("60s", "40s"),
+            ("5s", "10s"),
+            ("5s", "20s"),
+            ("10s", "20s"),
+            ("5s", "32s"),
+            ("5s", "40s"),
+            ("5s", "60s"),
+            ("40s", "60s"),
+        ],
+    )
+    def test_how_answers_under_a_changed_link(self, first, then):
+        plc, Alarm = self._program(first)
+        self._relink(plc, then)
+
+        plan = plc.how(Alarm, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+
+    def test_how_answers_when_the_scan_it_starts_from_made_the_target(self):
+        plc, Alarm = self._program("5s")
+        self._relink(plc, "10s")
+        plc.step()
+        assert plc.current_state.tags["Alarm"] is True
+
+        plan = plc.how(Alarm, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == 0
 
 
 class TestPlantOnASlotOnlyAPointerReaches:

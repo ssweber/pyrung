@@ -3025,6 +3025,20 @@ class PLC:
                 return plant
         return None
 
+    def _run_on_the_plant_of_the_scan_after(self, scan_id: int, replay: PLC) -> None:
+        """Give *replay*, positioned at *scan_id*, the plant its next scan ran under."""
+        earlier_plant = self._earlier_plant_at(scan_id)
+        if earlier_plant is None:
+            return
+        if replay._synthesis is None:
+            from pyrung.core.synthesis import Synthesis
+
+            replay._synthesis = Synthesis()
+        replay._synthesis.plant = list(earlier_plant)
+        if replay._harness is not None:
+            # Today's couplings do not describe these rungs.
+            replay._harness._detach()
+
     def _plant_tag_defaults(self) -> dict[str, Any]:
         """Each tag the synthesis plant uses, at its default.
 
@@ -3295,16 +3309,7 @@ class PLC:
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
         replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
         self._copy_current_synthesis_onto(replay)
-        earlier_plant = self._earlier_plant_at(anchor_scan_id)
-        if earlier_plant is not None:
-            if replay._synthesis is None:
-                from pyrung.core.synthesis import Synthesis
-
-                replay._synthesis = Synthesis()
-            replay._synthesis.plant = list(earlier_plant)
-            if replay._harness is not None:
-                # Today's couplings do not describe these rungs.
-                replay._harness._detach()
+        self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
@@ -3658,6 +3663,7 @@ class PLC:
                 forces=self._replay_force_map_at_scan(prev_scan, log),
                 replay_mode=True,
             )
+            self._run_on_the_plant_of_the_scan_after(prev_scan, replay)
         else:
             # ``target`` is the first reconstructable scan — nothing before it to
             # replay to; build the fork directly at the anchor.
