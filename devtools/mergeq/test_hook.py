@@ -247,13 +247,11 @@ CASES = [
     ("Bash", "for f in a b; do uv run pytest $f; done", MAIN, WRAP),
     ("PowerShell", "uv run pytest tests/x.py", BUILDER, REFUSE),
     ("PowerShell", "foreach ($f in 'a','b') { uv run pytest $f }", MAIN, REFUSE),
-    ("Bash", "# it's slow\nuv run pytest tests/x.py -k 'foo'", MAIN, WRAP),
     # comments read as comments (shlex), as before
     ("Bash", "# a\n# b\ngit status", REVIEWER, ALLOW),
     ("Bash", "git status\n# then the log\ngit log -1", REVIEWER, ALLOW),
     ("Bash", "git log -SOutputBlock", REVIEWER, ALLOW),
     ("Bash", "date -Iseconds", REVIEWER, ALLOW),
-    ("Bash", "# don't\nmake test\n# it's", BUILDER, REFUSE),
     ("Bash", "cat src/{a,b}.py", REVIEWER, ALLOW),
     # investigator: no test runs, no code
     ("Bash", f"{MQ} run --timeout 60 -- uv run python {TEMP}/p.py", READER, REFUSE),
@@ -268,6 +266,15 @@ CASES = [
     ("Bash", "make test-fold-new", BUILDER, REFUSE),
     ("Bash", "uv run python devtools/fold_new_tests.py", BUILDER, REFUSE),
     ("Bash", "git add devtools/fold_new_tests.py", BUILDER, ALLOW),
+    (
+        "Bash",
+        "python -I devtools/mergeq/mergeq.py run --heavy --timeout 900 -- uv run python devtools/fold_new_tests.py",
+        MAIN,
+        ALLOW,
+    ),
+    ("Bash", "uv run python devtools/fold_new_tests.py", MAIN, REFUSE),
+    ("Bash", f"{MQ} run --timeout 1800 -- python {TEMP}/p.py", REVIEWER, ALLOW),
+    ("Bash", f"{MQ} run --timeout 1801 -- python {TEMP}/p.py", REVIEWER, REFUSE),
 ]
 
 

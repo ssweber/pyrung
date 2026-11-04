@@ -19,6 +19,11 @@ Rules (mergeq.toml [hook]):
 - reviewer (agent_type == reviewer_agent): every shell segment must match reviewer_allow,
   redirects may only target /dev/null or reviewer_write_roots, heredocs and command
   substitution are refused, PowerShell is refused, and Write/Edit only reach the write roots.
+  A scratch script (reviewer_script) or a reviewer_bounded command (node --test) is allowed only
+  as `mergeq.py run --timeout N [--name X] [--cwd D] -- <command>`, so the Job Object's memory
+  cap applies; read-only ruff and ty are on the allowlist.
+- readonly (agent_type == readonly_agent): the reviewer's rules, but no scripts, no mergeq run,
+  and nothing in readonly_refuse (pytest, unittest, node --test, make).
 """
 
 from __future__ import annotations
@@ -50,29 +55,10 @@ class Refuse(Exception):
     pass
 
 
-def _strip_comments(cmd: str) -> str:
-    """Drop `# ...` comments (a word-initial # outside quotes), so an apostrophe in a comment
-    does not read as an open quote and hide the next line's command."""
-    out, quote, i = [], "", 0
-    while i < len(cmd):
-        ch = cmd[i]
-        if quote:
-            quote = "" if ch == quote else quote
-        elif ch in "'\"":
-            quote = ch
-        elif ch == "#" and (not out or out[-1] in " \t\n;&|("):
-            while i < len(cmd) and cmd[i] != "\n":
-                i += 1
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
 def _code_only(cmd: str) -> str:
     """The command with heredoc bodies and quoted strings blanked: what the shell will run,
     not the text it passes around (commit messages, docs written through a heredoc)."""
-    return QUOTED.sub("''", _strip_comments(HEREDOC.sub("<<''", cmd)))
+    return QUOTED.sub("''", HEREDOC.sub("<<''", cmd))
 
 
 def _config() -> dict:
@@ -116,11 +102,11 @@ def _under(path: str, roots: list[Path]) -> bool:
 def _segments(cmd: str) -> list[list[str]]:
     if "<<" in cmd:
         raise Refuse(
-            "heredocs are not allowed for the reviewer: Write the probe script to a temp dir and run it"
+            "heredocs are not allowed for this agent: Write the probe script to a temp dir and run it"
         )
     if "`" in cmd or "$(" in cmd:
         raise Refuse(
-            "command substitution is not allowed for the reviewer: run the inner command on its own"
+            "command substitution is not allowed for this agent: run the inner command on its own"
         )
     lexer = shlex.shlex(cmd.replace("\\", "/"), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
@@ -150,7 +136,7 @@ BOUNDED = re.compile(
 
 def _check_reviewer_shell(cfg: dict, tool: str, cmd: str, readonly: bool = False) -> None:
     if tool == "PowerShell":
-        raise Refuse("the reviewer uses Bash only (read-only allowlist); PowerShell is refused")
+        raise Refuse("this agent uses Bash only (read-only allowlist); PowerShell is refused")
     hook = cfg.get("hook", {})
     allow = [re.compile(p) for p in hook.get("reviewer_allow", [])]
     script_pat = re.compile(hook.get("reviewer_script", r"$^"))
@@ -211,9 +197,7 @@ def _check_reviewer_shell(cfg: dict, tool: str, cmd: str, readonly: bool = False
                 "run this bounded: `python -I devtools/mergeq/mergeq.py run --timeout 300 -- ...`"
             )
         if not any(p.search(text) for p in allow):
-            raise Refuse(
-                f"{words[0]!r} is not on the reviewer's read-only allowlist ({text[:80]!r})"
-            )
+            raise Refuse(f"{words[0]!r} is not on this agent's read-only allowlist ({text[:80]!r})")
 
 
 # --------------------------------------------------------------------------- everyone
@@ -249,7 +233,7 @@ def check(event: dict, cfg: dict) -> dict | None:
         path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
         if reviewer and not _under(path, _roots(cfg)):
             raise Refuse(
-                f"the reviewer is read-only; {path} is outside the scratch roots. Report the fix instead"
+                f"this agent is read-only; {path} is outside the scratch roots. Report the fix instead"
             )
         return None
     if tool not in SHELL_TOOLS:

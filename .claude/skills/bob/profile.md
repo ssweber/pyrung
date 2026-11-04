@@ -9,8 +9,8 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
   landing (user, 2026-10-30); never push bob/* branches or main.
 - Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
   (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
-- Current arc doc: `scratchpad/conformance_review/BOB-HANDOFF.md` (FINDINGS.md, DESIGN.md,
-  ROUND2.md beside it; some untracked, so give builders absolute main-checkout paths).
+- Current arc doc: `scratchpad/win-back/HANDOFF.md` (untracked, so give builders the absolute
+  main-checkout path).
 
 ## Correctness contract (put in every builder and reviewer brief)
 
@@ -87,7 +87,8 @@ for the branch: `lint,tumbler,fold` at least. Bound every compare run (machine b
   tests, spawn `bob-investigator` (read-only: no tests, no scripts) instead of a reviewer.
 - A branch that adds a test file gets it checked under `--fold-check` by the `fold-new` stage in
   `fast`, `default` and `heavy` (before `test`), so the file does not first meet lockstep in the
-  full `fold` stage. Builders run `pytest --fold-check <new file>` themselves.
+  full `fold` stage. Builders run `pytest --fold-check --fold-check-allow-vacuous <new file>` themselves (the flag
+  judges mismatches only, as the stage does).
 - Any run that exercises pilot or the prover, scratch scripts included, has a memory and time bound
   (user, 2026-11-02: an unbounded one can OOM the machine). Run it through
   `mergeq.py run --timeout N`, whose Job Object applies `job_memory_mb`. pytest also has its own

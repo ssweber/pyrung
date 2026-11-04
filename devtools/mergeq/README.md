@@ -21,7 +21,7 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
 | `next` | run the oldest job: merge onto the base in a scratch worktree, `install`, then stages cheapest first under the heavy lock, stop at the first failure. One job per call: launch it in the background to be notified. Exit 0 pass, 1 fail, 2 conflict (`conflict_branch` names it), 3 empty, 4 error |
 | `land --id X` | fast-forward the base to `refs/mergeq/X`, the exact merge that passed. Refuses if the base or a branch moved since the test, or the main checkout has tracked changes on the base |
 | `status` / `cancel --id X` | queue state and the lock; cancel kills a running job's process trees and cleans up. The runner's pid file also records its creation time: a stale file (process gone, or the pid reused after a reboot) is reported and removed, and kills nothing |
-| `run [--heavy] [--timeout S] [--name N] -- CMD` | run CMD as a kill-on-close process group (Windows Job Object; process group elsewhere). `--heavy` waits for and holds the machine-wide lock. Exit = CMD's, 124 timeout, 125 lock wait expired |
+| `run [--heavy] [--timeout S] [--name N] [--cwd D] -- CMD` | run CMD as a kill-on-close process group (Windows Job Object; process group elsewhere). `--heavy` waits for and holds the machine-wide lock. Exit = CMD's, 124 timeout, 125 lock wait expired |
 | `ps [--all]` | mergeq-run groups (runner pid, process count, peak memory, cwd); `--all` adds test processes mergeq did not start |
 | `reap --name PREFIX` / `reap --unmanaged [--match RE] [--dry-run]` | kill every group whose name starts with PREFIX / stray processes under the repo or worktrees (language servers excluded) |
 | `lock status` | free, or who holds it |
@@ -60,7 +60,7 @@ Files: `mergeq.py` (the tool), `hook.py` (PreToolUse guard), `test_hook.py`,
     reviewer's rules minus scripts, `mergeq run` and anything in `readonly_refuse` (pytest,
     unittest, node --test, make). For investigations that must not run tests;
   - matches heavy/timeout patterns on the command with heredoc bodies and quoted strings
-    blanked (and comments dropped), so commit messages and docs written through a heredoc don't trip it;
+    blanked, so commit messages and docs written through a heredoc don't trip it;
   - fails closed: if the hook breaks, shell calls are refused with the error (the main
     session's Edit tool is never blocked, so it can be repaired).
   `test_hook.py` pins the decisions on recorded payloads.
