@@ -980,6 +980,28 @@ def _new_epoch_ref() -> EpochRef:
     return EpochRef(next(_EPOCH_REFERENCE_VALUES))
 
 
+class AvoidCheckError(Exception):
+    """An ``avoid=`` check raised on a real state: where how() starts, or a scan a trial ran.
+
+    A check that raised did not say the state is clear, so how() does not go through it,
+    and it proved nothing about the target.  So there is no plan to return, and the check's
+    own exception is the ``__cause__``.  A raise on a state how() is only weighing, such as
+    a hold laid over a state, is not this error.
+    """
+
+    def __init__(self, check: str, error: Exception) -> None:
+        super().__init__(
+            f"avoid check {check!r} raised {type(error).__name__}: {error}. "
+            "That was on the state how() starts from or on a scan a trial ran, which may be a "
+            "trial the plan would not have kept. A raise is no answer, so how() stopped without "
+            "a plan. "
+            "A callable reads a tag a state may not have yet with snapshot.get(name, default). "
+            "A condition compares what it finds, so check each tag it names is in the program "
+            "and the two sides can be compared."
+        )
+        self.check = check
+
+
 class SearchStopped(Exception):
     """A how() world stopped itself, and its next scan would restart it.
 
@@ -2544,7 +2566,10 @@ class PLC:
         settles back to rest).  A path is excluded if it depends on the avoided
         condition at *any* of these three gates, and if every path is excluded
         the returned Path is unreachable with a reason that names the violated
-        avoid condition(s).
+        avoid condition(s).  A check that raises on the state how() starts from, or
+        on a scan a trial runs, raises ``AvoidCheckError`` here, since it has not
+        said that state is clear.  A raise on a state how() is only weighing, such
+        as a hold laid over a state, says nothing about the route and denies nothing.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a

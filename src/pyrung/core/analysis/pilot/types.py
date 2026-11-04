@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrsistent import PVector, pvector
 
 import pyrung.core.analysis.pilot.world as _world
+from pyrung.core.analysis.pilot.avoid import _member_on_scan, _member_weighed
 from pyrung.core.analysis.pilot.budget import SearchBudget, WallClock
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
@@ -85,13 +86,6 @@ class RevisitCredential:
 # ---------------------------------------------------------------------------
 
 
-def _avoid_member_true(pred: Callable[[dict[str, Any]], bool], state: dict[str, Any]) -> bool:
-    try:
-        return bool(pred(state))
-    except Exception:
-        return False
-
-
 @dataclass(frozen=True)
 class _AvoidMember:
     """One avoided snapshot condition and, when it has one, its runtime Condition."""
@@ -120,21 +114,25 @@ class _AvoidPredicate:
     members: tuple[_AvoidMember, ...]
 
     def __call__(self, state: dict[str, Any]) -> bool:
-        return any(_avoid_member_true(m.pred, state) for m in self.members)
+        return any(_member_on_scan(m.name, m.pred, state) for m in self.members)
 
     def violated(self, state: dict[str, Any]) -> tuple[str, ...]:
-        return tuple(m.name for m in self.members if _avoid_member_true(m.pred, state))
+        return tuple(m.name for m in self.members if _member_on_scan(m.name, m.pred, state))
 
     def violated_after_clear(
         self,
         start: dict[str, Any],
         state: dict[str, Any],
     ) -> tuple[str, ...]:
-        """Members clear at trial start that are true in a later observation."""
+        """Members clear at trial start that are true on a scan the trial ran.
+
+        The start may be the state behind how()'s start, so it is only weighed.
+        """
         return tuple(
             member.name
             for member in self.members
-            if not _avoid_member_true(member.pred, start) and _avoid_member_true(member.pred, state)
+            if not _member_weighed(member.pred, start)
+            and _member_on_scan(member.name, member.pred, state)
         )
 
     @property

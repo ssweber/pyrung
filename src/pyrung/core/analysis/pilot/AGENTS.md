@@ -232,6 +232,17 @@ record runs (past `MAX_RECORD_RUNS` a stretch's scans settle when asked, or a na
 past `SETTLE_SCAN_LIMIT`). What ends a search from under a question is a BaseException
 (`SearchOutOfTime`, `SearchOutOfMemory`, `SearchQuestionRefused`), so the `except Exception`
 around causal reads means only "no evidence" and cannot turn one of those into a verdict.
+An avoid check that raises on a real state travels the same way (`_AvoidCheckRaised`, from
+`avoid.py`), and `api.py` names it `AvoidCheckError` for the caller. A real state is the one
+how() starts from or a scan a trial really ran, failed trials included: a check that raised on
+one has not said it is clear, so no gate may read it as a pass. Any other state is only weighed,
+and a raise on it says nothing about the route: a hold or a route's demands laid over a state,
+the resting baseline, the state a trial stands on before it scans, which may be the one behind
+how()'s start when a plan rewinds and re-runs the entry scan. That member is not violated, the
+others keep their answers, and the gates judge the scans those choices lead to. Evaluate avoid
+through `avoid.py`, not by calling it, and pick by the state you hold: `_avoid_scan_names` and
+`_member_on_scan` for a real state, `_avoid_weighed_names`, `_member_weighed` and what is built
+on them (`_avoid_violations`, `route_forces`) for the rest.
 
 ## Attempt transaction
 
