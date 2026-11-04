@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import pickle
+from enum import Enum
 from typing import Any
 
 import pytest
@@ -136,6 +137,17 @@ def test_the_state_and_map_say_they_are_the_real_ones() -> None:
     assert _traced_call(lambda s: isinstance(s.tags, PMap), plc)[0] is True
 
 
+class _Key(str, Enum):
+    ACC = ACC
+
+
+def test_a_key_of_a_str_subclass_is_recorded_by_its_value() -> None:
+    plc = _plc()
+    # By its value: str(_Key.ACC) is a name no tag has, and the coast watches str(read).
+    assert {str(name) for name in _traced_call(lambda s: s.tags[_Key.ACC], plc)[1]} == {ACC}
+    assert {str(name) for name in _traced_call(lambda s: _Key.ACC in s.tags, plc)[1]} == {ACC}
+
+
 def test_a_read_of_plc_state_instead_of_the_argument_is_recorded() -> None:
     plc = _plc()
     _hit, reads = _traced_call(lambda _s: plc.state.tags["Lamp"], plc)
@@ -205,6 +217,7 @@ def test_a_predicate_reading_plc_state_stays_in_the_loop() -> None:
         pytest.param(lambda s: s.get("timestamp") >= 7.77, id="timestamp get"),
         pytest.param(lambda s: dict(s)["scan_id"] >= 777, id="as a dict"),
         pytest.param(lambda s: s.tags[ACC] >= 20, id="an accumulator"),
+        pytest.param(lambda s: s.tags[_Key.ACC] >= 20, id="a key of a str subclass"),
         pytest.param(lambda s: dict(s.items())["tags"][ACC] >= 20, id="items"),
         pytest.param(lambda s: s.tags.set("z", 1)[ACC] >= 20, id="map set"),
         pytest.param(lambda s: s.tags.update({"z": 1})[ACC] >= 20, id="map update"),

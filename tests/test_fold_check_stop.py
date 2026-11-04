@@ -8,6 +8,7 @@ import sys
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -76,18 +77,17 @@ def test_the_twin_is_asked_on_the_plain_state() -> None:
         )
 
 
-def test_a_predicate_naming_a_module_is_asked() -> None:
+def test_a_predicate_naming_a_module_is_not_asked() -> None:
+    # A module is shared with the run, so a twin's ask could move what the run reads.
     plc = _plc()
-    with (
-        fold_check.deliberate(),
-        pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
-    ):
-        fold_check._checked(
-            "run_until",
-            plc,
-            _stepper(plc, 9),
-            lambda s: threading.active_count() > 0 and s.tags["N"] >= 5,
-        )
+    before = fold_check.STATS["predicate skipped: not copyable"]
+    fold_check._checked(
+        "run_until",
+        plc,
+        _stepper(plc, 9),
+        lambda s: threading.active_count() > 0 and s.tags["N"] >= 5,
+    )
+    assert fold_check.STATS["predicate skipped: not copyable"] == before + 1
 
 
 def test_a_predicate_naming_a_timer_is_asked() -> None:
@@ -139,41 +139,97 @@ def _timing_plc(name: str) -> tuple[PLC, str]:
     return plc, timer.Acc.name
 
 
-def test_a_predicate_judged_on_executed_scans_is_let_off_between_them(installed) -> None:
+def _opaque(pred: Any) -> SimpleNamespace:
+    return SimpleNamespace(name="opaque", pred=pred, tags=(), condition=None)
+
+
+def _seek(plc: PLC, *members: Any, budget: int = 5_000) -> None:
+    """A real seek for a target that never comes, with these ``avoid=`` members armed."""
     import pyrung.core.analysis.pilot.coast as pilot_coast
 
+    session = pilot_coast.CoastSession(plc)
+    session.arm_avoid(SimpleNamespace(members=members))
+    session.seek(
+        [pilot_coast.predicate_trigger("target", pilot_coast.TARGET, lambda _s: False)],
+        budget=budget,
+    )
+
+
+def test_an_opaque_avoid_is_let_off_between_the_scans_it_is_judged_on(installed) -> None:
     fold_check.install()
     plc, acc = _timing_plc("LetOffT")
     before = fold_check.STATS["predicate let off: true between the scans it is judged on"]
-
-    def predicate(s: Any) -> bool:
-        with pilot_coast._reads_untraced():
-            return s.tags[acc] == 20
-
-    assert installed.coast_until(plc, predicate, budget=5_000) is False
+    _seek(plc, _opaque(lambda snap: snap.get(acc) == 20))
     assert plc.state.scan_id == 5_001
     assert (
         fold_check.STATS["predicate let off: true between the scans it is judged on"] == before + 1
     )
 
 
-def test_a_predicate_is_only_let_off_on_a_scan_that_asked_past_the_trace(installed) -> None:
-    import pyrung.core.analysis.pilot.coast as pilot_coast
+@pytest.mark.parametrize(
+    "opaque_says",
+    [
+        pytest.param(lambda _acc: False, id="false"),
+        pytest.param(lambda acc: acc is not None and acc >= 10, id="true first"),
+    ],
+)
+def test_an_opaque_avoid_lets_no_other_member_off(
+    installed, monkeypatch: pytest.MonkeyPatch, opaque_says: Any
+) -> None:
+    # The trace misreads, so the compiled member's stop is run past in a stretch.  The opaque
+    # member beside it answers for itself only, whatever it says on that scan.
+    fold_check.install()
+    timer = Timer.clone("BesideT")
+    run = Bool("Run")
+    with Program() as prog:
+        with Rung(run):
+            on_delay(timer, 30, "s")
+    plc = PLC(prog, dt=0.01)
+    plc.patch({run: True})
+    plc.step()
+    acc = timer.Acc.name
+    compiled = SimpleNamespace(
+        name="compiled",
+        pred=lambda snap: snap.get(acc) == 20,
+        tags=(acc,),
+        condition=timer.Acc == 20,
+    )
+    monkeypatch.setattr(
+        read_trace._TracedTags,
+        "__getitem__",
+        lambda self, key: False if read_trace._READ_TRACES else self._untraced[key],
+    )
+    monkeypatch.setattr(read_trace._TracedTags, "__contains__", lambda self, key: key in self._untraced)
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 2000, folded run stopped"),
+    ):
+        _seek(plc, _opaque(lambda snap: opaque_says(snap.get(acc))), compiled)
 
+
+def test_an_opaque_avoid_is_held_to_the_scans_the_coast_executes(installed, monkeypatch) -> None:
+    def ignores_it(plc, _predicate, *, budget, on_kernel_scan, **_kwargs):
+        for _ in range(budget):
+            plc.step()
+            on_kernel_scan(plc.state.scan_id)
+        return False
+
+    monkeypatch.setattr(installed, "coast_until", ignores_it)
     fold_check.install()
     plc = _plc()
-
-    def predicate(s: Any) -> bool:
-        if s.tags["N"] < 3:
-            with pilot_coast._reads_untraced():
-                return False
-        return s.tags["N"] >= 5
-
     with (
         fold_check.deliberate(),
         pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
     ):
-        fold_check._checked("run_until", plc, _stepper(plc, 9), predicate)
+        _seek(plc, _opaque(lambda snap: snap.get("N", 0) >= 5), budget=9)
+
+
+def test_a_coast_may_stop_short_on_an_opaque_avoid(installed) -> None:
+    fold_check.install()
+    plc = _plc()
+    _seek(plc, _opaque(lambda snap: snap.get("N", 0) >= 5))
+    assert plc.state.tags["N"] >= 5
+    assert plc.state.scan_id < 5_000
 
 
 def test_a_stop_on_the_first_true_scan_passes() -> None:
@@ -197,7 +253,7 @@ def installed(monkeypatch: pytest.MonkeyPatch):
     for mod, name in (
         (coast_run, "coast_until"),
         (pilot_coast, "coast_until"),
-        (pilot_coast, "_reads_untraced"),
+        (pilot_coast.CoastSession, "arm_avoid"),
         (compiled_run, "run_scans"),
         (compiled_run, "INTERPRETED_PREFIX"),
         (scan_trace, "MIN_RUN_SCANS"),

@@ -125,6 +125,11 @@ def _whole_map_read(name: str) -> Any:
     return property(get)
 
 
+def _key_read(key: Any) -> Any:
+    """The name a key reads, whatever a ``str`` subclass says it is when printed."""
+    return str.__str__(key) if isinstance(key, str) else key
+
+
 class _TracedTags(PMap):
     """A tag map that records which keys are read while a trace is active.
 
@@ -143,12 +148,12 @@ class _TracedTags(PMap):
 
     def __getitem__(self, key: Any) -> Any:
         if _READ_TRACES:
-            _READ_TRACES[-1].add(key)
+            _READ_TRACES[-1].add(_key_read(key))
         return self._untraced[key]
 
     def __contains__(self, key: Any) -> bool:
         if _READ_TRACES:
-            _READ_TRACES[-1].add(key)
+            _READ_TRACES[-1].add(_key_read(key))
         return key in self._untraced
 
 
@@ -180,8 +185,9 @@ class _TracedState(SystemState):
 
     An accepted limit: a predicate can overshoot a coast if it branches on the exact type or
     identity of the state or map (``type(s) is SystemState``), names the trace's own
-    ``_untraced``, or catches the AttributeError of a slot descriptor.  The trace does not see
-    what these read on a real state.  Lockstep catches them under ``--fold-check``.
+    ``_untraced``, catches the AttributeError of a slot descriptor, or reads ``plc.playhead``
+    (it moves with the scans, and is no read of a state).  The trace does not see what these
+    read on a real state.  Lockstep catches them under ``--fold-check``.
     """
 
     __slots__ = ("_untraced",)
