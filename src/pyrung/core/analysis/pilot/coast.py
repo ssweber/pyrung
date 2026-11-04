@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.coast_run import coast_until, memo_of, work_charged
-from pyrung.core.read_trace import _extract_condition_reads, _reads_untraced
+from pyrung.core.read_trace import _exact_condition_reads, _reads_untraced
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -176,12 +176,12 @@ def _trigger_reads(triggers: Iterable[CoastTrigger]) -> frozenset[str] | None:
     reads: set[str] = set()
     for trigger in triggers:
         reads.update(trigger.watched)
-        if trigger.condition is not None:
-            reads |= _extract_condition_reads(trigger.condition)
-        elif trigger.predicate_reads is not None:
-            reads.update(trigger.predicate_reads)
-        else:
+        says = None if trigger.condition is None else _exact_condition_reads(trigger.condition)
+        if says is None:
+            says = trigger.predicate_reads
+        if says is None:
             return None
+        reads.update(says)
     return frozenset(reads)
 
 

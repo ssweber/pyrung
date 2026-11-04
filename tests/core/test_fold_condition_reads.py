@@ -9,12 +9,30 @@ that changes every scan.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung import (
+    Block,
+    Bool,
+    Counter,
+    Int,
+    Program,
+    Rung,
+    TagType,
+    Timer,
+    calc,
+    copy,
+    count_up,
+    latch,
+    on_delay,
+    out,
+)
 from pyrung.core import And, Or, fall, rise, system
+from pyrung.core.analysis.pilot.coast import TARGET, CoastSession, CoastTrigger
 from pyrung.core.condition import _as_condition
-from pyrung.core.read_trace import _extract_condition_reads
+from pyrung.core.read_trace import _exact_condition_reads, _extract_condition_reads
 from pyrung.core.runner import PLC
 
 pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
@@ -326,3 +344,109 @@ class TestTimedAccumulatorEqualityHazard:
         folded, stepped = _fold_nofold(prog, tmr.Acc == 500, patch={"Enable": True})
         assert folded.state.tags["Tmr_Acc"] == 500
         _assert_landing_parity(folded, stepped)
+
+
+# ---------------------------------------------------------------------------
+# A coast trigger: its stop is where stepping would stop
+# ---------------------------------------------------------------------------
+
+_CoastT = Timer.clone("CoastT")
+_Mirror = Int("CoastMirror")
+_Bank = Block("CoastBank", TagType.INT, 1, 4)
+_Idx = Int("CoastIdx", default=2)
+_Clock = system.sys.clock_1s
+
+
+def _coast_plc() -> PLC:
+    """Nothing here stops the loop before scan 69 but a trigger's own reads."""
+    with Program(strict=False) as program:
+        with Rung():
+            on_delay(_CoastT, preset=7350)
+        with Rung():
+            copy(_CoastT.Acc, _Mirror)
+        with Rung(_CoastT.Acc >= 700):
+            latch(Bool("CoastLate"))
+        with Rung():
+            copy(_CoastT.Acc, _Bank[2])
+    plc = PLC(program, dt=0.010)
+    plc.set_rtc(datetime(2026, 1, 1))
+    plc.step()
+    return plc
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        _Clock,
+        ~_Clock,
+        _Mirror,
+        _Mirror >= 300,
+        _Bank[_Idx] >= 300,
+        _Mirror >= _Bank[_Idx],
+        _Mirror + 1 >= 300,
+        Or(_Bank[_Idx] >= 300, _Mirror >= 400),
+        And(_Clock, _Mirror >= 1),
+    ],
+    ids=[
+        "bare-clock",
+        "negated-clock",
+        "bare-int",
+        "compare",
+        "indirect-compare",
+        "indirect-operand",
+        "expression-compare",
+        "or-with-indirect",
+        "and-with-clock",
+    ],
+)
+def test_a_condition_trigger_stops_where_stepping_does(condition: object) -> None:
+    probe = _coast_plc()
+    predicate = probe._compile_condition_predicate(condition, method="run_until")
+
+    stepped = _coast_plc()
+    for _ in range(1_500):
+        stepped.step()
+        if predicate(stepped.state):
+            break
+    assert predicate(stepped.state), "the condition never comes true"
+
+    coasted = _coast_plc()
+    result = CoastSession(coasted, kind="t").seek(
+        [CoastTrigger("t", TARGET, predicate, condition=condition)], budget=1_500
+    )
+
+    assert result.stop_reason == "reached"
+    _assert_landing_parity(coasted, stepped)
+
+
+class TestExactConditionReads:
+    def test_bare_tags_read_themselves(self) -> None:
+        contact, word = Bool("A"), Int("W")
+        assert _extract_condition_reads(contact) == {"A"}
+        assert _extract_condition_reads(word) == {"W"}
+        assert _exact_condition_reads(contact) == {"A"}
+        assert _exact_condition_reads(word) == {"W"}
+
+    def test_a_named_condition_is_exact(self) -> None:
+        a, b, w = Bool("A"), Bool("B"), Int("W")
+        assert _exact_condition_reads(And(a, Or(~b, rise(a)), w >= 3, w == Int("V"))) == {
+            "A",
+            "B",
+            "W",
+            "V",
+        }
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            _Bank[_Idx] >= 1,
+            _Mirror >= _Bank[_Idx],
+            _Mirror + 1 >= 1,
+            _Mirror >= Int("Fixed", readonly=True, default=5),
+            Or(Bool("A"), _Bank[_Idx] == 1),
+            And(Bool("A"), _Mirror + 1 >= 1),
+        ],
+        ids=["indirect", "indirect-operand", "expression", "readonly-operand", "or", "and"],
+    )
+    def test_a_condition_hiding_a_read_will_not_say(self, condition: object) -> None:
+        assert _exact_condition_reads(condition) is None

@@ -24,13 +24,19 @@ if TYPE_CHECKING:
 def _extract_condition_reads(condition: Any) -> frozenset[str]:
     """Every tag name a ``run_until`` condition reads, regardless of form.
 
-    Bare contacts, ``rise``/``fall`` edges, comparison left sides, tag operands
-    on comparison right sides, and both legs of ``ArithAtom`` compounds.  A junk
-    name (a Char *value* operand that happens to be a string) is harmless: it
-    only makes a caller watch one name more.
+    Bare contacts and bare tags, ``rise``/``fall`` edges, comparison left sides, tag
+    operands on comparison right sides, and both legs of ``ArithAtom`` compounds.  A
+    junk name (a Char *value* operand that happens to be a string) is harmless: it
+    only makes a caller watch one name more.  A condition this cannot see into (an
+    indirect or expression comparison) gives a junk name in place of what it reads:
+    a caller that relies on the set being whole asks :func:`_exact_condition_reads`.
     """
     from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or, _condition_to_expr
-    from pyrung.core.tag import Tag
+    from pyrung.core.condition import _as_condition
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    if isinstance(condition, (Tag, ImmediateRef)):
+        condition = _as_condition(condition)
 
     out: set[str] = set()
 
@@ -54,6 +60,50 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
 
     visit(_condition_to_expr(condition))
     return frozenset(out)
+
+
+def _exact_condition_reads(condition: Any) -> frozenset[str] | None:
+    """The tags a condition reads, or None if it reads anything it does not name.
+
+    A coast runs on while what its predicate reads holds still, so a read missing here
+    runs it past the stop.  An indirect comparison reads a pointer and the slot it
+    selects, and an expression reads its terms; None sends the caller to
+    :func:`_traced_call`, which records them.
+    """
+    return _extract_condition_reads(condition) if _names_every_read(condition) else None
+
+
+def _names_every_read(condition: Any) -> bool:
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+        _EdgeCondition,
+    )
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    if isinstance(condition, (Tag, ImmediateRef)):
+        return True
+    if isinstance(condition, (AllCondition, AnyCondition)):
+        return all(_names_every_read(term) for term in condition.conditions)
+    if isinstance(
+        condition, (BitCondition, IntTruthyCondition, NormallyClosedCondition, _EdgeCondition)
+    ):
+        return True
+    if isinstance(condition, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
+        value = condition.value
+        if isinstance(value, Tag):
+            return not value.readonly  # lowers to its default, dropping the name
+        return value is None or isinstance(value, (bool, int, float, str))
+    return False
 
 
 # Reads of an opaque stop predicate.  A coast's undeclared predicate is judged on
