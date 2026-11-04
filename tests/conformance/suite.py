@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from pyrung.conformance import (
@@ -55,7 +55,6 @@ from tests.conformance import (
     test_drum_settle,
     test_drum_trace,
     test_faults,
-    test_fixed_minute,
     test_fixed_scan,
     test_flag_probe,
     test_for_count,
@@ -197,12 +196,11 @@ class ApartPart:
     Its groups' registers and raw memory are ``manifest_apart.toml`` and
     ``memory.OWNED_APART``: they may repeat the suite's, so it never runs in one project
     with them, and it changes no other part's hash however it grows.  With
-    *fixed_scan_ms* a person runs it with CLICK's fixed scan on, at each of those times.
+    *fixed_scan_ms* a person runs it with CLICK's fixed scan on, at that time.
     """
 
     groups: tuple[str, ...]
-    #: The fixed scan times (ms) its questions need, the first to run first.
-    fixed_scan_ms: tuple[int, ...] = ()
+    fixed_scan_ms: int | None = None
 
 
 #: Every group on memory of its own, in the order main calls them.
@@ -211,16 +209,14 @@ APART_GROUPS = [
     # Left out with ``GROUP=unit_pairs``: a minute's wait.
     test_unit_minute.group,
     test_fixed_scan.group,
-    # Left out with ``GROUP=fixed_scan``: a minute's wait.
-    test_fixed_minute.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
     # Timers in different units with one delay, Done on one scan: the relation, which
     # holds or not whatever a scan takes.
     "N": ApartPart(("unit_pairs", "unit_minute")),
-    # The scan each timer is Done on, counted: only fixed scan mode makes that a number.
-    "O": ApartPart(("fixed_scan", "fixed_minute"), fixed_scan_ms=(100, 10, 250)),
+    # The scan a CLICK counts, for curiosity: only fixed scan mode makes that a number.
+    "O": ApartPart(("fixed_scan",), fixed_scan_ms=100),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
@@ -242,17 +238,9 @@ def groups(part: str | None = None) -> list[Group]:
 
 
 def build(part: str | None = None) -> ConformanceProgram:
-    """The program for *part* (``None``: the whole suite) on its manifest.
-
-    A fixed scan part counts its settle time in its longest scan.
-    """
-    apart = APART_PARTS.get(part) if part is not None else None
-    if apart is None:
-        return build_program(groups(part), load_manifest(MANIFEST_PATH))
-    program = build_program(groups(part), load_manifest(APART_MANIFEST_PATH))
-    if apart.fixed_scan_ms:
-        return replace(program, scan_s=max(apart.fixed_scan_ms) / 1000)
-    return program
+    """The program for *part* (``None``: the whole suite) on its manifest."""
+    manifest = APART_MANIFEST_PATH if part in APART_PARTS else MANIFEST_PATH
+    return build_program(groups(part), load_manifest(manifest))
 
 
 def build_apart() -> ConformanceProgram:
@@ -287,15 +275,14 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
 
 def fixed_scan_note(part: str | None) -> str | None:
     """What a person sets in CLICK before running *part*; ``None`` when it needs nothing."""
-    times = APART_PARTS[part].fixed_scan_ms if part in APART_PARTS else ()
-    if not times:
+    ms = APART_PARTS[part].fixed_scan_ms if part in APART_PARTS else None
+    if ms is None:
         return None
-    each = ", ".join(f"{ms} ms" for ms in times)
     return (
         f"Part {part} runs in fixed scan mode: in the CLICK software turn fixed scan on "
-        f"(SC202) and set the scan time (SD13), write the project to the PLC, and run "
-        f"`make test-conformance PLC=...` at each of {each}. "
-        'See tests/conformance/AGENTS.md, "Fixed scan parts".'
+        f"(SC202) and set the scan time (SD13) to {ms} ms, write the project to the PLC, and "
+        f"run `make test-conformance PLC=...`. "
+        'See tests/conformance/AGENTS.md, "Fixed scan part".'
     )
 
 

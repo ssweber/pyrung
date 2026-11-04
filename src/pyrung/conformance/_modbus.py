@@ -562,8 +562,8 @@ async def _drive(
             if all(regs[r] != 0 for r in fired_registers) or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(POLL_S)
-        scan_s = build.scan_s if build.scan_s is not None else NOMINAL_SCAN_S
-        settle = max((c.scans for c in cases if c.fires_within is None), default=1) * scan_s
+        scans = max((c.scans for c in cases if c.fires_within is None), default=1)
+        settle = scans * NOMINAL_SCAN_S
         await asyncio.sleep(settle)
 
         # 6. Read every slot (and every system bit a case expects) twice; both

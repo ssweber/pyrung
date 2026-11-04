@@ -212,7 +212,6 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "unit_pairs": {"T": range(1, 11)},
     "unit_minute": {"T": range(11, 21)},
     "fixed_scan": {"T": range(21, 41), "C": range(1, 11), "DS": range(3901, 3903)},
-    "fixed_minute": {"T": range(41, 51)},
 }
 
 

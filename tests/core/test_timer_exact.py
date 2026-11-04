@@ -608,11 +608,12 @@ def test_changing_dt_mid_count_keeps_the_time() -> None:
 
 
 @pytest.mark.usefixtures("loop_from_first_scan")
-def test_changing_dt_between_long_runs_keeps_the_time() -> None:
+def test_a_long_run_after_a_dt_change_keeps_the_time() -> None:
     prog = _on_delay_program(1, "Ts")
-    plc = PLC(prog, dt=0.1)
-    assert _in_the_long_run(plc, 5) > 0
-    plc._set_time_mode(TimeMode.FIXED_STEP, dt=0.05)
+    before = PLC(prog, dt=0.1)
+    for _ in range(5):
+        before.step()
+    plc = PLC(prog, initial_state=before.current_state, dt=0.05)
     assert _in_the_long_run(plc, 9) > 0
     assert plc.current_state.tags["Ton_Acc"] == 0
     assert plc.current_state.memory["_frac:Ton_Acc"] == 950_000_000

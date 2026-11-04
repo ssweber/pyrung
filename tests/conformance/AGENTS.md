@@ -224,14 +224,14 @@ Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a regist
 2. -- (no case stages inputs; each case's reset rung initializes it while `Cmd = 0`).
 3. Poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1).
 4. Write `Cmd = 1` to every ready slot, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
-5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s; longer if a case's `fires_within` says so). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans)` scans of 10 ms (of the part's longest declared scan in a fixed scan part), leaving out a case with `fires_within`, which has nothing left to settle.
+5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s; longer if a case's `fires_within` says so). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans)` scans of 10 ms, leaving out a case with `fires_within`, which has nothing left to settle.
 6. Read every slot (and every system bit a case's `expect_system` names), wait `max(100 ms, settle)`, read them again.
 7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads. On a local target a `pending` case passes as `XFAIL` only if neither read meets `expect`.
 8. Report. `assert_all_passed` lists stale groups (`STALE: ...`, once per group) and failures; in-process-only skips do not fail. `format_report` gives the per-case lines.
 
 ## Pacing over the wire
 
-Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, then two reads". `case.scans` becomes settle time at the nominal 10 ms scan, or at the longest scan a fixed scan part declares (`ConformanceProgram.scan_s`). The double read is the stability check: a value still moving when the harness reads fails loudly instead of passing by luck.
+Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, then two reads". `case.scans` becomes settle time at the nominal 10 ms scan. The double read is the stability check: a value still moving when the harness reads fails loudly instead of passing by luck.
 
 The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK, with one exception: a scan advances them by at most `MAX_SCAN_DT_S` (40 ms; `SimServer(max_scan_dt=None)` lifts it). With the whole suite loaded the sim scans every 30-40 ms, and on a busy machine the scan thread stalls 70-190 ms now and then; let through, a stall becomes a scan no CLICK has (they take milliseconds), steps over a case's 80-100 ms windows, and fails cases that are right (the O4 flasher did, about one run in five). Capped, PLC time lags wall time by what the stall took beyond 40 ms, which the harness never sees: it waits on `Fired`, not on the clock. The P1AM-200 target has no cap: its generated code times itself. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
 
@@ -276,20 +276,17 @@ The whole suite's memory is full: DS, T and CT have no run left for a new group.
 
 A case whose answer is a wait passes `fires_within=` (seconds): `Fired` comes last, the harness waits that long for it, and its `scans` (still what it takes in-process) adds no settle time. Part N: `unit_pairs` and `unit_minute`, the relation (timers in different units with one delay on one rung are Done on one scan). Leave the minute's wait out with `GROUP=unit_pairs`.
 
-### Fixed scan parts
+### Fixed scan part
 
-With CLICK's fixed scan on (SC202, `system.sys.fixed_scan_mode`, with the time SD13, `system.sys.scan_time_fixed_setup_ms`), a scan is a known time, so a case can count scans and compare with a number, which over the wire nothing else gives. An `ApartPart` with `fixed_scan_ms=(...)` is a part to be run that way: it declares the times its questions need, and that declaration is what the rest reads. The harness counts settle time in the longest of them (`build.scan_s`), and `make conformance-export` prints the setting a person must make (`suite.fixed_scan_note`). A person sets it; the program cannot. Part O is the home for these cases.
+Part O is for curiosity: pyrung's count is exact by rule (`ceil(delay / dt)`, `tests/core/test_timer_exact.py`), and a differing CLICK reading is recorded, not chased. With CLICK's fixed scan on (SC202, `system.sys.fixed_scan_mode`, with the time SD13, `system.sys.scan_time_fixed_setup_ms`) a scan is a known time, so a case can count scans and report a number, which over the wire nothing else gives. An `ApartPart` with `fixed_scan_ms=` is run that way, and `make conformance-export` prints the setting a person must make (`suite.fixed_scan_note`). A person sets it; the program cannot.
 
 To run part O on a CLICK:
 
 1. `make conformance-export PART=O`, and paste it as a project of its own (first load, under "Running against the real PLC").
 2. In the CLICK software, open the scan time setup: fixed scan on, 100 ms. Write the project to the PLC and put it in RUN.
-3. `make test-conformance PLC=192.168.0.10` (`GROUP=fixed_scan` to leave the minute out). Read the `read fixed_scan/...` lines: `scan_setup` says what the PLC reports of its scan (`Result1` SC202, `Result2` SD13, `Result3` SD10, `Result4` SD12). Each other case holds a pair of counts in `Result1` and `Result2`, as its module docstring says, and the setting they were counted under, latched on the scan it fired: `Result3` SD13, `Result4` SD12, `ErrorCode` SC202. A count closes its question only under the setting asked, with SC202 on and SD12 not above SD13: a longer scan overran in the window.
-4. Set 10 ms, write the project, and run `make test-conformance PLC=... GROUP=fixed_minute`; then the same at 250 ms. The ladder does not change, so nothing else is repasted.
+3. `make test-conformance PLC=192.168.0.10`, and read the `read fixed_scan/...` lines. `scan_setup` says what the PLC reports of its scan (`Result1` SC202, `Result2` SD13, `Result3` SD10, `Result4` SD12). Each other case holds two counts in `Result1` and `Result2`, as its module docstring says, and the setting they were counted under, latched on the scan it fired: `Result3` SD13, `Result4` SD12, `ErrorCode` SC202. SC202 off, or SD12 above SD13, says the count was not at the setting.
 
-At 100 ms `fixed_scan` asks 1 s (scan 10 or 11?), and `fixed_minute` 60 s (600 or 601?). 10 ms and 250 ms ask the minute pair at the scan times where it can differ from the seconds side (6000 or 6001, 240 or 241).
-
-To add a case: a slot in `fixed_scan` or a group of its own in `manifest_apart.toml`, raw memory in `OWNED_APART`, and a group in `APART_GROUPS` and `APART_PARTS["O"]`; a time the part does not declare goes in `fixed_scan_ms`. `count_scans` and `latch_count` (`test_fixed_scan.py`) count from the scan the rung goes true and latch the count at a bit, and `fire_with_the_scan_setting` latches the setting with the pair: a slot holds two counts, so a question of more takes more cases. Every expectation is a range holding any count, so the case passes where a scan is not fixed (the soft PLC, `TARGET=circuitpy`, a CLICK without the setting) and the `read` line carries the answer; its docstring says what each count would mean. Pin what pyrung reads at the in-process `DT` in a test of its own, not in `expect`: in process `SC202` is on and `SD13` is 10. The soft PLC reports SC202 off and SD13 0 and paces itself, so it answers nothing here. A recording that disagrees with pyrung is the finding, and pyrung follows it.
+To add a case: a slot in `fixed_scan` in `manifest_apart.toml` and raw memory in `OWNED_APART`. `count_scans` and `latch_count` (`test_fixed_scan.py`) count from the scan the rung goes true and latch the count at a bit, and `fire_with_the_scan_setting` latches the setting with the pair: a slot holds two counts, so more take more cases. Every expectation is a range holding any count, so the case passes where a scan is not fixed (the soft PLC, `TARGET=circuitpy`, a CLICK without the setting). Pin what pyrung reads at the in-process `DT` in a test of its own, not in `expect`: in process `SC202` is on and `SD13` is 10. The soft PLC reports SC202 off and SD13 0 and paces itself, so it says nothing here.
 
 ## Coverage checklist
 
@@ -310,7 +307,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] first_scan true once, on scan 0
 - [ ] first_scan re-triggers on STOP->RUN
 - [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`)
-- [ ] fixed scan mode (SC202, SD13) gives absolute scan counts: a case can compare a count with a number, in part O (each case holds the setting it was counted under; "Fixed scan parts")
+- [ ] fixed scan mode (SC202, SD13) gives a scan count as a number: read in part O, for curiosity (each case holds the setting it was counted under; "Fixed scan part")
 - [x] scan_counter steps by one every scan (`system/scan_counter_steps_by_one`)
 - [ ] scan_counter resets on STOP->RUN
 - [x] clock toggles fire at their nominal rate (`system/clock_bits_toggle_at_their_rate`)
@@ -411,7 +408,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] timer Acc continues past preset up to 32767 clamp (`timers/acc_clamps_at_32767`, `timers/tof_times_only_when_false`)
 - [x] timer fractional ms accumulation across scans (`timers/fractional_accumulation`)
 - [ ] timers in different units with one delay are Done on one scan: do all units come off one clock (part N, `unit_pairs/one_second`, `unit_pairs/three_seconds`, `unit_minute/one_minute`, `unit_minute/thirty_seconds`)
-- [ ] the scan a timer, an off-delay and a time drum's step end on at a fixed scan time, ceil(delay/dt) or a scan more (part O, `fixed_scan/one_second`, `fixed_scan/three_seconds`, `fixed_scan/off_delay`, `fixed_scan/drum_step`, `fixed_minute/one_minute`, `fixed_minute/half_minute`)
+- [ ] the scan a timer, an off-delay and a time drum's step end on as a CLICK counts them at a 100 ms scan, for curiosity (part O, `fixed_scan/seconds_and_ms`, `fixed_scan/off_delay_and_drum`)
 - [x] timer resumes if preset raised mid-count (`timers/preset_raised_resumes`)
 - [x] timer fires immediately if preset lowered below Acc (`timers/preset_lowered_fires_at_once`)
 - [x] timer preset resolved dynamically each tick (the two preset cases above)

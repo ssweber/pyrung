@@ -140,15 +140,11 @@ def test_the_groups_apart_stay_in_their_own_memory_and_manifest() -> None:
     assert not set(suite.APART_PARTS).intersection(suite.PARTS)
 
 
-def test_a_fixed_scan_part_declares_its_scan_and_says_what_to_set() -> None:
-    assert suite.APART_PARTS["O"].fixed_scan_ms == (100, 10, 250)
-    # Settle time counts in the longest scan the part runs at.
-    assert suite.build("O").scan_s == 0.25
-    assert suite.build("N").scan_s is None
-    assert suite.build().scan_s is None
+def test_a_fixed_scan_part_says_what_to_set() -> None:
+    assert suite.APART_PARTS["O"].fixed_scan_ms == 100
     note = suite.fixed_scan_note("O")
     assert note is not None
-    for words in ("fixed scan", "SC202", "100 ms", "10 ms", "250 ms"):
+    for words in ("fixed scan", "SC202", "100 ms"):
         assert words in note
     assert note.isascii()
     assert suite.fixed_scan_note("N") is None

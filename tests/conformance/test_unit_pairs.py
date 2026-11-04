@@ -8,8 +8,9 @@ the same time on every scan.  A rung below them latches ``Result1`` on any scan 
 and the other is not, so ``Result1`` says "they ever differed" and is expected off;
 ``Result2`` says both got there, and ``Fired`` goes up with it.
 
-On a real CLICK this asks whether all units come off one clock.  A CLICK that reads
-``Result1 = 1`` has not failed: that is the answer, and pyrung matches it.
+On a real CLICK this asks whether all units come off one clock, which a program can lean
+on.  A CLICK that reads ``Result1 = 1`` has not failed: that is the answer, and it goes to
+the user.
 
 In process ``DT`` is 10 ms, where the seconds pairs have always agreed, so these cases pin
 that they stay so; the pair that has told the units apart is in ``test_unit_minute.py``.

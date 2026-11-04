@@ -25,15 +25,5 @@ slots = 19
 
 [groups.fixed_scan.cases]
 scan_setup = 1
-one_second = 2
-three_seconds = 3
-off_delay = 4
-drum_step = 5
-
-[groups.fixed_minute]
-base = 401 # Conf_FixedMinute: DS401..DS500
-slots = 9
-
-[groups.fixed_minute.cases]
-one_minute = 1
-half_minute = 2
+seconds_and_ms = 2
+off_delay_and_drum = 3
