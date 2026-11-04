@@ -669,8 +669,9 @@ class Harness:
         bit, holds the feedback for ``off_delay`` after the enable drops.  Presets
         are the declared delays, in ms unless one is too long for it (see
         :func:`~pyrung.core.synthesis.plant_timer`), so a held enable
-        crosses after ``ceil(delay_ms / dt_ms)`` scans (``delay_ms == 0`` ⇒ the
-        program sees the feedback next scan, from the scan boundary).
+        crosses after ``ceil(delay_ms / dt_ms)`` scans, one more where the longer unit's
+        ``dt`` does not sum exactly (``delay_ms == 0`` ⇒ the program sees the feedback
+        next scan, from the scan boundary).
 
         Idempotent — used at install, on each fork (fresh instructions reading the
         fork's tags; accumulator *state* rides the inherited committed state), and
