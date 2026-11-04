@@ -708,7 +708,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             self._apply_reset(ctx)
         else:
             if enabled and not hold:
-                int_units, frac = elapsed_units(ctx, self.accumulator, self.unit)
+                int_units, frac = elapsed_units(ctx, frac_key, self.unit)
                 acc_value = min(acc_value + int_units, self._acc_max())
                 preset = _resolve_preset_value(self.presets[step - 1], ctx)
                 if acc_value >= preset:
@@ -966,7 +966,7 @@ class TimeEventDrumInstruction(_DrumBaseInstruction):
             self._apply_reset(ctx)
         else:
             if enabled and not hold:
-                int_units, frac = elapsed_units(ctx, self.accumulator, self.unit)
+                int_units, frac = elapsed_units(ctx, frac_key, self.unit)
                 acc_value = min(acc_value + int_units, self._acc_max())
                 if self._step_ready(step, acc_value, ctx, condition_view):
                     if step < self.step_count:
