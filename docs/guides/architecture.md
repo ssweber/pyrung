@@ -15,7 +15,7 @@ Every `step()` call takes the current `SystemState`, evaluates all rungs as pure
 ## SystemState
 
 ```python
-class SystemState(PRecord):
+class SystemState(Mapping[str, Any]):
     scan_id   : int    # scan counter (resets to 0 on STOP→RUN/reboot)
     timestamp : float  # simulation clock (seconds)
     tags      : PMap   # tag values, keyed by name string
@@ -24,7 +24,7 @@ class SystemState(PRecord):
 
 `tags` is everything user code touches. `memory` is internal engine bookkeeping — the bit each `rise()`/`fall()` contact last saw (`_edge:e{N}`, one per contact), each counter's input memory, timer fractional accumulators, etc.
 
-`SystemState` is a [`PRecord`](https://pyrsistent.readthedocs.io/) from the pyrsistent library — a frozen, persistent data structure that shares structure between versions for memory efficiency. Each scan produces a new `SystemState` without modifying the previous one.
+`SystemState` is a small immutable class with one slot per field: assigning to a field raises, and `set()` and `with_tags()` return a new state. `tags` and `memory` are [`PMap`](https://pyrsistent.readthedocs.io/)s from the pyrsistent library, persistent maps that share structure between versions for memory efficiency. Each scan produces a new `SystemState` without modifying the previous one.
 
 ## Scan cycle
 

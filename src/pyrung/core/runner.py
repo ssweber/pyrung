@@ -132,7 +132,7 @@ def _parse_retention(value: str | int | None, dt_seconds: float) -> int | None:
 # Conservative per-entry byte estimate for PMap HAMT nodes.
 _PER_PMAP_ENTRY_BYTES = 200
 
-# Fixed overhead for PRecord shell (scan_id, timestamp, two PMap roots).
+# Fixed overhead for the state shell (scan_id, timestamp, two PMap roots).
 _STATE_BASE_BYTES = 200
 
 
@@ -1607,7 +1607,7 @@ class PLC:
             # Forks start from this runner's own (already migrated) states.
             self._state = migrate_legacy_edge_memory(self._state, self._site_table)
         # Mutable read mirror for ordinary interpreted scans.  The committed
-        # state remains an immutable PMap; this avoids repeated HAMT bucket
+        # tag map remains an immutable PMap; this avoids repeated HAMT bucket
         # walks while a scan reads its unchanged input image.  Capturing/debug
         # scans bypass it because they retain ConditionViews after commit.
         self._state_tags_read_cache: dict[str, Any] | None = None
