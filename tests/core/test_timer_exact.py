@@ -1,0 +1,555 @@
+"""A timer counts whole time exactly, whichever unit it counts in.
+
+At a fixed dt, the scan a timer is Done on is ``ceil(delay / dt)`` for every unit, on
+the interpreter, the kernel and the generated code, and ``run()`` lands on what stepping
+lands on.  The carry is whole nanoseconds (``time_mode.dt_to_ns``); these tables are
+what its arithmetic has to give, written from the rule and not from the code.
+
+Scans are numbered from 1, the first scan the rung is held (or, off-delay, the first it
+is false).  The generated code's first scan has no time behind it (its dt is the clock
+since boot, 0 here), so everything on it lands one scan later.
+"""
+
+from __future__ import annotations
+
+import math
+from fractions import Fraction
+from typing import Any
+
+import pytest
+
+from pyrung.circuitpy import generate_circuitpy
+from pyrung.core import (
+    PLC,
+    Bool,
+    Dint,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    calc,
+    copy,
+    debounce,
+    flasher,
+    latch,
+    off_delay,
+    on_delay,
+    time_drum,
+    timed,
+)
+from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.state import SystemState
+from pyrung.core.time_mode import TimeUnit, dt_to_ns
+from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
+from tests.circuitpy.test_scan_time_and_stop import _BoardClock, _hw
+from tests.circuitpy.test_system_points import _StubBase
+
+DTS = ("0.001", "0.003", "0.01", "0.02", "0.05", "0.1", "0.2", "0.25", "0.5")
+UNIT_SECONDS = {"Tms": Fraction(1, 1000), "Ts": Fraction(1), "Tm": Fraction(60), "Th": Fraction(3600), "Td": Fraction(86400)}
+PRESETS = (
+    (1000, "Tms"),
+    (5000, "Tms"),
+    (30000, "Tms"),
+    (1, "Ts"),
+    (3, "Ts"),
+    (33, "Ts"),
+    (60, "Ts"),
+    (1, "Tm"),
+    (1, "Th"),
+    (1, "Td"),
+)
+# Stepping past this many scans is what the long-run tests below are for.
+MAX_SCANS = 6100
+
+
+def want(preset: int, unit: str, dt: str) -> int:
+    return math.ceil(preset * UNIT_SECONDS[unit] / Fraction(dt))
+
+
+CROSS = [
+    (preset, unit, dt)
+    for preset, unit in PRESETS
+    for dt in DTS
+    if want(preset, unit, dt) <= MAX_SCANS
+]
+
+
+def _ids(row: tuple[int, str, str]) -> str:
+    return f"{row[0]}{row[1]}-dt{row[2]}"
+
+
+# --- The programs: each records, itself, the scan its timer ended on ----------------
+
+
+def _on_delay_program(preset: int, unit: str) -> Program:
+    Ton = Timer.clone("Ton")
+    Scans = Dint("Scans", retentive=False)
+    First = Dint("First", retentive=False)
+    Seen = Bool("Seen", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Scans + 1, Scans)
+        with Rung():
+            on_delay(Ton, preset=preset, unit=unit)
+        with Rung(Ton.Done, ~Seen):
+            copy(Scans, First)
+            latch(Seen)
+    return prog
+
+
+def _off_delay_program(preset: int, unit: str) -> Program:
+    """The rung is true on scan 0, false from scan 1 on."""
+    Tof = Timer.clone("Tof")
+    Scans = Dint("Scans", retentive=False)
+    First = Dint("First", retentive=False)
+    Seen = Bool("Seen", retentive=False)
+    Armed = Bool("Armed", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung(~Armed):
+            off_delay(Tof, preset=preset, unit=unit)
+        with Rung(Armed):
+            off_delay(Tof, preset=preset, unit=unit)
+        with Rung(Armed):
+            calc(Scans + 1, Scans)
+        with Rung(Armed, ~Tof.Done, ~Seen):
+            copy(Scans, First)
+            latch(Seen)
+        with Rung():
+            latch(Armed)
+    return prog
+
+
+def _drum_program(preset: int, unit: str) -> Program:
+    Scans = Dint("Scans", retentive=False)
+    First = Dint("First", retentive=False)
+    Seen = Bool("Seen", retentive=False)
+    Step = Int("Step", retentive=False)
+    Acc = Int("Acc", retentive=False)
+    Flag = Bool("Flag", retentive=False)
+    Reset = Bool("Reset", retentive=False)
+    Out1 = Bool("Out1", retentive=False)
+    Out2 = Bool("Out2", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Scans + 1, Scans)
+        with Rung():
+            time_drum(
+                outputs=[Out1, Out2],
+                presets=[preset, 32000],
+                unit=unit,
+                pattern=[[1, 0], [0, 1]],
+                current_step=Step,
+                accumulator=Acc,
+                completion_flag=Flag,
+            ).reset(Reset)
+        with Rung(Step == 2, ~Seen):
+            copy(Scans, First)
+            latch(Seen)
+    return prog
+
+
+PROGRAMS = {"on": _on_delay_program, "off": _off_delay_program, "drum": _drum_program}
+
+
+# --- The engines ----------------------------------------------------------------------
+
+
+def _step_interpreter(prog: Program, dt: float, scans: int) -> int:
+    plc = PLC(prog, dt=dt)
+    for _ in range(scans):
+        plc.step()
+    return plc.current_state.tags["First"]
+
+
+def _step_kernel(prog: Program, dt: float, scans: int) -> int:
+    plc = CompiledPLC(prog, dt=dt)
+    for _ in range(scans):
+        plc.step()
+    return plc.current_state.tags["First"]
+
+
+def _run_generated(prog: Program, step_ns: int, scans: int) -> Any:
+    hw = _hw()
+    result = generate_circuitpy(prog, hw, target_scan_ms=step_ns / 1e6, runstop=None)
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        _BoardClock(5_000_000_000, step_ns).install(monkeypatch)
+        namespace = _run_single_scan_source(
+            result.code,
+            monkeypatch,
+            _StubBase(),
+            runtime_source=result.runtime,
+            scans=scans,
+        )
+        return namespace, _context_for_program(prog, hw)
+    finally:
+        monkeypatch.undo()
+
+
+def _generated_first(prog: Program, dt: str, scans: int) -> int:
+    namespace, ctx = _run_generated(prog, int(Fraction(dt) * 10**9), scans)
+    return namespace[ctx.symbol_for_tag(ctx.referenced_tags["First"])]
+
+
+# --- Done lands on ceil(delay / dt), on every engine ----------------------------------
+
+
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize("row", CROSS, ids=_ids)
+def test_the_interpreter_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
+    preset, unit, dt = row
+    expect = want(preset, unit, dt)
+    assert _step_interpreter(PROGRAMS[kind](preset, unit), float(dt), expect + 3) == expect
+
+
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize("row", CROSS, ids=_ids)
+def test_the_kernel_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
+    preset, unit, dt = row
+    expect = want(preset, unit, dt)
+    assert _step_kernel(PROGRAMS[kind](preset, unit), float(dt), expect + 3) == expect
+
+
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize("row", CROSS, ids=_ids)
+def test_the_generated_code_ends_on_ceil(kind: str, row: tuple[int, str, str]) -> None:
+    preset, unit, dt = row
+    expect = want(preset, unit, dt)
+    # One later: its first scan has no time behind it (module docstring).
+    assert _generated_first(PROGRAMS[kind](preset, unit), dt, expect + 4) == expect + 1
+
+
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize("row", CROSS, ids=_ids)
+def test_run_equals_stepping(kind: str, row: tuple[int, str, str]) -> None:
+    """Whole state and scan count, past the scan the timer ends on."""
+    preset, unit, dt = row
+    scans = want(preset, unit, dt) + 3
+    prog = PROGRAMS[kind](preset, unit)
+    stepped = PLC(prog, dt=float(dt))
+    for _ in range(scans):
+        stepped.step()
+    ran = PLC(prog, dt=float(dt))
+    ran.run(scans)
+    assert ran.current_state.scan_id == stepped.current_state.scan_id
+    assert dict(ran.current_state.tags) == dict(stepped.current_state.tags)
+    assert dict(ran.current_state.memory) == dict(stepped.current_state.memory)
+    assert ran.current_state.tags["First"] == scans - 3
+
+
+# --- Acc: the whole units in the whole sum, on every scan ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("unit", "dt"),
+    [(u, d) for u in ("Tms", "Ts", "Tm") for d in ("0.003", "0.1", "0.25")],
+)
+def test_acc_is_the_whole_units_elapsed_on_every_scan(unit: str, dt: str) -> None:
+    prog = _on_delay_program(32000, unit)
+    interpreter, kernel = PLC(prog, dt=float(dt)), CompiledPLC(prog, dt=float(dt))
+    per_unit = UNIT_SECONDS[unit]
+    for scan in range(1, 3001):
+        interpreter.step()
+        kernel.step()
+        expected = min(int(scan * Fraction(dt) / per_unit), 32767)
+        assert interpreter.current_state.tags["Ton_Acc"] == expected, scan
+        assert kernel.current_state.tags["Ton_Acc"] == expected, scan
+
+
+# --- Every unit at every dt, by way of the last few scans -------------------------------
+
+
+@pytest.mark.parametrize("unit", ["Tms", "Ts", "Tm", "Th", "Td"])
+@pytest.mark.parametrize("dt", DTS)
+def test_a_unit_too_long_to_step_ends_where_the_carry_says(unit: str, dt: str) -> None:
+    """A carry staged 40 scans short of the unit: both engines cross on the 40th."""
+    dt_ns = int(Fraction(dt) * 10**9)
+    unit_ns = int(UNIT_SECONDS[unit] * 10**9)
+    if unit_ns <= 40 * dt_ns:
+        pytest.skip("the unit is shorter than the staged run")
+    prog = _on_delay_program(1, unit)
+    state = SystemState().with_memory({"_frac:Ton_Acc": unit_ns - 40 * dt_ns})
+    for engine in (PLC, CompiledPLC):
+        plc: Any = engine(prog, initial_state=state, dt=float(dt))
+        for _ in range(39):
+            plc.step()
+        assert not plc.current_state.tags["Ton_Done"]
+        plc.step()
+        assert plc.current_state.tags["Ton_Done"]
+        assert plc.current_state.tags["Ton_Acc"] == 1
+        assert plc.current_state.memory["_frac:Ton_Acc"] == 0
+
+
+# --- The generated code: the clock's own integers, no float on the way ------------------
+
+
+def test_generated_code_sums_uneven_scans_with_no_loss() -> None:
+    """A board's dt is whatever the clock read: the units are the whole sum's."""
+    prog = _on_delay_program(32000, "Tms")
+    hw = _hw()
+    result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
+
+    class Uneven(_BoardClock):
+        """Whole ticks of 1/32768 s, a SAMD51's, in truncated ns; never the same twice."""
+
+        ticks = 0
+
+        def sleep(self, _seconds: float) -> None:
+            self.ticks += 300 + (self.ticks % 17)
+            self.now_ns = 5_000_000_000 + self.ticks * 1_000_000_000 // 32768
+
+    clock = Uneven(5_000_000_000)
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        clock.install(monkeypatch)
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, _StubBase(), runtime_source=result.runtime, scans=3000
+        )
+    finally:
+        monkeypatch.undo()
+    ctx = _context_for_program(prog, hw)
+    acc = ctx.referenced_tags["Ton_Acc"]
+    # The last scan timed up to the clock's reading before its own sleep.
+    timed_ns = namespace["_last_scan_ns"] - 5_000_000_000
+    assert namespace[ctx.symbol_for_tag(acc)] == timed_ns // 1_000_000
+    assert namespace["_mem"]["_frac:Ton_Acc"] == timed_ns % 1_000_000
+
+
+def test_generated_timer_ticks_are_integer_arithmetic() -> None:
+    """A board's float cannot hold a day's fraction of 10 ms; no tick goes through one."""
+    prog = _on_delay_program(1, "Td")
+    code = generate_circuitpy(prog, _hw(), target_scan_ms=10.0, runstop=None).code
+    assert "_dt_units" not in code
+    assert "// 86400000000000" in code
+    # A float is only what the board's scan-time points report.
+    assert 'float(_mem.get("_dt"' not in code
+
+
+# --- dt is whole ns when it can be -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("dt", "ns"),
+    [
+        (0.0, 0),
+        (0.1, 100_000_000),
+        (0.003, 3_000_000),
+        (0.0005, 500_000),
+        (0.000123456, 123_456),
+        (0.123456789, 123_456_789),
+        (10, 10_000_000_000),
+        (60.1, 60_100_000_000),
+        (1 / 3, Fraction(10**9, 3)),
+        (1 / 60, Fraction(10**9, 60)),
+        (1 / 1024, Fraction(10**9, 1024)),
+        (0.0123456789012345, 12_345_679),
+    ],
+)
+def test_dt_to_ns(dt: float, ns: int | Fraction) -> None:
+    got = dt_to_ns(dt)
+    assert got == ns
+    assert type(got) is type(ns)
+
+
+def test_a_dt_under_a_nanosecond_still_counts() -> None:
+    ns = dt_to_ns(1e-10)
+    assert 0 < ns < 1
+
+
+@pytest.mark.parametrize("unit", list(TimeUnit))
+def test_each_unit_knows_its_length(unit: TimeUnit) -> None:
+    assert unit.ns == round(1e9 / unit.dt_to_units(1.0))
+
+
+# --- Non-decimal dt: every engine exact, and the loop declines it -----------------------
+
+
+@pytest.mark.parametrize(
+    ("dt", "scans_per_second"), [(1 / 3, 3), (1 / 60, 60), (1 / 1024, 1024), (1 / 7, 7)]
+)
+@pytest.mark.parametrize("engine", [_step_interpreter, _step_kernel])
+def test_non_decimal_dt_is_exact(engine: Any, dt: float, scans_per_second: int) -> None:
+    for preset, unit, seconds in ((1000, "Tms", 1), (3, "Ts", 3), (1, "Tm", 60)):
+        expect = seconds * scans_per_second
+        if expect > 10_000:
+            continue
+        assert engine(_on_delay_program(preset, unit), dt, expect + 2) == expect
+
+
+@pytest.mark.parametrize("dt", [1 / 3, 1 / 60, 1 / 1024])
+def test_run_with_a_non_decimal_dt_equals_stepping(dt: float) -> None:
+    prog = _on_delay_program(3, "Ts")
+    stepped = PLC(prog, dt=dt)
+    for _ in range(3500):
+        stepped.step()
+    ran = PLC(prog, dt=dt)
+    ran.run(3500)
+    assert dict(ran.current_state.tags) == dict(stepped.current_state.tags)
+    assert dict(ran.current_state.memory) == dict(stepped.current_state.memory)
+
+
+def test_sub_millisecond_dt_keeps_the_fraction_of_a_millisecond() -> None:
+    prog = _on_delay_program(10, "Tms")
+    for dt, expect in ((0.0005, 20), (0.0001, 100), (0.00025, 40)):
+        assert _step_interpreter(prog, dt, expect + 2) == expect
+        assert _step_kernel(prog, dt, expect + 2) == expect
+
+
+# --- The two engines hold the same memory ------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+def test_interpreter_and_kernel_memory_agree_on_every_scan(kind: str) -> None:
+    prog = PROGRAMS[kind](1, "Ts")
+    interpreter, kernel = PLC(prog, dt=0.03), CompiledPLC(prog, dt=0.03)
+    for _ in range(60):
+        interpreter.step()
+        kernel.step()
+        for key, value in interpreter.current_state.memory.items():
+            if key.startswith(("_frac:", "_dt")):
+                assert kernel.current_state.memory[key] == value, key
+                assert type(kernel.current_state.memory[key]) is type(value), key
+
+
+# --- A carry survives whatever a state goes through ---------------------------------------
+
+
+def test_fork_and_history_keep_the_carry() -> None:
+    prog = _on_delay_program(1, "Ts")
+    plc = PLC(prog, dt=0.1)
+    plc.run(5)
+    assert plc.current_state.memory["_frac:Ton_Acc"] == 500_000_000
+    fork = plc.fork()
+    fork.run(5)
+    assert fork.current_state.tags["Ton_Done"]
+    assert fork.current_state.tags["First"] == 10
+    plc.run(7)
+    # An earlier scan reads back as it was, and a fork from it lands as stepping does.
+    assert plc.history.at(3).memory["_frac:Ton_Acc"] == 300_000_000
+    assert plc.current_state.tags["First"] == 10
+
+
+@pytest.mark.parametrize(
+    ("unit", "old", "ns"),
+    [("Ts", 0.5, 500_000_000), ("Tm", 0.25, 15_000_000_000), ("Tms", 0.5, 500_000)],
+)
+@pytest.mark.parametrize("engine", ["interpreter", "kernel"])
+def test_a_saved_float_fraction_still_counts(
+    engine: str, unit: str, old: float, ns: int
+) -> None:
+    """An old state's ``_frac`` is a float fraction of the unit: it reads as that much time."""
+    preset = {"Ts": 1, "Tm": 1, "Tms": 1}[unit]
+    prog = _on_delay_program(preset, unit)
+    unit_ns = int(UNIT_SECONDS[unit] * 10**9)
+    dt = (unit_ns // 2) / 1e9
+    state = SystemState().with_memory({"_frac:Ton_Acc": old, "_dt": dt})
+    plc: Any = (CompiledPLC if engine == "kernel" else PLC)(prog, initial_state=state, dt=dt)
+    plc.step()
+    assert plc.current_state.tags["Ton_Done"]
+    assert plc.current_state.memory["_frac:Ton_Acc"] == (ns + unit_ns // 2) % unit_ns
+    assert type(plc.current_state.memory["_frac:Ton_Acc"]) is int
+
+
+def test_a_saved_fraction_of_no_timer_the_kernel_knows_reads_as_nothing() -> None:
+    prog = _on_delay_program(1, "Ts")
+    state = SystemState().with_memory({"_frac:Gone": 0.5})
+    plc = CompiledPLC(prog, initial_state=state, dt=0.1)
+    plc.step()
+    assert plc.current_state.tags["Ton_Acc"] == 0
+    assert plc.current_state.memory["_frac:Gone"] == 0
+
+
+def test_changing_dt_mid_count_keeps_the_time() -> None:
+    from pyrung.core.time_mode import TimeMode
+
+    prog = _on_delay_program(1, "Ts")
+    plc = PLC(prog, dt=0.1)
+    plc.run(5)
+    plc._set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    plc.run(1)
+    assert plc.current_state.memory["_frac:Ton_Acc"] == 750_000_000
+    plc.run(1)
+    assert plc.current_state.tags["Ton_Acc"] == 1
+    assert plc.current_state.memory["_frac:Ton_Acc"] == 0
+    assert plc.current_state.memory["_dt_ns"] == 250_000_000
+
+
+def test_a_realtime_dt_counts_in_whole_ns() -> None:
+    prog = _on_delay_program(1, "Ts")
+    plc = PLC(prog, realtime=True)
+    plc.step()
+    plc.step()
+    assert type(plc.current_state.memory["_frac:Ton_Acc"]) is int
+    assert plc.current_state.memory["_dt_ns"] == dt_to_ns(plc.current_state.memory["_dt"])
+
+
+# --- The v4 timed coils carry the same way -------------------------------------------------
+
+
+def _coil_program(build: Any) -> Program:
+    Scans = Dint("Scans", retentive=False)
+    Target = Bool("Target", retentive=False)
+    First = Dint("First", retentive=False)
+    Seen = Bool("Seen", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Scans + 1, Scans)
+        build(Target)
+        with Rung(Target, ~Seen):
+            copy(Scans, First)
+            latch(Seen)
+    return prog
+
+
+@pytest.mark.parametrize("dt", DTS[2:])
+@pytest.mark.parametrize("engine", [_step_interpreter, _step_kernel])
+def test_debounce_turns_on_at_ceil_whichever_unit(engine: Any, dt: str) -> None:
+    OnT, OffT = Timer.clone("OnT"), Timer.clone("OffT")
+
+    def seconds(target: Any) -> None:
+        with Rung():
+            debounce(target, on=(OnT, 1), off=(OffT, 1), unit="Ts")
+
+    def millis(target: Any) -> None:
+        with Rung():
+            debounce(target, on=(OnT, 1000), off=(OffT, 1000), unit="Tms")
+
+    expect = want(1, "Ts", dt)
+    assert engine(_coil_program(seconds), float(dt), expect + 2) == expect
+    assert engine(_coil_program(millis), float(dt), expect + 2) == expect
+
+
+@pytest.mark.parametrize("engine", [_step_interpreter, _step_kernel])
+def test_timed_coil_drops_at_ceil_in_seconds(engine: Any) -> None:
+    Pulse = Timer.clone("Pulse")
+    Scans = Dint("Scans", retentive=False)
+    Target = Bool("Target", retentive=False)
+    First = Dint("First", retentive=False)
+    Seen = Bool("Seen", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Scans + 1, Scans)
+        with Rung():
+            timed(Target, Pulse, 1, unit="Ts")
+        with Rung(~Target, ~Seen):
+            copy(Scans, First)
+            latch(Seen)
+    assert engine(prog, 0.1, 13) == 10
+
+
+@pytest.mark.parametrize("engine", [_step_interpreter, _step_kernel])
+def test_flasher_changes_phase_at_ceil_in_seconds(engine: Any) -> None:
+    OnT, OffT = Timer.clone("OnT"), Timer.clone("OffT")
+    Scans = Dint("Scans", retentive=False)
+    Target = Bool("Target", retentive=False)
+    First = Dint("First", retentive=False)
+    Seen = Bool("Seen", retentive=False)
+    with Program(strict=False) as prog:
+        with Rung():
+            calc(Scans + 1, Scans)
+        with Rung():
+            flasher(Target, on=(OnT, 1), off=(OffT, 1), unit="Ts")
+        with Rung(~Target, ~Seen):
+            copy(Scans, First)
+            latch(Seen)
+    assert engine(prog, 0.1, 13) == 10
