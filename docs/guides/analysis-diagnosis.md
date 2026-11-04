@@ -164,7 +164,7 @@ Trying CmdStart=True... done.
 
 ### Condition syntax
 
-Accepts one or more targets — each a Tag (Bool shorthand for `== True`) or a comparison. Several targets are an AND goal: `how()` reaches one state where they all hold at once.
+Accepts one or more targets — each a Tag (Bool shorthand for `== True`) or a comparison. Several targets, or an `And(...)` of them, are an AND goal: `how()` reaches one state where they all hold at once.
 
 ```python
 plc.how(State == RUNNING)                        # comparison
@@ -172,7 +172,7 @@ plc.how(Running)                                  # Bool shorthand — target is
 plc.how(Running, State == RUNNING)               # AND — a state where both hold
 ```
 
-If the targets can't coexist — the same register at two values, or two states whose only writers clobber each other — the result says `Cannot reach` and names the conflict:
+If the targets can't coexist — the same register at two values, or two states where every writer of each leaves the other off — the result says `Cannot reach` and names the conflict:
 
 ```python
 plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, two values

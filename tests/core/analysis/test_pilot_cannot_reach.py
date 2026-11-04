@@ -13,9 +13,11 @@ import pytest
 
 from pyrung import (
     PLC,
+    And,
     Bool,
     Harness,
     Int,
+    Or,
     Program,
     Pulse,
     Rung,
@@ -24,10 +26,13 @@ from pyrung import (
     copy,
     latch,
     on_delay,
+    out,
     reset,
     rise,
 )
 from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.analysis.pilot.drive_setup import prepare_drive
+from pyrung.core.analysis.pilot.static_proofs import facts_for, linked_feedback_block
 from pyrung.core.physical import Physical
 
 BOUND: dict[str, Any] = {"wall_clock_s": 30.0, "max_scans": 3000}
@@ -46,6 +51,12 @@ def _harnessed(program: Program, dt: float = 0.01) -> PLC:
     plc = PLC(program, dt=dt)
     Harness(plc).install()
     return plc
+
+
+def _link_proof(program: Program, tag: Any) -> str | None:
+    """What the proof says on its own: a search that reaches the target would hide it."""
+    setup = prepare_drive(_harnessed(program), unlink=None)
+    return linked_feedback_block(tag.name, True, facts_for(setup))
 
 
 def _step_to(plc: PLC, tag: Any, inputs: dict[str, Any], scans: int) -> int | None:
@@ -178,8 +189,48 @@ class TestLinkProofIsNotClaimedFalsely:
         plan = started.how(hit, **BOUND)
         assert plan.status is not PlanStatus.CANNOT_REACH, plan.reason
 
+    def test_a_program_that_keeps_both_arms_going(self) -> None:
+        """Each arm ends within its delay, but this program flips into the other arm unbroken.
+
+        The plant reads the enable the program left last scan, so the feedback's change and
+        the program's answer to it land in one scan and the rung never goes false.
+        """
+        Watch = Timer.clone("Watch")
+        go = Bool("Go", external=True)
+        enable = Bool("Enable")
+        feedback = Bool(
+            "Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="Enable"
+        )
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(go, ~feedback):
+                out(enable)
+            with Rung(Or(And(enable, ~feedback), And(~enable, feedback))):
+                on_delay(Watch, 1000)
+            with Rung(Watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 200) is not None
+        assert _link_proof(program, hit) is None
+
+        plan = _harnessed(program).how(hit, **BOUND)
+        assert plan.status is not PlanStatus.CANNOT_REACH, plan.reason
+
 
 class TestLinkProofStillProves:
+    def test_every_arm_needs_the_same_opposition(self) -> None:
+        extra = Bool("Extra", external=True)
+        Watch = Timer.clone("Watch")
+
+        def build(enable: Any, feedback: Any, hit: Any) -> None:
+            with Rung(Or(And(enable, ~feedback), And(enable, ~feedback, extra))):
+                on_delay(Watch, 3000)
+            with Rung(Watch.Done):
+                latch(hit)
+
+        program, hit = _linked(Physical("Fb", on_delay="200ms"), build)
+        plan = _harnessed(program).how(hit, **BOUND)
+        assert plan.status is PlanStatus.CANNOT_REACH, plan.reason
+
     def test_watchdog_held_off_by_its_link(self) -> None:
         Watch = Timer.clone("Watch")
 

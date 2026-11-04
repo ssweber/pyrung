@@ -6,9 +6,25 @@ from typing import Any
 
 import pytest
 
+from examples.learn import assignment
 from examples.packml_bench import S as PackmlStates
-from examples.packml_bench import StateCurrent, logic as packml
-from pyrung import PLC, And, Block, Bool, Int, Or, Program, Rung, TagType, Timer, copy, latch, on_delay
+from examples.packml_bench import StateCurrent
+from examples.packml_bench import logic as packml
+from pyrung import (
+    PLC,
+    And,
+    Block,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    TagType,
+    Timer,
+    copy,
+    latch,
+    on_delay,
+)
 from pyrung.core.analysis.graph import PlanStatus
 from tests.fixtures import pilot_bootstrap_guard_overwrite as guard
 
@@ -28,6 +44,16 @@ def test_a_scan_already_past_the_entry_stops_with_a_reason() -> None:
 
 def test_the_same_entry_from_cold_still_reaches() -> None:
     plan = PLC(guard.logic, dt=0.01).how(guard.SequenceState == guard.TARGET, **BOUND)
+    assert plan.status is PlanStatus.REACHED, plan.reason
+
+
+@pytest.mark.parametrize("warm", [0, 1, 2])
+def test_assignment_warmed_reaches(warm: int) -> None:
+    """Two warm scans once raised TheoryInvariantError here."""
+    plc = PLC(assignment.logic, dt=0.01)
+    for _ in range(warm):
+        plc.step()
+    plan = plc.how(assignment.CycleCount == 5, **BOUND)
     assert plan.status is PlanStatus.REACHED, plan.reason
 
 

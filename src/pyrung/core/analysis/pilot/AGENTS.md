@@ -23,7 +23,8 @@ module.
 - `PlanStatus.REACHED` carries the reached fork. Its scan log and synthesis
   holds are the replayable witness; replay does not re-plan.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
-  unreachability.
+  unreachability, over every write to the tags involved and not one traced route
+  (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`.
 - `PlanStatus.STOPPED` means PILOT exhausted its bounded supply of safe,
   evidence-backed actions. It is not a proof that no path exists.
 - `Plan.journal`, `journey`, and the event stream explain the drive. They do not

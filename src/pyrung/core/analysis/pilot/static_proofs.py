@@ -18,12 +18,12 @@ Three facts carry both proofs:
 does not hold now and every producer's condition needs a blocked value. Take the
 first scan any value in the proof appears: its producer read another value of
 the proof, already there, which contradicts first. That leaves where the proof
-bottoms out, a non-retentive on-delay's Done, whose rung needs a bool coupling's
-enable and its feedback opposed (``En, ~Fb`` or ``~En, Fb``). The plant ends that
-state within its delay, and the timer starts over whenever its rung goes false,
-so it cannot time out when its preset exceeds the delay plus some scans of slop.
-An instantaneous read of the same contacts proves nothing: the state exists for
-those scans. A ``Pulse`` feedback alternates, so it has no such bound.
+bottoms out, a non-retentive on-delay's Done, whose rung always needs a bool
+coupling's enable and its feedback opposed the same way (``En, ~Fb`` or ``~En, Fb``).
+The plant ends that state within its delay, and the timer starts over whenever its
+rung goes false, so it cannot time out when its preset exceeds the delay plus some
+scans of slop. An instantaneous read of the same contacts proves nothing: the state
+exists for those scans. A ``Pulse`` feedback alternates, so it has no such bound.
 
 **Mutually exclusive** (``exclusion_evidence``). ``X=a`` and ``Y=b`` cannot both
 hold at the end of a scan when no rung produces both and each rung producing one
@@ -118,9 +118,7 @@ class ProofFacts:
             rung = self.rung_of(node_index)
             if rung is None:
                 return None
-            writes = [
-                instr for instr in rung._instructions if instruction_writes_tag(instr, tag)
-            ]
+            writes = [instr for instr in rung._instructions if instruction_writes_tag(instr, tag)]
             if not writes:  # through a pointer or inside another instruction
                 return None
             produces = False
@@ -243,7 +241,13 @@ class _LinkProof:
                     return used
             return None
         if isinstance(expr, Or):
-            return self._every_arm(expr, lambda arm: self.never_true(arm, stack))
+            links: frozenset[Any] = frozenset()
+            for arm in expr.terms:
+                used = self.never_true(arm, stack)
+                if used is None:
+                    return None
+                links |= used
+            return links
         if not isinstance(expr, Atom) or expr.unsupported is not None:
             return None
         if expr.form in ("xic", "rise"):
@@ -253,15 +257,6 @@ class _LinkProof:
         if expr.form == "eq" and not expr.operand_is_tag:
             return self.blocked(expr.tag, expr.operand, stack)
         return None
-
-    def _every_arm(self, expr: Or, check: Any) -> frozenset[Any] | None:
-        links: frozenset[Any] = frozenset()
-        for arm in expr.terms:
-            used = check(arm)
-            if used is None:
-                return None
-            links |= used
-        return links
 
     def _timer_done_blocked(self, tag: str, value: Any, stack: frozenset[Any]) -> Any:
         """A non-retentive on-delay's Done, ``NotImplemented`` when *tag* is no timer's Done."""
@@ -296,48 +291,67 @@ class _LinkProof:
         return self._dwell_limited(self._condition_of(node_index), room_ms, stack)
 
     def _dwell_limited(self, expr: Any, room_ms: float, stack: frozenset[Any]) -> Any:
-        """Can *expr* never stay true for *room_ms* in one stretch?"""
+        """Can *expr* never stay true for *room_ms* in one stretch?
+
+        It can if some state it always needs ends too soon. One such state per arm of an
+        ``Or`` is not enough: a program may hand over from one arm to the next in one scan.
+        """
         proved = self.never_true(expr, stack)
         if proved is not None:
             return proved
-        if isinstance(expr, Or):
-            return self._every_arm(expr, lambda arm: self._dwell_limited(arm, room_ms, stack))
-        atoms = _conjuncts(expr)
-        for coupling in self.facts.couplings:
-            if self._opposition_ends_within(atoms, coupling, room_ms):
-                return frozenset({(coupling.en_name, coupling.fb_name)})
-        for term in atoms:
-            if isinstance(term, Or):
-                used = self._dwell_limited(term, room_ms, stack)
-                if used is not None:
-                    return used
+        for (en, fb, _driving), delay_ms in self._oppositions(expr, stack).items():
+            assert self.facts.dt_ms is not None
+            if delay_ms + _WINDOW_SLOP_SCANS * self.facts.dt_ms < room_ms:
+                return frozenset({(en, fb)})
         return None
 
-    def _opposition_ends_within(self, atoms: list[Any], coupling: Coupling, room_ms: float) -> bool:
-        """Do these contacts need the feedback against its enable, for less than the plant allows?
+    def _oppositions(self, expr: Any, stack: frozenset[Any]) -> dict[Any, float]:
+        """The opposed states *expr* cannot be true without: ``(en, fb, driving)`` to its longest."""
+        if isinstance(expr, Or):
+            arms = [
+                self._oppositions(arm, stack)
+                for arm in expr.terms
+                if self.never_true(arm, stack) is None
+            ]
+            return {
+                link: delay
+                for link, delay in (arms[0] if arms else {}).items()
+                if all(link in arm for arm in arms)
+            }
+        atoms = _conjuncts(expr)
+        found: dict[Any, float] = {}
+        for coupling in self.facts.couplings:
+            opposed = self._opposed_state(atoms, coupling)
+            if opposed is not None:
+                driving, delay_ms = opposed
+                found[(coupling.en_name, coupling.fb_name, driving)] = delay_ms
+        for term in atoms:
+            if isinstance(term, Or):
+                found.update(self._oppositions(term, stack))
+        return found
+
+    def _opposed_state(self, atoms: list[Any], coupling: Coupling) -> tuple[bool, float] | None:
+        """Which way these contacts hold the feedback against its enable, and for how long.
 
         Only a timing coupling has that bound: a profile (``Pulse``) has no resting value.
         """
         facts = self.facts
-        dt_ms = facts.dt_ms
         fb = coupling.fb_name
         if (
-            dt_ms is None
+            facts.dt_ms is None
             or coupling.physical.profile is not None
             or fb in facts.forced
             or facts.pdg.writers_of.get(fb)
         ):
-            return False
+            return None
         driving = _enable_required(atoms, coupling)
-        fb_high = _requires(atoms, coupling.fb_name, "xic")
-        fb_low = _requires(atoms, coupling.fb_name, "xio")
+        fb_high = _requires(atoms, fb, "xic")
+        fb_low = _requires(atoms, fb, "xio")
         if driving is True and fb_low and not fb_high:
-            delay_ms = coupling.physical.on_delay_ms or 0
-        elif driving is False and fb_high and not fb_low:
-            delay_ms = coupling.physical.off_delay_ms or 0
-        else:
-            return False
-        return delay_ms + _WINDOW_SLOP_SCANS * dt_ms < room_ms
+            return True, coupling.physical.on_delay_ms or 0
+        if driving is False and fb_high and not fb_low:
+            return False, coupling.physical.off_delay_ms or 0
+        return None
 
 
 def linked_feedback_block(target_tag: str, target_value: Any, facts: ProofFacts) -> str | None:
@@ -404,6 +418,8 @@ def _reads_off(expr: Any, tag: str, value: Any) -> bool:
 def _rung_chain(facts: ProofFacts, node: RungNode) -> list[Any]:
     """The rung and the branches down to *node*: all of them are true when it fires."""
     rung = resolve_rung(facts.program, replace(node, branch_path=()))
+    if rung is None:
+        return []
     chain = [rung]
     for branch_index in node.branch_path:
         rung = rung._branches[branch_index]

@@ -77,7 +77,6 @@ from pyrung.core.analysis.sp_values import (
     _written_value_for_tag,
 )
 from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
-from pyrung.core.expression import ExprCompare
 from pyrung.core.crossing import (
     Affine,
     AffineCmp,
@@ -89,6 +88,7 @@ from pyrung.core.crossing import (
     ReverseResult,
     eq_target,
 )
+from pyrung.core.expression import ExprCompare
 from pyrung.core.instruction.advance import ConditionDemand, constraint_holds
 from pyrung.core.instruction.conversions import copy_store_transform
 from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
