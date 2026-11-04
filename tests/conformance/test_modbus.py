@@ -39,6 +39,7 @@ from pyrung.conformance import (
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
 from pyrung.core import Rung, calc, copy
 from tests.conformance import suite, test_system
+from tests.conformance.probe_kit import asks_for_a_reading, reading_lines, record_readings
 
 ds = ClickBlocks().ds
 
@@ -62,12 +63,21 @@ def test_all_groups_over_modbus(
             wait_for_scan_counter_wrap(conformance_endpoint)
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     if conformance_endpoint is not None:
-        # A real CLICK: record what passed, drop what failed (confirmed.toml).
+        # A real CLICK: record what passed, drop what failed (confirmed.toml).  A case
+        # whose range holds every candidate answers nothing by passing: it records what
+        # it read instead (readings.toml).
+        today = date.today().isoformat()
         added, dropped = record_confirmations(
-            suite.CONFIRMED_PATH, results, on=date.today().isoformat()
+            suite.CONFIRMED_PATH,
+            [r for r in results if not asks_for_a_reading(r.case)],
+            on=today,
         )
         print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
+        read = record_readings(suite.READINGS_PATH, results, on=today)
+        print(f"readings.toml: {len(read)} read")
     print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
+    for line in reading_lines(results):
+        print(line)
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in loaded)
     assert_all_passed(results)

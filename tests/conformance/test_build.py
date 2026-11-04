@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from collections import Counter
 from dataclasses import replace
 
@@ -33,6 +34,12 @@ from pyrung.core import PLC, Program, Rung, calc, copy
 from pyrung.core.system_points import system
 from pyrung.core.validation._common import _collect_write_sites
 from tests.conformance import memory, suite
+from tests.conformance.probe_kit import (
+    asks_for_a_reading,
+    between,
+    reading_lines,
+    record_readings,
+)
 
 ds = ClickBlocks().ds
 
@@ -388,6 +395,38 @@ def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
     assert is_confirmed(passed, record)
     # Rewritten since (another hash): unconfirmed until it passes again.
     assert not is_confirmed(replace(passed, case_hash="h9"), record)
+
+
+def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, monkeypatch) -> None:
+    asks = case("x", ladder=_prove_constant, expect={"Result1": between(0, 9)})
+    asserts = case("x", ladder=_prove_constant, expect={"Result1": range(0, 10)})
+    assert asks_for_a_reading(asks)
+    assert not asks_for_a_reading(asserts)
+    read = CaseResult(
+        case=asks, passed=True, actual={"Result1": 7}, slot_index=1, group="g", case_hash="h1"
+    )
+    other = CaseResult(
+        case=asserts, passed=True, actual={"Result1": 7}, slot_index=2, group="g", case_hash="h2"
+    )
+    path = tmp_path / "readings.toml"
+    assert record_readings(path, [read, other], on="2026-11-04") == ["g/constant"]
+    assert record_readings(path, [replace(read, actual={"Result1": 8})], on="2026-11-05")
+    assert record_readings(path, [replace(read, stale=True)], on="2026-11-06") == []
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"] == [
+        {"case": "g/constant", "hash": "h1", "on": "2026-11-04", "read": {"Result1": 7}},
+        {"case": "g/constant", "hash": "h1", "on": "2026-11-05", "read": {"Result1": 8}},
+    ]
+    assert reading_lines([read, other]) == ["read g/constant {'Result1': 7}"]
+    monkeypatch.setenv("PYRUNG_CONFORMANCE_STEP", "STOP->RUN")
+    record_readings(path, [read], on="2026-11-07")
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"][-1]["step"] == "STOP->RUN"
+
+
+def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
+    asked = {f"{g.name}/{c.id}" for g in suite.ALL_GROUPS for c in g.cases if asks_for_a_reading(c)}
+    confirmed = load_confirmations(suite.CONFIRMED_PATH)
+    assert not asked & set(confirmed)
+    assert {"boot_read/what_survives", "rtc_set/date_and_time_apply", "real_sum/f64_row"} <= asked
 
 
 def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:

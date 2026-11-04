@@ -4,8 +4,8 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as six
-projects, one part each (``PARTS``; there is no part D)::
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as
+twelve projects, one part each (``PARTS``; there is no part D)::
 
     make conformance-export PART=A OUT=path/to/a
     make conformance-export PART=B OUT=path/to/b
@@ -13,6 +13,7 @@ projects, one part each (``PARTS``; there is no part D)::
     make conformance-export PART=E OUT=path/to/e
     make conformance-export PART=F OUT=path/to/f
     make conformance-export PART=G OUT=path/to/g
+    make conformance-export PART=H OUT=path/to/h  (and I, J, K, L, M)
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
@@ -38,15 +39,19 @@ from pyrung.conformance import (
     read_program_hash,
 )
 from tests.conformance import (
+    test_agg_more,
     test_block,
+    test_boot_read,
     test_call_twice,
     test_coils,
     test_cont_box,
+    test_copy_more,
     test_counters,
     test_drum,
     test_drum_close,
     test_drum_idle,
     test_drum_jump,
+    test_drum_pins,
     test_drum_rule,
     test_drum_settle,
     test_drum_trace,
@@ -57,10 +62,13 @@ from tests.conformance import (
     test_loop_call,
     test_math,
     test_math_error,
+    test_math_more,
     test_numeric,
     test_out,
     test_past_bank_write,
     test_paste_risk,
+    test_real_bits,
+    test_real_sum,
     test_ret_branch,
     test_row_solve,
     test_rung_semantics,
@@ -71,11 +79,15 @@ from tests.conformance import (
     test_system,
     test_text,
     test_timers,
+    test_v4_more,
+    test_word_store,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
 #: Cases that passed on a real CLICK, as they are now (``record_confirmations``).
 CONFIRMED_PATH = Path(__file__).with_name("confirmed.toml")
+#: What the probes with no answer yet read on a real CLICK (``probe_kit.record_readings``).
+READINGS_PATH = Path(__file__).with_name("readings.toml")
 #: The ClickNick workspace linked to the conformance CLICK project.
 WORKSPACE_PATH = Path(__file__).with_name("workspace")
 
@@ -117,6 +129,28 @@ ALL_GROUPS = [
     test_drum_idle.group,
     # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
     test_math_error.group,
+    # The grey-area probes (probe_kit.py): each reads a flag right after its own op, or
+    # waits for a scan it starts off (SC46), so nothing they raise reaches a group above.
+    test_word_store.group,
+    test_real_bits.group,
+    test_real_sum.group,
+    test_drum_pins.group,
+    test_drum_pins.branch_group,
+    test_drum_pins.limits_group,
+    test_math_more.group,
+    test_math_more.hex_group,
+    test_agg_more.group,
+    test_copy_more.group,
+    test_copy_more.block_group,
+    test_v4_more.group,
+    test_v4_more.for_group,
+    test_v4_more.call_group,
+    test_boot_read.boot_group,
+    test_boot_read.rtc_group,
+    test_boot_read.wide_group,
+    test_copy_more.range_group,
+    test_copy_more.compare_group,
+    test_boot_read.flag_group,
     # After every group: its probes raise SC43 and SC46 on purpose, and a flag
     # stays up to the end of the scan, so any group after it that reads a flag
     # would see them (text/to_binary read SC43 on a scan a store probe raised it).
@@ -177,6 +211,14 @@ PARTS: dict[str, tuple[str, ...]] = {
     # writes past the DD bank on a CLICK, is the project's last group so it can be
     # left out: nothing depends on it.
     "F": ("store_probe", "flag_probe", "past_write"),
+    # The grey-area probes (probe_kit.py) go in parts of their own, so no confirmed
+    # group changes.  H what Copy and Math store.
+    "H": ("word_store", "real_bits", "real_sum"),
+    "I": ("drum_pins", "drum_branch", "drum_limits"),
+    "J": ("math_more", "hex_math", "agg_more"),
+    "K": ("copy_more", "block_more", "coil_range", "compare"),
+    "L": ("out_more", "for_more", "call_more"),
+    "M": ("boot_read", "rtc_set", "for_wide", "flag_scan"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
