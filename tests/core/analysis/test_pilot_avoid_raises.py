@@ -1305,3 +1305,32 @@ def test_a_member_that_answers_keeps_its_answer_beside_one_that_raises() -> None
 
     assert plan.status is PlanStatus.REACHED
     assert plan.fork.state.tags["Danger"] is False
+
+
+# ---------------------------------------------------------------------------
+# The settled gate on a trial with no pulse
+# ---------------------------------------------------------------------------
+
+
+def test_a_raise_on_the_landing_of_a_wait_reaches_the_caller() -> None:
+    """True where the wait starts, so nothing else asks the member again: only the landing does."""
+    prog, target, dt = _route_by_waiting()
+
+    def _clear_on_landing(snapshot: dict) -> bool:
+        return not snapshot["Delay_Done"]
+
+    def _raises_on_landing(snapshot: dict) -> bool:
+        return 1 / 0 > 0 if snapshot["Delay_Done"] else True
+
+    def _run(avoid):
+        plc = PLC(prog, dt=dt)
+        plc.step()
+        return plc.how(target, avoid=avoid, max_scans=2000)
+
+    without = _run(None)
+    assert without.status is PlanStatus.REACHED
+    assert not any(step.inputs for step in without.journal)
+    _same_plan(_run(_clear_on_landing), without)
+
+    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
+        _run(_raises_on_landing)
