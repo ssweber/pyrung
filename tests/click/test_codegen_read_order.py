@@ -235,3 +235,12 @@ def test_export_keeps_a_written_contact_out_of_the_shared_prefix():
     ]
     code = ladder_to_pyrung(bundle)
     assert "with branch(C5, X002):" in code
+
+
+def test_hex_constant_is_not_a_read_of_an_address():
+    from pyrung.click.codegen.read_order import _operands
+
+    names, _ = _operands("DH1==FFC0h")
+    assert names == {"DH1"}
+    names, _ = _operands("DS1==16C2h")
+    assert names == {"DS1"}

@@ -82,8 +82,8 @@
 
 ### Fixes
 
-- A hex, Real or text constant no longer reads as an address when CLICK ladder is imported: `0xFFC0` (`FFC0h`) added a `C0 = c[0]` that made the generated `tags.py` fail on import, `0xC000` did the same, and `0x16C2` added an unused `C2`; quoted text such as `"C1"` is left alone too.
-- Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError: Cannot use Condition 'CompareEq' as boolean`, and runs the same on both backends and in generated CircuitPython.
+- A constant in an imported CLICK ladder (hex such as `FFC0h`, a Real, or quoted text) is never read as an address, so the generated `tags.py` no longer gains a stray tag like `C0 = c[0]` that fails on import.
+- Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`.
 - A long `how()` coast holds bounded memory: it keeps at most two compiled kernels and 512 checkpoints, and past a million record runs its scans are recorded only if a later `cause()` or survey reaches them, up to 250,000 scans, with `UnrecordedScansError` beyond that.
 - A kernel that fails to compile for a reason pyrung does not expect gives a `RuntimeWarning` and the scans run interpreted, rather than raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a rung-driven stop: it ends where the program stopped itself, as stepping does, and says it does not plan across the restart.
