@@ -6,7 +6,7 @@
 
 --base   a git ref (its src/ is exported with git archive, cached by sha) or a directory with src/
 --tree   a directory with src/ (a worktree, or the merged tree of a train)
---full   the long set (about 160 more rows; a quarter hour or more); the default is the fast set
+--full   the long set (256 more rows; not timed end to end); the default is the fast set
 --only S run only cases whose name contains S
 --expected FILE
          differences you expect, one per line: `<glob on the case name>  # reason`.  A difference

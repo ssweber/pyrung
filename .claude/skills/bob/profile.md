@@ -66,8 +66,8 @@ python -I devtools/mergeq/mergeq.py run --timeout 1700 --     .venv/Scripts/pyth
 - `--base` is a git ref (exported with `git archive`) or a directory; `--tree` is a directory
   with `src/`. Each side runs in its own process at below-normal priority with a memory limit
   and a per-row time limit, and prints `pyrung.__file__`, which the tool checks.
-- Fast set (default): about 125 rows, 5 minutes a side. `--full`: about 280 rows, a quarter
-  hour or more; run it for a branch that moves the planner itself.
+- Fast set (default): 122 rows, 3.5 to 4 minutes a side (7 minutes both). `--full`: 378 rows (not yet timed end to end; expect a quarter
+  hour or more per side); run it for a branch that moves the planner itself.
 - The groups: a timer mid-count under a held enable (with and without a harness, bench link
   changed), entry-requirement programs warmed 0..2 scans, programs that really reach, long
   waits (minutes, past 32.767 s), holds, two routes, every avoid form (condition, callable index,
