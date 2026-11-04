@@ -145,6 +145,7 @@ def test_v4_programs_behave_the_same_after_export_and_import(spec):
     exec_with_source(code, namespace)
     again = namespace["logic"]
 
+    ran: set[tuple[str, str]] = set()  # (side, dest) that has held a draw
     skip = {name for name, _, _ in rands} | _randagg_names(spec)
     dt = spec.dt
     left, right = PLC(logic, dt=dt), PLC(again, dt=dt)
@@ -159,9 +160,18 @@ def test_v4_programs_behave_the_same_after_export_and_import(spec):
             right.step()
             a, b = dict(left.current_state.tags), dict(right.current_state.tags)
             for name, lo, hi in rands:
-                # 0 is a draw only inside the bounds; else the rung has not run yet.
-                assert a[name] == 0 or lo <= a[name] <= hi
-                assert b[name] == 0 or lo <= b[name] <= hi
+                # A destination is 0 until its rung first runs (calc then holds
+                # the last draw), so 0 out of bounds means "not run yet".  Once
+                # nonzero it must stay in bounds, and both sides must agree on
+                # whether the rung has run.
+                if not lo <= 0 <= hi:
+                    assert (a[name] == 0) == (b[name] == 0), (name, a[name], b[name], code)
+                for side, tags in (("a", a), ("b", b)):
+                    if tags[name] != 0:
+                        ran.add((side, name))
+                        assert lo <= tags[name] <= hi, (name, side, tags[name], lo, hi)
+                    elif (side, name) in ran:
+                        assert lo <= 0 <= hi, (name, side, "went back to 0", lo, hi)
             for name in skip:
                 a.pop(name, None)
                 b.pop(name, None)

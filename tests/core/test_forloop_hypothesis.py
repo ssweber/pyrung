@@ -3,8 +3,8 @@
 A random loop nest (up to three deep) is built into a pyrung program and run
 by a plain-Python interpreter of the same tree.  The tree mixes bare body
 instructions (implicit always-true rungs) with conditioned body rungs holding
-``break_loop()`` / ``continue_loop()``, ``out()`` coils and counters, read back
-from tags the body wrote on earlier iterations.  The interpreter and the
+``break_loop()`` / ``continue_loop()``, ``out()`` coils and ``calc`` increments, read
+back from tags the body wrote on earlier iterations.  The interpreter and the
 compiled kernel must both match the model on every scan, and each other.
 
 Rules the model encodes (hardware-recorded in ``tests/conformance/test_loop.py``

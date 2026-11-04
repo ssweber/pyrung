@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import math
+import sys
 from fractions import Fraction
 
 import pytest
@@ -269,15 +270,16 @@ bound_st = st.integers(-1000, 1000)
 def bounds_st(draw):
     """(lo, hi), often within a few of each other and sometimes reversed."""
     lo = draw(bound_st)
-    return lo, lo + draw(st.one_of(st.integers(-3, 3), st.integers(-1000, 1000)))
+    # Never equal: equal constants are a math error, tested on their own below.
+    return lo, lo + draw(
+        st.one_of(st.integers(-3, 3), st.integers(-1000, 1000)).filter(lambda d: d != 0)
+    )
 
 
 @given(bounds=bounds_st())
 @SETTINGS
 def test_randint_stays_in_range_inclusive_and_is_the_same_on_every_runner(bounds):
     lo, hi = bounds
-    if lo == hi:
-        return  # equal constants are a math error, covered by the docs
     logic, _expr = _randint_program(lo, hi)
     low, high = min(lo, hi), max(lo, hi)
     stepped = _draws(PLC(logic), 60)
@@ -293,8 +295,6 @@ def test_randint_stays_in_range_inclusive_and_is_the_same_on_every_runner(bounds
 @SETTINGS
 def test_randint_long_run_and_history_replay_equal_stepping(bounds):
     lo, hi = bounds
-    if lo == hi:
-        return
     logic, _expr = _randint_program(lo, hi)
     stepped_plc = PLC(logic)
     stepped = _draws(stepped_plc, 120)
@@ -331,11 +331,25 @@ def test_randint_tag_bounds_are_read_each_scan(lo, hi, scans):
             assert min(low, high) <= got <= max(low, high)
 
 
+@given(lo=bound_st)
+@SETTINGS
+def test_randint_equal_bounds_are_a_math_error(lo):
+    """Equal integer constants: the draw is 0 and SC46 is set, on every runner."""
+    logic, _expr = _randint_program(lo, lo)
+    for runner in (PLC(logic), CompiledPLC(logic)):
+        runner.patch({"AgGo": True})
+        for _ in range(3):
+            runner.step()
+            tags = runner.current_state.tags
+            assert tags["RiDraw"] == 0 and tags["RiDraw2"] == 0
+            assert tags[system.fault.math_operation_error.name] is True
+
+
 @given(lo=bound_st, hi=bound_st, pick=st.integers(0, 10**6))
 @SETTINGS
 def test_randint_patch_of_the_sites_tag_chooses_the_draw(lo, hi, pick):
     if lo == hi:
-        return
+        hi = lo + 1
     logic, expr = _randint_program(lo, hi)
     low, high = min(lo, hi), max(lo, hi)
     chosen = low + pick % (high - low + 1)
@@ -346,6 +360,7 @@ def test_randint_patch_of_the_sites_tag_chooses_the_draw(lo, hi, pick):
 
 
 @pytest.mark.xfail(
+    sys.version_info >= (3, 12),
     strict=True,
     reason=(
         "SumExpr.evaluate uses builtin sum(), which on Python 3.12+ adds floats with "
