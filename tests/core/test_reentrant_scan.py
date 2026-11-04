@@ -17,11 +17,13 @@ from pyrung import (
     Program,
     Rung,
     calc,
-    call as run_subroutine,
     copy,
     run_enabled_function,
     run_function,
     subroutine,
+)
+from pyrung import (
+    call as run_subroutine,
 )
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core import compiled_run, scan_trace

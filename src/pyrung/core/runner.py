@@ -4336,7 +4336,9 @@ class PLC:
 
     def _ensure_running(self) -> None:
         # Every way into a scan comes through here first, ahead of anything it would move.
-        self._refuse_scan_inside_a_call()
+        # Not through _refuse_scan_inside_a_call: every scan pays for this line.
+        if self._user_calls_running:
+            raise scan_inside_its_own_scan()
         # A replay walks one recording, and a restart ends a recording: a stop inside
         # it scanned on until a later call, which is past the end of this log.
         if not self._running and not self._replay_mode:
