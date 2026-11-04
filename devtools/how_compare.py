@@ -44,6 +44,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from typing import NoReturn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -68,7 +69,7 @@ FIELDS = (
 )
 
 
-def die(message: str, code: int = 2):
+def die(message: str, code: int = 2) -> NoReturn:
     print(f"how_compare: {message}", file=sys.stderr)
     sys.exit(code)
 

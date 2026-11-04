@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser()
@@ -108,9 +109,9 @@ def rss_mb() -> float:
         return peak / (1048576 if sys.platform == "darwin" else 1024)
 
 
-DOC = {"origin": ORIGIN, "rows": []}
+DOC: dict[str, Any] = {"origin": ORIGIN, "rows": []}
 LOCK = threading.Lock()
-CURRENT = {"name": None, "started": 0.0, "deadline": 0.0, "peak_mb": 0.0}
+CURRENT: dict[str, Any] = {"name": None, "started": 0.0, "deadline": 0.0, "peak_mb": 0.0}
 
 
 def save():
