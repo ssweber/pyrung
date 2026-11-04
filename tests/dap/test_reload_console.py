@@ -100,6 +100,53 @@ def _setup(tmp_path: Path, script: str = BASIC_SCRIPT) -> tuple[DAPAdapter, io.B
     return adapter, out_stream, script_path
 
 
+TIMER_SCRIPT = (
+    "from pyrung.core import Bool, Int, PLC, Program, Rung, Timer, on_delay\n"
+    "\n"
+    "ton = Timer.clone('Ton')\n"
+    "\n"
+    "with Program(strict=False) as prog:\n"
+    "    with Rung():\n"
+    "        on_delay(ton, preset={preset}, unit='{unit}')\n"
+    "\n"
+    "runner = PLC(prog, dt=0.1)\n"
+)
+
+
+class TestReloadChangingATimersUnit:
+    def _after_59_seconds_of_a_minute(self, tmp_path: Path) -> tuple[Any, ...]:
+        adapter, out, script_path = _setup(tmp_path, TIMER_SCRIPT.format(preset=5, unit="Tm"))
+        _repl(adapter, out, "step 590", seq=10)
+        state = adapter._runner.current_state
+        assert state.tags["Ton_Acc"] == 0
+        assert state.memory["_frac:Ton_Acc"] == 59_000_000_000
+        return adapter, out, script_path
+
+    def test_a_carry_read_by_a_shorter_unit_does_not_finish_the_timer(self, tmp_path: Path):
+        adapter, out, script_path = self._after_59_seconds_of_a_minute(tmp_path)
+        script_path.write_text(TIMER_SCRIPT.format(preset=2000, unit="Tms"), encoding="utf-8")
+        resp, _ = _repl(adapter, out, "reload", seq=11)
+        assert resp["success"] is True
+        assert adapter._runner.current_state.memory["_frac:Ton_Acc"] == 0
+
+        _repl(adapter, out, "step 1", seq=12)
+        state = adapter._runner.current_state
+        assert state.tags["Ton_Acc"] == 100
+        assert state.tags["Ton_Done"] is False
+
+    def test_a_carry_of_the_same_unit_is_untouched(self, tmp_path: Path):
+        adapter, out, script_path = self._after_59_seconds_of_a_minute(tmp_path)
+        script_path.write_text(TIMER_SCRIPT.format(preset=1, unit="Tm"), encoding="utf-8")
+        resp, _ = _repl(adapter, out, "reload", seq=11)
+        assert resp["success"] is True
+        assert adapter._runner.current_state.memory["_frac:Ton_Acc"] == 59_000_000_000
+
+        _repl(adapter, out, "step 9", seq=12)
+        assert adapter._runner.current_state.tags["Ton_Done"] is False
+        _repl(adapter, out, "step 1", seq=13)
+        assert adapter._runner.current_state.tags["Ton_Done"] is True
+
+
 class TestReload:
     def test_reload_basic(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)

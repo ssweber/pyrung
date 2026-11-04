@@ -13,6 +13,7 @@ since boot, 0 here), so a count that starts on it lands one scan later.
 from __future__ import annotations
 
 import math
+import time
 from fractions import Fraction
 from typing import Any
 
@@ -37,12 +38,15 @@ from pyrung.core import (
     time_drum,
     timed,
 )
+from pyrung.core import compiled_run, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.site_memory import remap_site_memory
 from pyrung.core.state import SystemState
 from pyrung.core.time_mode import TimeUnit, dt_to_ns
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_scan_time_and_stop import _BoardClock, _hw
 from tests.circuitpy.test_system_points import _StubBase
+from tests.core.scan_loop_counts import NEVER
 
 DTS = ("0.001", "0.003", "0.01", "0.02", "0.05", "0.1", "0.2", "0.25", "0.5")
 UNIT_SECONDS = {
@@ -225,22 +229,69 @@ def test_the_generated_code_ends_on_ceil(kind: str, row: tuple[int, str, str]) -
     assert _generated_first(PROGRAMS[kind](preset, unit), dt, expect + 4) == expect + late
 
 
-@pytest.mark.parametrize("kind", ["on", "off", "drum"])
-@pytest.mark.parametrize("row", CROSS, ids=_ids)
-def test_run_equals_stepping(kind: str, row: tuple[int, str, str]) -> None:
-    """Whole state and scan count, past the scan the timer ends on."""
-    preset, unit, dt = row
-    scans = want(preset, unit, dt) + 3
-    prog = PROGRAMS[kind](preset, unit)
-    stepped = PLC(prog, dt=float(dt))
+# --- A long run lands where stepping lands, in the guarded loop or out of it ------------
+
+
+def _in_the_long_run(plc: PLC, scans: int) -> int:
+    """Run *scans* scans the way a long run does; return how many ran in the guarded loop."""
+    before = scan_trace.TOTALS["loop scans"]
+    plc.run_until(NEVER, max_cycles=scans)
+    return scan_trace.TOTALS["loop scans"] - before
+
+
+def _stepped(prog: Program, dt: float, scans: int) -> PLC:
+    plc = PLC(prog, dt=dt)
     for _ in range(scans):
-        stepped.step()
-    ran = PLC(prog, dt=float(dt))
-    ran.run(scans)
+        plc.step()
+    return plc
+
+
+def _assert_same(ran: PLC, stepped: PLC) -> None:
     assert ran.current_state.scan_id == stepped.current_state.scan_id
     assert dict(ran.current_state.tags) == dict(stepped.current_state.tags)
     assert dict(ran.current_state.memory) == dict(stepped.current_state.memory)
-    assert ran.current_state.tags["First"] == scans - 3
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize("row", CROSS, ids=_ids)
+def test_a_long_run_equals_stepping(kind: str, row: tuple[int, str, str]) -> None:
+    """Whole state and scan count, in the loop, across the scan the timer ends on."""
+    preset, unit, dt = row
+    expect = want(preset, unit, dt)
+    scans = expect + 60
+    prog = PROGRAMS[kind](preset, unit)
+    ran = PLC(prog, dt=float(dt))
+    assert _in_the_long_run(ran, scans) > 0
+    _assert_same(ran, _stepped(prog, float(dt), scans))
+    assert ran.current_state.tags["First"] == expect
+
+
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize(
+    ("preset", "unit", "dt"),
+    [
+        (500, "Ts", "0.1"),
+        (1, "Tm", "0.01"),
+        (20, "Tm", "0.25"),
+        (30000, "Tms", "0.01"),
+        (5000, "Tms", "0.001"),
+        (15, "Ts", "0.003"),
+    ],
+)
+def test_run_for_past_the_interpreted_prefix_equals_stepping(
+    kind: str, preset: int, unit: str, dt: str
+) -> None:
+    """At the production settings, the timer ending well past the interpreted prefix."""
+    expect = want(preset, unit, dt)
+    assert expect > compiled_run.INTERPRETED_PREFIX + scan_trace.MIN_RUN_SCANS
+    prog = PROGRAMS[kind](preset, unit)
+    ran = PLC(prog, dt=float(dt))
+    before = scan_trace.TOTALS["loop scans"]
+    ran.run_for((expect + 1200) * float(dt))
+    assert scan_trace.TOTALS["loop scans"] - before > 0
+    _assert_same(ran, _stepped(prog, float(dt), ran.current_state.scan_id))
+    assert ran.current_state.tags["First"] == expect
 
 
 # --- Acc: the whole units in the whole sum, on every scan ------------------------------
@@ -349,6 +400,9 @@ def test_generated_timer_ticks_are_integer_arithmetic() -> None:
         (1 / 60, Fraction(10**9, 60)),
         (1 / 1024, Fraction(10**9, 1024)),
         (0.0123456789012345, 12_345_679),
+        (2**-20, Fraction(10**9, 2**20)),
+        (6e-10, Fraction(6e-10) * 10**9),
+        (1.2345678e-6, Fraction(1.2345678e-6) * 10**9),
     ],
 )
 def test_dt_to_ns(dt: float, ns: int | Fraction) -> None:
@@ -360,6 +414,43 @@ def test_dt_to_ns(dt: float, ns: int | Fraction) -> None:
 def test_a_dt_under_a_nanosecond_still_counts() -> None:
     ns = dt_to_ns(1e-10)
     assert 0 < ns < 1
+
+
+@pytest.mark.parametrize("engine", [_step_interpreter, _step_kernel])
+def test_a_dt_rounding_would_move_counts_exactly(engine: Any) -> None:
+    """2**-20 s is 953.67 ns: 10 ms is scan 10486.  At 954 ns it would be 10483."""
+    assert engine(_on_delay_program(10, "Tms"), 2**-20, 10_490) == 10_486
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_dt_under_a_nanosecond_is_not_rounded_up_to_one(engine: Any) -> None:
+    """6e-10 s is 0.6 ns: 5 ns short of a unit is 9 scans.  At 1 ns it would be 5."""
+    state = SystemState().with_memory({"_frac:Ton_Acc": 1_000_000 - 5})
+    plc: Any = engine(_on_delay_program(1, "Tms"), initial_state=state, dt=6e-10)
+    for _ in range(8):
+        plc.step()
+    assert not plc.current_state.tags["Ton_Done"]
+    plc.step()
+    assert plc.current_state.tags["Ton_Done"]
+
+
+def test_a_measured_dt_with_float_noise_is_whole_ns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clock read as a float, eleven days up: its noise is gone, and no time with it."""
+    now = [1e6]
+
+    def clock() -> float:
+        now[0] += 0.01
+        return now[0]
+
+    monkeypatch.setattr(time, "perf_counter", clock)
+    assert (1e6 + 0.01) - 1e6 != 0.01
+    assert dt_to_ns((1e6 + 0.01) - 1e6) == 10_000_000
+    plc = PLC(_on_delay_program(1, "Ts"), realtime=True)
+    for _ in range(50):
+        plc.step()
+    carry = plc.current_state.memory["_frac:Ton_Acc"]
+    assert type(carry) is int
+    assert carry % 10_000_000 == 0
 
 
 @pytest.mark.parametrize("unit", list(TimeUnit))
@@ -382,16 +473,27 @@ def test_non_decimal_dt_is_exact(engine: Any, dt: float, scans_per_second: int) 
         assert engine(_on_delay_program(preset, unit), dt, expect + 2) == expect
 
 
-@pytest.mark.parametrize("dt", [1 / 3, 1 / 60, 1 / 1024])
-def test_run_with_a_non_decimal_dt_equals_stepping(dt: float) -> None:
-    prog = _on_delay_program(3, "Ts")
-    stepped = PLC(prog, dt=dt)
-    for _ in range(3500):
-        stepped.step()
+@pytest.mark.parametrize("kind", ["on", "off", "drum"])
+@pytest.mark.parametrize("dt", [1 / 3, 1 / 60, 1 / 1024, 2**-20])
+def test_a_long_run_at_a_dt_of_no_whole_ns_declines_the_loop(kind: str, dt: float) -> None:
+    """Past the prefix, at the production settings: not one scan in the loop, and exact."""
+    preset, unit = (10, "Tms") if dt == 2**-20 else (3, "Ts")
+    prog = PROGRAMS[kind](preset, unit)
+    scans = compiled_run.INTERPRETED_PREFIX + 2500
+    if dt == 2**-20:
+        scans = 10_600
     ran = PLC(prog, dt=dt)
-    ran.run(3500)
-    assert dict(ran.current_state.tags) == dict(stepped.current_state.tags)
-    assert dict(ran.current_state.memory) == dict(stepped.current_state.memory)
+    assert _in_the_long_run(ran, scans) == 0
+    _assert_same(ran, _stepped(prog, dt, scans))
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("dt", [1 / 3, 1 / 60])
+def test_a_ratio_dt_stays_out_of_the_loop_however_short_the_run(dt: float) -> None:
+    prog = _on_delay_program(3, "Ts")
+    ran = PLC(prog, dt=dt)
+    assert _in_the_long_run(ran, 400) == 0
+    _assert_same(ran, _stepped(prog, dt, 400))
 
 
 def test_sub_millisecond_dt_keeps_the_fraction_of_a_millisecond() -> None:
@@ -418,6 +520,19 @@ def test_interpreter_and_kernel_memory_agree_on_every_scan(kind: str) -> None:
 
 
 # --- A carry survives whatever a state goes through ---------------------------------------
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+def test_a_long_run_hands_on_the_carry_it_ends_with() -> None:
+    prog = _on_delay_program(1, "Ts")
+    plc = PLC(prog, dt=0.1)
+    assert _in_the_long_run(plc, 5) > 0
+    assert plc.current_state.memory["_frac:Ton_Acc"] == 500_000_000
+    fork = plc.fork()
+    assert _in_the_long_run(fork, 7) > 0
+    assert fork.current_state.tags["Ton_Done"]
+    assert fork.current_state.tags["First"] == 10
+    _assert_same(fork, _stepped(prog, 0.1, 12))
 
 
 def test_fork_and_history_keep_the_carry() -> None:
@@ -477,12 +592,78 @@ def test_changing_dt_mid_count_keeps_the_time() -> None:
     assert plc.current_state.memory["_frac:Ton_Acc"] == 0
 
 
-def test_a_realtime_dt_counts_in_whole_ns() -> None:
+@pytest.mark.usefixtures("loop_from_first_scan")
+def test_changing_dt_between_long_runs_keeps_the_time() -> None:
+    from pyrung.core.time_mode import TimeMode
+
     prog = _on_delay_program(1, "Ts")
-    plc = PLC(prog, realtime=True)
-    plc.step()
-    plc.step()
-    assert type(plc.current_state.memory["_frac:Ton_Acc"]) is int
+    plc = PLC(prog, dt=0.1)
+    assert _in_the_long_run(plc, 5) > 0
+    plc._set_time_mode(TimeMode.FIXED_STEP, dt=0.05)
+    assert _in_the_long_run(plc, 9) > 0
+    assert plc.current_state.tags["Ton_Acc"] == 0
+    assert plc.current_state.memory["_frac:Ton_Acc"] == 950_000_000
+    assert _in_the_long_run(plc, 1) >= 0
+    assert plc.current_state.tags["Ton_Acc"] == 1
+    assert plc.current_state.memory["_frac:Ton_Acc"] == 0
+
+
+# --- A reload may change the unit under a carry ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("build", "keys"),
+    [
+        (lambda t, o, unit: on_delay(t, preset=5, unit=unit), ["_frac:Ton_Acc"]),
+        (lambda t, o, unit: off_delay(t, preset=5, unit=unit), ["_frac:Ton_Acc"]),
+        (
+            lambda t, o, unit: debounce(Bool("B"), on=(t, 5), off=(o, 5), unit=unit),
+            ["_frac:Ton_Acc", "_frac:Other_Acc"],
+        ),
+        (
+            lambda t, o, unit: flasher(Bool("B"), on=(t, 5), off=(o, 5), unit=unit),
+            ["_frac:Ton_Acc", "_frac:Other_Acc"],
+        ),
+        (lambda t, o, unit: timed(Bool("B"), t, 5, unit=unit), ["_frac:Ton_Acc"]),
+        (
+            lambda t, o, unit: time_drum(
+                outputs=[Bool("B")],
+                presets=[5],
+                unit=unit,
+                pattern=[[1]],
+                current_step=Int("Step", default=1),
+                accumulator=t.Acc,
+                completion_flag=Bool("Flag"),
+            ).reset(Bool("Reset")),
+            ["_frac:Ton_Acc"],
+        ),
+    ],
+    ids=["on_delay", "off_delay", "debounce", "flasher", "timed", "time_drum"],
+)
+def test_a_reload_cuts_each_carry_to_below_a_unit_of_its_timer(build: Any, keys: list[str]) -> None:
+    def program(unit: str) -> Program:
+        Ton, Other = Timer.clone("Ton"), Timer.clone("Other")
+        with Program(strict=False) as prog:
+            with Rung():
+                build(Ton, Other, unit)
+        return prog
+
+    old, new = PLC(program("Tm"), dt=0.1), PLC(program("Tms"), dt=0.1)
+    carries = {key: 59_000_000_000 for key in keys}
+    carried, _ = remap_site_memory(carries, old._site_table, new._site_table)
+    assert carried == dict.fromkeys(keys, 0)
+    longer = dict.fromkeys(keys, 59_000_123_456)
+    carried, _ = remap_site_memory(longer, old._site_table, new._site_table)
+    assert carried == dict.fromkeys(keys, 123_456)
+    kept, _ = remap_site_memory(longer, old._site_table, old._site_table)
+    assert kept == longer
+
+
+def test_a_reload_leaves_a_carry_it_finds_no_timer_for_and_an_old_float() -> None:
+    prog = _on_delay_program(1, "Tms")
+    table = PLC(prog, dt=0.1)._site_table
+    memory = {"_frac:Gone": 59_000_000_000, "_frac:Ton_Acc": 0.75}
+    assert remap_site_memory(memory, table, table)[0] == memory
 
 
 # --- The v4 timed coils carry the same way -------------------------------------------------

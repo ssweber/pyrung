@@ -64,6 +64,12 @@ TimeUnit.Th.ns = 3_600_000_000_000
 TimeUnit.Td.ns = 86_400_000_000_000
 
 
+# How far a dt may move to become whole nanoseconds.  A clock read as a float carries
+# noise of a fraction of a nanosecond, which at a scan of a millisecond is well under this;
+# 2**-20 s, 953.67 ns, moves by 3 parts in 10000, and that would be time lost.
+_WHOLE_NS_WITHIN = 1e-6
+
+
 @lru_cache(maxsize=64)
 def dt_to_ns(dt_seconds: float) -> int | Fraction:
     """The time a scan of *dt_seconds* takes, in nanoseconds, with nothing lost in a sum.
@@ -71,14 +77,18 @@ def dt_to_ns(dt_seconds: float) -> int | Fraction:
     A dt written as a decimal is that many whole nanoseconds, the float's own rounding
     gone: 0.1 is 100_000_000.  One too fine for that which is a plain ratio (1/3, 1/1024)
     stays that ratio exactly, as a ``Fraction``.  A measured dt, whose last digits are
-    float noise, is the nearest whole nanosecond, unless that is none at all.
+    float noise, is the nearest whole nanosecond where that barely moves it.  Anything
+    else is the float's own value, exactly, as a ``Fraction``.
     """
     exact = Fraction(dt_seconds).limit_denominator(1_000_000)
-    if float(exact) != dt_seconds:
-        nearest = round(dt_seconds * 1e9)
-        return nearest if nearest else Fraction(dt_seconds) * 1_000_000_000
-    ns = exact * 1_000_000_000
-    return ns.numerator if ns.denominator == 1 else ns
+    if float(exact) == dt_seconds:
+        ns = exact * 1_000_000_000
+        return ns.numerator if ns.denominator == 1 else ns
+    scaled = dt_seconds * 1e9
+    nearest = round(scaled)
+    if abs(scaled - nearest) <= scaled * _WHOLE_NS_WITHIN:
+        return nearest
+    return Fraction(dt_seconds) * 1_000_000_000
 
 
 # fmt: off

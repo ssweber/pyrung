@@ -9,6 +9,9 @@ not a seconds timer, and 100 ms the reverse, so these are the times asked (``AGE
 "Fixed scan parts").  A CLICK's 16-bit accumulator holds no 60000 ms preset, so the
 milliseconds side is the pair 30 s and 30000 ms.
 
+Each case latches the scan it was counted under as ``test_fixed_scan.py`` says: ``Result3``
+SD13, ``Result4`` SD12 (above SD13, a scan overran in the window), ``ErrorCode`` SC202.
+
 Off fixed scan these counts vary with the wall clock, the ranges pass, and they say nothing.
 """
 
@@ -17,31 +20,34 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from tests.conformance.test_fixed_scan import ANY_COUNT, count_timers
+from tests.conformance.test_fixed_scan import IN_PROCESS_SETTING, READING, count_two_timers
 
 
-def _prove_long_timers(slot: Any) -> None:
-    count_timers(
-        slot,
-        [(41, 60, "Ts"), (42, 1, "Tm"), (43, 30, "Ts"), (44, 30000, "Tms")],
-        [slot.Result1, slot.Result2, slot.Result3, slot.Result4],
-    )
+def _prove_one_minute(slot: Any) -> None:
+    count_two_timers(slot, (41, 60, "Ts"), (42, 1, "Tm"))
+
+
+def _prove_half_minute(slot: Any) -> None:
+    count_two_timers(slot, (43, 30, "Ts"), (44, 30000, "Tms"))
 
 
 group = Group(
     "fixed_minute",
     [
         case(
-            "On-delays of 60 s, 1 min, 30 s and 30000 ms: the scan each is Done on",
-            ladder=_prove_long_timers,
-            expect={
-                "Result1": ANY_COUNT,
-                "Result2": ANY_COUNT,
-                "Result3": ANY_COUNT,
-                "Result4": ANY_COUNT,
-            },
+            "On-delays of 60 s and 1 min: the scan each is Done on, and the scan setting",
+            ladder=_prove_one_minute,
+            expect=READING,
             scans=6010,
             fires_within=75.0,
+            probe="ceil(delay/dt), or a scan more",
+        ),
+        case(
+            "On-delays of 30 s and 30000 ms: the scan each is Done on, and the scan setting",
+            ladder=_prove_half_minute,
+            expect=READING,
+            scans=3010,
+            fires_within=45.0,
             probe="ceil(delay/dt), or a scan more",
         ),
     ],
@@ -53,5 +59,6 @@ def test_fixed_minute() -> None:
 
 
 def test_at_the_in_process_fixed_scan_each_count_is_the_ceil() -> None:
-    (result,) = run(group)
-    assert result.actual == {"Result1": 6000, "Result2": 6000, "Result3": 3000, "Result4": 3000}
+    results = {r.case.id: r.actual for r in run(group)}
+    assert results["one_minute"] == {"Result1": 6000, "Result2": 6000, **IN_PROCESS_SETTING}
+    assert results["half_minute"] == {"Result1": 3000, "Result2": 3000, **IN_PROCESS_SETTING}
