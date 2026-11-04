@@ -776,9 +776,10 @@ def _shared_types() -> tuple[type, ...]:
     from pyrung.core.memory_block import Block
     from pyrung.core.program import Program
     from pyrung.core.state import SystemState
+    from pyrung.core.structure import _StructRuntime
     from pyrung.core.tag import Tag
 
-    return (Tag, Condition, Expression, Block, Program, SystemState)
+    return (Tag, Condition, Expression, Block, Program, SystemState, _StructRuntime)
 
 
 def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], bool] | None:
