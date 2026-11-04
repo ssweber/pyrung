@@ -60,8 +60,15 @@ class GuardedProbes:
         self.window = window
 
     def __call__(
-        self, slot: Any, op: Callable[[], None], flag: Any, field: Any, bit: int = 1
+        self,
+        slot: Any,
+        op: Callable[[], None],
+        flag: Any,
+        field: Any,
+        bit: int = 1,
+        also: Iterable[tuple[Any, int]] = (),
     ) -> None:
+        """*also*: other ``(flag, bit)`` pairs to read right after the op."""
         now, taken = next(self.free), next(self.free)
         with Rung(slot.Scratch > self.stage_scan, slot.Scratch <= self.window, ~taken, ~flag):
             out(now)
@@ -70,3 +77,6 @@ class GuardedProbes:
             op()
         with Rung(now, flag):
             calc(field + bit, field)
+        for other, other_bit in also:
+            with Rung(now, other):
+                calc(field + other_bit, field)

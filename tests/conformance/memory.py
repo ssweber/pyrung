@@ -153,7 +153,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "numeric": {"DD": range(101, 133), "DF": range(101, 142), "DH": range(201, 223)},
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
-        "DS": (range(3901, 3907), range(3911, 3933)),
+        "DS": (range(3901, 3907), range(3915, 3933)),
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
@@ -208,7 +208,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     # C582..C660 are drum_settle's (the solve_order cases use none of them).
     "solve_order": {
-        "C": (range(501, 582), range(661, 662), range(681, 682)),
+        "C": (range(501, 503), range(511, 522), range(527, 582), range(661, 662), range(681, 682)),
         "T": range(151, 161),
         "CT": range(161, 171),
     },
@@ -314,6 +314,19 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
             range(4424, 4431),
         ),
         "DD": range(150, 160),
+    },
+    "math_more": {
+        "C": range(503, 511),
+        "DD": range(4, 26),
+        "DF": range(151, 170),
+    },
+    "hex_math": {"DH": range(5, 34)},
+    "agg_more": {
+        "C": range(522, 527),
+        "DS": range(3911, 3915),
+        "DD": range(41, 57),
+        "DF": range(170, 192),
+        "DH": range(61, 67),
     },
     "real_sum": {"DF": (range(70, 101), range(142, 151))},
 }

@@ -139,8 +139,8 @@ pins_read_before_count = 14
 pins_read_before_count_tee = 15
 
 [groups.coils]
-base = 1501 # Conf_Coils: DS1501..DS1700
-slots = 19
+base = 1501 # Conf_Coils: DS1501..DS1610
+slots = 10
 
 [groups.coils.cases]
 out_follows_rung = 1
@@ -201,8 +201,8 @@ fill_blank_ascii = 14
 pack_text_int_fraction = 15
 
 [groups.block]
-base = 2101 # Conf_Block: DS2101..DS2300
-slots = 19
+base = 2101 # Conf_Block: DS2101..DS2210
+slots = 10
 
 [groups.block.cases]
 blockcopy_range = 1
@@ -317,8 +317,8 @@ slots = 1
 acos_above_1 = 1 # retired: one case of math_error/math_errors_do_not_stop
 
 [groups.math_error]
-base = 3041 # Conf_MathError: DS3041..DS3090
-slots = 4
+base = 3041 # Conf_MathError: DS3041..DS3060
+slots = 1
 
 [groups.math_error.cases]
 math_errors_do_not_stop = 1
@@ -594,3 +594,37 @@ slots = 3
 preset_from_ds = 1
 units = 2
 single_step = 3
+
+[groups.math_more]
+base = 1611 # Conf_MathMore: DS1611..DS1700; part J
+slots = 8
+
+[groups.math_more.cases]
+int_div_mid_formula = 1
+wide_constant_into_dint = 2
+real_past_int = 3
+abs_and_precision = 4
+mod_signs = 5
+power_edges = 6
+math_errors = 7
+functions = 8
+
+[groups.hex_math]
+base = 3061 # Conf_HexMath: DS3061..DS3090; part J
+slots = 2
+
+[groups.hex_math.cases]
+shifts = 1
+rotates_and_bits = 2
+
+[groups.agg_more]
+base = 2211 # Conf_AggMore: DS2211..DS2280; part J
+slots = 6
+
+[groups.agg_more.cases]
+sum_int_wrap = 1
+sum_bits = 2
+agg_signed = 3
+agg_nan_order = 4
+agg_inf = 5
+rand_sites = 6
