@@ -61,7 +61,12 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "rungs": {"C": range(1601, 1661), "CT": range(151, 161)},
     # DD4.., DF20.. and DH5.. are the grey-area probes' (the math cases use none).
     "math": {
-        "DS": range(4401, 4439),
+        "DS": (
+            range(4401, 4403),
+            range(4411, 4413),
+            range(4421, 4424),
+            range(4431, 4439),
+        ),
         "DD": range(1, 4),
         "DF": range(1, 20),
         "DH": range(1, 5),
@@ -125,36 +130,59 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
-    "out": {"C": range(1801, 1852), "T": range(301, 351)},
-    "loop": {"C": range(1701, 1751), "T": range(201, 251), "CT": range(201, 251)},
-    "timers": {"C": range(1471, 1501), "T": range(1, 101)},
+    "out": {"C": range(1801, 1852), "T": range(301, 313)},
+    "loop": {"C": range(1701, 1751), "T": (range(201, 212), range(225, 251)), "CT": range(201, 251)},
+    "timers": {"C": (range(1471, 1472), range(1481, 1482), range(1491, 1492)), "T": range(1, 101)},
     # C1331..C1380, C1381..C1382 and CT147 are the fault-flag probes' (the counters
     # cases use none of them).
-    "counters": {"C": (range(1301, 1331), range(1383, 1401)), "CT": range(1, 147)},
-    "coils": {"C": range(1501, 1601)},
+    "counters": {"C": (range(1301, 1302), range(1383, 1401)), "CT": range(1, 147)},
+    "coils": {
+        "C": (
+            range(1501, 1502),
+            range(1511, 1512),
+            range(1521, 1522),
+            range(1531, 1532),
+            range(1541, 1543),
+            range(1551, 1552),
+            range(1561, 1562),
+            range(1571, 1573),
+            range(1581, 1583),
+            range(1591, 1593),
+        )
+    },
     "numeric": {"DD": range(101, 133), "DF": range(101, 142), "DH": range(201, 223)},
     "text": {
         "TXT": (range(1, 201), range(301, 401)),
-        "DS": range(3901, 3933),
+        "DS": (range(3901, 3907), range(3911, 3933)),
         "DD": range(301, 401),
         "DH": range(301, 401),
     },
     "block": {
-        "C": range(1201, 1301),
+        "C": range(1201, 1277),
         "DS": range(4001, 4111),
         "DD": range(201, 301),
         "DF": range(201, 301),
         "DH": range(101, 201),
     },
-    "shift": {"C": range(1001, 1110)},
+    "shift": {
+        "C": (
+            range(1001, 1030),
+            range(1041, 1050),
+            range(1061, 1070),
+            range(1081, 1090),
+            range(1101, 1110),
+        )
+    },
     "search": {
-        "C": range(851, 901),
+        "C": range(851, 882),
         # DS4226: past_write's pointer; DS4208..DS4222, DS4227..DS4230: drum_settle's;
         # DS4332..DS4342, DS4352..DS4362, DS4372..DS4382: drum_close's.
         "DS": (
             range(4203, 4208),
             range(4223, 4226),
-            range(4231, 4293),
+            range(4243, 4248),
+            range(4263, 4267),
+            range(4283, 4293),
             range(4323, 4332),
             range(4343, 4352),
             range(4363, 4372),
@@ -166,7 +194,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "system": {
         # C969..C1000 are drum_close's.
-        "C": range(901, 969),
+        "C": (range(901, 904), range(911, 914), range(921, 924), range(941, 969)),
         "T": range(101, 151),
         "CT": range(171, 181),
         "DD": range(901, 1000),
@@ -180,7 +208,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # Solve order within a rung (tests/conformance/test_solve_order.py).
     # C582..C660 are drum_settle's (the solve_order cases use none of them).
     "solve_order": {
-        "C": (range(501, 582), range(661, 701)),
+        "C": (range(501, 582), range(661, 662), range(681, 682)),
         "T": range(151, 161),
         "CT": range(161, 171),
     },
@@ -207,9 +235,58 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # The grey-area probes, parts H.. (tests/conformance/probe_kit.py).  Their memory is
     # what the groups above leave unused.
     "word_store": {"DD": range(810, 850), "DF": range(434, 450), "DH": range(422, 470),
-                   "DS": range(4312, 4323)},
+                   "DS": (range(4312, 4316), range(4322, 4323))},
     "real_bits": {"DD": range(850, 860), "DF": range(20, 70), "DH": range(470, 500),
                   "TXT": range(546, 570)},
+    # tests/conformance/test_drum_pins.py: from what other groups' cases never used.
+    "drum_pins": {
+        "C": (
+            range(662, 681),
+            range(682, 701),
+            range(882, 901),
+            range(904, 911),
+            range(914, 921),
+            range(924, 941),
+            range(1030, 1041),
+            range(1050, 1055),
+        ),
+        "T": (range(182, 201), range(313, 318)),
+        "DS": (range(4231, 4243), range(4248, 4260), range(4293, 4298)),
+        "DD": range(860, 884),
+    },
+    "drum_branch": {
+        "C": (
+            range(1055, 1061),
+            range(1070, 1081),
+            range(1090, 1101),
+            range(1277, 1301),
+            range(1302, 1331),
+            range(1472, 1481),
+            range(1482, 1491),
+            range(1492, 1501),
+            range(1502, 1511),
+            range(1512, 1521),
+            range(1522, 1531),
+            range(1532, 1541),
+            range(1543, 1551),
+            range(1552, 1561),
+            range(1562, 1571),
+            range(1573, 1581),
+            range(1583, 1587),
+        ),
+        "T": (range(212, 225), range(318, 351)),
+        "DS": (
+            range(4260, 4263),
+            range(4267, 4283),
+            range(4298, 4303),
+            range(3907, 3911),
+            range(4316, 4322),
+            range(4403, 4411),
+            range(4413, 4421),
+            range(4424, 4431),
+        ),
+        "DD": (range(133, 160), range(884, 901)),
+    },
     "real_sum": {"DF": (range(70, 101), range(142, 151))},
 }
 

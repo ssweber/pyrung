@@ -217,8 +217,8 @@ pack_words = 9
 unpack_words = 10
 
 [groups.shift]
-base = 2301 # Conf_Shift: DS2301..DS2500
-slots = 19
+base = 2301 # Conf_Shift: DS2301..DS2380
+slots = 7
 
 [groups.shift.cases]
 forward_range_shifts_up = 1
@@ -331,8 +331,8 @@ slots = 4
 rise_once_per_scan = 1
 
 [groups.solve_order]
-base = 3141 # Conf_SolveOrder: DS3141..DS3440
-slots = 29
+base = 3141 # Conf_SolveOrder: DS3141..DS3260
+slots = 11
 
 [groups.solve_order.cases]
 row_series_reads_rows_above = 1
@@ -554,3 +554,11 @@ minus_zero_shapes = 2
 non_finite_raw_bits = 3
 underflow = 4
 float32_equality = 5
+
+[groups.drum_pins]
+base = 2381 # Conf_DrumPins: DS2381..DS2480
+slots = 9
+
+[groups.drum_branch]
+base = 3261 # Conf_DrumBranch: DS3261..DS3400
+slots = 13

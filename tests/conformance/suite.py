@@ -47,6 +47,7 @@ from tests.conformance import (
     test_drum_close,
     test_drum_idle,
     test_drum_jump,
+    test_drum_pins,
     test_drum_rule,
     test_drum_settle,
     test_drum_trace,
@@ -125,6 +126,8 @@ ALL_GROUPS = [
     test_word_store.group,
     test_real_bits.group,
     test_real_sum.group,
+    test_drum_pins.group,
+    test_drum_pins.branch_group,
     # After every group: its probes raise SC43 and SC46 on purpose, and a flag
     # stays up to the end of the scan, so any group after it that reads a flag
     # would see them (text/to_binary read SC43 on a scan a store probe raised it).
@@ -188,6 +191,7 @@ PARTS: dict[str, tuple[str, ...]] = {
     # The grey-area probes (probe_kit.py) go in parts of their own, so no confirmed
     # group changes.  H what Copy and Math store.
     "H": ("word_store", "real_bits", "real_sum"),
+    "I": ("drum_pins", "drum_branch"),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

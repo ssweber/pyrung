@@ -20,6 +20,7 @@ import pytest
 from pyrung.click import ClickBlocks
 from pyrung.conformance import (
     BuildMismatchError,
+    CaseResult,
     CircuitPySim,
     ConformanceError,
     ConformanceProgram,
@@ -45,6 +46,19 @@ ds = ClickBlocks().ds
 pytestmark = pytest.mark.conformance
 
 
+def range_readings(results: list[CaseResult]) -> list[str]:
+    """A ``read`` line for each case that expects a range: its reading is the answer.
+
+    A probe whose answer is unknown expects a range over the candidates, so a PASS says
+    nothing of which, and the report prints a reading only on a FAIL.
+    """
+    return [
+        f"read {r.group}/{r.case.id} {r.actual}"
+        for r in results
+        if any(isinstance(value, range) for value in r.case.expect.values())
+    ]
+
+
 def test_all_groups_over_modbus(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
@@ -68,6 +82,8 @@ def test_all_groups_over_modbus(
         )
         print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
     print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
+    for line in range_readings(results):
+        print(line)
     if conformance_groups is None:
         assert len(results) == sum(len(g.cases) for g in loaded)
     assert_all_passed(results)
