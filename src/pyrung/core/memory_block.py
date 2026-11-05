@@ -273,18 +273,30 @@ class PastBankError(IndexError):
     """
 
 
+def block_room(tag: Tag) -> int | None:
+    """How many elements *tag*'s block holds from *tag* to its end, *tag* included.
+
+    ``None`` for a tag in no block, and for a field of a UDT or named array, whose
+    block is the field's own and not the memory the structure lies in.
+    """
+    block = getattr(tag, "_pyrung_block", None)
+    addr = getattr(tag, "_pyrung_block_addr", None)
+    if not isinstance(block, Block) or not isinstance(addr, int):
+        return None
+    if block._pyrung_structure_kind is not None:
+        return None
+    return max(0, block.end - addr + 1)
+
+
 def elements_that_fit(tag: Tag, count: int) -> int:
     """How many of *count* consecutive elements from *tag* on are in its block.
 
     A store of several elements (a text, its digits) writes the ones that fit and
     drops the rest, with no flag, as a write past the end of the block is dropped.
-    A tag in no block keeps *count*.  Every engine counts the elements here.
+    Every engine counts the elements here (``block_room``).
     """
-    block = getattr(tag, "_pyrung_block", None)
-    addr = getattr(tag, "_pyrung_block_addr", None)
-    if not isinstance(block, Block) or not isinstance(addr, int):
-        return count
-    return max(0, min(count, block.end - addr + 1))
+    room = block_room(tag)
+    return count if room is None else min(count, room)
 
 
 @dataclass(eq=False)

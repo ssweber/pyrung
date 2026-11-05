@@ -618,8 +618,8 @@ def _copy_converter_write_lines(
     """Write *values_var*'s elements from the target on, as many as its block holds.
 
     *fit* is how many elements a static target's block holds from it
-    (``elements_that_fit``), ``None`` for a tag in no block; an indexed target's
-    block array ends where its block does.  The rest are dropped, with no flag.
+    (``block_room``), ``None`` for a tag in no block; an indexed target's block
+    array ends where its block does.  The rest are dropped, with no flag.
     """
     if target_kind == "scalar":
         seq = _parse_sequential_tag_name(target_name) if target_name else None
