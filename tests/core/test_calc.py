@@ -204,6 +204,26 @@ class TestCutIntConstants:
         for dest in (Dint("D"), Real("R")):
             assert CalcInstruction(roll, dest).expression is roll
 
+    def test_a_hex_word_draw_reads_its_own_site_where_the_cuts_differ(self):
+        from pyrung.core import Word
+        from pyrung.core.expression import randint
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        whole = randint(1, 6)
+        assert whole.ucut_tag.name == whole.tag.name == whole.cut_tag.name
+        same = randint(70000, 70002)  # 4464..4466 either way
+        assert same.ucut_tag.name == same.cut_tag.name != same.tag.name
+        unsigned_whole = randint(40000, 40002)  # 16 bits unsigned, -25536.. signed
+        assert unsigned_whole.ucut_tag.name == unsigned_whole.tag.name
+        assert unsigned_whole.cut_tag.name != unsigned_whole.tag.name
+        differs = randint(100000, 100002)  # -31072.. signed, 34464.. unsigned
+        assert differs.ucut_tag.name.endswith(".ucut")
+        assert differs.cut_tag.name.endswith(".cut")
+        assert (differs.ucut_tag.min, differs.ucut_tag.max) == (34464, 34466)
+        hex_calc = CalcInstruction(differs | Word("Mask"), Word("W"))
+        assert hex_calc.mode == "hex"
+        assert hex_calc.expression.left.tag.name == differs.ucut_tag.name
+
 
 class TestCalcRangeAggregates:
     """max/min/median/mean through calc's destination conversion, both backends."""

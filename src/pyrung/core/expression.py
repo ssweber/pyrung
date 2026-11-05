@@ -923,6 +923,15 @@ class RandIntExpr(Expression):
 
         return cut_int_constants(self).tag
 
+    @property
+    def ucut_tag(self) -> Any:
+        """The tag of the draw a hex Math into a Word reads: ``cut_tag`` where the
+        unsigned cut is the signed one, ``tag`` if no constant cuts."""
+        from pyrung.core.instruction.calc import calc_form
+        from pyrung.core.tag import TagType
+
+        return calc_form(self, "hex", TagType.WORD).tag
+
     def draw(self, ctx: ScanContext) -> int:
         """This scan's draw, from the bounds as the scan starts.
 
