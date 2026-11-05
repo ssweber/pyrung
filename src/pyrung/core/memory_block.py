@@ -465,6 +465,10 @@ class Block:
                     configured_default is not UNSET or self.default_factory is not None
                 )
                 object.__setattr__(tag, "_default_explicit", default_explicit)
+                # The block that made the tag; ``_pyrung_block`` moves to a bank
+                # that reads it as a mapped slot, this does not.
+                object.__setattr__(tag, "_pyrung_home_block", self)
+                object.__setattr__(tag, "_pyrung_home_addr", addr)
                 self._tag_cache[addr] = tag
         # _tag_cache is typed dict[int, LiveTag]; both assignment sites store a
         # LiveTag, so no runtime cast is needed here (this runs on every access).

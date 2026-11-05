@@ -890,6 +890,10 @@ def _text_literal_compares(condition: Any, out: list[tuple[Any, list[Tag]]]) -> 
         _text_literal_compares(getattr(condition, attr_name, None), out)
 
 
+#: CLICK's last TXT address.
+_TXT_LAST = 1000
+
+
 def _evaluate_text_windows(
     program: Any, mode: ValidationMode, resolver: _ResolutionCache
 ) -> list[ClickFinding]:
@@ -914,6 +918,14 @@ def _evaluate_text_windows(
         actual = [_bank_label(slot) for slot in resolved]
         if actual == expected:
             return
+        last = first.address + len(written.value) - 1
+        if last > _TXT_LAST:
+            click_reads = (
+                f"a CLICK compares TXT{first.address} and the TXTs after it, "
+                f"which run past TXT{_TXT_LAST}"
+            )
+        else:
+            click_reads = f"a CLICK compares {', '.join(expected)}, one character each"
         if len(tags) == 1:
             read = f"compares {tags[0].name} ({actual[0]}) alone with the whole literal"
         else:
@@ -927,7 +939,7 @@ def _evaluate_text_windows(
                 severity=_route_severity(CLK_TEXT_WINDOW_NOT_CONTIGUOUS, mode),
                 message=(
                     f"{render_condition(written)} at {location_str} {read} in pyrung; "
-                    f"a CLICK compares {', '.join(expected)}, one character each."
+                    f"{click_reads}."
                 ),
                 location=location_str,
                 suggestion=(
@@ -937,6 +949,10 @@ def _evaluate_text_windows(
             )
         )
 
+    # A timer's or counter's enable (and a drum's, an enabled call's) holds the
+    # rung's own conditions again, so each compare is checked once, where first met.
+    seen: set[int] = set()
+
     def _walk_rung(rung: Any, location_str: str) -> None:
         compares: list[tuple[Any, list[Tag]]] = []
         _text_literal_compares(rung._conditions[rung._branch_condition_start :], compares)
@@ -944,6 +960,9 @@ def _evaluate_text_windows(
             for field_name in getattr(type(instruction), "_conditions", ()):
                 _text_literal_compares(getattr(instruction, field_name, None), compares)
         for written, tags in compares:
+            if id(written) in seen:
+                continue
+            seen.add(id(written))
             _check(written, tags, location_str)
         for branch in rung._branches:
             _walk_rung(branch, location_str)

@@ -534,17 +534,20 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
     on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
     for any other compare, and where the block ends before the literal does.
 
-    The characters after it are the next elements of its block, or, in a
-    ``named_array``, the next slots of its layout (the other fields of the
-    instance first), as that maps to TXT.  Where a TagMap puts them elsewhere,
-    CLICK validation refuses the export (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
+    The characters after it are the next elements of the block that declared
+    the tag, or, in a ``named_array``, the next slots of its layout (the other
+    fields of the instance first), as that maps to TXT.  A tag mapped onto a
+    bank keeps its own block for this however the bank was read before, and a
+    ``Char`` of no block is compared as written.  Where a TagMap puts those
+    characters elsewhere, CLICK validation refuses the export
+    (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
     """
     from pyrung.core.tag import TagType
 
     if tag.type is not TagType.CHAR or not isinstance(value, str) or len(value) < 2:
         return None
-    block = getattr(tag, "_pyrung_block", None)
-    addr = getattr(tag, "_pyrung_block_addr", None)
+    block = getattr(tag, "_pyrung_home_block", None)
+    addr = getattr(tag, "_pyrung_home_addr", None)
     if block is None or not isinstance(addr, int):
         return None
     try:

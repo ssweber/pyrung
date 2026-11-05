@@ -306,3 +306,57 @@ def test_a_named_array_window_reads_the_next_slots_of_its_layout(runner_factory)
     assert (tags["Same"], tags["Differs"]) == (True, False)
     tags = _one_scan(runner_factory, logic, {"Pair1_a": "X", "Pair1_b": "Q", "Pair2_a": "Y"})
     assert (tags["Same"], tags["Differs"]) == (False, True)
+
+
+def _window_shape(cond):
+    if isinstance(cond, AllCondition):
+        return [c.tag.name for c in cond.conditions]
+    return ("as written", cond.tag.name)
+
+
+def test_a_window_reads_the_tags_own_block_however_its_bank_was_read(runner_factory):
+    """A tag mapped onto TXT keeps its declaring block (or layout) for the window,
+    whether or not ``txt[n]`` was read first; a lone Char stays as written."""
+    from pyrung.core import Char, named_array
+
+    bank = ClickBlocks().txt
+    msg = Block("Msg", TagType.CHAR, 1, 2)
+    msg[1].map_to(bank[5])
+    msg[2].map_to(bank[3])
+
+    @named_array(Char, count=2, stride=3)
+    class Padded:
+        a = ""
+        b = ""
+
+    Padded.map_to(bank.select(11, 16))
+    lone = Char("Lone")
+    lone.map_to(bank[21])
+
+    def shapes():
+        return [
+            _window_shape(msg[1] == "AB"),
+            _window_shape(Padded.b[1] == "XY"),
+            _window_shape(lone == "AB"),
+        ]
+
+    before = shapes()
+    for addr in (3, 5, 6, 12, 13, 21, 22):
+        _ = bank[addr]
+    assert (
+        shapes()
+        == before
+        == [
+            ["Msg1", "Msg2"],
+            ("as written", "Padded1_b"),
+            ("as written", "Lone"),
+        ]
+    )
+
+    same = Bool("Same")
+    with Program() as logic:
+        with Rung(bank[5] == "AB"):
+            out(same)
+    assert _window_shape(logic.rungs[0]._conditions[0]) == ["Msg1", "Msg2"]
+    tags = _one_scan(runner_factory, logic, {"Msg1": "A", "Msg2": "B", "TXT6": "Q"})
+    assert tags["Same"] is True

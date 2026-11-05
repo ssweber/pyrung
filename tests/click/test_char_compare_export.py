@@ -252,3 +252,51 @@ def test_a_named_array_window_imports_back_comparing_the_same_txts(tmp_path):
     window = namespace["logic"].rungs[0]._conditions[0]
     assert [cond.tag.name for cond in window.conditions] == ["Pair1_a", "Pair1_b"]
     assert _window_codes(namespace["logic"], namespace["mapping"]) == []
+
+
+def test_a_window_on_a_box_rung_is_one_finding():
+    # A timer's or counter's enable holds the rung's conditions again; the
+    # compare is still reported once, on the rung or the branch that has it.
+    from pyrung.core import Block, Counter, TagType, Timer, branch, count_up, on_delay
+
+    msg = Block("Msg", TagType.CHAR, 1, 2)
+    hit, ok, rst = Bool("Hit"), Bool("Ok"), Bool("Rst")
+    cnt, tmr, tmr2 = Counter.clone("Cnt"), Timer.clone("Tmr"), Timer.clone("Tmr2")
+    with Program(strict=False) as prog:
+        with rung(msg[1] == "AB"):
+            count_up(cnt, 5).reset(rst)
+        with rung(msg[1] != "AB"):
+            on_delay(tmr, 100)
+        with rung(hit):
+            out(ok)
+            with branch(msg[1] == "XY"):
+                on_delay(tmr2, 100)
+    mapping = TagMap(
+        [
+            msg[1].map_to(txt[5]),
+            msg[2].map_to(txt[3]),
+            hit.map_to(c[1]),
+            ok.map_to(c[2]),
+            rst.map_to(c[3]),
+            cnt.Done.map_to(ct[1]),
+            cnt.Acc.map_to(ctd[1]),
+            tmr.Done.map_to(t[1]),
+            tmr.Acc.map_to(td[1]),
+            tmr2.Done.map_to(t[2]),
+            tmr2.Acc.map_to(td[2]),
+        ],
+        include_system=False,
+    )
+    found = _window_codes(prog, mapping)
+    assert [f.location for f in found] == ["main rung 0", "main rung 1", "main rung 2"]
+
+
+def test_a_window_past_the_last_txt_says_so():
+    hit = Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(txt[1000] == "AB"):
+            out(hit)
+    found = _window_codes(prog, TagMap({hit: c[1]}, include_system=False))
+    assert len(found) == 1
+    assert "TXT1001" not in found[0].message
+    assert "TXT1000 and the TXTs after it, which run past TXT1000" in found[0].message
