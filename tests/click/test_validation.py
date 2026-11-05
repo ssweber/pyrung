@@ -8,6 +8,7 @@ from pyrung.click import ClickBlocks, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.validation import (
+    CLK_CALC_ARG_NOT_PLAIN,
     CLK_CALC_BIT_RANGE_AGGREGATE,
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
@@ -30,14 +31,15 @@ from pyrung.click.validation import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_RAND_BOUND_TYPE,
     CLK_RAND_EQUAL_BOUNDS,
-    CLK_RAND_REAL_BOUND,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PRESET_OVERFLOW,
     ClickValidationReport,
     validate_click_program,
 )
 from pyrung.core import Block, Bool, Int, Tag, TagType, Timer, forloop, immediate, randint, to_value
+from pyrung.core.expression import lro, lsh, rro, rsh
 from pyrung.core.program import (
     Program,
     Rung,
@@ -1655,14 +1657,32 @@ class TestForLoopCountAndRandBounds:
     def test_real_bound_is_refused(self):
         lo = Tag("Lo", TagType.REAL)
         report = self._rand(lo, 9, [lo.map_to(df[1])])
-        found = [f for f in report.errors if f.code == CLK_RAND_REAL_BOUND]
+        found = [f for f in report.errors if f.code == CLK_RAND_BOUND_TYPE]
         assert found
         assert found[0].message.isascii()
 
     def test_real_high_bound_is_refused(self):
         hi = Tag("Hi", TagType.REAL)
         report = self._rand(1, hi, [hi.map_to(df[1])])
-        assert CLK_RAND_REAL_BOUND in _finding_codes(report)
+        assert CLK_RAND_BOUND_TYPE in _finding_codes(report)
+
+    @pytest.mark.parametrize("lo, hi", [(1.5, 3.5), (1, 3.0)])
+    def test_float_constant_bound_is_refused(self, lo, hi):
+        report = self._rand(lo, hi, [])
+        assert CLK_RAND_BOUND_TYPE in _finding_codes(report)
+
+    @pytest.mark.parametrize(
+        "kind, block",
+        [(TagType.BOOL, c), (TagType.WORD, dh), (TagType.CHAR, txt)],
+        ids=["bit", "word", "text"],
+    )
+    def test_other_tag_types_are_refused(self, kind, block):
+        lo = Tag("Lo", kind)
+        report = self._rand(lo, 9, [lo.map_to(block[1])])
+        assert CLK_RAND_BOUND_TYPE in _finding_codes(report)
+
+    def test_bool_constant_bound_is_refused(self):
+        assert CLK_RAND_BOUND_TYPE in _finding_codes(self._rand(True, 9, []))
 
     def test_equal_constant_bounds_are_refused(self):
         report = self._rand(7, 7, [])
@@ -1670,16 +1690,85 @@ class TestForLoopCountAndRandBounds:
 
     def test_integer_bounds_pass(self):
         lo = Tag("Lo", TagType.INT)
+        wide = Tag("Wide", TagType.DINT)
         for args, mappings in (
             ((7, 9), []),
             ((70000, 70002), []),
             ((6, 1), []),
             ((lo, 9), [lo.map_to(ds[1])]),
             ((lo, lo), [lo.map_to(ds[1])]),
+            ((wide, 9), [wide.map_to(dd[1])]),
         ):
             codes = _finding_codes(self._rand(*args, mappings))
-            assert CLK_RAND_REAL_BOUND not in codes
+            assert CLK_RAND_BOUND_TYPE not in codes
             assert CLK_RAND_EQUAL_BOUNDS not in codes
+
+
+class TestCalcPlainArguments:
+    """CLICK's editor takes only a tag or a constant as an argument of RAND, LSH, RSH,
+    LRO and RRO: it refused ``RAND ( DD615 / 2 , 10 )``."""
+
+    @staticmethod
+    def _codes(build):
+        n = Tag("N", TagType.DINT)
+        w = Tag("W", TagType.WORD)
+        dest = Tag("Dest", TagType.DINT)
+        hdest = Tag("HDest", TagType.WORD)
+        expr, target = build(n, w)
+        out_tag = dest if target == "dd" else hdest
+
+        def logic():
+            with Rung():
+                calc(expr, out_tag)
+
+        report = validate_click_program(
+            _build_program(logic),
+            TagMap(
+                [n.map_to(dd[1]), w.map_to(dh[1]), dest.map_to(dd[100]), hdest.map_to(dh[100])],
+                include_system=False,
+            ),
+            mode="strict",
+        )
+        return report, [f for f in report.errors if f.code == CLK_CALC_ARG_NOT_PLAIN]
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n, w: (randint(n / 2, 10), "dd"),
+            lambda n, w: (randint(1, n + 1), "dd"),
+            lambda n, w: (randint(-n, 10), "dd"),
+            lambda n, w: (lsh(w + 1, 2), "dh"),
+            lambda n, w: (rsh(w, w & 3), "dh"),
+            lambda n, w: (lro(w | 1, 1), "dh"),
+            lambda n, w: (rro(w, w ^ 1), "dh"),
+            lambda n, w: ((w & 0xFF) << 2, "dh"),
+            lambda n, w: (w >> (w & 3), "dh"),
+        ],
+        ids=["rand-div", "rand-add", "rand-neg", "lsh", "rsh", "lro", "rro", "shl-op", "shr-op"],
+    )
+    def test_expression_argument_is_refused(self, build):
+        _, found = self._codes(build)
+        assert len(found) == 1
+        assert found[0].message.isascii()
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n, w: (randint(n, 10), "dd"),
+            lambda n, w: (randint(1, 20) + n / 2, "dd"),
+            lambda n, w: (lsh(w, 2), "dh"),
+            lambda n, w: (rro(w, w), "dh"),
+            lambda n, w: ((w << 2) & 0xFF, "dh"),
+        ],
+        ids=["rand-tag", "rand-in-expr", "lsh-tag", "rro-tags", "shl-in-expr"],
+    )
+    def test_plain_arguments_pass(self, build):
+        _, found = self._codes(build)
+        assert found == []
+
+    def test_each_site_is_reported(self):
+        _, found = self._codes(lambda n, w: (randint(n / 2, 10) + randint(1, n * 2), "dd"))
+        assert len(found) == 2
 
 
 def test_export_refuses_a_real_rand_bound_unless_allowed():
@@ -1698,7 +1787,7 @@ def test_export_refuses_a_real_rand_bound_unless_allowed():
     try:
         pyrung_to_ladder(prog, tag_map)
     except LadderExportError as exc:
-        assert CLK_RAND_REAL_BOUND in str(exc)
+        assert CLK_RAND_BOUND_TYPE in str(exc)
     else:
         raise AssertionError("export should refuse a Real RAND bound")
-    assert pyrung_to_ladder(prog, tag_map, allow=(CLK_RAND_REAL_BOUND,)).main_rows
+    assert pyrung_to_ladder(prog, tag_map, allow=(CLK_RAND_BOUND_TYPE,)).main_rows

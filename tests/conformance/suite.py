@@ -223,8 +223,7 @@ PARTS: dict[str, tuple[str, ...]] = {
         "block_more",
         "past_write",
     ),
-    # ``store_probe`` is last: the editor may refuse a RAND bound form (``rand_bound_forms``,
-    # the group's last case), and it raises fault flags no group below may read.
+    # ``store_probe`` is last: it raises fault flags no group below may read.
     "math": (
         "math",
         "numeric",

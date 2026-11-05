@@ -32,6 +32,7 @@ from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
+    CLK_CALC_ARG_NOT_PLAIN,
     CLK_CALC_BIT_RANGE_AGGREGATE,
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
@@ -58,8 +59,8 @@ from .findings import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_RAND_BOUND_TYPE,
     CLK_RAND_EQUAL_BOUNDS,
-    CLK_RAND_REAL_BOUND,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TEXT_ORDER_COMPARE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
@@ -1107,30 +1108,70 @@ def _collect_rands(expr: Any, out: list[RandIntExpr], seen: set[int]) -> None:
         _collect_rands(child, out, seen)
 
 
+def _collect_plain_arg_sites(
+    expr: Any, out: list[tuple[str, tuple[Any, ...]]], seen: set[int]
+) -> None:
+    """Each RAND, LSH, RSH, LRO and RRO in *expr*, with its arguments (``<<``/``>>`` as LSH/RSH)."""
+    if id(expr) in seen or not isinstance(expr, Expression):
+        return
+    seen.add(id(expr))
+    if isinstance(expr, RandIntExpr):
+        out.append(("RAND", (expr.lo, expr.hi)))
+    elif isinstance(expr, ShiftFuncExpr) and expr.name in _HEX_ONLY_SHIFT_FUNCS:
+        out.append((expr.name.upper(), (expr.value, expr.count)))
+    elif isinstance(expr, BinaryExpr) and expr.symbol in ("<<", ">>"):
+        out.append((_CLICK_OP_NAME[expr.symbol], (expr.left, expr.right)))
+    for child in vars(expr).values():
+        _collect_plain_arg_sites(child, out, seen)
+
+
+def _is_bad_bound_type(bound: Any) -> bool:
+    """RAND takes an integer constant or an Int or Dint tag: not a DF, a float, a bit or a Word."""
+    if isinstance(bound, TagExpr):
+        return bound.tag.type not in (TagType.INT, TagType.DINT)
+    return isinstance(bound, LiteralExpr) and isinstance(bound.value, (float, bool))
+
+
 def _evaluate_rand_bounds(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
-    """CLICK's editor refuses a Real (DF) bound on RAND, and equal constant bounds."""
+    """CLICK's editor takes only an integer constant or an Int or Dint tag as a RAND bound,
+    refuses equal constant bounds, and an expression as an argument of RAND, LSH, RSH, LRO or RRO."""
     if type(instruction).__name__ != "CalcInstruction":
-        return []
-    rands: list[RandIntExpr] = []
-    _collect_rands(instruction.source_expression, rands, set())
-    if not rands:
         return []
     location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
     findings: list[ClickFinding] = []
+    sites: list[tuple[str, tuple[Any, ...]]] = []
+    _collect_plain_arg_sites(instruction.source_expression, sites, set())
+    for name, args in sites:
+        if all(isinstance(arg, (TagExpr, LiteralExpr)) for arg in args):
+            continue
+        findings.append(
+            ClickFinding(
+                code=CLK_CALC_ARG_NOT_PLAIN,
+                severity=_route_severity(CLK_CALC_ARG_NOT_PLAIN, mode),
+                message=(
+                    f"{name} at {location_text} has an expression as an argument; CLICK takes "
+                    f"only a tag or a constant there (its editor refuses RAND ( DD1 / 2 , 10 ))."
+                ),
+                location=location_text,
+                suggestion="Compute the argument into a tag in a calc() above, and pass the tag.",
+            )
+        )
+    rands: list[RandIntExpr] = []
+    _collect_rands(instruction.source_expression, rands, set())
     for rand in rands:
-        if any(isinstance(b, TagExpr) and b.tag.type == TagType.REAL for b in (rand.lo, rand.hi)):
+        if any(_is_bad_bound_type(b) for b in (rand.lo, rand.hi)):
             findings.append(
                 ClickFinding(
-                    code=CLK_RAND_REAL_BOUND,
-                    severity=_route_severity(CLK_RAND_REAL_BOUND, mode),
+                    code=CLK_RAND_BOUND_TYPE,
+                    severity=_route_severity(CLK_RAND_BOUND_TYPE, mode),
                     message=(
-                        f"randint() at {location_text} has a Real bound; the CLICK editor "
-                        "refuses a DF bound on RAND."
+                        f"randint() at {location_text} has a bound that is not an integer "
+                        "constant or an Int or Dint tag; the CLICK editor takes no other."
                     ),
                     location=location_text,
-                    suggestion="Use constant bounds, or copy the bound into an Int or Dint tag.",
+                    suggestion="Use integer constants, or copy the bound into an Int or Dint tag.",
                 )
             )
         elif (

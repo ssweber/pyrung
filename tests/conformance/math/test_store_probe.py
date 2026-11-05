@@ -29,13 +29,6 @@ otherwise is an answer.
   lands, without a flag), and equal constants zero the whole calc, 0 (Result3)
   with SC46 (Result4 = 4).  RAND ( 7 , 7 ) + 5 reading 5 puts the 0 on the
   RAND alone.
-- ``rand_bound_forms`` (probe, last of the group: the editor may refuse these
-  forms at paste, and a refusal costs the case's rungs, which are the last):
-  bounds that are not plain: a float literal RAND ( 1.5 , 3.5 ), a division
-  RAND ( DD / 2 , 10 ) with DD 8 and RAND ( ABS ( DD ) , 20 ) with DD -6.  pyrung
-  draws between the bounds as integers: 1..3 (Result1), 4..10 (Result2), 6..20
-  (Result3) with no flag (Result4 = 0).  A form CLICK reads as a Real bound
-  writes 0 (the DF bound reading of ``paste_risk/rand_real_bounds``).
 - ``inf_and_nan_to_text`` (probe): -Inf and NaN copied as text (Copy Option 4c),
   as ``faults/copy_inf_to_text`` does +Inf (``inf``, no flag).  A text register
   seeded ``Z``, then the copy, then each pair of TXT codes packed as 128 *
@@ -226,30 +219,6 @@ def prove_rand_tag_bounds(slot):
     probe(slot, tags, SC46, slot.Result4, 1)
     probe(slot, real_bounds, SC46, slot.Result4, 2)
     probe(slot, constants, SC46, slot.Result4, 4)
-    done(slot, WINDOW)
-
-
-def prove_rand_bound_forms(slot):
-    probe = Probes(3)
-    count_scans(slot, WINDOW)
-    eight, minus_six = dd[615], dd[616]
-    _stage(slot, lambda: copy(8, eight), lambda: copy(-6, minus_six))
-
-    def float_literal():
-        copy(99, slot.Result1)
-        calc(randint(1.5, 3.5), slot.Result1)
-
-    def halved():
-        copy(99, slot.Result2)
-        calc(randint(eight / 2, 10), slot.Result2)
-
-    def absolute():
-        copy(99, slot.Result3)
-        calc(randint(abs(minus_six), 20), slot.Result3)
-
-    probe(slot, float_literal, SC46, slot.Result4, 1)
-    probe(slot, halved, SC46, slot.Result4, 2)
-    probe(slot, absolute, SC46, slot.Result4, 4)
     done(slot, WINDOW)
 
 
@@ -452,22 +421,6 @@ group = Group(
             expect={"Result1": 0, "Result2": 66, "Result3": 32767, "Result4": 0},
             scans=SCANS,
             probe="finite Real copied into a TXT; Fill that clamps",
-        ),
-        case(
-            "RAND bounds that are expressions draw between them: a float literal "
-            "RAND ( 1.5 , 3.5 ) draws 1..3 (Result1), RAND ( DD / 2 , 10 ) with DD 8 draws "
-            "4..10 (Result2) and RAND ( ABS ( DD ) , 20 ) with DD -6 draws 6..20 (Result3), "
-            "none raising SC46 (Result4 = 0)",
-            ladder=prove_rand_bound_forms,
-            init=_init(3, dds=[(615, 616)]),
-            expect={
-                "Result1": range(1, 4),
-                "Result2": range(4, 11),
-                "Result3": range(6, 21),
-                "Result4": 0,
-            },
-            scans=SCANS,
-            probe="RAND bounds: float literal, a division, ABS",
         ),
     ],
 )

@@ -44,7 +44,7 @@ LAYOUT_VERSION = 3
 
 #: Findings the export lets through: the suite pastes RAND with DF and equal
 #: bounds, and measures what the editor does with them.
-PASTE_PROBE_FINDINGS = ("CLK_RAND_REAL_BOUND", "CLK_RAND_EQUAL_BOUNDS")
+PASTE_PROBE_FINDINGS = ("CLK_RAND_BOUND_TYPE", "CLK_RAND_EQUAL_BOUNDS")
 
 
 @dataclass(frozen=True)

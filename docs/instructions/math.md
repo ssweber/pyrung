@@ -81,6 +81,8 @@ When a value stored as Inf or NaN reaches an instruction's own integer conversio
 
 For CLICK portability, do not mix WORD and non-WORD math in the same `calc()` expression. CLICK validation reports `CLK_CALC_MODE_MIXED` for mixed-family expressions.
 
+CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`, and as either side of `<<` and `>>`. CLICK validation reports `CLK_CALC_ARG_NOT_PLAIN` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`; compute the value into a tag in a `calc()` above. The same holds for `randint()` bounds.
+
 ## Numeric behavior summary
 
 | Operation | Out-of-range behavior |
@@ -142,7 +144,7 @@ calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 - A bare `Real` tag as a bound reads 0 with no flag, whatever it holds. Any other bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`, a float literal); one that evaluates to Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
 - Into an `Int`, each constant bound is cut to 16 bits like any constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466.
 
-CLICK validation refuses a bare `Real` tag as a bound (`CLK_RAND_REAL_BOUND`) and equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`). Use constants or an `Int`/`Dint` bound, and a plain constant for a one-value draw.
+CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses any other bound, a `Real` tag, a float constant, a bit, a `Word` or text (`CLK_RAND_BOUND_TYPE`), equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`), and a bound that is an expression, such as `randint(0, N / 2)` (`CLK_CALC_ARG_NOT_PLAIN`). Use constants or an `Int`/`Dint` tag, computing the bound into a tag in a `calc()` above, and a plain constant for a one-value draw.
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
