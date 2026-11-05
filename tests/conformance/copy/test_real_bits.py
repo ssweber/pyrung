@@ -18,8 +18,9 @@ is an answer.
 - ``non_finite_raw_bits``: +Inf is 0x7F80 (Result1 = 1), -Inf 0xFF80 (Result2 = 1) with
   a zero low word (ErrorCode = 1 for the pair), and +Inf - +Inf is a NaN whose high
   word tells which NaN (Result3): 2 for 0xFFC0 (x86's default, what Python's
-  subtraction leaves), 1 for 0x7FC0 (ARM's), 0 for any other; Result4 is its low word,
-  1 for zero.  The word is compared after an XOR with 0x0080, each bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these
+  subtraction leaves), 1 for 0x7FC0 (ARM's), 3 for 0xFFFF, 0 for any other; Result4 is
+  its low word, 1 for zero, 2 for 0xFFFF.  A CLICK's NaN reads 0xFFFF:0xFFFF, and so
+  does pyrung's, whichever NaN it holds.  The word is compared after an XOR with 0x0080, each bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these
   registers; a client (ClickNick, the sim) shows what these bits decode to.
 - ``underflow``: pyrung keeps a Real at 64 bits, so 1.0E-20 * 1.0E-20 and 1.0E-30 *
   1.0E-30 are not 0 in a compare (Result1, Result2 = 0).  A float32 CLICK reads 1E-40
@@ -123,8 +124,8 @@ def prove_non_finite_raw_bits(slot):
     with Rung(*once(slot)):
         copy(0x80, dh[491])
         calc(dh[487] ^ dh[491], dh[490])
-    class_of(slot, dh[490], [0x7F40, 0xFF40], slot.Result3)
-    class_of(slot, dh[486], [0], slot.Result4)
+    class_of(slot, dh[490], [0x7F40, 0xFF40, 0xFF7F], slot.Result3)
+    class_of(slot, dh[486], [0, 0xFFFF], slot.Result4)
     with Rung(*once(slot), dh[482] == 0, dh[484] == 0):
         copy(1, slot.ErrorCode)
     finish(slot)
@@ -208,11 +209,11 @@ group = Group(
         ),
         case(
             "The raw bits of the non-finite Reals: +Inf high word 0x7F80 (Result1 = 1), -Inf "
-            "0xFF80 (Result2 = 1), both low words 0 (ErrorCode = 1); +Inf - +Inf is the NaN "
-            "0xFFC0 (Result3 = 2) with low word 0 (Result4 = 1)",
+            "0xFF80 (Result2 = 1), both low words 0 (ErrorCode = 1); +Inf - +Inf is a NaN, "
+            "0xFFFF (Result3 = 3) with low word 0xFFFF (Result4 = 2)",
             ladder=prove_non_finite_raw_bits,
             init=init_non_finite_raw_bits,
-            expect={"Result1": 1, "Result2": 1, "Result3": 2, "Result4": 1, "ErrorCode": 1},
+            expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 1},
             probe="what a DF holding Inf or NaN reads over Modbus, which NaN",
         ),
         case(

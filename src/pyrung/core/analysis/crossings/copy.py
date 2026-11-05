@@ -60,7 +60,9 @@ from pyrung.core.crossing import (
 )
 from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
 from pyrung.core.instruction.conversions import (
+    LITERAL,
     _store_copy_value_to_tag_type,
+    copy_source_kind,
     copy_store_transform,
 )
 from pyrung.core.instruction.data_transfer import (
@@ -162,8 +164,13 @@ def _dest_tag(instr: Any, dest_name: str, ctx: CrossingContext) -> Any | None:
     return ctx.tags_by_name.get(dest_name)
 
 
-def _stored_literal(instr: Any, dest_name: str, value: Any, ctx: CrossingContext) -> Any:
-    """Apply the instruction's concrete destination-storage semantics."""
+def _stored_literal(
+    instr: Any, dest_name: str, value: Any, ctx: CrossingContext, source: Any = LITERAL
+) -> Any:
+    """Apply the instruction's concrete destination-storage semantics.
+
+    *source* is the store's ``copy_source_kind``: a constant, or a readonly tag's type.
+    """
     dest = _dest_tag(instr, dest_name, ctx)
     if dest is None:
         return _NO_STORED_VALUE
@@ -171,7 +178,7 @@ def _stored_literal(instr: Any, dest_name: str, value: Any, ctx: CrossingContext
     if getattr(dest, "type", None) is TagType.CHAR and isinstance(value, str) and len(value) > 1:
         return _NO_STORED_VALUE
     try:
-        return _store_copy_value_to_tag_type(value, dest)
+        return _store_copy_value_to_tag_type(value, dest, source)
     except (TypeError, ValueError, OverflowError):
         return _NO_STORED_VALUE
 
@@ -197,6 +204,10 @@ def _value_preserving(
     """
     if dest_type is not None and not stored_value_possible(dest_type, value):
         return unsatisfiable(src_name)
+
+    # A Word into an Int keeps its bits: one Word for each Int.
+    if src_type is TagType.WORD and dest_type is TagType.INT:
+        return single(Eq(src_name, frozenset({int(value) & 0xFFFF})), exact=True)
 
     # Source can never overflow the destination -> the copy never clamps.
     if range_subset(src_type, dest_type):
@@ -230,13 +241,13 @@ class CopyCrossing(BaseCrossing):
         if getattr(instr, "convert", None) is not None:
             return UNKNOWN
         src = instr.source if isinstance(instr, CopyInstruction) else instr.value
-        storage = copy_store_transform(_dest_type(instr, target_tag, ctx))
+        storage = copy_store_transform(_dest_type(instr, target_tag, ctx), copy_source_kind(src))
         if storage is None:
             return UNKNOWN
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):
-                stored = _stored_literal(instr, target_tag, named.default, ctx)
+                stored = _stored_literal(instr, target_tag, named.default, ctx, named.type)
                 return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
             return Affine(source=named.name, scale=1, offset=0, storage=storage)
         if isinstance(src, (bool, int, float, str)):
@@ -272,7 +283,7 @@ class CopyCrossing(BaseCrossing):
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):  # constant ref: dest is fixed
-                stored = _stored_literal(instr, dest_name, named.default, ctx)
+                stored = _stored_literal(instr, dest_name, named.default, ctx, named.type)
                 if stored is _NO_STORED_VALUE:
                     return REVERSE_FALLTHROUGH
                 return satisfied() if stored == value else unsatisfiable(dest_name)

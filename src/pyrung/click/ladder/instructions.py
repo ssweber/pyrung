@@ -282,8 +282,10 @@ class _InstructionMixin:
             )
         if instruction_type == "CopyInstruction":
             convert_kw = {}
-            if instruction.convert is not None:
-                convert_kw["convert"] = self._render_converter(instruction.convert)
+            # A plain Copy across text converts on its own; it exports as written.
+            authored = getattr(instruction, "authored_convert", instruction.convert)
+            if authored is not None:
+                convert_kw["convert"] = self._render_converter(authored)
             dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
             with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
                 copy_source = self._render_operand(

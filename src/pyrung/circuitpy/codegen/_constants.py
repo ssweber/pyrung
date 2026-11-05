@@ -38,6 +38,8 @@ _HELPER_ORDER = (
     "_store_int",
     "_store_dint",
     "_store_word",
+    "_store_word_clamped",
+    "_store_bit",
     "_store_real",
     "_store_bool",
     "_math_func",

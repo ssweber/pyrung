@@ -1006,10 +1006,13 @@ def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | Non
 
     It holds what the store truncates: 32767.5 into an INT stores 32767 without
     clamping.  +/-Inf passes and NaN compares false, as a clamp pins Inf and
-    stores NaN as 0.  Text converts in the store and never clamps here.
+    stores NaN as 0.  Text converts in the store and never clamps here, and a
+    Word into an INT keeps its bits.
     """
     bounds = {"INT": (-32768, 32767), "DINT": (-2147483648, 2147483647)}.get(dest_type)
     if bounds is None or source_type == "CHAR":
+        return None
+    if dest_type == "INT" and source_type == "WORD":
         return None
     lower, upper = bounds
     return f"{value_var} >= {upper + 1} or {value_var} <= {lower - 1}"
@@ -1145,6 +1148,28 @@ def _compile_source_element_read(
     the address-error flag and an IndexError (``_read_index_*``)."""
     index_expr = f"{ctx.use_read_index_block(binding.block_id)}(int({addr_expr}))"
     return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
+
+
+def _past_end_keeps(value: Any) -> bool:
+    """True for a pointer into a bank whose Copy writes nothing past its end."""
+    return isinstance(value, (IndirectRef, IndirectExprRef)) and value.block._past_end_keeps
+
+
+def _compile_copy_source(value: Any, ctx: CodegenContext) -> str:
+    """A Copy's source, as :func:`_compile_value` reads it, except a pointer into a bank
+    whose Copy writes nothing past its end (``Block._past_end_keeps``): past the end it
+    raises IndexError with no flag (``_resolve_index_*``), and the guard drops the copy."""
+    if not _past_end_keeps(value):
+        return _compile_value(value, ctx)
+    binding = ctx.block_bindings.get(id(value.block))
+    if binding is None:
+        raise RuntimeError(f"Missing block binding for indirect ref {value.block.name!r}")
+    if isinstance(value, IndirectRef):
+        addr_expr = _compile_value(value.pointer, ctx)
+    else:
+        addr_expr = _compile_expression_impl(value.expr, ctx)
+    index_expr = f"{ctx.use_indirect_block(binding.block_id)}(int({addr_expr}))"
+    return _element_read_or_default(value.block, binding, index_expr, ctx, None)
 
 
 def _element_read_or_default(

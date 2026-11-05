@@ -43,6 +43,7 @@ from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.conversions import (
     _store_copy_value_to_tag_type,
     _truncate_to_tag_type,
+    copy_source_kind,
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.runner import PLC
@@ -153,7 +154,9 @@ FIRES = [
     pytest.param("Int", "Word", "5-", "==", 65535, 6, id="5 - i to a word"),
     pytest.param("Int", "Word", "neg", "==", 65535, 1, id="-i to a word"),
     pytest.param("Word", "Int", "calc+1", "==", -1, 65534, id="word + 1 to an int, wraps"),
-    pytest.param("Word", "Int", "copy", "==", 32767, 40000, id="word to int, clamps at the top"),
+    pytest.param("Word", "Int", "copy", "==", -25536, 40000, id="word to int, keeps its bits"),
+    pytest.param("Word", "Int", "copy", "==", -1, 65535, id="word to int, the top is -1"),
+    pytest.param("Word", "Int", "copy", "<", 0, 40000, id="word to int, under zero"),
     pytest.param("Int", "Word", "fill", "==", 65535, -1, id="fill int to word"),
     pytest.param("Int", "Word", "blockcopy", "==", 65535, -1, id="blockcopy int to word"),
     pytest.param("Int", "Word", "blockcopy", ">=", 40000, -1, id="blockcopy, past the int"),
@@ -179,8 +182,7 @@ UNREACHABLE = [
     pytest.param("Int", "Word", "copy", "<", 0, id="under the word"),
     pytest.param("Int", "Dint", "copy", ">", 40000, id="past the int, on a wider target"),
     pytest.param("Int", "Dint", "copy", "==", 32768, id="one past the int, on a wider target"),
-    pytest.param("Word", "Int", "copy", "==", -1, id="word clamps, nothing negative"),
-    pytest.param("Word", "Int", "copy", "<", 0, id="word clamps, under zero"),
+    pytest.param("Word", "Int", "copy", "==", 40000, id="word to int, nothing past the int"),
     pytest.param("Int", "Int", "calc+1", ">", 32767, id="a wrap leaves nothing above"),
     pytest.param("Int", "Word", "fill", "==", 70000, id="fill, past the word"),
     pytest.param("Int", "Word", "blockcopy", "==", 70000, id="blockcopy, past the word"),
@@ -216,6 +218,7 @@ def _through_a_mid_tag(mid: str, target: str, op: str, bound: Any) -> tuple[Prog
         pytest.param("Dint", "Word", ">=", 40000, -1, id="past the int, through a dint"),
         pytest.param("Real", "Word", "==", 65535, -1, id="through a real"),
         pytest.param("Word", "Word", "==", 65535, -1, id="through a word"),
+        pytest.param("Word", "Int", "==", -1, -1, id="through a word, back into an int"),
     ],
 )
 def test_a_chain_with_a_wrap_on_it_says_no_scan_only_with_what_it_tried(
@@ -233,8 +236,8 @@ def test_a_chain_with_a_wrap_on_it_says_no_scan_only_with_what_it_tried(
 
 
 def test_a_chain_of_stores_that_leaves_nothing_to_find_is_not_claimed() -> None:
-    """INT to WORD to INT: nothing fires, but a chain's values aren't known to be all of them."""
-    program, hit = _through_a_mid_tag("Word", "Int", "==", -1)
+    """INT to WORD to DINT: nothing fires, but a chain's values aren't known to be all of them."""
+    program, hit = _through_a_mid_tag("Word", "Dint", "==", -1)
     assert not [value for value in SWEEP if _fires_at(program, "S", value, hit)]
     verdict = never(program, hit)
     assert isinstance(verdict, Intractable)
@@ -797,7 +800,9 @@ def _stored(instruction: Any, value: Any) -> Any:
         given = _evaluate(instruction.expression, value)
         return _truncate_to_tag_type(given, instruction.dest, instruction.mode)
     assert isinstance(instruction, CopyInstruction)
-    return _store_copy_value_to_tag_type(value, instruction.dest)
+    return _store_copy_value_to_tag_type(
+        value, instruction.dest, copy_source_kind(instruction.source)
+    )
 
 
 class Built(NamedTuple):

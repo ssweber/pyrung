@@ -1672,14 +1672,16 @@ class TestBoardPeripheralsAndRunStop:
             ("inf", Dint, 2147483647, True),
             ("-inf", Dint, -2147483648, True),
             ("nan", Dint, 0, False),
-            ("inf", Word, 0, False),
+            ("inf", Word, 65535, False),
+            ("-inf", Word, 32768, False),
             ("nan", Word, 0, False),
         ],
     )
     def test_copy_non_finite_on_every_backend(
         self, monkeypatch, operand, dest_tag, stored, flagged
     ):
-        """A Copy of +/-Inf clamps with SC43 on an INT or DINT; NaN, or a WORD, stores 0 with none."""
+        """A Copy of +/-Inf clamps with SC43 on an INT or DINT and with none on a WORD (CLICK:
+        65535 and 32768); NaN stores 0 with none."""
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1703,13 +1705,16 @@ class TestBoardPeripheralsAndRunStop:
             (Real, 32768.0, Int, 32767, True),
             (Real, -32769.0, Int, -32768, True),
             (Real, 1.0e10, Dint, 2147483647, True),
-            (Dint, 70000, Word, 4464, False),
+            (Dint, 70000, Word, 65535, False),
+            (Dint, -1, Word, 65535, False),
+            (Word, 65535, Int, -1, False),
         ],
     )
     def test_copy_clamp_flag_on_every_backend(
         self, monkeypatch, source_tag, value, dest_tag, stored, flagged
     ):
-        """A Copy raises SC43 when the store stops at a limit: not on a truncation or a wrap."""
+        """A Copy raises SC43 when the store stops at a limit: not on a truncation, a wrap, or
+        a WORD's clamp."""
         source = source_tag("Source", default=value)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1831,9 +1836,10 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (7, False, False, False, 5) for name in results}
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
-    def test_a_copy_of_a_non_finite_real_stores_zero_in_a_char_on_every_backend(
+    def test_a_copy_of_a_non_finite_real_into_a_lone_char_keeps_it_on_every_backend(
         self, monkeypatch, operand
     ):
+        """A plain Copy of a Real into text writes its text, which one CHAR cannot hold."""
         r, setup = self._non_finite_real(operand)
         ch = Char("Ch", default="A")
         with Program(strict=False) as prog:
@@ -1843,10 +1849,10 @@ class TestBoardPeripheralsAndRunStop:
             with Rung(~system.sys.first_scan):
                 copy(r, ch)
 
-        results = _on_every_backend(prog, monkeypatch, (ch,), scans=2)
-        assert results == {name: (0,) for name in results}
+        results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS), scans=2)
+        assert results == {name: ("A", False, True, False) for name in results}
 
-    def test_a_copy_of_a_finite_real_into_a_char_agrees_on_every_backend(self, monkeypatch):
+    def test_a_copy_of_a_finite_real_into_a_lone_char_faults_on_every_backend(self, monkeypatch):
         r = Real("R", default=66.5)
         ch = Char("Ch", default="A")
         with Program(strict=False) as prog:
@@ -1854,7 +1860,25 @@ class TestBoardPeripheralsAndRunStop:
                 copy(r, ch)
 
         results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS), scans=1)
-        assert results == {name: (66.5, False, False, False) for name in results}
+        assert results == {name: ("A", False, True, False) for name in results}
+
+    def test_a_copy_of_a_real_into_a_txt_writes_its_digits_on_every_backend(self, monkeypatch):
+        """CLICK's plain Copy of a DF into a TXT is ``to_text()``; of the TXT into a number,
+        ``to_value``."""
+        r = Real("R", default=66.5)
+        chars = Block("Txt", TagType.CHAR, 1, 12)
+        digit = Int("Digit", default=99)
+        point = Bool("Point")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(r, chars[1])
+                copy(chars[1], digit)
+            with Rung(chars[3] == "."):
+                out(point)
+
+        watched = (chars[1], digit, point, *self._FAULTS)
+        results = _on_every_backend(prog, monkeypatch, watched, scans=1)
+        assert results == {name: ("6", 6, True, False, False, False) for name in results}
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
@@ -2559,7 +2583,8 @@ class TestCopyConverterCodegen:
         assert ord(ch_terminator) == 13
         assert ch_values[9] == "{"
 
-    def test_blockcopy_converter_failure_sets_fault_and_avoids_partial_write(self, monkeypatch):
+    def test_blockcopy_converter_failure_sets_fault_and_skips_the_bad_character(self, monkeypatch):
+        # CLICK writes the others and leaves the bad character's slot ("1A3" over 9s: 1, 9, 3).
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 10)
@@ -2606,9 +2631,9 @@ class TestCopyConverterCodegen:
             result.code, monkeypatch, StubBase(), runtime_source=result.runtime
         )
         ds_values = _namespace_list(namespace, ds_symbol)
-        assert ds_values[0] == 9
+        assert ds_values[0] == 1
         assert ds_values[1] == 9
-        assert ds_values[2] == 9
+        assert ds_values[2] == 3
         assert namespace[fault_seen_symbol] is True
 
     def test_ascii_code_of_unwritten_char_writes_zero(self, monkeypatch):

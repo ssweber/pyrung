@@ -2652,7 +2652,8 @@ class TestSelfFeedingChurnExact:
     def test_a_copy_into_a_word_wraps_and_a_comparison_sees_it(
         self, step: int, start: int, read: Any
     ) -> None:
-        """A Copy into a Word wraps with no flag, so past its range it reads like no line."""
+        """A Copy into a Word wraps below 0 and clamps above 65535 with no flag, so past its
+        range it reads like no line."""
 
         def reader(v: Any) -> None:
             with Rung(read(v)):
@@ -2664,16 +2665,31 @@ class TestSelfFeedingChurnExact:
             patch={"Wide": start},
         )
 
-    def test_a_copy_into_a_word_stops_at_the_first_read_of_its_wrapped_value(self) -> None:
+    def test_a_copy_into_a_word_stops_at_the_first_read_of_its_clamped_value(self) -> None:
+        """Past 65535 a register clamps into a Word (a CLICK reading): 65537 reads 65535."""
+
         def reader(v: Any) -> None:
-            with Rung(v == 1):
+            with Rung(v == 65_535):
                 out(Bool("Hit"))
 
         folded = _assert_fold_is_exact(
             self._copy_into_a_word(7, reader), _until_hit(10_000), patch={"Wide": 65_495}
         )
         assert folded.state.tags["Wide"] == 65_537
-        assert folded.state.tags["View"] == 1
+        assert folded.state.tags["View"] == 65_535
+
+    def test_a_copy_into_a_word_stops_at_the_first_read_of_its_wrapped_value(self) -> None:
+        """Below 0 a register wraps into a Word: -7 reads 65529."""
+
+        def reader(v: Any) -> None:
+            with Rung(v == 65_529):
+                out(Bool("Hit"))
+
+        folded = _assert_fold_is_exact(
+            self._copy_into_a_word(-7, reader), _until_hit(10_000), patch={"Wide": 700}
+        )
+        assert folded.state.tags["Wide"] == -7
+        assert folded.state.tags["View"] == 65_529
 
     def test_a_copy_into_a_word_inside_its_range_still_folds(self) -> None:
         """The wrap only ends a window at the edge: inside the range they stay long."""

@@ -432,7 +432,7 @@ def test_copy_inf_into_an_integer_clamps(runner_factory):
     tags = plc.current_state.tags
     assert tags["I"] == 32767
     assert tags["D"] == -2147483648
-    assert tags["W"] == 0
+    assert tags["W"] == 65535  # a CLICK reading: +Inf into a Word is its top
     assert tags["N"] == 0
 
 

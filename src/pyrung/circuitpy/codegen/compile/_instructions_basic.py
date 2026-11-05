@@ -10,6 +10,7 @@ from pyrung.circuitpy.codegen._constants import (
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _coil_reset_value,
+    _copy_store_expr,
     _indent_body,
     _optional_value_type_name,
     _store_coerce_expr,
@@ -31,6 +32,7 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_timing_key
 from pyrung.core.kernel import prove_effective_preset_key
@@ -39,6 +41,7 @@ from pyrung.core.tag import Tag
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_assignment_lines,
+    _compile_copy_source,
     _compile_guarded_instruction,
     _compile_lvalue,
     _compile_set_address_error_fault_body,
@@ -49,6 +52,7 @@ from ._primitives import (
     _copy_clamp_condition,
     _copy_converter_target_info,
     _copy_converter_write_lines,
+    _past_end_keeps,
     _timer_carry_lines,
 )
 
@@ -473,19 +477,21 @@ def _compile_copy_instruction(
     target_type = _value_type_name(instr.target)
     # A text literal into a CHAR fans out, one character per register.
     fanout = isinstance(instr.source, str) and len(instr.source) > 1 and target_type == "CHAR"
-    if instr.convert is not None or fanout:
-        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
-    source_expr = _compile_value(instr.source, ctx)
+    convert = instr.convert
+    if convert is not None or fanout:
+        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent, convert)
+    source_expr = _compile_copy_source(instr.source, ctx)
     source_type = (
         "CHAR" if isinstance(instr.source, str) else _optional_value_type_name(instr.source)
     )
+    source_kind = copy_source_kind(instr.source)
     clamp_cond = _copy_clamp_condition("_copy_value", target_type, source_type)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     if clamp_cond is None or fault_body == ["pass"] or _copy_source_fits(instr.source, target_type):
-        value_expr = _store_coerce_expr(source_expr, target_type, ctx)
+        value_expr = _copy_store_expr(source_expr, target_type, source_kind, ctx)
         enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
     else:
-        value_expr = _store_coerce_expr("_copy_value", target_type, ctx)
+        value_expr = _copy_store_expr("_copy_value", target_type, source_kind, ctx)
         enabled_body = [
             f"_copy_value = {source_expr}",
             *_compile_assignment_lines(instr.target, value_expr, ctx, indent=0),
@@ -509,8 +515,10 @@ def _compile_copy_converter_instruction(
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
+    converter: CopyConverter | None = None,
 ) -> list[str]:
-    converter = instr.convert
+    """A Copy with *converter* (``instr.convert``, or the plain one across text), or a
+    text literal's fan-out when it is ``None``."""
     if converter is not None and not isinstance(converter, CopyConverter):
         raise TypeError("copy converter compiler requires CopyConverter")
 
@@ -518,7 +526,13 @@ def _compile_copy_converter_instruction(
     address_fault_body = _compile_set_address_error_fault_body(ctx)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     mode = "fanout" if converter is None else converter.mode
-    source_expr = _compile_value(instr.source, ctx)
+    source_expr = _compile_copy_source(instr.source, ctx)
+    source_read: list[str] = []
+    if _past_end_keeps(instr.source):
+        # Read where a pointer past the end drops the copy (the guard's IndexError),
+        # not inside the conversion's own handler, which would flag it.
+        source_read = [f"_{stem}_source = {source_expr}"]
+        source_expr = f"_{stem}_source"
 
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
         instr.target, ctx, stem
@@ -541,7 +555,7 @@ def _compile_copy_converter_instruction(
         kernel=ctx.kernel_runtime,
     )
 
-    enabled_body: list[str] = [*setup]
+    enabled_body: list[str] = [*source_read, *setup]
     if mode == "fanout":
         enabled_body.extend(
             [
