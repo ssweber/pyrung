@@ -19,11 +19,14 @@ right after its op.
 - ``abs_and_precision``: DD 2147483647 ^ 2 less itself less 1 (Result1): 1 exact, 0 in a double.
   a * a * 4 / (a * a) (Result2): 4, or another if the intermediate wraps at 64 bits.
   ABS(-32768) into an Int (Result3): -32768 wrapped, 32767 clamped; Result4 bit 1 is SC43.
-  ABS(-2147483648) into a DD (ErrorCode): 1 for itself, 2 for 2147483647.
-- ``mod_signs``: MOD's sign.  -7 MOD 2 (Result1): 1 floored as pyrung, -1 truncated as C.  7
-  MOD -2 (Result2): -1 or 1.  7.5 MOD 2.0 * 10 (Result3): 15.  -7.5 MOD 2.0 * 10 (Result4): 5
-  floored, -15 truncated.
-- ``power_edges``: 0 ^ 0 (Result1): 1 (0 where a CLICK takes it for an error).  (-2) ^ 3
+  ABS(-2147483648) into a DD (ErrorCode): 1 for itself, 2 for 2147483647.  Answered on a CLICK
+  (2026-11-05): a double (0); ABS(-32768) is neither, 0 with SC43; ABS(-2147483648) is neither
+  too (0), its value not read yet.
+- ``mod_signs``: MOD's sign.  -7 MOD 2 (Result1): 1 floored, -1 truncated as C.  7 MOD -2
+  (Result2): -1 or 1.  7.5 MOD 2.0 * 10 (Result3): 15.  -7.5 MOD 2.0 * 10 (Result4): 5 floored,
+  -15 truncated.  Answered on a CLICK (2026-11-05): truncated, the dividend's sign.
+- ``power_edges``: 0 ^ 0 (Result1): 1, or 0 where a CLICK takes it for an error (it does,
+  2026-11-05).  (-2) ^ 3
   (Result2): -8; 2 ^ -1 into a DF * 10 (Result3): 5.  2 ^ -1 into an Int (Result4): 0 cut, 1
   rounded.  2 ^ 40 into an Int (ErrorCode): 0 wrapped, 32767 clamped.  Each of those two starts at
   99, which stays where the store is refused.
@@ -31,7 +34,8 @@ right after its op.
   off (``GuardedProbes``), the destination staged at 99: 0 ^ -1 into a DF (Result1, by 1: 0 or
   99 kept); -8.0 ^ 0.5 (Result2); 7 MOD 0 (Result3); 7.5 MOD 0.0 (Result4).  ErrorCode bits: 1
   and 2 SC46 after the first two, 4 and 8 SC40 after the last two, 16 SC40 after the first,
-  which pyrung takes for a division by 0.
+  which pyrung took for a division by 0.  Answered on a CLICK (2026-11-05): all four write 0,
+  and only -8.0 ^ 0.5 raises a flag, SC46 (ErrorCode = 2).
 - ``functions``: radians or degrees, and which log.  SIN(1), COS(1), TAN(1), ATAN(1) and LN(10),
   each * 1000: 841, 540, 1557, 785, 2302 in radians.  In degrees 17, 999, 17, 785 and the rest
   tells.  ``log`` is LN (2302) and not LOG (1000).
@@ -40,7 +44,9 @@ right after its op.
   constant``).  Into a DD: DD 131072 / 65536 is 2, or 0 with SC40 where the constant is cut to
   16 bits (Result1 = 1 for 2, 2 for 0; ErrorCode bit 1 is SC40); DD 2 * 40000 is 80000 (1) or
   -51072 (2) (Result2); the same into a DF (Result3); 3000000000 / DD 1000 is 3000000 (1) or
-  -1294967 (2) (Result4).
+  -1294967 (2) (Result4).  Answered on a CLICK (2026-11-05): cut, whatever the destination
+  (2, 2, 2, ErrorCode 1); 3000000000 / 1000 is neither (Result4 = 0), its value not read yet
+  (the cut predicts 24064 / 1000, 24).
 
 ``hex_math`` (WORD only: ``numeric`` reads hex Math's store, not these):
 
@@ -48,7 +54,8 @@ right after its op.
   rotate; 0 for any other); << 16 and << 17 (Result2, by digits: 1 for 0 and 2 for
   anything else); RSH 0xFFFF >> 1 (Result3): 1 logical 0x7FFF, 2 arithmetic 0xFFFF; RSH 0x8000
   >> 16 (Result4): 1 for 0, 2 for unchanged.  ErrorCode: SC43 after the first shift, bit 1,
-  after 0xFFFF + 1, bit 2, after 1 - 2, bit 4.
+  after 0xFFFF + 1, bit 2, after 1 - 2, bit 4.  Answered on a CLICK (2026-11-05): the bit
+  shifted out raises no SC43 (ErrorCode = 6).
 - ``rotates_and_bits``: LRO 0x8001 by 1 (Result1, 1 for 0x0003), by 16 (Result2, 1 for itself,
   2 for 0), by 17 (Result3, 1 for 0x0003).  RRO 0x8001 by 2 (Result4, 1 for 0x6000).
   ErrorCode digits: units, 0xFFFF MOD 0x0100 (1 for 0x00FF, unsigned); tens, 0xF0F0 AND 0xFF00
@@ -359,38 +366,39 @@ group = Group(
             probe="what a Math stores for a Real past an Int's or a Dint's range",
         ),
         case(
-            "Integer intermediates: DD 2147483647 squared less itself less 1 is 1 (Result1), a * a "
-            "* 4 / (a * a) is 4 (Result2); ABS(-32768) into an Int (Result3, SC43 Result4); "
-            "ABS(-2147483648) into a DD (ErrorCode)",
+            "Intermediates are doubles: DD 2147483647 squared less itself less 1 is 0 (Result1), "
+            "a * a * 4 / (a * a) is 4 (Result2); ABS(-32768) into an Int is 0 (Result3) with SC43 "
+            "(Result4); ABS(-2147483648) into a DD is neither itself nor 2147483647 (ErrorCode)",
             ladder=prove_abs_and_precision,
             init=init_abs_and_precision,
-            expect={"Result1": 1, "Result2": 4, "Result3": -32768, "Result4": 1, "ErrorCode": 1},
+            expect={"Result1": 0, "Result2": 4, "Result3": 0, "Result4": 1, "ErrorCode": 0},
             probe="exact or double intermediates; ABS at the bottom of a signed range",
         ),
         case(
-            "MOD takes the divisor's sign: -7 MOD 2 is 1 (Result1), 7 MOD -2 is -1 (Result2), "
-            "7.5 MOD 2.0 * 10 is 15 (Result3), -7.5 MOD 2.0 * 10 is 5 (Result4)",
+            "MOD truncates, taking the dividend's sign: -7 MOD 2 is -1 (Result1), 7 MOD -2 is 1 "
+            "(Result2), 7.5 MOD 2.0 * 10 is 15 (Result3), -7.5 MOD 2.0 * 10 is -15 (Result4)",
             ladder=prove_mod_signs,
             init=init_mod_signs,
-            expect={"Result1": 1, "Result2": -1, "Result3": 15, "Result4": 5},
+            expect={"Result1": -1, "Result2": 1, "Result3": 15, "Result4": -15},
             probe="floored or truncated MOD, Int and Real",
         ),
         case(
-            "Powers: 0 ^ 0 is 1 (Result1), (-2) ^ 3 is -8 (Result2), 2 ^ -1 into a DF * 10 is 5 "
-            "(Result3), into an Int 0 (Result4), 2 ^ 40 into an Int wraps to 0 (ErrorCode)",
+            "Powers: 0 ^ 0 is a math error, 0 (Result1), (-2) ^ 3 is -8 (Result2), 2 ^ -1 into a "
+            "DF * 10 is 5 (Result3), into an Int 0 (Result4), 2 ^ 40 into an Int wraps to 0 "
+            "(ErrorCode)",
             ladder=prove_power_edges,
             init=init_power_edges,
-            expect={"Result1": 1, "Result2": -8, "Result3": 5, "Result4": 0, "ErrorCode": 0},
+            expect={"Result1": 0, "Result2": -8, "Result3": 5, "Result4": 0, "ErrorCode": 0},
             probe="power edge values",
         ),
         case(
-            "Math errors past the recorded seven, each over a staged 99: 0.0 ^ -1.0 reads 0 with "
-            "SC40 (Result1, ErrorCode bit 16), -8.0 ^ 0.5 reads 0 with SC46 (Result2, bit 2); 7 "
-            "MOD 0 (Result3) and 7.5 MOD 0.0 (Result4) read 0 with SC40 (bits 4, 8)",
+            "Math errors past the recorded seven, each over a staged 99, all write 0: 0.0 ^ -1.0 "
+            "(Result1) with no flag, -8.0 ^ 0.5 (Result2) with SC46 (ErrorCode bit 2), 7 MOD 0 "
+            "(Result3) and 7.5 MOD 0.0 (Result4) with no SC40 (ErrorCode = 2)",
             ladder=prove_math_errors,
             init=init_math_errors,
             scans=scans_for(),
-            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 0, "ErrorCode": 30},
+            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 0, "ErrorCode": 2},
             probe="which flag and what value for 0 ^ -1, a root of a minus, MOD by 0",
         ),
         case(
@@ -408,12 +416,12 @@ group = Group(
             probe="radians or degrees; a Math's log forms",
         ),
         case(
-            "A constant past 16 bits into a DD or DF is whole: 131072 / 65536 is 2 (Result1 = 1, "
-            "no SC40, ErrorCode = 0), 2 * 40000 is 80000 into a DD and a DF (Result2, Result3 = "
-            "1), 3000000000 / 1000 is 3000000 (Result4 = 1)",
+            "A constant past 16 bits is cut to 16 bits into a DD or DF too: 131072 / 65536 is 0 "
+            "(Result1 = 2) with SC40 (ErrorCode = 1), 2 * 40000 is -51072 into a DD and a DF "
+            "(Result2, Result3 = 2), 3000000000 / 1000 is neither 3000000 nor -1294967 (Result4 = 0)",
             ladder=prove_wide_constant_into_dint,
             init=init_wide_constant_into_dint,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1, "ErrorCode": 0},
+            expect={"Result1": 2, "Result2": 2, "Result3": 2, "Result4": 0, "ErrorCode": 1},
             probe="does a wide constant reach a Dint or Real Math whole",
         ),
     ],
@@ -423,12 +431,12 @@ hex_group = Group(
     "hex_math",
     [
         case(
-            "Hex shifts on a DH: 0x8001 << 1 is 0x0002 (Result1 = 1); << 16 and << 17 are 0 "
-            "(Result2 = 11); >> 1 of 0xFFFF is logical (Result3 = 1); >> 16 of 0x8000 is 0 "
-            "(Result4 = 1); SC43 bits after the shift, 0xFFFF + 1 and 1 - 2 (ErrorCode)",
+            "Hex shifts on a DH: 0x8001 << 1 is 0x0002 (Result1 = 1) with no SC43; << 16 and << 17 "
+            "are 0 (Result2 = 11); >> 1 of 0xFFFF is logical (Result3 = 1); >> 16 of 0x8000 is 0 "
+            "(Result4 = 1); SC43 after 0xFFFF + 1 and 1 - 2 (ErrorCode = 6)",
             ladder=prove_shifts,
             init=init_shifts,
-            expect={"Result1": 1, "Result2": 11, "Result3": 1, "Result4": 1, "ErrorCode": 7},
+            expect={"Result1": 1, "Result2": 11, "Result3": 1, "Result4": 1, "ErrorCode": 6},
             probe="LSH and RSH at the edges; SC43 in hex Math",
         ),
         case(
