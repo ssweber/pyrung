@@ -68,12 +68,12 @@ Each step shows `rN: instruction(tag) -- contacts`. Bool True is implicit (just 
 
 Steps marked `*` are where something NOT happening keeps the tag in its current state. `blocked` means a contact is preventing the rung from firing — if it changed, so would the result. `held` means a latch trigger that has since cleared — the latch fired in the past but the reason is no longer active.
 
-`why()` works in both directions — "why is this ON?" and "why is this OFF?" — same call, same format. When no writer has fired (the tag is at its initial value), the per-rung detail collapses to a summary:
+`why()` works in both directions — "why is this ON?" and "why is this OFF?" — same call, same format. When no writer is firing (the tag is at its initial value, or a latch is holding), the per-rung detail collapses to a summary:
 
 ```
 State = IDLE  [why]
   roots: CmdStart(False), CmdStop(False), Fault(False), CmdReset(False)
-  no writer has fired (5 blocked)
+  no writer is firing now (5 blocked)
 ```
 
 ### Multiple tags

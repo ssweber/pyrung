@@ -157,7 +157,7 @@ class TestHowCompletedFromColdStart:
     strict=True,
     reason="Causal attribution of an overflow-driven ABORTED through the affine "
     "LoopIndex counter and the ds[150+StateRequested] jump table is not yet "
-    "supported; why() reports 'no writer has fired' at the transition scan.",
+    "supported; why() reports 'no writer is firing now' at the transition scan.",
 )
 class TestWhyAbortedViaOverflow:
     """§1.5: ``why StateCurrent == ABORTED`` must attribute the transition to the
@@ -181,7 +181,7 @@ class TestWhyAbortedViaOverflow:
         chain = plc.why("StateCurrent")
         assert "no writer" not in str(chain), (
             "why(StateCurrent) at ABORTED must name the writer that set it, "
-            "not report 'no writer has fired'"
+            "not report 'no writer is firing now'"
         )
 
 

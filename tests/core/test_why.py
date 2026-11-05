@@ -716,7 +716,7 @@ class TestForced:
         assert chain.forced == {"Lamp": False, "Go": True}
         text = str(chain)
         assert "Lamp is forced False" in text
-        assert "no writer has fired" not in text
+        assert "no writer is firing now" not in text
         assert "  r1: out(Lamp) -- Go" in text
 
     def test_a_tag_forced_on_with_its_rung_false_says_so(self) -> None:
@@ -728,7 +728,7 @@ class TestForced:
 
         assert "Lamp = True  [why]" in text
         assert "Lamp is forced True" in text
-        assert "no writer has fired" not in text
+        assert "no writer is firing now" not in text
         assert "  r1: out(Lamp) -- Go(False)" in text
 
     def test_a_forced_latch_is_not_called_blocked(self) -> None:
@@ -739,7 +739,7 @@ class TestForced:
         text = str(plc.why("Sealed"))
 
         assert "Sealed is forced True" in text
-        assert "no writer has fired" not in text
+        assert "no writer is firing now" not in text
         assert "*" not in text
 
     def test_a_forced_input_is_marked_among_the_roots(self) -> None:
@@ -767,7 +767,7 @@ class TestForced:
         assert chain.forced == {"Relay": False, "Go": True}
         text = str(chain)
         assert "Relay is forced False" in text
-        assert "no writer has fired" not in text
+        assert "no writer is firing now" not in text
         assert "*" not in text
         assert "  r2: out(Relay) -- Go" in text
 
@@ -820,7 +820,20 @@ class TestForced:
         chain = plc.why("Sealed")
 
         assert chain.forced == {}
-        assert "no writer has fired" in str(chain)
+        assert "no writer is firing now" in str(chain)
+
+    def test_a_latch_that_fired_and_holds_does_not_claim_it_never_fired(self) -> None:
+        plc = self._plc()
+        plc.patch({"Go": True})
+        plc.step()
+        plc.patch({"Go": False})
+        plc.step()
+
+        text = str(plc.why("Sealed"))
+
+        assert "Sealed = True  [why]" in text
+        assert "no writer is firing now (2 blocked)" in text
+        assert "has fired" not in text
 
 
 # ---------------------------------------------------------------------------

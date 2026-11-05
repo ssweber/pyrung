@@ -546,7 +546,7 @@ class CausalChain:
 
         all_blocked = self.steps and all(is_abnormal(s) for s in self.steps)
         if all_blocked:
-            lines.append(f"  no writer has fired ({len(self.steps)} blocked)")
+            lines.append(f"  no writer is firing now ({len(self.steps)} blocked)")
             return "\n".join(lines)
 
         has_abnormal = any(is_abnormal(s) for s in self.steps)
