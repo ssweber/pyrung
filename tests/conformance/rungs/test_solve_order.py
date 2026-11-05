@@ -121,8 +121,8 @@ from pyrung.core import (
     pack_bits,
     reset,
 )
-from tests.conformance import test_cont_box, test_row_solve, test_rung_semantics
 from tests.conformance.memory import ClickCounter, c
+from tests.conformance.rungs import test_cont_box, test_row_solve, test_rung_semantics
 from tests.conformance.scans import count_scans, done, scans_for
 
 GROUP = "solve_order"

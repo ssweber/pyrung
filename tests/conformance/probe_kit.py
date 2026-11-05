@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.conformance import Case, CaseResult, record_confirmations
-from pyrung.core import Rung, calc, copy, latch, out
+from pyrung.core import Rung, calc, copy, latch, on_delay, out
+from tests.conformance.memory import ClickTimer, td
 
 
 def once(slot: Any) -> tuple[Any, Any]:
@@ -153,3 +154,21 @@ class GuardedProbes:
         for other, other_bit in also:
             with Rung(now, other):
                 calc(field + other_bit, field)
+
+
+def ms_clock(slot: Any, n: int, preset: int = 5000) -> Any:
+    """A TON of *n* from ``Cmd``: its TD is the case's clock, in ms."""
+    with Rung(slot.Cmd != 0):
+        on_delay(ClickTimer(n), preset)
+    return td[n]
+
+
+def in_window(slot: Any, clock: Any, low: int, high: int) -> tuple[Any, ...]:
+    """The conditions of a rung true from *low* up to *high* ms on *clock*, until ``Fired``."""
+    return (*once(slot), clock >= low, clock < high)
+
+
+def end_at(slot: Any, clock: Any, ms: int) -> None:
+    """Raise ``Fired`` once *clock* reaches *ms*."""
+    with Rung(*once(slot), clock >= ms):
+        copy(1, slot.Fired)

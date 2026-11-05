@@ -3,7 +3,7 @@
 ``toggle``, ``debounce``, ``flasher`` and ``timed`` are driven by a random rung
 sequence, one level per scan.  Each is checked against a small model written
 from the documented behaviour (``docs`` and the hardware-recorded
-``tests/conformance/test_out.py`` cases), and every scan the interpreter and
+``tests/conformance/coils/test_out.py`` cases), and every scan the interpreter and
 the compiled kernel must hold identical state.
 
 Scan periods are binary fractions of a second (62.5 ms and up), so a unit

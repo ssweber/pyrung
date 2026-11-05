@@ -81,7 +81,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DH": range(1, 5),
     },
     "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
-    # S6 probes (tests/conformance/test_drum_rule.py, test_drum_jump.py,
+    # S6 probes (tests/conformance/drum_shift_search/test_drum_rule.py, test_drum_jump.py,
     # test_drum_idle.py, test_store_probe.py).  Their C, T, DD and DS come from
     # what the groups around them leave unused.
     "drum_rule": {
@@ -108,7 +108,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(718, 754),
         "DS": (range(4208, 4223), range(4227, 4231)),
     },
-    # What drum_settle left for the fix (tests/conformance/test_drum_close.py).
+    # What drum_settle left for the fix (tests/conformance/drum_shift_search/test_drum_close.py).
     "drum_close": {
         "C": (range(702, 751), range(969, 1001), range(414, 451), range(27, 51)),
         "T": (range(271, 299), range(377, 401)),
@@ -123,7 +123,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "TXT": range(521, 546),
         "DS": range(4499, 4500),
     },
-    # The fault-flag model's unmeasured choices (tests/conformance/test_flag_probe.py,
+    # The fault-flag model's unmeasured choices (tests/conformance/system/test_flag_probe.py,
     # test_past_bank_write.py); their memory is what the counters group and the free
     # tails of the DD, DF, DH and TXT banks leave.
     "flag_probe": {
@@ -136,7 +136,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "TXT": range(501, 503),
     },
     "past_write": {"C": range(1381, 1383), "DS": range(4226, 4227)},
-    # A drum's state scan by scan (tests/conformance/test_drum_trace.py).
+    # A drum's state scan by scan (tests/conformance/drum_shift_search/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
     "out": {"C": range(1801, 1852), "T": range(301, 313)},
@@ -224,33 +224,33 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(901, 1000),
         "DH": range(401, 411),
     },
-    # Math errors (tests/conformance/test_math_error.py).
+    # Math errors (tests/conformance/math/test_math_error.py).
     "math_error": {"DF": range(401, 411)},
-    # A subroutine called twice a scan (tests/conformance/test_call_twice.py).
+    # A subroutine called twice a scan (tests/conformance/program_control/test_call_twice.py).
     # C702..C750 are drum_close's.
     "call_twice": {"C": range(701, 702)},
-    # Solve order within a rung (tests/conformance/test_solve_order.py).
+    # Solve order within a rung (tests/conformance/rungs/test_solve_order.py).
     # C582..C660 are drum_settle's (the solve_order cases use none of them).
     "solve_order": {
         "C": (range(501, 503), range(511, 522), range(527, 582), range(661, 662), range(681, 682)),
         "T": range(151, 161),
         "CT": range(161, 171),
     },
-    # Row solve, round 3 (tests/conformance/test_row_solve.py).
+    # Row solve, round 3 (tests/conformance/rungs/test_row_solve.py).
     # C414..C450 and C27..C50 are drum_close's.
     "row_solve": {"C": (range(401, 414), range(1, 27)), "CT": range(191, 196)},
-    # A box on a continued wire (tests/conformance/test_cont_box.py).
+    # A box on a continued wire (tests/conformance/rungs/test_cont_box.py).
     "cont_box": {"C": range(451, 501), "CT": range(181, 191)},
-    # Which stores raise a fault flag (tests/conformance/test_faults.py).
+    # Which stores raise a fault flag (tests/conformance/system/test_faults.py).
     "faults": {
         "C": range(201, 401),
         "DD": (range(501, 601), range(1000, 1001)),
         "DF": range(451, 496),
         "TXT": range(401, 501),
     },
-    # A FOR whose count is a Real (tests/conformance/test_for_count.py).
+    # A FOR whose count is a Real (tests/conformance/program_control/test_for_count.py).
     "for_count": {"DD": range(601, 611), "DF": range(496, 501)},
-    # Probes a CLICK may refuse at paste (tests/conformance/test_paste_risk.py).
+    # Probes a CLICK may refuse at paste (tests/conformance/rungs/test_paste_risk.py).
     "paste_risk": {
         "C": range(751, 771),
         "CT": range(196, 201),
@@ -270,7 +270,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DH": range(470, 500),
         "TXT": range(546, 570),
     },
-    # tests/conformance/test_drum_pins.py: from what other groups' cases never used.
+    # tests/conformance/drum_shift_search/test_drum_pins.py: from what other groups' cases never used.
     "drum_pins": {
         "C": (
             range(662, 681),

@@ -43,15 +43,26 @@ from pyrung.conformance import (
     load_manifest,
     read_program_hash,
 )
-from tests.conformance import (
-    test_agg_more,
-    test_block,
-    test_boot_read,
-    test_call_twice,
+from tests.conformance.coils import (
+    test_coil_range,
     test_coils,
-    test_cont_box,
+    test_flasher_td,
+    test_out,
+    test_out_more,
+)
+from tests.conformance.conditions import (
+    test_compare,
+    test_text_compare,
+)
+from tests.conformance.copy import (
+    test_block,
     test_copy_more,
-    test_counters,
+    test_past_bank_write,
+    test_real_bits,
+    test_text,
+    test_word_store,
+)
+from tests.conformance.drum_shift_search import (
     test_drum,
     test_drum_close,
     test_drum_idle,
@@ -60,37 +71,46 @@ from tests.conformance import (
     test_drum_rule,
     test_drum_settle,
     test_drum_trace,
-    test_faults,
-    test_fixed_scan,
-    test_flag_probe,
-    test_flasher_td,
-    test_for_count,
-    test_loop,
-    test_loop_call,
+    test_search,
+    test_shift,
+)
+from tests.conformance.math import (
+    test_agg_more,
     test_math,
     test_math_error,
     test_math_more,
     test_numeric,
-    test_out,
-    test_past_bank_write,
-    test_paste_risk,
-    test_real_bits,
     test_real_sum,
+    test_store_probe,
+)
+from tests.conformance.program_control import (
+    test_call_more,
+    test_call_twice,
+    test_for_count,
+    test_for_more,
+    test_loop,
+    test_loop_call,
     test_ret_branch,
+)
+from tests.conformance.rungs import (
+    test_cont_box,
+    test_paste_risk,
     test_row_solve,
     test_rung_semantics,
-    test_search,
-    test_shift,
     test_solve_order,
-    test_store_probe,
+)
+from tests.conformance.system import (
+    test_boot_read,
+    test_faults,
+    test_flag_probe,
     test_system,
-    test_text,
-    test_text_compare,
+)
+from tests.conformance.timers_counters import (
+    test_counters,
+    test_fixed_scan,
     test_timers,
     test_unit_minute,
     test_unit_pairs,
-    test_v4_more,
-    test_word_store,
 )
 
 MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
@@ -154,14 +174,14 @@ ALL_GROUPS = [
     test_agg_more.group,
     test_copy_more.group,
     test_copy_more.block_group,
-    test_v4_more.group,
-    test_v4_more.for_group,
-    test_v4_more.call_group,
+    test_out_more.group,
+    test_for_more.group,
+    test_call_more.group,
     test_boot_read.boot_group,
     test_boot_read.rtc_group,
     test_boot_read.wide_group,
-    test_copy_more.range_group,
-    test_copy_more.compare_group,
+    test_coil_range.group,
+    test_compare.group,
     test_boot_read.flag_group,
     # After every group: its probes raise SC43 and SC46 on purpose, and a flag
     # stays up to the end of the scan, so any group after it that reads a flag

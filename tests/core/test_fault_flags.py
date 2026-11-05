@@ -6,8 +6,8 @@ follow the last Copy or Math.  Nothing else touches them, and an instruction tha
 does not run clears nothing.  A pointer below its block is SC44 with the
 destination left alone; past it, there is no flag, a read gets the type's zero
 and a write is dropped.  A dynamic window out of its block is SC44 on either side,
-with nothing written.  ``tests/conformance/test_system.py`` and
-``tests/conformance/test_faults.py`` hold what a CLICK read.
+with nothing written.  ``tests/conformance/system/test_system.py`` and
+``tests/conformance/system/test_faults.py`` hold what a CLICK read.
 """
 
 from __future__ import annotations

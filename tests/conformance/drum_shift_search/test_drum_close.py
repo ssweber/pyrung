@@ -40,9 +40,7 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, latch, out, reset
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pool_of, put, track
-from tests.conformance.memory import dd, ds, td
-from tests.conformance.scans import count_scans, done, scans_for
-from tests.conformance.test_drum_settle import (
+from tests.conformance.drum_shift_search.test_drum_settle import (
     acc_hundreds,
     moves,
     pause_on,
@@ -50,6 +48,8 @@ from tests.conformance.test_drum_settle import (
     te_side,
     time_side,
 )
+from tests.conformance.memory import dd, ds, td
+from tests.conformance.scans import count_scans, done, scans_for
 
 SCANS = scans_for()
 

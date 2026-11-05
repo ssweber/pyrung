@@ -1,4 +1,4 @@
-"""Copy forms nothing has read: the ``copy_more``, ``block_more`` and ``compare`` groups.
+"""Copy forms nothing has read: the ``copy_more`` and ``block_more`` groups.
 
 Part K (``suite.PARTS``).  An expectation is pyrung's reading today; a CLICK that reads
 otherwise prints what it read.  Text is read as a pair of characters, 128 * first + second,
@@ -34,28 +34,6 @@ so 6197 is "15" (49, 53); a NUL reads 0.
   past it: 12 with 1 or 3.  Fill: DF 2.7 into a DS range: 2 truncated, 3 rounded (Result3).  Fill
   of 2 into a C range: on, by any nonzero (Result4 = 1), off by the low bit.
 
-``coil_range``:
-
-- ``ranges_and_search``: nothing reads Out, Set or Reset over a range.  An Out over C1623..C1625, read
-  on its true scan 3: first +100, last +10, the bit past it +1, so Result1 = 110; 100 for the first
-  bit only.  After its rung falls on scan 4: Result2 = 0, each bit counted, where all follow it.  Set
-  over 3 bits, Reset over the first 2: the bits read 100s, 10s, 1s, Result3 = 1; 111 where Reset
-  takes one bit.  A search above 0x8000 over a DH holding 5, 0xFFFF, 7 (Result4): 73 for an
-  unsigned compare, -1 for a signed one, where ``search`` read no Word table.  A one-shot search, its
-  table moved after the first scan, its rung held: ErrorCode = 1 kept the first hit, 2 searched again.
-
-``compare``, the last group of its part:
-
-- ``word_and_wide_compare``: DH 0xFFFF against DS -1 (Result1): 0 by value (65535 and -1), pyrung's
-  reading, 1 by the raw 16 bits.  DH 0xFFFF > DS 0 (Result2): 1 unsigned, 0 where the Word reads
-  signed -1.  A DS against a constant past its width, DS 5000 < 70000 (Result3): 1 for whole, 0
-  for the constant cut to 4464.  Text order is not asked: CLICK's Compare dialog offers only = and
-  not-equal on text.
-- ``char_two_char_literal``: a TXT compared with a 2-char literal.  R1: TXT "A", next "B" == "AB";
-  R2: "A", next "C"; R3: "B"; control R4: "A" == "A" = 1.  pyrung (a char is not two): 0, 0, 0,
-  1.  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1.  A refusal at paste
-  is the answer too, which is why this case comes last.
-
 The cases own what ``memory.OWNED`` lists under these groups.
 """
 
@@ -68,11 +46,8 @@ from pyrung.core import (
     calc,
     copy,
     fill,
-    latch,
-    out,
     pack_text,
     reset,
-    search,
     system,
     to_ascii,
     to_text,
@@ -80,7 +55,6 @@ from pyrung.core import (
 )
 from tests.conformance.memory import c, dd, df, dh, ds, txt
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
-from tests.conformance.scans import count_scans, done, scans_for
 
 SC43 = system.fault.out_of_range
 SC44 = system.fault.address_error
@@ -263,99 +237,6 @@ def init_block_forms(slot):
     fill("\x00", txt.select(751, 753))
 
 
-def prove_ranges_and_search(slot):
-    count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 3):
-        out(c.select(1623, 1625))
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1623]):
-        calc(slot.Result1 + 100, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1625]):
-        calc(slot.Result1 + 10, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1626]):
-        calc(slot.Result1 + 1, slot.Result1)
-    for bit in (1623, 1624, 1625):
-        with Rung(slot.Cmd != 0, slot.Scratch == 4, c[bit]):
-            calc(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
-        latch(c.select(1627, 1629))
-        copy(5, dh[72])
-        copy(0xFFFF, dh[73])
-        copy(7, dh[74])
-        copy(9, dh[75])
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
-        reset(c.select(1627, 1628))
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1627]):
-        calc(slot.Result3 + 100, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1628]):
-        calc(slot.Result3 + 10, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1629]):
-        calc(slot.Result3 + 1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
-        search(dh.select(72, 74) > 0x8000, result=slot.Result4, found=c[1630])
-    # The table moves after the search's first scan, its rung still true.
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2):
-        search(dh.select(75, 76) == 9, result=dd[77], found=c[1633], oneshot=True)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
-        copy(0, dh[75])
-        copy(9, dh[76])
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, dd[77] == 75):
-        copy(1, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, dd[77] == 76):
-        copy(2, slot.ErrorCode)
-    done(slot)
-
-
-def init_ranges_and_search(slot):
-    fill(False, c.select(1627, 1630))
-    reset(c[1633])
-    fill(0, dh.select(72, 76))
-    copy(0, dd[77])
-
-
-def prove_word_and_wide_compare(slot):
-    with Rung(*once(slot)):
-        copy(0xFFFF, dh[70])
-        copy(-1, ds[3920])
-        copy(0, ds[3924])
-        copy(5000, ds[3925])
-    with Rung(*once(slot), dh[70] == ds[3920]):
-        copy(1, slot.Result1)
-    with Rung(*once(slot), dh[70] > ds[3924]):
-        copy(1, slot.Result2)
-    with Rung(*once(slot), ds[3925] < 70000):
-        copy(1, slot.Result3)
-    finish(slot)
-
-
-def init_word_and_wide_compare(slot):
-    copy(0, dh[70])
-    copy(0, ds[3920])
-    fill(0, ds.select(3924, 3925))
-
-
-def prove_char_two_char_literal(slot):
-    with Rung(*once(slot)):
-        copy("A", txt[771])
-        copy("B", txt[772])
-        copy("A", txt[773])
-        copy("C", txt[774])
-        copy("B", txt[775])
-        copy("A", txt[776])
-    with Rung(*once(slot), txt[771] == "AB"):
-        copy(1, slot.Result1)
-    with Rung(*once(slot), txt[773] == "AB"):
-        copy(1, slot.Result2)
-    with Rung(*once(slot), txt[775] == "AB"):
-        copy(1, slot.Result3)
-    with Rung(*once(slot), txt[776] == "A"):
-        copy(1, slot.Result4)
-    finish(slot)
-
-
-def init_char_two_char_literal(slot):
-    fill("\x00", txt.select(771, 776))
-
-
 group = Group(
     "copy_more",
     [
@@ -429,44 +310,6 @@ block_group = Group(
     ],
 )
 
-range_group = Group(
-    "coil_range",
-    [
-        case(
-            "Out, Set and Reset over a range take each bit: Result1 = 110, Result2 = 0, Result3 = "
-            "1; a search over a Word table reads it unsigned (Result4 = 73); a one-shot search "
-            "keeps its first hit (ErrorCode = 1)",
-            ladder=prove_ranges_and_search,
-            init=init_ranges_and_search,
-            scans=scans_for(),
-            expect={"Result1": 110, "Result2": 0, "Result3": 1, "Result4": 73, "ErrorCode": 1},
-            probe="a coil over a range; a search over a Word table, and one-shot",
-        ),
-    ],
-)
-
-compare_group = Group(
-    "compare",
-    [
-        case(
-            "A compare by value: DH 0xFFFF == DS -1 reads 0 (Result1), 0xFFFF > DS 0 (Result2), DS 5000 "
-            "< 70000 (Result3)",
-            ladder=prove_word_and_wide_compare,
-            init=init_word_and_wide_compare,
-            expect={"Result1": 0, "Result2": 1, "Result3": 1},
-            probe="a Word against an Int; a constant past an Int",
-        ),
-        case(
-            "A TXT compared with a 2-char literal: TXT A, next B == AB reads 0 (Result1), A, next "
-            "C reads 0 (Result2), B reads 0 (Result3), control A == A reads 1 (Result4)",
-            ladder=prove_char_two_char_literal,
-            init=init_char_two_char_literal,
-            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 1},
-            probe="CHAR compare with a 2-char literal; a refusal at paste is an answer",
-        ),
-    ],
-)
-
 
 def test_copy_more():
     assert_all_passed(run(group))
@@ -474,11 +317,3 @@ def test_copy_more():
 
 def test_block_more():
     assert_all_passed(run(block_group))
-
-
-def test_coil_range():
-    assert_all_passed(run(range_group))
-
-
-def test_compare():
-    assert_all_passed(run(compare_group))

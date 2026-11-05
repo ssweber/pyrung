@@ -70,7 +70,8 @@ def test_the_importer_reads_the_drawing_as_the_rail_drawing(twins_build):
 
 
 def test_twin_sentences_and_expectations_match_their_siblings():
-    from tests.conformance import test_counters, test_drum
+    from tests.conformance.drum_shift_search import test_drum
+    from tests.conformance.timers_counters import test_counters
 
     for module, sibling, twin in (
         (test_counters, "pins_read_before_count", "pins_read_before_count_tee"),

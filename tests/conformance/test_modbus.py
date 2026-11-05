@@ -37,9 +37,10 @@ from pyrung.conformance import (
 )
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
 from pyrung.core import Rung, calc, copy, on_delay
-from tests.conformance import suite, test_system
+from tests.conformance import suite
 from tests.conformance.memory import ClickTimer
 from tests.conformance.probe_kit import reading_lines, record_run
+from tests.conformance.system import test_system
 
 ds = ClickBlocks().ds
 

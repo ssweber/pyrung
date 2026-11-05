@@ -61,20 +61,20 @@ from pyrung.core import (
     reset,
 )
 from pyrung.core.expression import randint
+from tests.conformance.drum_shift_search.test_drum import entered, first_on_from
 from tests.conformance.memory import ClickCounter, c, df
 from tests.conformance.scans import count_scans, done, scans_for
-from tests.conformance.test_drum import entered, first_on_from
-from tests.conformance.test_faults import (
+from tests.conformance.system.test_faults import (
     SC43,
     SC46,
     _probe,
     _stage,
     _stage_inf,
 )
-from tests.conformance.test_faults import (
+from tests.conformance.system.test_faults import (
     SCANS as FAULT_SCANS,
 )
-from tests.conformance.test_faults import (
+from tests.conformance.system.test_faults import (
     WINDOW as FAULT_WINDOW,
 )
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from tests.conformance.test_unit_pairs import pair_on_one_rung
+from tests.conformance.timers_counters.test_unit_pairs import pair_on_one_rung
 
 
 def _prove_one_minute(slot: Any) -> None:

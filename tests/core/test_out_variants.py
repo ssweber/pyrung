@@ -2,7 +2,7 @@
 
 Hardware round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an
 Out coil never sets its Timer's done bit T<n>, its phases come from the TDs
-alone (``tests/conformance/test_out.py``).  Round 2 (2026-10-30) read O4: a
+alone (``tests/conformance/coils/test_out.py``).  Round 2 (2026-10-30) read O4: a
 flasher with its rung false keeps both TDs frozen, then restarts with an on
 phase.
 """
