@@ -402,6 +402,25 @@ Do not introduce a broad manager/facade merely to hide lifecycle complexity.
 When a decision moves, update the affected module docstrings and this document
 only if the cross-cutting contract changed.
 
+### When a stop turns out to be passable
+
+The pilot's tools mostly exist; what fails is how they compose. So when something
+gets past a `STOPPED` (a plain wait, one input change, a last-resort move), first
+ask which existing tool should have answered and why it was not asked. That is a
+fix to the normal pilot, not a new reader or engine. So far: a wait chose a timer
+that was not running although `AdvanceStep.progress` names the live one; `Pulse`
+feedback had no `AdvanceProfile`; intrascan interprets only failed effect
+expectations, so a prerequisite hold that promises nothing never asks it.
+
+A last resort is planned, not built, and these are its limits:
+
+- It stays small: wait, set an input, and later restart. It runs only when the
+  pilot is about to stop, so a plan that reaches without it cannot change.
+- It relaxes "absence of a diagnosis does not authorize motion" there and nowhere
+  else. Anything may be tried on a fork; only the result keeps it.
+- A `REACHED` plan must say when it relied on these moves, in `str(plan)`. Each
+  such plan names a gap to teach the normal pilot.
+
 Run:
 
 ```text

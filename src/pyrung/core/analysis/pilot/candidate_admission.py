@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.candidate_read as _candidate_read
+from pyrung.core.analysis.pilot.advance import demand_holds
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.candidate_policy import (
@@ -342,7 +343,19 @@ def _separate_prerequisites(
     instruction_boundary: ChannelHeading | None = None
     instruction_node: Any | None = None
     if is_coast:
-        for node in frame.tree.leaves():
+        # Two owners can be waiting at once, one on the other: a timer chain's second timer
+        # needs the first one's Done.  The wait belongs to the one the program is running now,
+        # which its own progress witness says; the stable sort leaves every other order alone.
+        for node in sorted(
+            frame.tree.leaves(),
+            key=lambda leaf: (
+                not (
+                    getattr(leaf, "advance", None) is not None
+                    and leaf.advance.progress is not None
+                    and demand_holds(leaf.advance.progress, frame.snap)
+                )
+            ),
+        ):
             step = getattr(node, "advance", None)
             if step is None or node.satisfied:
                 continue

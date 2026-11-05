@@ -522,7 +522,9 @@ class Harness:
                     if profile is not None:
                         yield profile
         for c in self._profile_couplings:
-            profile = self._analog_profile(c)
+            profile = (
+                self._pulse_profile(c) if isinstance(c.profile, Pulse) else self._analog_profile(c)
+            )
             if profile is not None:
                 yield profile
 
@@ -562,6 +564,34 @@ class Harness:
             raise ValueError("first-order Approach profile; measure empirically")
 
         return rate_per_scan, direction
+
+    def _pulse_profile(self, c: _ProfileCoupling) -> Any | None:
+        """The next edge of a bool pulse train: keep the enable on and it comes.
+
+        Its toggle rungs are the plant's and the program has no writer for ``Fb``, so without
+        this a trace reads the feedback as a dead end.  No scalar is exposed: the dwells are
+        the plant's business.
+        """
+        from pyrung.core.condition import BitCondition, CompareEq
+        from pyrung.core.crossing import Eq
+        from pyrung.core.instruction.advance import AdvanceProfile, AdvanceStep, ConditionDemand
+
+        fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+        en_tag = self._plc._known_tags_by_name.get(c.en_name)
+        if fb_tag is None or en_tag is None:
+            return None
+        demand = ConditionDemand(
+            CompareEq(en_tag, c.trigger_value)
+            if c.trigger_value is not None
+            else BitCondition(en_tag)
+        )
+
+        def plan(constraint: Any, snapshot: Any) -> AdvanceStep | None:
+            if not isinstance(constraint, Eq) or len(constraint.values) != 1:
+                return None
+            return AdvanceStep(until=constraint, holds=(demand,), progress=demand)
+
+        return AdvanceProfile(channels=(fb_tag,), plan=plan)
 
     def _analog_profile(self, c: _ProfileCoupling) -> Any | None:
         """Build the continuous :class:`AdvanceProfile` for one analog coupling.
