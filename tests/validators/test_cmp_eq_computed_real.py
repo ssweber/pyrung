@@ -155,3 +155,48 @@ def test_integer_tag_eq_exempt():
             copy(1, out)
 
     assert not _hits(_prog(build))
+
+
+def test_copy_of_float_expression_flagged():
+    scaled = Real("Scaled")
+    raw = Real("Raw", external=True)
+
+    def build(en, out):
+        with Rung(en):
+            copy(raw * 0.1, scaled)
+        with Rung(scaled == 2.5):
+            copy(1, out)
+
+    assert len(_hits(_prog(build))) == 1
+
+
+def test_zero_on_left_exempt():
+    scaled = Real("Scaled")
+    raw = Real("Raw", external=True)
+
+    # Python reflects `0 == tag` to `tag == 0`, so build the compare both ways.
+    def build_zero(en, out):
+        with Rung(en):
+            calc(raw * 0.1, scaled)
+        with Rung(0 == scaled):
+            copy(1, out)
+        with Rung(0.0 != scaled):
+            copy(0, out)
+
+    assert not _hits(_prog(build_zero))
+
+
+def test_block_indexed_real_does_not_crash():
+    from pyrung.core import Block, TagType
+
+    blk = Block("Blk", TagType.REAL, 1, 10)
+    idx = Int("Idx")
+    raw = Real("Raw", external=True)
+
+    def build(en, out):
+        with Rung(en):
+            copy(raw, blk[idx])
+        with Rung(blk[idx] == 2.5):
+            copy(1, out)
+
+    assert not _hits(_prog(build))

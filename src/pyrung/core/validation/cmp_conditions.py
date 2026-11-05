@@ -517,6 +517,8 @@ def _computed_real_names(program: Program) -> set[str]:
                 source = source.value
             if isinstance(source, Tag) and source.type is TagType.REAL:
                 copies.append((source.name, dest.name))
+            elif isinstance(source, Expression) and may_be_float(source):
+                names.add(dest.name)
     changed = True
     while changed:
         changed = False
