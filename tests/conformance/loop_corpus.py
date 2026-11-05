@@ -35,8 +35,6 @@ from pyrung.core.tag import TagType
 from tests import fold_check
 from tests.conformance import suite
 
-__all__ = ["DT", "Driver", "Subject", "Tally"]
-
 UNCUT_DRAW = "uncut draw"
 
 #: The whole-state differences found, by the case that shows each.  Such a case stays out of the
@@ -162,7 +160,12 @@ def whole_run_decline(program: Program) -> str | None:
 
 
 _REASONS = ("run declined: ", "decline: ", "interpreted: ")
-_NOT_ASKED = "predicate skipped"
+_NOT_CHECKED = (
+    "predicate skipped",
+    "skipped:",
+    "loop scans, landing only",
+    "loop scans, not compared",
+)
 
 
 @dataclass
@@ -175,7 +178,7 @@ class Tally:
     loop: int = 0
     real: int = 0
     reasons: Counter[str] = field(default_factory=Counter)
-    predicates_not_asked: Counter[str] = field(default_factory=Counter)
+    not_checked: Counter[str] = field(default_factory=Counter)
     never_in_the_loop: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
 
@@ -212,7 +215,7 @@ class Tally:
             lines.append(f"  never in the loop: {', '.join(self.never_in_the_loop)}")
         return "\n".join(lines)
 
-    def note_run(self, ran: int, before: Counter[str], asked_before: Counter[str]) -> None:
+    def note_run(self, ran: int, before: Counter[str], checked_before: Counter[str]) -> None:
         after = scan_trace.TOTALS
         self.runs += 1
         self.scans += ran
@@ -222,12 +225,17 @@ class Tally:
             if key.startswith(_REASONS) and after[key] != before[key]:
                 self.reasons[key] += after[key] - before[key]
         for key in fold_check.STATS:
-            if key.startswith(_NOT_ASKED) and fold_check.STATS[key] != asked_before[key]:
-                self.predicates_not_asked[key] += fold_check.STATS[key] - asked_before[key]
+            if key.startswith(_NOT_CHECKED) and fold_check.STATS[key] != checked_before[key]:
+                self.not_checked[key] += fold_check.STATS[key] - checked_before[key]
 
 
 def assert_nothing_found(tally: Tally) -> None:
     assert not tally.failures, "\n".join(tally.failures)
+
+
+def assert_every_run_checked(tally: Tally) -> None:
+    """A run the twin left out, or a stop it could not be asked about, would be a run not checked."""
+    assert not tally.not_checked, tally.not_checked
 
 
 def assert_the_loop_ran(tally: Tally, at_least: float) -> None:
@@ -270,8 +278,7 @@ def check_each_case_alone(part: str) -> None:
     print(f"part {part}, each case alone: {tally.report()}")
     assert_nothing_found(tally)
     assert_the_loop_ran(tally, MIN_LOOP_SHARE_ALONE)
-    # A stop the twin could not be asked about would be a stop not checked.
-    assert not tally.predicates_not_asked
+    assert_every_run_checked(tally)
 
 
 class Driver:
@@ -286,11 +293,11 @@ class Driver:
     def _checked(self, call: Callable[[], Any], predicate: Any, budget: int) -> None:
         start = self.plc.current_state.scan_id
         before = scan_trace.TOTALS.copy()
-        asked_before = fold_check.STATS.copy()
+        checked_before = fold_check.STATS.copy()
         fold_check._checked(
             "compiled", self.plc, call, predicate, compiled_predicate=True, budget=budget
         )
-        self.tally.note_run(self.plc.current_state.scan_id - start, before, asked_before)
+        self.tally.note_run(self.plc.current_state.scan_id - start, before, checked_before)
 
     def run_scans(self, scans: int) -> None:
         """``run_for()``, for exactly *scans*: half a scan short so float drift cannot add one."""
@@ -469,15 +476,20 @@ def not_checked_by_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fold_check, "_depth", 1)
 
 
-def assert_equals_stepping(plc: PLC, run: Callable[[], Any]) -> None:
-    """*run* on *plc* against scans stepped on a twin, with what differs in the assertion."""
+def assert_equals_stepping(plc: PLC, run: Callable[[], Any], times: int = 1) -> None:
+    """*run*, *times* over, on *plc* against the same scans stepped on a twin.
+
+    A compiled run is compared where it lands, and a draw over few values can land on what it
+    should be by chance: *times* is what keeps such a difference from passing.
+    """
     twin = fold_check._twin(plc)
-    start = plc.current_state.scan_id
-    run()
-    for _ in range(plc.current_state.scan_id - start):
-        twin._run_single_scan(consume_pause_request=False)
-    ours, stepped = fold_check._image(plc.current_state), fold_check._image(twin.current_state)
-    differs = {k: (ours.get(k), stepped.get(k)) for k in ours.keys() | stepped.keys()}
-    differs = {k: v for k, v in differs.items() if v[0] != v[1]}
-    assert not differs, f"at scan {plc.current_state.scan_id}, (run, stepped): {differs}"
-    assert plc.current_state.timestamp == twin.current_state.timestamp
+    for _ in range(times):
+        start = plc.current_state.scan_id
+        run()
+        for _ in range(plc.current_state.scan_id - start):
+            twin._run_single_scan(consume_pause_request=False)
+        ours, stepped = fold_check._image(plc.current_state), fold_check._image(twin.current_state)
+        differs = {k: (ours.get(k), stepped.get(k)) for k in ours.keys() | stepped.keys()}
+        differs = {k: v for k, v in differs.items() if v[0] != v[1]}
+        assert not differs, f"at scan {plc.current_state.scan_id}, (run, stepped): {differs}"
+        assert plc.current_state.timestamp == twin.current_state.timestamp

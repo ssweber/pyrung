@@ -48,12 +48,13 @@ def test_every_drill_on_each_case(part: str) -> None:
     ),
 )
 def test_a_long_run_of_a_wide_rand_equals_stepping(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A run as a user gets it: nothing lowered, 3000 scans.
+    # A run as a user gets it: nothing lowered, 3000 scans.  The bounds leave a draw 20001 values,
+    # so the tag that stands still does not land on the stepped value by chance.
     loop_corpus.not_checked_by_the_session(monkeypatch)
     r = Int("R")
     with Program(strict=False) as program:
         with Rung():
-            calc(randint(70000, 70002), r)
+            calc(randint(70000, 90000), r)
     plc = PLC(program, dt=loop_corpus.DT)
     loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(30.0))
 
@@ -77,4 +78,5 @@ def test_a_hole_still_shows(label: str, monkeypatch: pytest.MonkeyPatch) -> None
     subject = loop_corpus.case_alone(group, case)
     with loop_corpus.fine_loop():
         plc = PLC(subject.program, dt=loop_corpus.DT)
-        loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(1.0))
+        # faults/rand_unequal_bounds draws over 3 values: 30 landings, not one.
+        loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(0.1), times=30)

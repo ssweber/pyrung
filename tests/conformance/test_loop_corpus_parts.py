@@ -27,7 +27,7 @@ PARTS_THAT_DECLINE = {
 MIN_LOOP_SHARE = 0.4
 
 #: A case's scans are few: the loop's share of a part comes from the stretches around them.
-IDLE = 40
+IDLE = 20
 
 _EVERY_PART = [*suite.PARTS, *suite.APART_PARTS]
 
@@ -52,6 +52,7 @@ def test_part_as_built(part: str) -> None:
         tally.add(subject, lambda driver: driver.judged_passes(idle=idle))
     print(f"part {part} as built: {tally.report()}")
     loop_corpus.assert_nothing_found(tally)
+    loop_corpus.assert_every_run_checked(tally)
     if part in PARTS_THAT_DECLINE:
         assert tally.loop == 0
     else:
@@ -66,4 +67,5 @@ def test_a_part_with_nothing_lowered(part: str) -> None:
         tally.add(_part_as_built(part), lambda driver: driver.long_wait(2200))
     print(f"part {part} with nothing lowered: {tally.report()}")
     loop_corpus.assert_nothing_found(tally)
+    loop_corpus.assert_every_run_checked(tally)
     assert tally.loop > 0
