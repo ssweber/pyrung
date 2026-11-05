@@ -13,7 +13,7 @@ from pyrung.click._topology import (
     factor_outputs,
     make_compound,
 )
-from pyrung.core.condition import AllCondition, AnyCondition, Condition
+from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.rung import Rung
 
 from ._solve_order import MovedRead, ReadOrder
@@ -359,6 +359,7 @@ class _LadderExporter(
         return normalized
 
     def _condition_signature(self, condition: Condition) -> str:
+        condition = text_window_of(condition)
         if isinstance(condition, AllCondition):
             parts = ",".join(self._condition_signature(child) for child in condition.conditions)
             return f"AND({parts})"

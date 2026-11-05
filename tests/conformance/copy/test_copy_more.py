@@ -1,26 +1,27 @@
 """Copy forms nothing has read: the ``copy_more`` and ``block_more`` groups.
 
-Part ``copy`` (``suite.PARTS``).  An expectation is pyrung's reading today; a CLICK that reads
-otherwise prints what it read.  Text is read as a pair of characters, 128 * first + second,
+Part ``copy`` (``suite.PARTS``).  An expectation is what a CLICK read on 2026-11-05.  Text is read as a pair of characters, 128 * first + second,
 so 6197 is "15" (49, 53); a NUL reads 0.
 
 ``copy_more``:
 
 - ``across_types``: a Copy of a constant into a C bit: 2 (Result1), 1 where any nonzero is on, 0
-  where the low bit is taken.  2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
+  where the low bit is taken (CLICK: 0).  2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
   refuses a DS or DF into a C and a C into a DS or DF (``CLK_COPY_BANK_INCOMPATIBLE``), so those
   are not asked.
 - ``pointer_limits``: ``faults/pointer_past_bank`` reads a DD past its bank.  The others, by
   pointer into a slot staged at 99: DS4501 (Result1), DH501 (Result2, by 1 for 0, 2 for
-  kept), DF501 (Result3, 1 for 0.0, 2 for kept), TXT1001 (Result4).  pyrung reads 0 for
-  each.  ErrorCode counts those that raised SC43 (units) or SC44 (tens).
+  kept), DF501 (Result3, 1 for 0.0, 2 for kept), TXT1001 (Result4).  CLICK leaves each
+  destination as it was (99, 2, 2, 'Z' = 90), with no flag.  ErrorCode counts those that
+  raised SC43 (units) or SC44 (tens).
 - ``to_text_real``: a Real into text, fixed: 1.5 is "1.5000000", first pair "1." (Result1),
   pair 9-10 "0" and NUL (Result2).  1.0E10 is "10000000000.000" or "1.0000000E+10" in fixed,
   first pair (Result3) and pair 2-3 (Result4), where the second char tells.  Exponential: 1.5
   is "1.5000000E+00", pair 10-11 "E+" (ErrorCode).
 - ``to_text_ints``: a DD in fixed width: "0000000042" pair 9-10 "42" (Result1), and pair 11-12
   NUL (Result2).  Negative: "-0000000042" first pair "-0" (Result3).  A DH: "00AB" pair 3-4
-  "AB" (Result4, fixed), or "00171" as decimal.  Suppressed: "171" (17, ErrorCode = 6327) is pyrung, or "AB" (ErrorCode = 8386): pyrung reads a Word as hex fixed and decimal suppressed.
+  "AB" (Result4, fixed), or "00171" as decimal.  Suppressed: "AB" (ErrorCode = 8386), hex as
+  in fixed, or "171" (17, ErrorCode = 6327) as decimal; CLICK writes hex.
 - ``pack_text_forms``: Pack Copy text into a DF: "12.5" (Result1, * 10 = 125), "1.5E+02" (Result2,
   by 1 for 150.0, 2 for 1.0, 3 with SC43 and kept).  "abc" into a DF: SC43 and kept (Result3 =
   1).  "00ff" into a DH, lower case: 1 for 0xFF, 2 with SC43 and kept (Result4).  "+5" into
@@ -30,9 +31,10 @@ so 6197 is "15" (49, 53); a NUL reads 0.
 
 - ``block_forms``: a block copy from TXT by Character Value of "1", "A", "2" into three DS at 99,
   read as 10 * first + third (Result1) and the middle (Result2, 1 for 0, 2 for 99, 3 for 'A' at
-  17).  pyrung leaves the whole range on a bad character: 1089, 2.  Stopping at it: 109, 2.  Going
-  past it: 12 with 1 or 3.  Fill: DF 2.7 into a DS range: 2 truncated, 3 rounded (Result3).  Fill
-  of 2 into a C range: on, by any nonzero (Result4 = 1), off by the low bit.
+  17).  Leaving the whole range on a bad character: 1089, 2.  Stopping at it: 109, 2.  Going
+  past it: 12 with 1 or 3; CLICK skips it and leaves its slot, 12 and 2.  Fill: DF 2.7 into a
+  DS range: 2 truncated, 3 rounded (Result3).  Fill of 2 into a C range: on, by any nonzero
+  (Result4 = 1), off by the low bit (CLICK: 0).
 
 The cases own what ``memory.OWNED`` lists under these groups.
 """
@@ -241,19 +243,20 @@ group = Group(
     "copy_more",
     [
         case(
-            "A Copy across types: a constant 2 into a C bit is on (Result1), 2.7 into an Int "
-            "truncates (ErrorCode = 2)",
+            "A Copy across types: a constant 2 into a C bit takes the low bit, off (Result1 = "
+            "0), 2.7 into an Int truncates (ErrorCode = 2)",
             ladder=prove_across_types,
             init=init_across_types,
-            expect={"Result1": 1, "ErrorCode": 2},
+            expect={"Result1": 0, "ErrorCode": 2},
             probe="what a Copy does across bits and numbers",
         ),
         case(
-            "A pointer past the bank reads 0 with no flag: DS4501 (Result1), DH501 (Result2 = 1), "
-            "DF501 (Result3 = 1), TXT1001 (Result4 = 0); SC43 and SC44 raised (ErrorCode)",
+            "A Copy from a pointer past the bank leaves the destination, with no flag: DS4501 "
+            "(Result1 = 99), DH501 (Result2 = 2), DF501 (Result3 = 2), TXT1001 (Result4 = 90, "
+            "'Z'); SC43 and SC44 raised (ErrorCode)",
             ladder=prove_pointer_limits,
             init=init_pointer_limits,
-            expect={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": 0, "ErrorCode": 0},
+            expect={"Result1": 99, "Result2": 2, "Result3": 2, "Result4": 90, "ErrorCode": 0},
             probe="a pointer past each other bank: kept or zero, flagged or not",
         ),
         case(
@@ -272,7 +275,7 @@ group = Group(
         ),
         case(
             "A DD fixed: 0000000042 (Result1 = 42 pair, Result2 = NUL pair), negative -0000000042 "
-            "(Result3); a DH fixed is 00AB (Result4), suppressed reads 171 in pyrung (ErrorCode)",
+            "(Result3); a DH fixed is 00AB (Result4), suppressed is AB (ErrorCode)",
             ladder=prove_to_text_ints,
             init=init_to_text_ints,
             expect={
@@ -280,7 +283,7 @@ group = Group(
                 "Result2": 0,
                 "Result3": 5808,
                 "Result4": 8386,
-                "ErrorCode": 6327,
+                "ErrorCode": 8386,
             },
             probe="a Dint and a Word as text",
         ),
@@ -299,12 +302,12 @@ block_group = Group(
     "block_more",
     [
         case(
-            "A block copy to_value with a bad character leaves its range (Result1 = 1089, "
-            "Result2 = 2); a Fill of DF 2.7 truncates, 2 (Result3); a Fill of 2 into bits is on "
-            "(Result4 = 1)",
+            "A block copy to_value skips a bad character and leaves its slot (Result1 = 12, "
+            "Result2 = 2); a Fill of DF 2.7 truncates, 2 (Result3); a Fill of 2 into bits takes "
+            "the low bit, off (Result4 = 0)",
             ladder=prove_block_forms,
             init=init_block_forms,
-            expect={"Result1": 1089, "Result2": 2, "Result3": 2, "Result4": 1},
+            expect={"Result1": 12, "Result2": 2, "Result3": 2, "Result4": 0},
             probe="a block copy's converter; a Fill across types",
         ),
     ],

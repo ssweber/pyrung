@@ -253,17 +253,23 @@ class Tag:
 
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
-        from pyrung.core.condition import CompareEq
+        from pyrung.core.condition import CompareEq, text_window_condition
 
-        cond = CompareEq(cast(Any, self), self._resolve_choice(other))
+        value = self._resolve_choice(other)
+        cond = text_window_condition(cast(Any, self), value, equal=True)
+        if cond is None:
+            cond = CompareEq(cast(Any, self), value)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create inequality comparison condition."""
-        from pyrung.core.condition import CompareNe
+        from pyrung.core.condition import CompareNe, text_window_condition
 
-        cond = CompareNe(cast(Any, self), self._resolve_choice(other))
+        value = self._resolve_choice(other)
+        cond = text_window_condition(cast(Any, self), value, equal=False)
+        if cond is None:
+            cond = CompareNe(cast(Any, self), value)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 

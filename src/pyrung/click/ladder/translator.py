@@ -33,6 +33,7 @@ from pyrung.core.condition import (
     IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
+    text_window_of,
 )
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
@@ -610,6 +611,8 @@ class _TranslatorMixin:
         return f"[{','.join(rendered)}]"
 
     def _render_condition_inline(self, value: Any, *, path: str, source: Any) -> str:
+        if isinstance(value, Condition):
+            value = text_window_of(value)
         if isinstance(value, AllCondition):
             return self._fn(
                 "all",

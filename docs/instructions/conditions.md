@@ -90,6 +90,8 @@ with rung(Counter != 5):
     out(NotAtTarget)
 ```
 
+A TXT compared with a literal of more than one character compares the TXTs that follow it too, as a CLICK does: `Txt[1] == "AB"` is true when TXT1 is "A" and TXT2 is "B".
+
 A comparison may read a block element addressed at scan time, through a pointer or an index expression:
 
 ```python

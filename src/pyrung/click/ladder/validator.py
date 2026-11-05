@@ -13,7 +13,7 @@ from pyrung.click.codegen.models import _AnalyzedRung, _PinInfo
 from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
 from pyrung.click.validation.findings import CLK_NESTED_CALL, CLK_STEP_LIMIT
-from pyrung.core.condition import AllCondition, AnyCondition, Condition
+from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
 
@@ -456,6 +456,7 @@ class _RoundTripValidationMixin:
         return make_compound(nodes, Series)
 
     def _condition_to_tree(self, condition: Condition, *, path: str) -> SPNode:
+        condition = text_window_of(condition)
         if isinstance(condition, AllCondition):
             children = [
                 self._condition_to_tree(child, path=f"{path}.all[{index}]")

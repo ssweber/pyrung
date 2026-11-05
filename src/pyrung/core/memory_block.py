@@ -359,6 +359,9 @@ class Block:
     _pyrung_field_max: int | float | None = field(default=None, init=False, repr=False)
     _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
     _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
+    # A Copy whose source pointer is past the end writes nothing (CLICK's DS, DH, DF
+    # and TXT); otherwise the read is the type's zero.  Set by the dialect's banks.
+    _past_end_keeps: bool = field(default=False, init=False, repr=False, compare=False)
 
     # Weak: a Block must not outlive its program just for being listed here.
     _all_instances: ClassVar[weakref.WeakSet[Block]] = weakref.WeakSet()

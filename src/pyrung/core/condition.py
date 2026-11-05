@@ -525,6 +525,43 @@ class AnyCondition(Condition):
         return False
 
 
+def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | None:
+    """``txt[771] == "AB"``: a CHAR of a block against a longer literal, as CLICK reads it.
+
+    CLICK compares the literal over the TXT and the ones after it, one character
+    each, so the compare is the And of each character's (``!=``: the Or of each
+    ``!=``), and every analysis reads it as that.  The compare as written is kept
+    on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
+    for any other compare, and where the block ends before the literal does.
+    """
+    from pyrung.core.tag import TagType
+
+    if tag.type is not TagType.CHAR or not isinstance(value, str) or len(value) < 2:
+        return None
+    block = getattr(tag, "_pyrung_block", None)
+    addr = getattr(tag, "_pyrung_block_addr", None)
+    if block is None or not isinstance(addr, int):
+        return None
+    try:
+        tags = [tag, *(block[addr + offset] for offset in range(1, len(value)))]
+    except (IndexError, KeyError, ValueError):
+        return None
+    cond: Condition
+    if equal:
+        cond = AllCondition(*(CompareEq(t, char) for t, char in zip(tags, value, strict=True)))
+        written: Condition = CompareEq(tag, value)
+    else:
+        cond = AnyCondition(*(CompareNe(t, char) for t, char in zip(tags, value, strict=True)))
+        written = CompareNe(tag, value)
+    setattr(cond, "_text_window", written)  # noqa: B010 - not a field of the condition
+    return cond
+
+
+def text_window_of(condition: Condition) -> Condition:
+    """*condition* as written: the one compare of a :func:`text_window_condition`."""
+    return getattr(condition, "_text_window", condition)
+
+
 def _normalize_and_condition(
     *conditions: object,
     coerce: Callable[[object], Condition] = _as_condition,

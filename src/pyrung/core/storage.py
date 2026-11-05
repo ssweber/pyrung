@@ -79,8 +79,20 @@ def store_real(value: Any) -> float:
     return real
 
 
+#: Where a ``"word"`` store stops below: a value under it stores as it does (0x8000).
+WORD_STORE_FLOOR = -32768
+
+
 def store_value(value: Any, storage: StoreTransform) -> Any:
-    """Apply *storage* or raise when its descriptor/value is invalid."""
+    """Apply *storage* or raise when its descriptor/value is invalid.
+
+    Besides ``identity``, ``real``, ``bool``, ``char``, ``clamp`` and ``wrap``:
+
+    - ``word``: a Copy into a Word from a register.  Past *upper* it clamps; below 0
+      it keeps the low 16 bits of the value, first stopped at ``WORD_STORE_FLOOR``
+      (-1 is 0xFFFF, -Inf 0x8000, +Inf 0xFFFF).
+    - ``bit``: a Copy into a bit takes a number's low bit (2 is off).
+    """
 
     kind = storage.kind
     if kind == "identity":
@@ -91,12 +103,18 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
         # A clamp pins +/-Inf at its bound; NaN, and anything that wraps, is 0.
         if kind == "clamp" and value == value and storage.lower is not None:
             return storage.upper if value > 0 else storage.lower
-        return False if kind == "bool" else 0
+        if kind == "word" and value == value and storage.upper is not None:
+            return storage.upper if value > 0 else WORD_STORE_FLOOR & 0xFFFF
+        return False if kind in {"bool", "bit"} else 0
     if kind == "bool":
         return bool(value)
+    if kind == "bit":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return bool(value)
+        return bool(int(value) & 1)
     if kind == "char":
         return store_char(value)
-    if kind not in {"clamp", "wrap"}:
+    if kind not in {"clamp", "wrap", "word"}:
         raise ValueError(f"unknown store transform: {kind!r}")
     if storage.lower is None or storage.upper is None:
         raise ValueError(f"{kind} store requires inclusive bounds")
@@ -104,6 +122,10 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     integer = int(value)
     if kind == "clamp":
         return max(storage.lower, min(storage.upper, integer))
+    if kind == "word":
+        if integer > storage.upper:
+            return storage.upper
+        return max(WORD_STORE_FLOOR, integer) & 0xFFFF
 
     span = storage.upper - storage.lower + 1
     if span <= 0:
@@ -128,6 +150,7 @@ __all__ = [
     "IDENTITY_STORE",
     "REAL_MAX",
     "StoreTransform",
+    "WORD_STORE_FLOOR",
     "check_real_literal",
     "check_real_value",
     "real_in_range",

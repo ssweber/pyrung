@@ -15,7 +15,11 @@ from pyrung.core.analysis.write_sites import instruction_write_targets, static_w
 from pyrung.core.condition import AllCondition, Condition
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.control import ReturnInstruction
-from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type, _truncate_to_tag_type
+from pyrung.core.instruction.conversions import (
+    _store_copy_value_to_tag_type,
+    _truncate_to_tag_type,
+    copy_source_kind,
+)
 from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.rung import Rung
 from pyrung.core.tag import ImmediateRef, Tag
@@ -91,7 +95,8 @@ def site_evidence(
                 source = source.value
             values = env.get(source.name) if isinstance(source, Tag) else (source,)
             if values is not None and all(isinstance(v, (int, float, bool)) for v in values):
-                new = tuple(_store_copy_value_to_tag_type(v, target) for v in values)
+                kind = copy_source_kind(source)
+                new = tuple(_store_copy_value_to_tag_type(v, target, kind) for v in values)
         elif isinstance(instr, CalcInstruction) and isinstance(target, Tag):
             affine = extract_forward_affine(instr)
             if affine is not None:

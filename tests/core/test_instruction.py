@@ -1912,7 +1912,8 @@ class TestBlockCopyTextModes:
         assert new_state.tags["DS2"] == 2
         assert new_state.tags["DS3"] == 3
 
-    def test_blockcopy_to_value_failure_sets_out_of_range_no_partial_write(self):
+    def test_blockcopy_to_value_failure_sets_out_of_range_and_skips_the_bad_character(self):
+        """A CLICK reading: the bad slot keeps what it held, the others are written."""
         from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import BlockCopyInstruction
 
@@ -1925,9 +1926,9 @@ class TestBlockCopyTextModes:
         new_state = execute(instr, state)
 
         assert new_state.tags["fault.out_of_range"] is True
-        assert new_state.tags["DS1"] == 9
+        assert new_state.tags["DS1"] == 1
         assert new_state.tags["DS2"] == 9
-        assert new_state.tags["DS3"] == 9
+        assert new_state.tags["DS3"] == 3
         assert new_state.tags.get("fault.address_error", False) is False
 
 
