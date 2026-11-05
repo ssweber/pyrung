@@ -147,3 +147,11 @@ slots = 2
 
 [groups.word_floor.cases]
 below_int_and_nan = 1
+
+[groups.flasher_off]
+base = 1051 # Conf_FlasherOff: DS1051..DS1090
+slots = 3
+
+[groups.flasher_off.cases]
+ds_zero = 1
+ds_minus_five = 2

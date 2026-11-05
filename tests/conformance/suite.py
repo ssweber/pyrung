@@ -48,6 +48,7 @@ from tests.conformance.coils import (
     test_coil_timing,
     test_coils,
     test_deb_zero,
+    test_flasher_off,
     test_flasher_td,
     test_out,
     test_out_more,
@@ -310,6 +311,7 @@ APART_GROUPS = [
     test_deb_zero.group,
     test_coil_timing.group,
     test_word_floor.group,
+    test_flasher_off.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -334,6 +336,8 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow_timing": ApartPart(
         ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
     ),
+    # A fourth, of what the others left: a flasher's off phase of 0 or below.
+    "follow_extra": ApartPart(("flasher_off",)),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
