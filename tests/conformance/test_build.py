@@ -125,7 +125,7 @@ def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
         hashes.add(build.program_hash)
     assert len(hashes) == 1 + len(suite.PARTS)
     # The system group still runs first in its part (see test_system.py).
-    assert suite.groups("B")[0].name == "system"
+    assert suite.groups("system")[0].name == "system"
 
 
 def test_the_groups_apart_stay_in_their_own_memory_and_manifest() -> None:
@@ -149,23 +149,23 @@ def test_the_groups_apart_stay_in_their_own_memory_and_manifest() -> None:
 
 
 def test_a_fixed_scan_part_says_what_to_set() -> None:
-    assert suite.APART_PARTS["O"].fixed_scan_ms == 100
-    note = suite.fixed_scan_note("O")
+    assert suite.APART_PARTS["fixed_scan"].fixed_scan_ms == 100
+    note = suite.fixed_scan_note("fixed_scan")
     assert note is not None
     for words in ("fixed scan", "SC202", "100 ms"):
         assert words in note
     assert note.isascii()
-    assert suite.fixed_scan_note("N") is None
-    assert suite.fixed_scan_note("A") is None
+    assert suite.fixed_scan_note("units") is None
+    assert suite.fixed_scan_note("coils") is None
     assert suite.fixed_scan_note(None) is None
 
 
 def test_the_export_of_a_fixed_scan_part_names_the_setting(
     tmp_path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert suite.main(["--part", "O", str(tmp_path / "o")]) == 0
+    assert suite.main(["--part", "fixed_scan", str(tmp_path / "fixed_scan")]) == 0
     assert "fixed scan" in capsys.readouterr().out
-    assert suite.main(["--part", "N", str(tmp_path / "n")]) == 0
+    assert suite.main(["--part", "units", str(tmp_path / "units")]) == 0
     assert "fixed scan" not in capsys.readouterr().out
 
 
@@ -473,7 +473,7 @@ def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, mo
 
 
 def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) -> None:
-    results = [replace(r, case_hash="h") for g in suite.groups("O") for r in run(g)]
+    results = [replace(r, case_hash="h") for g in suite.groups("fixed_scan") for r in run(g)]
     assert results
     assert all(r.passed and asks_for_a_reading(r.case) for r in results)
     confirmed, readings = tmp_path / "confirmed.toml", tmp_path / "readings.toml"
@@ -491,7 +491,7 @@ def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) 
 
 
 def test_a_pass_of_part_n_is_confirmed(tmp_path) -> None:
-    results = [replace(r, case_hash="h") for g in suite.groups("N") for r in run(g)]
+    results = [replace(r, case_hash="h") for g in suite.groups("units") for r in run(g)]
     added, _dropped, read = record_run(
         tmp_path / "confirmed.toml", tmp_path / "readings.toml", results, on="2026-11-04"
     )
@@ -776,4 +776,4 @@ def test_flag_raising_probes_run_after_every_group_that_reads_a_fault_flag() -> 
         "past_write",
     ]
     # Nothing depends on past_write: a part without it is a part.
-    assert suite.PARTS["F"][-1] == "past_write"
+    assert suite.PARTS["copy"][-1] == "past_write"

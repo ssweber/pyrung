@@ -37,9 +37,10 @@ from pyrung.conformance import (
 )
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
 from pyrung.core import Rung, calc, copy, on_delay
-from tests.conformance import suite, test_system
+from tests.conformance import suite
 from tests.conformance.memory import ClickTimer
 from tests.conformance.probe_kit import reading_lines, record_run
+from tests.conformance.system import test_system
 
 ds = ClickBlocks().ds
 
@@ -129,7 +130,7 @@ def test_the_groups_apart_on_a_local_target(
     conformance_groups: list[str] | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
-    """Parts N, O and P, once, on pyrung's own target: a minute's wait, whichever groups run.
+    """The parts apart, once, on pyrung's own target: a minute's wait, whichever groups run.
 
     ``test_all_groups_over_modbus`` takes them on a CLICK loaded with one, or by ``GROUP=``.
     Off fixed scan the counts are wall clock, and no case fails on them.
@@ -260,10 +261,10 @@ def test_mismatched_layout_bails_before_writing() -> None:
 
 def test_the_loaded_part_is_read_from_ds1() -> None:
     assert suite.build_for(None).program_hash == suite.build().program_hash
-    part_a = suite.build("A")
-    with SimServer(part_a) as sim:
+    part = suite.build("coils")
+    with SimServer(part) as sim:
         assert sim.endpoint is not None
-        assert suite.build_for(sim.endpoint).program_hash == part_a.program_hash
+        assert suite.build_for(sim.endpoint).program_hash == part.program_hash
     other = build_program([_alpha(), _beta()], _TWO_GROUPS)
     with SimServer(other) as sim:
         assert sim.endpoint is not None

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.click.ladder import pyrung_to_ladder
+from pyrung.conformance import build_program, load_manifest
 from pyrung.conformance._build import PASTE_PROBE_FINDINGS, _draw_tees
 from pyrung.conformance._tee import TeeSpec, draw_tees
 from tests.click.helpers import bundle_logic
@@ -23,8 +24,10 @@ TWINS = [
 
 
 @pytest.fixture(scope="module")
-def part_a():
-    build = suite.build("A")
+def twins_build():
+    names = {group for group, _case_id in TWINS}
+    groups = [g for g in suite.ALL_GROUPS if g.name in names]
+    build = build_program(groups, load_manifest(suite.MANIFEST_PATH))
     rail = pyrung_to_ladder(build.program, build.tag_map, validate=False)
     return build, rail, _draw_tees(rail, build.groups)
 
@@ -40,8 +43,8 @@ def _case_rows(bundle, subroutine: str, group: str, case_id: str):
 
 
 @pytest.mark.parametrize(("group", "case_id"), TWINS)
-def test_twin_is_drawn_with_tees_and_nothing_else_moves(part_a, group, case_id):
-    build, rail, drawn = part_a
+def test_twin_is_drawn_with_tees_and_nothing_else_moves(twins_build, group, case_id):
+    build, rail, drawn = twins_build
     sub = build.group(group).subroutine
     before = _case_rows(rail, sub, group, case_id)
     after = _case_rows(drawn, sub, group, case_id)
@@ -61,13 +64,14 @@ def test_twin_is_drawn_with_tees_and_nothing_else_moves(part_a, group, case_id):
     assert rail.main_rows == drawn.main_rows
 
 
-def test_the_importer_reads_the_drawing_as_the_rail_drawing(part_a):
-    _build, rail, drawn = part_a
+def test_the_importer_reads_the_drawing_as_the_rail_drawing(twins_build):
+    _build, rail, drawn = twins_build
     assert bundle_logic(drawn) == bundle_logic(rail)
 
 
 def test_twin_sentences_and_expectations_match_their_siblings():
-    from tests.conformance import test_counters, test_drum
+    from tests.conformance.drum_shift_search import test_drum
+    from tests.conformance.timers_counters import test_counters
 
     for module, sibling, twin in (
         (test_counters, "pins_read_before_count", "pins_read_before_count_tee"),
@@ -79,8 +83,8 @@ def test_twin_sentences_and_expectations_match_their_siblings():
         assert cases[twin].tee is not None and cases[sibling].tee is None
 
 
-def test_draw_tees_refuses_a_rung_that_is_not_the_expected_rail_drawing(part_a):
-    build, rail, _drawn = part_a
+def test_draw_tees_refuses_a_rung_that_is_not_the_expected_rail_drawing(twins_build):
+    build, rail, _drawn = twins_build
     rows = dict(rail.subroutine_rows)[build.group("counters").subroutine]
     marker = "counters/pins_read_before_count_tee"
     with pytest.raises(ValueError, match="shared contacts"):
@@ -89,8 +93,8 @@ def test_draw_tees_refuses_a_rung_that_is_not_the_expected_rail_drawing(part_a):
         draw_tees(rows, marker, TeeSpec("count_up(", (".reset()",), after=1))
 
 
-def test_draw_tees_refuses_a_pin_left_on_the_rail_c000a(part_a):
-    build, rail, _drawn = part_a
+def test_draw_tees_refuses_a_pin_left_on_the_rail_c000a(twins_build):
+    build, rail, _drawn = twins_build
     rows = dict(rail.subroutine_rows)[build.group("counters").subroutine]
     marker = "counters/pins_read_before_count_tee"
     with pytest.raises(ValueError, match="C000A"):
@@ -117,10 +121,10 @@ def test_draw_tees_refuses_cells_with_nothing_to_hang_a_tee_on():
     assert ok[1][2] == "T"
 
 
-def test_a_tee_case_without_its_subroutine_is_refused(part_a):
+def test_a_tee_case_without_its_subroutine_is_refused(twins_build):
     from dataclasses import replace
 
-    build, rail, _drawn = part_a
+    build, rail, _drawn = twins_build
     gone = replace(
         rail,
         subroutine_rows=tuple(
@@ -151,15 +155,15 @@ def test_no_exported_row_has_a_vertical_token_in_column_a(part):
 
 
 @pytest.fixture(scope="module")
-def part_c():
-    build = suite.build("C")
+def control_build():
+    build = suite.build("control")
     rail = pyrung_to_ladder(build.program, build.tag_map, validate=False)
     return build, rail, _draw_tees(rail, build.groups)
 
 
-def test_the_bare_twin_hangs_its_tee_off_a_wire_in_column_a(part_c):
+def test_the_bare_twin_hangs_its_tee_off_a_wire_in_column_a(control_build):
     """S5 #3: ``R,-,T`` over ``,,-``: no trunk contact, a wire in column A, the tee in B."""
-    build, rail, drawn = part_c
+    build, rail, drawn = control_build
     sub = build.group("cont_box").subroutine
     before = _case_rows(rail, sub, "cont_box", "box_tee_without_trunk")
     after = _case_rows(drawn, sub, "cont_box", "box_tee_without_trunk")
@@ -175,8 +179,8 @@ def test_the_bare_twin_hangs_its_tee_off_a_wire_in_column_a(part_c):
     assert rail.main_rows == drawn.main_rows
 
 
-def test_the_importer_reads_the_bare_twin_as_the_rail_drawing(part_c):
-    _build, rail, drawn = part_c
+def test_the_importer_reads_the_bare_twin_as_the_rail_drawing(control_build):
+    _build, rail, drawn = control_build
     assert bundle_logic(drawn) == bundle_logic(rail)
 
 

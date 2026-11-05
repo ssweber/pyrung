@@ -7,7 +7,7 @@ instructions (implicit always-true rungs) with conditioned body rungs holding
 back from tags the body wrote on earlier iterations.  The interpreter and the
 compiled kernel must both match the model on every scan, and each other.
 
-Rules the model encodes (hardware-recorded in ``tests/conformance/test_loop.py``
+Rules the model encodes (hardware-recorded in ``tests/conformance/program_control/test_loop.py``
 and ``test_for_count.py``): a For whose rung is false skips its body, so
 coils hold; the count is read as unsigned 16-bit and a count of 0 runs no
 iteration; Break leaves the innermost loop, Continue skips the rest of the

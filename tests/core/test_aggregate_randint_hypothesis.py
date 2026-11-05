@@ -4,7 +4,7 @@ Aggregates (``sum``/``max``/``min``/``median``/``mean`` over a block range) are
 checked against exact ``Fraction`` arithmetic, including how each destination
 type stores the result (the docs' "calc wraps" and "an Int truncates toward
 zero"), the CLICK rule for an even-count integer median (hardware-recorded in
-``tests/conformance/test_math.py``) and the division rules (a zero divisor
+``tests/conformance/math/test_math.py``) and the division rules (a zero divisor
 stores 0 and sets ``division_error``).  Both backends must match the model.
 
 ``randint()`` draws stay inside the inclusive bounds (reversed bounds are

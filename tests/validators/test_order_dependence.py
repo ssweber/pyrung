@@ -1,6 +1,6 @@
 """RUNG_ORDER_DEPENDENT: rows that read a tag an earlier row of their rung wrote.
 
-The solve-order table (``tests/conformance/test_solve_order.py``,
+The solve-order table (``tests/conformance/rungs/test_solve_order.py``,
 ``ORDER_DEPENDENT``) is the check's ground truth: it records, for every
 conformance case on solve order, whether its answer differs between the live
 row solve (a CLICK, and pyrung since S4) and a rung-entry snapshot (pyrung
@@ -41,7 +41,7 @@ from pyrung.core.validation import (
     reads_after_write,
     validate_order_dependence,
 )
-from tests.conformance import test_rung_semantics, test_solve_order
+from tests.conformance.rungs import test_rung_semantics, test_solve_order
 
 Go, A, B, P, Q, Y1, Y2 = (Bool(n) for n in ("Go", "A", "B", "P", "Q", "Y1", "Y2"))
 N = Int("N")
