@@ -6,8 +6,9 @@ such fix-up.  pyrung literals stay decimal, so pyrung ``255`` exports as
 ``FFh`` (unpadded: CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy
 and Compare keep either spelling).  REAL constants are float32 in CLICK, keep at most 7
 significant digits, and are written the way CLICK writes them (``3.402823E+38``).
-A blank text constant is ``""``: a TXT blank is NUL, and CLICK ends a text
-constant at NUL.
+A blank text constant is ``$00``, CLICK's ASCII-code constant for NUL (a TXT
+blank): a quoted ``""`` writes no TXT at all, and CLICK ends a quoted constant
+at NUL.
 """
 
 from __future__ import annotations
@@ -281,8 +282,8 @@ def test_real_exponent_round_trips():
 # ---------------------------------------------------------------------------
 
 
-def test_blank_text_constants_export_as_empty_quotes():
-    """A raw NUL inside the quotes would end the constant early on CLICK."""
+def test_blank_text_constants_export_as_ascii_code():
+    """``""`` writes nothing on CLICK; a raw NUL in quotes ends the constant."""
     with Program() as logic:
         with Rung():
             fill("\x00", txt.select(1, 2))
@@ -300,14 +301,14 @@ def test_blank_text_constants_export_as_empty_quotes():
             copy("AB", txt.select(5, 6))
     tokens = _tokens(logic)
     assert tokens == [
-        'fill("",TXT1..TXT2)',
-        'copy("",TXT3)',
-        'copy("",TXT4)',
-        'TXT1==""',
+        "fill($00,TXT1..TXT2)",
+        "copy($00,TXT3)",
+        "copy($00,TXT4)",
+        "TXT1==$00",
         "out(C1)",
-        'TXT2!=""',
+        "TXT2!=$00",
         "out(C2)",
-        'search(TXT1..TXT4 == "",result=DS1,found=C3)',
+        "search(TXT1..TXT4 == $00,result=DS1,found=C3)",
         'copy("AB",TXT5..TXT6)',
     ]
     assert not any("\x00" in token for token in tokens)
@@ -346,3 +347,32 @@ def test_blank_text_constants_import_as_nul():
     tags = plc.current_state.tags
     assert [tags["TXT1"], tags["TXT2"], tags["TXT3"]] == ["\x00"] * 3
     assert tags["C1"] is True
+
+
+@pytest.mark.parametrize("blank", ["$00", '""'])
+def test_csv_blank_spellings_import_as_blank(blank: str):
+    """``$00`` is the export's spelling; ``""`` from older CSVs still reads as the blank."""
+    bundle = _bundle(
+        ("", 'copy("Q",TXT1)'),
+        ("", f"copy({blank},TXT1)"),
+        (f"TXT1=={blank}", "out(C1)"),
+    )
+    code = ladder_to_pyrung(bundle)
+    assert 'copy("", TXT1)' in strip_pyrung_boilerplate(code)
+    ns: dict = {}
+    exec_with_source(code, ns)
+    plc = PLC(ns["logic"])
+    plc.step()
+    assert plc.current_state.tags["TXT1"] == "\x00"
+    assert plc.current_state.tags["C1"] is True
+    again = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    assert again.main_rows[2][-1] == "copy($00,TXT1)"
+    assert again.main_rows[3][1] == "TXT1==$00"
+
+
+def test_csv_ascii_code_constant_imports_as_its_character():
+    """CLICK's ``$0D`` copies one CR into a TXT."""
+    bundle = _bundle(("", "copy($0D,TXT1)"), ("TXT1==$41", "out(C1)"))
+    body = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
+    assert r'copy("\r", TXT1)' in body
+    assert 'TXT1 == "A"' in body

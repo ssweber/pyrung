@@ -51,6 +51,7 @@ from pyrung.click.codegen.utils import (
     _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
+    _text_code_value,
 )
 from pyrung.core.structure import AutoDefault
 
@@ -1036,6 +1037,9 @@ def _parse_choice_literal(text: str) -> object:
     hex_match = _CLICK_HEX_RE.fullmatch(text.strip())
     if hex_match is not None:
         return int(hex_match.group(1), 16)
+    code_char = _text_code_value(text)
+    if code_char is not None:
+        return code_char
     if text.strip().startswith('"'):
         return _csv_string_value(text.strip())
     try:

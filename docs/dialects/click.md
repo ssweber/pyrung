@@ -450,7 +450,7 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 
 To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen](click-codegen.md).
 
-A blank TXT holds NUL, but CLICK ends a text constant at NUL, so a blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) exports as CLICK's `""` and imports back as NUL. A longer text constant with a NUL in it is refused.
+A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing, and CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL, and imports back as the blank. A `""` in an older CSV still imports as the blank, and any other `$hh` (`$0D`) imports as its one character. A longer text constant with a NUL in it is refused.
 
 ### Empty and comment-only rungs
 
