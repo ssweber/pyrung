@@ -122,25 +122,47 @@ class EnabledFunctionCallInstruction(Instruction):
 
 
 # What a For does with a count of 0.  CLICK reads the count as an unsigned
-# 16-bit number (-1 runs 65535 iterations, measured on hardware 2026-10-29);
-# whether 0 means no iteration or 65536 of them is still open.  The runtime,
-# the debugger and the generated P1AM-200 code all read this one switch, so
-# the next hardware round can flip it to 65536.
+# number of its register's width: a DS of -1 runs 65535 iterations (hardware
+# 2026-10-29), a DD of 65536 runs 65536 (hardware 2026-11-05).  A count of 0
+# runs none.  The runtime, the debugger and the generated P1AM-200 code all
+# read this one switch.
 FOR_ZERO_COUNT_ITERATIONS = 0
 
+#: The mask of a 16-bit count (DS, TD, SD, a literal) and of a 32-bit one (DD, CTD).
+FOR_COUNT_MASK_16 = 0xFFFF
+FOR_COUNT_MASK_32 = 0xFFFFFFFF
 
-def for_loop_iterations(count_value: Any) -> int:
+
+def for_count_mask(count: Any) -> int:
+    """The mask a For reads *count* through: a Dint register is read whole.
+
+    A Dint tag or a Dint block element (a DD, a CTD) is read as unsigned 32-bit;
+    anything else (an Int, a Word, a literal, an expression, a REAL) as unsigned
+    16-bit.
+    """
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if isinstance(count, Tag):
+        return FOR_COUNT_MASK_32 if count.type == TagType.DINT else FOR_COUNT_MASK_16
+    if isinstance(count, (IndirectRef, IndirectExprRef)):
+        if getattr(count.block, "type", None) == TagType.DINT:
+            return FOR_COUNT_MASK_32
+    return FOR_COUNT_MASK_16
+
+
+def for_loop_iterations(count_value: Any, mask: int = FOR_COUNT_MASK_16) -> int:
     """How many times a For runs its body for a resolved count, as on CLICK.
 
-    The count is read as unsigned 16-bit (``count & 0xFFFF``); a count of 0
-    runs :data:`FOR_ZERO_COUNT_ITERATIONS` iterations.  A REAL count holding
-    Inf or NaN runs none (pyrung's choice: CLICK's editor refuses a REAL count,
-    and a pasted one stops the PLC on its watchdog;
+    The count is read as unsigned through *mask* (:func:`for_count_mask`:
+    ``count & 0xFFFF`` for a 16-bit register, ``count & 0xFFFFFFFF`` for a
+    Dint); a count of 0 runs :data:`FOR_ZERO_COUNT_ITERATIONS` iterations.  A
+    REAL count holding Inf or NaN runs none (pyrung's choice: CLICK's editor
+    refuses a REAL count, and a pasted one stops the PLC on its watchdog;
     :meth:`ForLoopInstruction.iterations` also sets SC43 for it).
     """
     if not _finite_count(count_value):
         return 0
-    iterations = int(count_value) & 0xFFFF
+    iterations = int(count_value) & mask
     return iterations if iterations else FOR_ZERO_COUNT_ITERATIONS
 
 
@@ -226,7 +248,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         try:
             count_value = resolve_tag_or_value_ctx(self.count, ctx)
             if _finite_count(count_value):
-                return for_loop_iterations(count_value)
+                return for_loop_iterations(count_value, for_count_mask(self.count))
         except OverflowError:  # an expression count hit Inf or NaN on the way
             pass
         except IndexError:

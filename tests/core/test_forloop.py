@@ -73,13 +73,22 @@ def test_forloop_tag_count_zero_runs_no_iteration():
 
 
 @pytest.mark.parametrize(
-    ("count", "iterations"),
-    [(-65535, 1), (-65534, 2), (65539, 3), (-65536, 0)],
+    ("loops", "count", "iterations"),
+    [
+        # CLICK reads an Int count as unsigned 16-bit: -1 runs 65535 iterations.
+        (Int("Loops"), -1, 65535),
+        (Int("Loops"), -32768, 32768),
+        (Int("Loops"), 0, 0),
+        # and a DD count whole: 65537 runs 65537, 65536 runs 65536 (hardware 2026-11-05).
+        (Dint("Loops"), 65537, 65537),
+        (Dint("Loops"), 65536, 65536),
+        (Dint("Loops"), 3, 3),
+        (Dint("Loops"), 0, 0),
+    ],
+    ids=["int-1", "int-32768", "int0", "dint65537", "dint65536", "dint3", "dint0"],
 )
-def test_forloop_count_is_read_as_unsigned_16_bit(count, iterations, runner_factory):
-    # CLICK reads the count as unsigned 16-bit: -1 runs 65535 iterations.
-    loops = Dint("Loops")
-    counter = Int("Counter")
+def test_forloop_count_is_read_as_unsigned_of_its_width(loops, count, iterations, runner_factory):
+    counter = Dint("Counter")
 
     with Program() as prog:
         with Rung():
@@ -92,9 +101,39 @@ def test_forloop_count_is_read_as_unsigned_16_bit(count, iterations, runner_fact
     assert runner.current_state.tags["Counter"] == iterations
 
 
+def test_forloop_dint_element_count_is_read_whole(runner_factory):
+    counts = Block("Counts", TagType.DINT, 1, 2)
+    pointer = Int("Pointer")
+    counter = Dint("Counter")
+
+    with Program() as prog:
+        with Rung():
+            with forloop(counts[pointer]):
+                copy(counter + 1, counter)
+
+    runner = runner_factory(prog)
+    runner.patch({"Counts2": 65537, "Pointer": 2, "Counter": 0})
+    runner.step()
+    assert runner.current_state.tags["Counter"] == 65537
+
+
+def test_for_count_mask_follows_the_count_width():
+    words = Block("Words", TagType.INT, 1, 2)
+    longs = Block("Longs", TagType.DINT, 1, 2)
+    pointer = Int("Pointer")
+    assert control.for_count_mask(Int("A")) == 0xFFFF
+    assert control.for_count_mask(Dint("B")) == 0xFFFFFFFF
+    assert control.for_count_mask(words[pointer]) == 0xFFFF
+    assert control.for_count_mask(longs[pointer]) == 0xFFFFFFFF
+    assert control.for_count_mask(7) == 0xFFFF
+
+
 def test_for_zero_count_switch(monkeypatch):
     assert for_loop_iterations(0) == 0
     assert for_loop_iterations(-1) == 65535
+    assert for_loop_iterations(65536) == 0
+    assert for_loop_iterations(65536, control.FOR_COUNT_MASK_32) == 65536
+    assert for_loop_iterations(-1, control.FOR_COUNT_MASK_32) == 0xFFFFFFFF
     assert for_loop_iterations(7) == 7
     monkeypatch.setattr(control, "FOR_ZERO_COUNT_ITERATIONS", 65536)
     assert for_loop_iterations(0) == 65536

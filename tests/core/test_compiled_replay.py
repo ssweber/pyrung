@@ -127,12 +127,14 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
     )
 
 
+@pytest.mark.parametrize("retentive", [True, False], ids=["retentive", "not_retentive"])
 @pytest.mark.parametrize("transition", ["reboot", "stop_to_run"])
-def test_a_dormant_range_keeps_through_a_battery_reboot_and_not_a_restart(
+def test_a_dormant_range_keeps_through_a_reset_only_if_retentive(
     transition: str,
+    retentive: bool,
 ) -> None:
     enabled = Bool("ResetRangeEnabled", external=True)
-    values = Block("ResetRange", TagType.INT, 1, 2)
+    values = Block("ResetRange", TagType.INT, 1, 2, retentive=retentive)
 
     with Program(strict=False) as program:
         with Rung(enabled):
@@ -164,11 +166,12 @@ def test_a_dormant_range_keeps_through_a_battery_reboot_and_not_a_restart(
     _assert_states_equivalent(plc, compiled)
     for runner in (plc, compiled):
         tags = runner.current_state.tags
-        if transition == "reboot":
-            # A battery keeps what a slot the rungs reach holds, named or not.
+        assert runner.current_state.scan_id == 1
+        if retentive:
+            # A battery reboot keeps what STOP -> RUN keeps: what a retentive slot the
+            # rungs reach holds, named or not.
             assert (tags["ResetRange1"], tags["ResetRange2"]) == (7, 7)
             assert tags["ResetRangeEnabled"] is False
-            assert runner.current_state.scan_id == 1
         else:
             assert not {"ResetRange1", "ResetRange2"} & set(tags)
 
@@ -203,7 +206,8 @@ def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
 
 def test_compiled_plc_forced_block_tag_survives_battery_reboot() -> None:
     enabled = Bool("ForcedRangeEnabled", external=True)
-    values = Block("ForcedRange", TagType.INT, 1, 2)
+    # Retentive, so a battery keeps it (a non-retentive slot resets, as on STOP -> RUN).
+    values = Block("ForcedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
         with Rung(enabled):
@@ -267,7 +271,7 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     key_kind: str,
 ) -> None:
     enabled = Bool("PatchedRangeEnabled", external=True)
-    values = Block("PatchedRange", TagType.INT, 1, 2)
+    values = Block("PatchedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
         with Rung(enabled):
@@ -289,7 +293,8 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     compiled.reboot()
 
     _assert_states_equivalent(plc, compiled)
-    # The rungs reach it, so a battery keeps it, whichever way the patch spelled it.
+    # The rungs reach it and it is retentive, so a battery keeps it, whichever way the
+    # patch spelled it.
     assert compiled.current_state.tags["PatchedRange1"] == 31
 
 

@@ -4102,7 +4102,13 @@ class PLC:
 
     @property
     def battery_present(self) -> bool:
-        """Simulated backup battery presence."""
+        """Whether the PLC has its backup battery (default True).
+
+        It decides what :meth:`reboot` keeps, and ``sys.battery_present`` reads it.
+        On a CLICK that point is SC203, ``_Battery_Installed``, which mirrors the
+        project's Battery Backup Setup box, a setting that travels with the project:
+        a CLICK cannot detect its battery.
+        """
         return self._battery_present
 
     @battery_present.setter
@@ -4122,8 +4128,11 @@ class PLC:
     def reboot(self) -> SystemState:
         """Power-cycle the runner and return the reset state.
 
-        Reboot is destructive: with a battery every tag keeps its value, and
-        without one every tag returns to its default.  ``state.scan_id`` and
+        Reboot is destructive: with a battery the retentive tags keep their
+        values and the rest return to their defaults, as over STOP -> RUN (a
+        CLICK power cycle reads the same); without one every tag returns to its
+        default, the worst case, a CLICK whose capacitor ran out too.  Forces
+        are cleared either way.  ``state.scan_id`` and
         ``state.timestamp`` return to 0.  Because post-reboot scan_ids
         would alias pre-reboot entries in every sparse channel
         (patches, forces, rtc_base_changes, dts), the scan log and
@@ -4133,10 +4142,7 @@ class PLC:
         before rebooting.
         """
         self._refuse_inside_a_call()
-        tag_values = self._rebuild_tags_for_reset(
-            preserve_all=self._battery_present,
-            preserve_retentive=False,
-        )
+        tag_values = self._rebuild_tags_for_reset(preserve_retentive=self._battery_present)
         self._reset_runtime_scope(
             tag_values=tag_values,
             mode_run=True,
@@ -4253,18 +4259,10 @@ class PLC:
             if isinstance(key, TagClass):
                 self._register_tag_no_rung_gave(key)
 
-    def _rebuild_tags_for_reset(
-        self,
-        *,
-        preserve_all: bool,
-        preserve_retentive: bool,
-    ) -> dict[str, Any]:
+    def _rebuild_tags_for_reset(self, *, preserve_retentive: bool) -> dict[str, Any]:
         current_tags = self._state.tags
         rebuilt: dict[str, Any] = {}
         for tag in self._known_tags_by_name.values():
-            if preserve_all:
-                rebuilt[tag.name] = current_tags.get(tag.name, tag.default)
-                continue
             if preserve_retentive and tag.retentive and tag.name in current_tags:
                 rebuilt[tag.name] = current_tags[tag.name]
                 continue
@@ -4272,7 +4270,6 @@ class PLC:
         self._tags_rungs_reach.kept_through_a_reset(
             current_tags,
             rebuilt,
-            preserve_all=preserve_all,
             preserve_retentive=preserve_retentive,
         )
         # A plant is the machine's physics, not the controller's memory: nothing of it
@@ -4391,10 +4388,7 @@ class PLC:
         if self._running:
             return
         kept_forces = dict(self._forces) if self._keep_forces_on_run else {}
-        tag_values = self._rebuild_tags_for_reset(
-            preserve_all=False,
-            preserve_retentive=True,
-        )
+        tag_values = self._rebuild_tags_for_reset(preserve_retentive=True)
         self._reset_runtime_scope(
             tag_values=tag_values,
             mode_run=True,
