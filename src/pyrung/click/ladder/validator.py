@@ -12,7 +12,7 @@ from pyrung.click.codegen.constants import _PIN_RE
 from pyrung.click.codegen.models import _AnalyzedRung, _PinInfo
 from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
-from pyrung.click.validation.findings import CLK_NESTED_CALL, CLK_STEP_LIMIT
+from pyrung.click.validation.findings import CLK_NESTED_CALL, CLK_STEP_LIMIT, CLK_TEXT_PAST_BANK
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
@@ -51,15 +51,17 @@ class _ValidationMixin:
         # We intentionally fail on warnings and hints to keep export deterministic.
         findings = [*report.errors, *report.warnings, *report.hints]
         # The step count is the whole project's, and an estimate: rows over the
-        # limit still render faithfully, so it warns instead of refusing.
+        # limit still render faithfully, so it warns instead of refusing.  So does
+        # a text past its bank, a store the CLICK editor takes.
+        warn_only = (CLK_STEP_LIMIT, CLK_TEXT_PAST_BANK)
         for finding in findings:
-            if finding.code == CLK_STEP_LIMIT:
+            if finding.code in warn_only:
                 warnings.warn(
-                    f"{finding.code}: {finding.message} {finding.suggestion}",
+                    f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip(),
                     stacklevel=5,
                 )
         # A nested call is refused below, with its source location.
-        findings = [f for f in findings if f.code not in (CLK_STEP_LIMIT, CLK_NESTED_CALL, *allow)]
+        findings = [f for f in findings if f.code not in (*warn_only, CLK_NESTED_CALL, *allow)]
         if findings:
             issues: list[Issue] = []
             for finding in findings:
