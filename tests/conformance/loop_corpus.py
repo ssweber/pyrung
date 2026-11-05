@@ -14,6 +14,7 @@ loop, stepping and recorded all agree.
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -160,12 +161,9 @@ def whole_run_decline(program: Program) -> str | None:
 
 
 _REASONS = ("run declined: ", "decline: ", "interpreted: ")
-_NOT_CHECKED = (
-    "predicate skipped",
-    "skipped:",
-    "loop scans, landing only",
-    "loop scans, not compared",
-)
+#: What fold_check lists as a run or a stop gone unchecked, and any other run it skips whole (a
+#: monitor, say): its tuple names only the skips a test can do something about.
+_NOT_CHECKED = (*fold_check._SKIPS_LISTED_BY_TEST, "skipped:")
 
 
 @dataclass
@@ -270,15 +268,24 @@ def cases_of(part: str) -> list[tuple[Group, Case]]:
 def check_each_case_alone(part: str) -> None:
     """Loop, stepping and ``expect`` agree on each case of *part*, and the loop did run."""
     tally = Tally()
+    subjects: dict[str, Subject] = {}
     with fine_loop():
         for group, case in cases_of(part):
             if case_label(group.name, case) not in LEFT_TO_THEIR_PART:
                 subject = case_alone(group, case)
+                subjects[subject.label] = subject
                 tally.add(subject, lambda driver: driver.judged_passes(idle=40))
     print(f"part {part}, each case alone: {tally.report()}")
     assert_nothing_found(tally)
     assert_the_loop_ran(tally, MIN_LOOP_SHARE_ALONE)
     assert_every_run_checked(tally)
+    # A part's share hides one case: alone, only a program the loop refuses whole stays out of it.
+    newly_out = [
+        label
+        for label in tally.never_in_the_loop
+        if whole_run_decline(subjects[label].program) is None
+    ]
+    assert not newly_out, f"never in the loop, for no stated reason: {newly_out}\n{tally.report()}"
 
 
 class Driver:
@@ -476,13 +483,24 @@ def not_checked_by_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fold_check, "_depth", 1)
 
 
+class OnlyUncutDrawsDiffer(AssertionError):
+    """A run differs from stepping in ``_rand.N`` tags and in nothing else: the hole, as known."""
+
+
+_UNCUT_DRAW_TAG = re.compile(r"_rand\.\d+")
+
+
 def assert_equals_stepping(plc: PLC, run: Callable[[], Any], times: int = 1) -> None:
     """*run*, *times* over, on *plc* against the same scans stepped on a twin.
 
     A compiled run is compared where it lands, and a draw over few values can land on what it
     should be by chance: *times* is what keeps such a difference from passing.
+
+    Any difference but an uncut draw's is a plain failure, at the landing that shows it.  Those
+    wait for the last landing, so a draw that differs early does not hide what differs later.
     """
     twin = fold_check._twin(plc)
+    draws = ""
     for _ in range(times):
         start = plc.current_state.scan_id
         run()
@@ -491,5 +509,11 @@ def assert_equals_stepping(plc: PLC, run: Callable[[], Any], times: int = 1) -> 
         ours, stepped = fold_check._image(plc.current_state), fold_check._image(twin.current_state)
         differs = {k: (ours.get(k), stepped.get(k)) for k in ours.keys() | stepped.keys()}
         differs = {k: v for k, v in differs.items() if v[0] != v[1]}
-        assert not differs, f"at scan {plc.current_state.scan_id}, (run, stepped): {differs}"
+        at_scan = f"at scan {plc.current_state.scan_id}, (run, stepped)"
+        others = {k: v for k, v in differs.items() if not _UNCUT_DRAW_TAG.fullmatch(k)}
+        assert not others, f"{at_scan}: {differs}"
         assert plc.current_state.timestamp == twin.current_state.timestamp
+        if differs and not draws:
+            draws = f"{at_scan}: {differs}"
+    if draws:
+        raise OnlyUncutDrawsDiffer(draws)
