@@ -105,6 +105,15 @@ plc.why(ConveyorMotor)    # updated explanation with EstopOK forced True
 
 This loop — load dump, `why()`, force a tag, `why()` again — is the core interactive workflow. Each force simulates a field change; each `why()` shows what remains.
 
+`why()` names the forces in its answer. A forced input reads `roots: EstopOK forced`. A forced tag with rungs gets its own line, and the rungs below it show what the logic is doing:
+
+```
+Y001 = False  [why]
+  Y001 is forced False: its rungs can change it during a scan, the force restores it before outputs are written
+  roots: X001
+  r1: out(Y001) -- X001
+```
+
 ## `how()` — how do I reach a target state?
 
 !!! note "Experimental"

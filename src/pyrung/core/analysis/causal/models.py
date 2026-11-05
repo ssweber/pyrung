@@ -283,6 +283,8 @@ class CausalChain:
     ``blockers`` are populated when ``mode == 'unreachable'`` — the contacts
     that would need to transition but can't be reached.
     ``confidence`` is 1.0 when unambiguous; ``1 / len(ambiguous_roots)`` otherwise.
+    ``forced`` (why mode) holds the forces on tags in the chain that the snapshot
+    shows in effect; ``force_pending`` holds those no scan has applied yet.
     """
 
     effect: Transition
@@ -294,6 +296,8 @@ class CausalChain:
     blockers: list[BlockingCondition] = field(default_factory=list)
     effects: list[Transition] = field(default_factory=list)
     choice_labels: dict[str, dict[Any, str]] = field(default_factory=dict)
+    forced: dict[str, Any] = field(default_factory=dict)
+    force_pending: dict[str, Any] = field(default_factory=dict)
 
     @property
     def confidence(self) -> float:
@@ -361,6 +365,10 @@ class CausalChain:
             d["blockers"] = [b.to_dict() for b in self.blockers]
         if self.effects:
             d["effects"] = [t.to_dict() for t in self.effects]
+        if self.forced:
+            d["forced"] = dict(self.forced)
+        if self.force_pending:
+            d["force_pending"] = dict(self.force_pending)
         return d
 
     def to_config(self) -> dict[str, Any]:
@@ -481,22 +489,40 @@ class CausalChain:
         seen_roots: set[str] = set()
         root_parts: list[str] = []
 
+        def forced_mark(tag_name: str) -> str:
+            return " forced" if tag_name in self.forced else ""
+
         for r in self.conjunctive_roots:
             if r.tag_name not in seen_roots:
                 seen_roots.add(r.tag_name)
-                root_parts.append(_fmt_contact(r.tag_name, r.to_value, cl))
+                root_parts.append(
+                    _fmt_contact(r.tag_name, r.to_value, cl) + forced_mark(r.tag_name)
+                )
         for r in self.ambiguous_roots:
             if r.tag_name not in seen_roots:
                 seen_roots.add(r.tag_name)
-                root_parts.append(_fmt_contact(r.tag_name, r.to_value, cl) + "?")
+                root_parts.append(
+                    _fmt_contact(r.tag_name, r.to_value, cl) + "?" + forced_mark(r.tag_name)
+                )
         for step in self.steps:
             if step.kind == "reset_blocked":
                 for t in step.triggers:
                     if t.tag_name not in seen_roots:
                         seen_roots.add(t.tag_name)
                         root_parts.append(
-                            _fmt_contact(t.tag_name, t.to_value, cl) + " blocks reset"
+                            _fmt_contact(t.tag_name, t.to_value, cl)
+                            + forced_mark(t.tag_name)
+                            + " blocks reset"
                         )
+
+        for name, value in self.forced.items():
+            if name not in seen_roots:
+                lines.append(
+                    f"  {name} is forced {_fmt_value(name, value, cl)}: its rungs can change it"
+                    " during a scan, the force restores it before outputs are written"
+                )
+        for name, value in self.force_pending.items():
+            lines.append(f"  {name} is forced {_fmt_value(name, value, cl)} from the next scan")
 
         if root_parts:
             lines.append(f"  roots: {', '.join(root_parts)}")
@@ -509,12 +535,21 @@ class CausalChain:
             "transient",
         }
 
-        all_blocked = self.steps and all(s.kind in abnormal for s in self.steps)
+        def is_abnormal(step: ChainStep) -> bool:
+            # A force answers for these: the rung is not blocked, and a rung that
+            # disagrees with a forced contact read it before the force restored it.
+            if step.kind not in abnormal or step.transition.tag_name in self.forced:
+                return False
+            return step.kind != "transient" or not any(
+                t.tag_name in self.forced for t in step.triggers
+            )
+
+        all_blocked = self.steps and all(is_abnormal(s) for s in self.steps)
         if all_blocked:
             lines.append(f"  no writer has fired ({len(self.steps)} blocked)")
             return "\n".join(lines)
 
-        has_abnormal = any(s.kind in abnormal for s in self.steps)
+        has_abnormal = any(is_abnormal(s) for s in self.steps)
         if has_abnormal:
             lines.append("  (* = blocked, would need different value)")
 
@@ -529,8 +564,7 @@ class CausalChain:
                     lines.append("  --- main ---")
             t = step.transition
             instr = step.instruction or "write"
-            is_abnormal = step.kind in abnormal
-            prefix = " *" if is_abnormal else "  "
+            prefix = " *" if is_abnormal(step) else "  "
             contacts = _fmt_contacts(step, cl)
             suffix = f" -- {contacts}" if contacts else ""
             lines.append(f"{prefix}r{step.rung_index + 1}: {instr}({t.tag_name}){suffix}")

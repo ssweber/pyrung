@@ -1567,7 +1567,26 @@ class PyrungHistoryPanelProvider {
       conjunctive || ambiguous
         ? '<div class="chain-roots">' + conjunctive + ambiguous + "</div>"
         : "";
-    return steps + footer;
+    return renderForces(chain) + steps + footer;
+  }
+
+  function renderForces(chain) {
+    const group = (title, forces) => {
+      const rows = Object.keys(forces || {})
+        .map(
+          (tag) =>
+            '<div><span class="change-tag">' +
+            esc(tag) +
+            "</span> = " +
+            formatValue(tag, forces[tag]) +
+            "</div>"
+        )
+        .join("");
+      return rows ? '<div class="chain-roots-title">' + title + "</div>" + rows : "";
+    };
+    const body =
+      group("Forced", chain.forced) + group("Forced from the next scan", chain.force_pending);
+    return body ? '<div class="chain-roots">' + body + "</div>" : "";
   }
 
   function renderChainResult() {

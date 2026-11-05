@@ -2552,7 +2552,7 @@ class PLC:
 
         No history required. Walks the program graph backward from each
         tag, using the current state as evidence. Terminates at external
-        inputs.
+        inputs. Active forces on tags in the chain are named in it.
 
         Multiple tags produce one unified tree — a single explanation
         consistent with all observations.
@@ -2576,6 +2576,7 @@ class PLC:
             tags=resolved,
             pdg=self._ensure_pdg(),
             program=self._program,
+            forces=self._forces,
         )
 
     def how(
