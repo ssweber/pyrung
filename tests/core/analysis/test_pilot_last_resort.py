@@ -27,12 +27,42 @@ def test_the_input_pressed_when_the_plant_needs_it_is_a_stated_move() -> None:
     assert plc.state.scan_id == scan
 
 
-def test_a_count_the_program_runs_for_itself_is_a_stated_wait() -> None:
+def test_a_count_the_program_runs_every_other_scan_is_waited_for_without_the_last_resort() -> None:
+    """The trace unrolls Count's own calc to its depth and stops: a projection reads the motion.
+
+    This was a last-resort rescue: no advance profile owns a calc fed its own result.
+    """
     osc, count, hit = Bool("Osc"), Int("Count"), Bool("Hit")
     with Program(strict=False) as logic:
         with Rung(~osc):
             out(osc)
         with Rung(osc):
+            calc(count + 1, count)
+        with Rung(count == 40):
+            latch(hit)
+    plc = PLC(logic, dt=0.01)
+    plc.step()
+    assert list(pilot_events(plc, hit, max_scans=3000))[-1].data["reached"] is True
+
+    plan = plc.how(hit, max_scans=3000)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
+    assert plan.replay().state.tags["Hit"] is True
+
+
+def test_a_count_the_program_runs_for_itself_is_a_stated_wait() -> None:
+    """Count moves once in ten scans, longer than the projection that reads self-motion."""
+    ring = [Bool(f"R{i}") for i in range(5)]
+    count, hit = Int("Count"), Bool("Hit")
+    with Program(strict=False) as logic:
+        # A Johnson ring: each bit takes the one before it, the first the last one's inverse.
+        for i in range(4, 0, -1):
+            with Rung(ring[i - 1]):
+                out(ring[i])
+        with Rung(~ring[-1]):
+            out(ring[0])
+        with Rung(ring[0], ~ring[1]):
             calc(count + 1, count)
         with Rung(count == 40):
             latch(hit)
