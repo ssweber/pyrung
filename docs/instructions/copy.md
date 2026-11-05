@@ -13,7 +13,7 @@ copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 
 Out-of-range values are **clamped** to the destination type's min/max, which sets `system.fault.out_of_range`, for `copy()`, `blockcopy()`, `fill()` and `pack_text()`. This is different from `calc()`, which wraps.
 
-`Word` and bit destinations are different, and raise no flag. Into a `Word`, a constant or an `Int` keeps its low 16 bits (-1 is 65535); a `Dint` or `Real` above 65535 stores 65535, and one below 0 wraps. A `Word` into an `Int` keeps its bits (65535 is -1). A number into a `Bool` takes its low bit, so 2 is off.
+`Word` and bit destinations are different, and raise no flag. Into a `Word`, a constant or an `Int` keeps its low 16 bits (-1 is 65535); a `Dint` or `Real` above 65535 stores 65535, and one below 0 wraps down to -32768 (32768); below that pyrung stores 32768, its own choice, not yet read on a CLICK. A `Word` into an `Int` keeps its bits (65535 is -1). A number into a `Bool` takes its low bit, so 2 is off.
 
 A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag, and an index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`, no `**` or math function). The same rule holds for the bounds of a `select()` whose bounds are tags or expressions (`DS.select(Start, Start + 9)`). A `Real`, `Word`, `Bool` or `Char` pointer or bound, or an index expression that breaks the rule, raises `TypeError` when the program is built; copy a `Word` or `Real` into an `Int` first.
 

@@ -1,4 +1,5 @@
-"""What a Copy, Block copy and Fill store, as a CLICK read it (conformance round 2026-11-05).
+"""What a Copy, Block copy and Fill store, as a CLICK read it (conformance round 2026-11-05),
+except where a test names a row as pyrung's own choice.
 
 Each runs on every backend ``runner_factory`` gives: the interpreter, the compiled kernel, or
 both in lockstep.  The kernel is the CircuitPython codegen's, so the generated P1AM-200 code
@@ -63,6 +64,8 @@ def _one_scan(runner_factory, logic, patch=None):
     ],
 )
 def test_a_register_into_a_word_clamps_above_and_wraps_below(runner_factory, source, value, stored):
+    """Read on a CLICK: past 65535 is 65535, -1 is 65535 and -Inf is 32768.  The floor at
+    -32768 (-40000 stores 32768, as -32768 does) is pyrung's choice, not yet read."""
     src = source("Src", default=value)
     dest = Word("Dest", default=7)
     with Program() as logic:
