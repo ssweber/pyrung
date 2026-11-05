@@ -42,6 +42,7 @@ from .findings import (
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_CALC_SUM_BANK_NOT_AVAILABLE,
+    CLK_CALC_WIDE_CONSTANT,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
@@ -1192,6 +1193,69 @@ def _evaluate_rand_bounds(
                 )
             )
     return findings
+
+
+def _collect_wide_constants(
+    expr: Any, out: list[int], seen: set[int], *, low: int, high: int, rand_cut: bool
+) -> None:
+    """Each integer constant in *expr* outside *low*..*high*; a RAND's bounds only if *rand_cut*."""
+    if isinstance(expr, bool):
+        return
+    if isinstance(expr, int):
+        if not low <= expr <= high:
+            out.append(expr)
+        return
+    if id(expr) in seen or not isinstance(expr, Expression):
+        return
+    seen.add(id(expr))
+    if isinstance(expr, LiteralExpr):
+        _collect_wide_constants(expr.value, out, seen, low=low, high=high, rand_cut=rand_cut)
+        return
+    if isinstance(expr, RandIntExpr) and not rand_cut:
+        bounds = (expr.lo, expr.hi)
+        children = [child for child in vars(expr).values() if all(child is not b for b in bounds)]
+    else:
+        children = list(vars(expr).values())
+    for child in children:
+        _collect_wide_constants(child, out, seen, low=low, high=high, rand_cut=rand_cut)
+
+
+def _evaluate_wide_constants(
+    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
+) -> list[ClickFinding]:
+    """A Math constant past 16 bits: CLICK cuts it to 16 bits whatever the destination
+    (hardware, 2026-11-05), so ``DD1 * 40000`` multiplies by -25536.  A RAND's constant
+    bounds are cut only into an Int or a Word."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    hex_mode = instruction.mode == "hex"
+    low, high = (-32768, 65535) if hex_mode else (-32768, 32767)
+    dest = instruction.dest
+    dest_type = (
+        dest.type if isinstance(dest, Tag) else getattr(getattr(dest, "block", None), "type", None)
+    )
+    rand_cut = hex_mode or dest_type == TagType.INT
+    wide: list[int] = []
+    _collect_wide_constants(
+        instruction.source_expression, wide, set(), low=low, high=high, rand_cut=rand_cut
+    )
+    if not wide:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
+    listed = ", ".join(str(value) for value in dict.fromkeys(wide))
+    return [
+        ClickFinding(
+            code=CLK_CALC_WIDE_CONSTANT,
+            severity=_route_severity(CLK_CALC_WIDE_CONSTANT, mode),
+            message=(
+                f"calc() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
+                "Math cuts each constant to 16 bits, whatever the destination, so 40000 "
+                "reads -25536."
+            ),
+            location=location_text,
+            suggestion="Copy the constant into a DD tag in a rung above and use the tag.",
+        )
+    ]
 
 
 def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFinding]:

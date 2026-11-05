@@ -18,6 +18,7 @@ from pyrung.click.validation import (
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_CALC_SUM_BANK_NOT_AVAILABLE,
+    CLK_CALC_WIDE_CONSTANT,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FORLOOP_COUNT_BANK,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
@@ -1769,6 +1770,71 @@ class TestCalcPlainArguments:
     def test_each_site_is_reported(self):
         _, found = self._codes(lambda n, w: (randint(n / 2, 10) + randint(1, n * 2), "dd"))
         assert len(found) == 2
+
+
+class TestCalcWideConstant:
+    """A CLICK Math cuts each constant to 16 bits whatever the destination: ``DD1 * 40000``
+    multiplies by -25536 (hardware, 2026-11-05).  A RAND's constant bounds are cut only
+    into an Int or a Word."""
+
+    @staticmethod
+    def _found(build, dest_type=TagType.DINT):
+        n = Tag("N", TagType.DINT)
+        w = Tag("W", TagType.WORD)
+        dest = Tag("Dest", dest_type)
+        block = {TagType.DINT: dd, TagType.INT: ds, TagType.REAL: df, TagType.WORD: dh}[dest_type]
+
+        def logic():
+            with Rung():
+                calc(build(n, w), dest)
+
+        report = validate_click_program(
+            _build_program(logic),
+            TagMap(
+                [n.map_to(dd[1]), w.map_to(dh[1]), dest.map_to(block[100])],
+                include_system=False,
+            ),
+            mode="strict",
+        )
+        return [f for f in report.errors if f.code == CLK_CALC_WIDE_CONSTANT]
+
+    @pytest.mark.parametrize(
+        "build, dest_type",
+        [
+            (lambda n, w: n * 40000, TagType.DINT),
+            (lambda n, w: n / 65536, TagType.REAL),
+            (lambda n, w: n - 32768, TagType.INT),
+            (lambda n, w: 70000, TagType.DINT),
+            (lambda n, w: randint(70000, 70002), TagType.INT),
+            (lambda n, w: w + 70000, TagType.WORD),
+            (lambda n, w: randint(1, 70000), TagType.WORD),
+        ],
+        ids=["dd", "df", "ds", "bare", "rand-into-int", "hex", "rand-into-word"],
+    )
+    def test_a_constant_past_16_bits_is_reported(self, build, dest_type):
+        found = self._found(build, dest_type)
+        assert len(found) == 1
+        assert found[0].message.isascii()
+        assert "past 16 bits" in found[0].message
+
+    @pytest.mark.parametrize(
+        "build, dest_type",
+        [
+            (lambda n, w: n * 32767 + -32768, TagType.DINT),
+            (lambda n, w: n * 1.0e6, TagType.REAL),
+            (lambda n, w: w + 0xFFFF, TagType.WORD),
+            (lambda n, w: randint(70000, 70002), TagType.DINT),
+            (lambda n, w: randint(70000, 70002) * 2, TagType.REAL),
+        ],
+        ids=["edges", "float", "hex-edge", "rand-into-dint", "rand-into-real"],
+    )
+    def test_a_constant_in_16_bits_passes(self, build, dest_type):
+        assert self._found(build, dest_type) == []
+
+    def test_one_finding_names_each_constant(self):
+        found = self._found(lambda n, w: n * 40000 + 40000 - 70000)
+        assert len(found) == 1
+        assert "(40000, 70000)" in found[0].message
 
 
 def test_export_refuses_a_real_rand_bound_unless_allowed():
