@@ -5,14 +5,23 @@ from __future__ import annotations
 from pyrung import PLC, Bool, Int, Program, Rung, Timer, calc, latch, on_delay, out, reset
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
-from tests.core.analysis.test_pilot_reads_at_the_rung import _reset_at_the_top
 
 
-def test_the_input_pressed_when_the_plant_needs_it_is_a_stated_move() -> None:
-    plc, hit = _reset_at_the_top(go=False)
+def test_an_input_past_the_depth_of_the_trace_is_a_stated_move() -> None:
+    """Twenty coils in a row: the trace stops before it reaches Go."""
+    go = Bool("Go", external=True)
+    links = [Bool(f"L{i}") for i in range(20)]
+    with Program(strict=False) as logic:
+        with Rung(go):
+            out(links[0])
+        for before, after in zip(links, links[1:], strict=False):
+            with Rung(before):
+                out(after)
+    plc = PLC(logic, dt=0.01)
+    plc.step()
     scan = plc.state.scan_id
 
-    plan = plc.how(hit, max_scans=30000)
+    plan = plc.how(links[-1], max_scans=3000)
 
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.last_resort.tag == "Go"
@@ -20,7 +29,7 @@ def test_the_input_pressed_when_the_plant_needs_it_is_a_stated_move() -> None:
     assert plan.last_resort.tries == 1
     assert plan.anchor_scan == scan
     assert plan.changes["Go"] is True
-    assert plan.replay().state.tags["Hit"] is True
+    assert plan.replay().state.tags["L19"] is True
     text = str(plan)
     assert "1. Set Go=True before the next scan." in text
     assert "Nothing in the trace pointed to this." in text

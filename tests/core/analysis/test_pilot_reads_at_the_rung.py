@@ -44,14 +44,18 @@ def test_a_bit_reset_above_the_rung_is_already_off_for_it() -> None:
 
 
 def test_the_input_is_pressed_when_the_plant_needs_it() -> None:
-    """Nothing in the trace offers Go: the plant needs En=True while the rung needs En=False,
-    both in the same scan at different points.  The last resort finds it."""
+    """The plant needs En=True at the scan's end while the rung reads it reset to False.
+
+    The trace reaches Go through the plant's own on-delay, and holds it until the timer
+    that reads Fb is done, not only until Fb first comes on.  This was a last-resort rescue.
+    """
     plc, hit = _reset_at_the_top(go=False)
     assert plc.state.tags["En"] is False
 
     plan = plc.how(hit, max_scans=30000)
 
     assert plan.reachable, plan.reason
+    assert plan.last_resort is None
     assert plan.fork.state.tags["Go"] is True
     assert plan.replay().state.tags["Hit"] is True
 

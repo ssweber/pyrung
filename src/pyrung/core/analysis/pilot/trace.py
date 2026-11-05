@@ -1294,8 +1294,11 @@ def _advance_frontier(
             return boundary
         # A persistent program prerequisite still needs an action. Let the
         # ordinary writer trace expose that nearer transition; after it lands,
-        # retracing will make this profile the immediate frontier.
-        return None
+        # retracing will make this profile the immediate frontier.  A channel
+        # the program does not write (a plant timer the harness synthesized) has
+        # no such trace: its profile's demands are the only route, so keep them.
+        if env.pdg.writers_of.get(constraint.tag):
+            return None
     children = [boundary, *gate_nodes, *demand_nodes]
     target_atom = _trace_constraints._constraint_atom(constraint)
     return TraceNode(
@@ -1306,6 +1309,23 @@ def _advance_frontier(
         predicate=target_atom,
         children=children,
     )
+
+
+def _writer_holds_its_conditions(env: _TraceEnv, rung: Any, tag: str, value: Any) -> bool:
+    """Whether this writer is the owner that reaches ``tag == value`` by holding its rung.
+
+    A timer's Done: its profile says hold, and its rung's conditions are what it holds.
+    Its own profile may have deferred to this writer trace, because those conditions
+    still need an act; the act must then last until the Done, not until the first
+    boundary nested under it.
+    """
+    owner = env.advance_index.resolve(tag)
+    if owner is None or owner.instruction is None:
+        return False
+    if not any(instruction is owner.instruction for instruction in rung._instructions):
+        return False
+    step = owner.profile.plan(Eq(tag, frozenset((value,))), env.snapshot)
+    return step is not None and bool(step.holds) and step.pulse is None
 
 
 def trace_target(
@@ -1494,6 +1514,7 @@ class _WriterAttempt:
     live_guard: bool
     crossing_exact: bool | None
     visited_after: frozenset[tuple[str, Any]]
+    holds_own_conditions: bool = False
 
 
 @dataclass
@@ -1528,6 +1549,7 @@ class _WriterBuild:
             live_guard=self.node.live_guard,
             crossing_exact=self.node.crossing_exact,
             visited_after=frozenset(self.visited),
+            holds_own_conditions=self.node.holds_own_conditions,
         )
 
 
@@ -1543,6 +1565,7 @@ def _apply_writer_attempt(
     node.writer_availability = attempt.writer_availability
     node.live_guard = attempt.live_guard
     node.crossing_exact = attempt.crossing_exact
+    node.holds_own_conditions = attempt.holds_own_conditions
     visited.clear()
     visited.update(attempt.visited_after)
 
@@ -2192,6 +2215,7 @@ def _trace_back(
         attempt_node = writer_build.node
         attempt_visited = writer_build.visited
         attempt_node.writer_rung = ri
+        attempt_node.holds_own_conditions = _writer_holds_its_conditions(env, ro, tag, value)
         attempt_node.writer_availability = writer_availability.get(
             ri, _availability._WriterAvailability.UNKNOWN
         )
