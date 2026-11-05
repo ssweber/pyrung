@@ -692,10 +692,7 @@ def _dint_count_loop(count: Any, *producers: Any) -> Program:
     with Program(strict=False) as logic:
         for i, source in enumerate(producers):
             with Rung(Sel == i):
-                if callable(source):
-                    source()
-                else:
-                    copy(source, count)
+                copy(source, count)
         with Rung():
             with forloop(count):
                 call("work")
