@@ -168,7 +168,13 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         CountDownInstruction,
         CountUpInstruction,
     )
-    from pyrung.core.instruction.drums import EventDrumInstruction, _DrumBaseInstruction
+    from pyrung.core.instruction.drums import (
+        PRESET_MEMORY,
+        PRESET_STEP_MEMORY,
+        EventDrumInstruction,
+        _DrumBaseInstruction,
+        latches_presets,
+    )
     from pyrung.core.instruction.out_variants import FlasherInstruction, ToggleInstruction
 
     slots: list[tuple[str, Any]] = []
@@ -191,6 +197,10 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         slots.append(("_drum_jog_prev", False))
         # Its rung as the last scan left it: a false-to-true writes the outputs.
         slots.append(("_drum_rung_prev", False))
+    if latches_presets(instr):
+        # The step a tag preset was read for, and what it read.
+        slots.append((PRESET_STEP_MEMORY, 0))
+        slots.append((PRESET_MEMORY, 0))
     if isinstance(instr, EventDrumInstruction):
         slots.append(("_drum_event_prev", False))
         slots.append(("_drum_last_step", 0))

@@ -32,8 +32,9 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   The missing source may be intentional, so this is an **advisory**.
 
 * ``CMP_PRESET_STAYS_ZERO`` — the same high-confidence check for a tag-valued
-  timer/counter preset.  Literal zero remains an intentional, supported elapsed-
-  accumulator idiom and is exempt.  **warning**.
+  timer/counter preset, and a drum step's (a step whose preset stays 0 never
+  ends).  Literal zero remains an intentional, supported elapsed-accumulator
+  idiom and is exempt.  **warning**.
 
 * ``CMP_STEPPER_VALUE_NOT_SET`` — a discrete stepping tag is tested for
   equality with a numeric value that none of its fully understood direct or
@@ -600,8 +601,9 @@ def _is_default_only_boolish_compare(cmp: _Compare, graph: Any) -> bool:
 
 
 def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
-    """``(write_site, preset_tag, instruction)`` for zero timer/counter presets."""
+    """``(write_site, preset_tag, instruction)`` for zero timer, counter and drum presets."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import _TimedDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
     accumulating = (
@@ -609,6 +611,7 @@ def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
         OffDelayInstruction,
         CountUpInstruction,
         CountDownInstruction,
+        _TimedDrumInstruction,
     )
     sites: list[tuple[Any, Tag, Any]] = []
     seen: set[int] = set()
@@ -616,24 +619,40 @@ def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
         instr = site.instruction
         if not isinstance(instr, accumulating) or id(instr) in seen:
             continue
-        # _collect_write_sites emits Done and Acc sites.  Keep the accumulator
-        # site as the instruction anchor and discard the duplicate Done site.
+        # _collect_write_sites emits Done and Acc sites (a drum's outputs, step
+        # and flag too).  Keep the accumulator site as the instruction anchor.
         if site.target_name != instr.accumulator.name:
             continue
-        preset = instr.preset
-        if isinstance(preset, Tag) and _tag_stays_zero(preset, graph):
-            sites.append((site, preset, instr))
-            seen.add(id(instr))
+        seen.add(id(instr))
+        presets = instr.presets if isinstance(instr, _TimedDrumInstruction) else (instr.preset,)
+        named: set[str] = set()
+        for preset in presets:
+            if isinstance(preset, Tag) and preset.name not in named:
+                if _tag_stays_zero(preset, graph):
+                    sites.append((site, preset, instr))
+                named.add(preset.name)
     return sites
 
 
 def _preset_display(site: Any, preset: Tag) -> FindingDisplay:
+    from pyrung.core.instruction.drums import _TimedDrumInstruction
+
     name = operand_name(preset)
+    if isinstance(site.instruction, _TimedDrumInstruction):
+        # The drum's line does not show its presets, so the hint names the tag.
+        label = "preset stays 0"
+        hint = (
+            f"step preset {name} stays 0, so the step never ends: set it to the "
+            "step's intended time, or mark it external"
+        )
+    else:
+        label = "preset stays 0"
+        hint = f"set {name} to the intended delay or count, or mark it external"
     return FindingDisplay(
         code=CMP_PRESET_STAYS_ZERO,
         severity="warning",
-        frames=(site_frame(site, caret_token=name, caret_label="preset stays 0"),),
-        hint=f"set {name} to the intended delay or count, or mark it external",
+        frames=(site_frame(site, caret_token=name, caret_label=label),),
+        hint=hint,
     )
 
 

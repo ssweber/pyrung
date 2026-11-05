@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -253,7 +254,7 @@ def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
         with Rung(enable):
             time_drum(
                 outputs=[y1, y2, y3, y4],
-                presets=[0, 0, 0, 0],
+                presets=[1, 1, 1, 1],
                 pattern=[
                     [1, 0, 0, 0],
                     [0, 1, 0, 0],
@@ -284,7 +285,7 @@ def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is True
 
-    # Step 1's 0 ms preset is up on the next scan.
+    # Step 1's 1 ms preset is up on the next scan.
     runner.patch({"Jump": False, "Jog": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 2
@@ -1145,13 +1146,90 @@ def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
     assert _snapshot(plc) == (2, False, True, True)
 
 
+# -- a step's preset: read when the step starts timing ---------------------------
+#
+# Read on a CLICK (``drum_limits/preset_from_ds``): a DS preset lowered under Acc
+# mid-step does not end the step, and a preset of 0 or -5 never ends it.
+
+
+def _preset_drum(kind: str, presets: list[Any]) -> Program:
+    """A 2-step timed drum under ``Enable`` with *presets*; ``Go`` jumps to step 1."""
+    args = {
+        "outputs": [Bool("A"), Bool("B")],
+        "pattern": [[1, 0], [0, 1]],
+        "current_step": Int("Step"),
+        "completion_flag": Bool("Done"),
+    }
+    with Program(strict=False) as logic:
+        with Rung(Bool("Enable")):
+            if kind == "time":
+                drum = time_drum(presets=presets, accumulator=Int("Acc"), **args)
+            else:
+                drum = time_event_drum(
+                    presets=presets, events=[None, None], accumulator=Int("Acc"), **args
+                )
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step=1)
+    return logic
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_a_tag_preset_is_read_when_its_step_starts_timing(kind: str, backend: type) -> None:
+    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
+    plc.patch({"Enable": True, "P": 1000})
+    for _ in range(4):
+        plc.step()
+    assert plc.current_state.tags["Acc"] == 30
+    # Lowered under Acc mid-step: the step keeps the preset it read.
+    plc.patch({"P": 20})
+    for _ in range(3):
+        plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+    # A jump to the same step is a step change: it reads 20, and ends on the second tick.
+    plc.patch({"Go": True})
+    plc.step()
+    assert plc.current_state.tags["Acc"] == 0
+    plc.step()
+    assert plc.current_state.tags["Step"] == 1
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend: type) -> None:
+    """A write to the step register is not a move, but the step it lands on reads its preset."""
+    plc = backend(_preset_drum(kind, [Int("P"), Int("P")]), dt=0.01)
+    plc.patch({"Enable": True, "P": 1000})
+    for _ in range(4):
+        plc.step()
+    plc.patch({"P": 20, "Step": 2})
+    plc.step()
+    tags = plc.current_state.tags
+    assert (tags["Step"], tags["Acc"], tags["Done"]) == (2, 40, True)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+@pytest.mark.parametrize("preset", [0, -5, "tag 0", "tag -5"])
+def test_a_preset_of_zero_or_below_never_ends_its_step(
+    kind: str, backend: type, preset: int | str
+) -> None:
+    first = preset if isinstance(preset, int) else Int("P")
+    plc = backend(_preset_drum(kind, [first, 30_000]), dt=0.01)
+    plc.patch({"Enable": True})
+    if isinstance(preset, str):
+        plc.patch({"P": int(preset.split()[1])})
+    for _ in range(20):
+        plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+    assert plc.current_state.tags["Acc"] == 190
+
+
 # -- a pin and the step's own end on one scan ------------------------------------
 #
-# Unmeasured until the next hardware round (the grey-probes branch carries the
-# probes).  No recorded case tells these from own logic running before the pins,
-# which would read step 3 and a completed flag.  They name what pyrung does, the
-# routine's order with a pin's move taking the scan; the backend comparison below
-# would pass a shared error.
+# Measured on a CLICK (``drum_pins``, 2026-11-05): a pin's move takes the scan.
+# Own logic running before the pins would read step 3 and a completed flag.
 
 
 def _three_step_drum_with_events(kind: str) -> Program:
@@ -1264,6 +1342,8 @@ def _random_patch(rng: random.Random) -> dict[str, bool | int]:
         patch["Acc"] = rng.choice([0, 25, 1000])
     if rng.random() < 0.05:
         patch["B"] = rng.random() < 0.5
+    if rng.random() < 0.1:
+        patch["Preset"] = rng.choice([-5, 0, 20, 40, 60])
     return patch
 
 
@@ -1413,3 +1493,19 @@ def test_a_flag_cleared_inside_a_long_run_frees_the_drum_on_that_scan(kind: str)
     )
     assert plc.state.tags["Step"] == 2
     assert plc.state.tags["Done"] is False
+
+
+@pytest.mark.usefixtures("loop_from_first_scan")
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_a_tag_preset_lowered_inside_a_long_run_holds_until_the_step_changes(kind: str) -> None:
+    """The step keeps the preset it read; a jump reads the new one, mid-run."""
+    plc = _equal_stepping(
+        lambda: _preset_drum(kind, [Int("P"), Int("P")]),
+        [
+            ({"Enable": True, "P": 30_000}, 300),
+            ({"P": 1000}, 300),
+            ({"Go": True}, 50),
+            ({"Go": False}, 300),
+        ],
+    )
+    assert plc.state.tags["Done"] is True

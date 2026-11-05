@@ -25,6 +25,7 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.drums import PRESET_MEMORY, PRESET_STEP_MEMORY, latches_presets
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
@@ -414,6 +415,14 @@ def _compile_drum_instruction(
             f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
             f"_mem[{f'_frac:{instr.accumulator.name}'!r}] = 0",
         ]
+        if latches_presets(instr):
+            # A step change: the step the drum lands on reads its preset afresh.
+            clear_time.extend(
+                [
+                    f"_mem[{f'{PRESET_STEP_MEMORY}:{key_base}'!r}] = 0",
+                    f"_mem[{f'{PRESET_MEMORY}:{key_base}'!r}] = 0",
+                ]
+            )
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
     # The pins, read before the drum writes anything.
@@ -580,7 +589,7 @@ def _drum_end_lines(
         None if preset is None else f"int({_compile_value(preset, ctx)})"
         for preset in instr.presets
     ]
-    tick = _drum_tick_lines(instr, ctx)
+    tick = [*_drum_latch_lines(instr, ctx), *_drum_tick_lines(instr, ctx)]
     if isinstance(instr, TimeDrumInstruction):
         lines = [
             *_compile_step_selector_lines(
@@ -593,7 +602,7 @@ def _drum_end_lines(
         if ctx.proof_metadata:
             preset_key = prove_effective_preset_key(instr.completion_flag.name)
             lines.append(f"_mem[{preset_key!r}] = _limit")
-        lines.append("_end_met = _acc >= _limit")
+        lines.append(f"_end_met = {_TIME_UP}")
         return lines
 
     lines = []
@@ -628,6 +637,28 @@ def _drum_end_lines(
         )
     )
     return lines
+
+
+#: A timed step's end: a preset of 0 or less never ends it.
+_TIME_UP = "(_limit > 0) and (_acc >= _limit)"
+
+
+def _drum_latch_lines(
+    instr: TimeDrumInstruction | TimeEventDrumInstruction, ctx: CodegenContext
+) -> list[str]:
+    """A tag preset is read on the first scan its step times, then held: ``_limit``."""
+    if not latches_presets(instr):
+        return []
+    key_base = ctx.state_key_for(instr)
+    step_key = f"{PRESET_STEP_MEMORY}:{key_base}"
+    value_key = f"{PRESET_MEMORY}:{key_base}"
+    return [
+        f"if _step == int(_mem.get({step_key!r}, 0)):",
+        f"    _limit = int(_mem.get({value_key!r}, 0))",
+        "else:",
+        f"    _mem[{step_key!r}] = _step",
+        f"    _mem[{value_key!r}] = _limit",
+    ]
 
 
 def _drum_tick_lines(
@@ -673,7 +704,7 @@ def _time_event_end_exprs(
     for preset_expr, event in zip(preset_exprs, instr.events, strict=True):
         parts: list[str] = []
         if preset_expr is not None:
-            parts.append("(_acc >= _limit)")
+            parts.append(f"({_TIME_UP})")
         if event is not None:
             if snapshots is not None:
                 parts.append(f"bool({next(snapshots)})")
