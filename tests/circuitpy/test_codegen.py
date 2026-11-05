@@ -2155,6 +2155,24 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (hits, system.fault.out_of_range), scans=2)
         assert results == {name: (6, False) for name in results}
 
+    def test_forloop_count_is_read_as_unsigned_of_its_width_on_every_backend(self, monkeypatch):
+        """A DD count is read whole (65537 runs 65537, hardware 2026-11-05) and a DS
+        count as unsigned 16-bit (-32768 runs 32768), on all three backends."""
+        wide = Dint("Wide", default=65537)
+        narrow = Int("Narrow", default=-32768)
+        wide_hits = Dint("WideHits")
+        narrow_hits = Dint("NarrowHits")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                with forloop(wide):
+                    calc(wide_hits + 1, wide_hits)
+            with Rung(system.sys.first_scan):
+                with forloop(narrow):
+                    calc(narrow_hits + 1, narrow_hits)
+
+        results = _on_every_backend(prog, monkeypatch, (wide_hits, narrow_hits), scans=1)
+        assert results == {name: (65537, 32768) for name in results}
+
     _FAULTS = (
         system.fault.division_error,
         system.fault.out_of_range,
