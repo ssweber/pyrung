@@ -2376,6 +2376,39 @@ class TestBoardPeripheralsAndRunStop:
         expected = (stored, *(bool(flag) for flag in flags))
         assert results == {name: expected for name in results}, label
 
+    def test_mod_floors_and_zero_to_zero_is_one_outside_calc_on_every_backend(self, monkeypatch):
+        """CLICK's MOD and 0 ^ 0 are calc()'s: anywhere else ``%`` and ``**`` are
+        Python's, so the wrap-around index ``(P - 1) % 10 + 1`` still works."""
+        n, z, p = Int("N", default=-3), Int("Z"), Int("P")
+        odd, zero_power = Bool("Odd"), Bool("ZeroPower")
+        copied, indexed = Int("Copied", default=99), Int("Indexed", default=99)
+        ds = Block("DS", TagType.INT, 1, 10)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(42, ds[10])
+            with Rung(n % 2 == 1):
+                out(odd)
+            with Rung(z**z == 1):
+                out(zero_power)
+            with Rung():
+                copy(n % 2, copied)
+                copy(ds[(p - 1) % 10 + 1], indexed)
+
+        watch = (odd, zero_power, copied, indexed, *self._FAULTS)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
+        assert results == {name: (True, True, 1, 42, False, False, False) for name in results}
+
+    @pytest.mark.parametrize("default", [300000007, 10**17 + 1])
+    def test_a_real_holding_an_int_steps_in_doubles_on_every_backend(self, monkeypatch, default):
+        r = Real("R", default=default)
+        dest = Dint("Dest", default=99)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(r * r + 1 - r * r, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        assert results == {name: (0, False, False, False) for name in results}
+
     @pytest.mark.parametrize("dest_type, floor", [(Int, -32768), (Dint, -2147483648)])
     def test_abs_of_the_bottom_of_a_range_is_zero_and_sc43_on_every_backend(
         self, monkeypatch, dest_type, floor

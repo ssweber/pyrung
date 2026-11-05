@@ -628,7 +628,7 @@ def _compile_calc_instruction(
                 "    _calc_value = 0",
             ]
         )
-    if re.search(r"\b_(mod|pow)\(", value_expr):
+    if re.search(r"\b_(mod|pow_calc)\(", value_expr):
         # 0 ** 0, 0 ** -1, a MOD by 0: 0 and no flag (QuietMathError).
         enabled_body.extend(["except _QuietMathError:", "    _calc_value = 0"])
     if site_flags:

@@ -52,6 +52,7 @@ _HELPER_ORDER = (
     "_dbl",
     "_abs_int",
     "_pow",
+    "_pow_calc",
     "_permissive_op",
     "_cond_elem",
     "_cond_tag_elem",

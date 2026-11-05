@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import operator
 import os
 import sys
 import time
@@ -1649,9 +1650,12 @@ def _interval_bounds(
         return None
 
     if node.symbol == "%":
-        # MOD truncates: below the divisor's size, with the dividend's sign, and
-        # 0 for a MOD by 0.  Not monotone, so not from the corners.
+        # Not monotone, so not from the corners.  Below the divisor's size: a
+        # calc's MOD truncates, with the dividend's sign (0 for a MOD by 0);
+        # Python's % (outside calc) floors, with the divisor's.
         size = max(abs(b_lo), abs(b_hi))
+        if node.op is operator.mod:
+            return (-size if b_lo < 0 else 0, size if b_hi > 0 else 0)
         return (max(a_lo, -size) if a_lo < 0 else 0, min(a_hi, size) if a_hi > 0 else 0)
 
     try:
@@ -1689,13 +1693,19 @@ def _domain_from_calc_expression(
     if isinstance(expression, BinaryExpr) and expression.symbol == "%":
         modulus = _literal_value_from_value(expression.right)
         if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
-            # MOD truncates: a dividend that may be negative reaches -(modulus - 1).
+            # A calc's MOD truncates: a dividend that may be negative reaches
+            # -(modulus - 1), which the destination stores as it does (a Word
+            # holds -1 as 65535).  Python's % floors into 0..modulus - 1.
             dividend = _interval_bounds(
                 expression.left, graph, all_exprs, known_domains, atom_index
             )
-            if dividend is not None and dividend[0] >= 0:
-                return tuple(range(modulus))
-            return tuple(range(1 - modulus, modulus))
+            if expression.op is operator.mod or (dividend is not None and dividend[0] >= 0):
+                values: range = range(modulus)
+            else:
+                values = range(1 - modulus, modulus)
+            from pyrung.core.instruction.conversions import _truncate_to_tag_type
+
+            return tuple(sorted({_truncate_to_tag_type(value, target) for value in values}))
 
     bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
     if bounds is None:

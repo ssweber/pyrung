@@ -60,9 +60,11 @@ def _permissive(error: Exception) -> int:
 class QuietMathError(ArithmeticError):
     """A math error CLICK's Math answers with 0 and no fault flag.
 
-    ``0 ** 0``, ``0 ** -1`` and a MOD by 0 (measured on a CLICK, 2026-11-05).
-    ``calc`` stores 0 and sets nothing; outside ``calc`` the operation gives 0,
-    as any math error does.
+    ``0 ** -1`` and a MOD by 0 (measured on a CLICK, 2026-11-05: 0, no flag), and
+    ``0 ** 0`` (measured 0; its flag not read, so no flag is pyrung's choice).
+    Raised only by the ops :func:`~pyrung.core.instruction.calc.calc_form` puts
+    in a ``calc`` (:func:`_op_mod`, :func:`_op_pow_calc`): ``calc`` stores 0 and
+    sets nothing.  Outside ``calc``, ``%`` floors and ``0 ** 0`` is 1, as Python's.
     """
 
 
@@ -91,10 +93,11 @@ def _op_div(a: Numeric, b: Numeric) -> Numeric:
 
 
 def _op_mod(a: Numeric, b: Numeric) -> Numeric:
-    """``a MOD b`` as a CLICK takes it: truncated, so the result has the sign of *a*.
+    """``a MOD b`` as a CLICK's Math takes it: truncated, the sign of *a*.
 
     ``-7 MOD 2`` is -1 and ``7 MOD -2`` is 1, Int and Real alike (C's ``fmod``;
     Python's ``%`` floors instead).  A MOD by 0 is a :class:`QuietMathError`.
+    ``calc`` runs ``%`` as this; anywhere else ``%`` is Python's.
     """
     if b == 0:
         raise QuietMathError("MOD by zero")
@@ -108,11 +111,8 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
     Python raises ``OverflowError`` where ``*`` would give Inf, so a ``calc``
     of ``Big ** 2`` would store 0, not the Inf a ``Big * Big`` stores.  The
     sign is the IEEE one: negative only for a negative base and an odd
-    integer exponent.  A zero base to a power of 0 or below is a
-    :class:`QuietMathError`, as a CLICK takes ``0 ^ 0`` and ``0 ^ -1``.
+    integer exponent.
     """
-    if a == 0 and b <= 0:
-        raise QuietMathError(f"({a!r}) ** {b!r}")
     try:
         result = a**b
     except OverflowError:
@@ -126,6 +126,18 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
         # value: a math error, as ``sqrt(-1)`` is (calc sets SC46).
         raise MathDomainError(f"({a!r}) ** {b!r}: math domain error")
     return result
+
+
+def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
+    """``a ** b`` in a ``calc``: a zero base to a power of 0 or below is a
+    :class:`QuietMathError`, as a CLICK's Math takes ``0 ^ 0`` and ``0 ^ -1``."""
+    if a == 0 and b <= 0:
+        raise QuietMathError(f"({a!r}) ** {b!r}")
+    return _op_pow(a, b)
+
+
+#: The op ``calc`` runs in place of each op of a formula (``calc_form``).
+CALC_OPS: dict[Any, Any] = {operator.mod: _op_mod, _op_pow: _op_pow_calc}
 
 
 def bit_operand(value: Numeric) -> int:
@@ -261,10 +273,10 @@ class Expression(ABC):
         return BinaryExpr(_wrap(other), _wrap(self), operator.floordiv, "//")
 
     def __mod__(self, other: Expression | Numeric) -> BinaryExpr:
-        return BinaryExpr(_wrap(self), _wrap(other), _op_mod, "%")
+        return BinaryExpr(_wrap(self), _wrap(other), operator.mod, "%")
 
     def __rmod__(self, other: Numeric) -> BinaryExpr:
-        return BinaryExpr(_wrap(other), _wrap(self), _op_mod, "%")
+        return BinaryExpr(_wrap(other), _wrap(self), operator.mod, "%")
 
     def __pow__(self, other: Expression | Numeric) -> BinaryExpr:
         return BinaryExpr(_wrap(self), _wrap(other), _op_pow, "**")
@@ -455,7 +467,9 @@ class BinaryExpr(Expression):
             result = self.op(left, right)
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)
-        return _calc_step(result)
+        if type(result) is int and not -DOUBLE_EXACT_LIMIT <= result <= DOUBLE_EXACT_LIMIT:
+            return _calc_step(result)
+        return result
 
     def __repr__(self) -> str:
         return f"({self.left} {self.symbol} {self.right})"
@@ -495,7 +509,9 @@ class UnaryExpr(Expression):
             result = self.op(operand)
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)
-        return _calc_step(result)
+        if type(result) is int and not -DOUBLE_EXACT_LIMIT <= result <= DOUBLE_EXACT_LIMIT:
+            return _calc_step(result)
+        return result
 
     def __repr__(self) -> str:
         if self.symbol == "abs":
@@ -657,7 +673,9 @@ class ShiftFuncExpr(Expression):
             result = self.func(bit_operand(value), bit_operand(count))
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)
-        return _calc_step(result)
+        if type(result) is int and not -DOUBLE_EXACT_LIMIT <= result <= DOUBLE_EXACT_LIMIT:
+            return _calc_step(result)
+        return result
 
     def __repr__(self) -> str:
         return f"{self.name}({self.value}, {self.count})"

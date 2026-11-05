@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import operator
 import re
 from typing import Any
 
@@ -25,6 +26,7 @@ from pyrung.circuitpy.codegen.context import (
 from pyrung.core.expression import (
     ABS_FLOORS,
     ABS_OF_TYPE,
+    CALC_OPS,
     DOMAIN_LIMITED_MATH_FUNCS,
     DOUBLE_EXACT_LIMIT,
     BinaryExpr,
@@ -37,6 +39,7 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
     UnaryExpr,
+    _op_pow,
     may_be_float,
 )
 from pyrung.core.memory_block import (
@@ -154,31 +157,39 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
+        calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         if not strict and (
             _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
         ):
-            return _permissive_op(expr.symbol, left, right, ctx)
+            symbol = {"%": "mod", "**": "pow0"}[expr.symbol] if calc_op else expr.symbol
+            return _permissive_op(symbol, left, right, ctx)
         if expr.symbol in _BITWISE_SYMBOLS:
             left_int = _bit_int_expr(expr.left, left, ctx)
             right_int = _bit_int_expr(expr.right, right, ctx)
             if expr.symbol in ("<<", ">>"):
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
-        if expr.symbol == "**" and (
-            _may_be_float(expr.left)
-            or _may_be_float(expr.right)
-            or not _positive_int_literal(expr.right)
-        ):
-            # _pow gives +/-Inf for a float overflow, as the core's _op_pow,
-            # raises _MathDomainError for a complex result and _QuietMathError
-            # for a zero base to a power of 0 or below; an integer power is
-            # exact and never overflows.
+        if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
+            # A calc's ** (core _op_pow_calc): a zero base to a power of 0 or
+            # below is a _QuietMathError, then as _pow.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_QuietMathError")
             ctx.mark_helper("_pow")
+            ctx.mark_helper("_pow_calc")
+            return _calc_step(expr, f"_pow_calc({left}, {right})", ctx, strict)
+        if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
+            # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
+            # raises _MathDomainError for a complex result; an integer power is
+            # exact and never overflows.
+            ctx.mark_helper("_math_func")
+            ctx.mark_helper("_pow")
             return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
-        if expr.symbol == "%" and not (_non_negative(expr.left) and _positive_literal(expr.right)):
-            # MOD truncates (the dividend's sign) and a MOD by 0 is a
+        if (
+            calc_op
+            and expr.symbol == "%"
+            and not (_non_negative(expr.left) and _positive_literal(expr.right))
+        ):
+            # A calc's MOD truncates (the dividend's sign) and a MOD by 0 is a
             # _QuietMathError, as the core's _op_mod; Python's % floors.
             ctx.mark_helper("_QuietMathError")
             ctx.mark_helper("_mod")
@@ -377,6 +388,9 @@ def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
 
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
 
+#: The op each symbol runs outside ``calc``; ``calc_form`` swaps it for its CALC_OPS one.
+_PYTHON_OPS = {"%": operator.mod, "**": _op_pow}
+
 
 def _non_zero_literal(expr: Any) -> bool:
     return isinstance(expr, LiteralExpr) and expr.value != 0
@@ -429,13 +443,14 @@ def calc_site_flags(expr: Any) -> bool:
     return False
 
 
-#: The largest magnitude of each integer tag type.
+#: The largest magnitude of each integer tag type.  A Real is not bounded: it may
+#: hold a Python int (``Real("R", default=300000007)``), so its steps go through
+#: ``_dbl`` as the core's do.
 _TYPE_BOUNDS = {
     TagType.BOOL: 1,
     TagType.INT: 1 << 15,
     TagType.DINT: 1 << 31,
     TagType.WORD: 0xFFFF,
-    TagType.REAL: 0,  # a Real holds a float: an integer bound does not apply
 }
 
 
@@ -461,7 +476,8 @@ def _int_bound(expr: Any) -> float:
         if symbol in ("+", "-"):
             return left + right
         if symbol == "*":
-            return left * right
+            # A 0 bound is a 0 or a float: so is the product (and inf * 0 is NaN).
+            return 0 if left == 0 or right == 0 else left * right
         if symbol == "/":
             return 0
         if symbol in ("//", "%", ">>"):
@@ -509,8 +525,8 @@ def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> s
 def _binary_may_raise(expr: BinaryExpr) -> bool:
     """Whether *expr* can raise on a math error (and so, outside calc, give 0).
 
-    A division by a non-zero constant, a power with a positive integer
-    constant exponent, a bitwise operation on integers and a shift by a
+    A division by a non-zero constant, a power with a non-negative integer
+    constant exponent (positive in a calc), a bitwise operation on integers and a shift by a
     non-negative constant cannot; ``+``, ``-`` and ``*`` never do (a float
     overflow is Inf).  Each of them can raise when an operand is an integer too
     large for a float (:func:`_may_be_huge`), which the caller checks.
@@ -519,9 +535,11 @@ def _binary_may_raise(expr: BinaryExpr) -> bool:
     if symbol in ("/", "//", "%"):
         return not _non_zero_literal(expr.right)
     if symbol == "**":
-        # A zero base to a power of 0 or below is a math error, and a
-        # fractional power of a negative base is complex (one too).
-        return not _positive_int_literal(expr.right)
+        # A negative exponent of 0 divides by zero (in a calc, 0 ** 0 is an
+        # error too); a fractional one of a negative base is complex.
+        if expr.op is CALC_OPS[_op_pow]:
+            return not _positive_int_literal(expr.right)
+        return not _non_negative_int_literal(expr.right)
     if symbol in ("&", "|", "^"):
         return _may_be_float(expr.left) or _may_be_float(expr.right)
     if symbol in ("<<", ">>"):
@@ -580,6 +598,7 @@ def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
     ctx.mark_helper("_QuietMathError")
     ctx.mark_helper("_mod")
     ctx.mark_helper("_pow")
+    ctx.mark_helper("_pow_calc")
     ctx.mark_helper("_permissive_op")
     return f"_permissive_op({op!r}, {left}, {right})"
 

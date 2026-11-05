@@ -354,8 +354,6 @@ _HELPER_DEFS: dict[str, list[str]] = {
     ],
     "_pow": [
         "def _pow(base, exp):",
-        "    if base == 0 and exp <= 0:",
-        "        raise _QuietMathError()",
         "    try:",
         "        result = base ** exp",
         "    except OverflowError:",
@@ -375,6 +373,14 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return result",
         "",
     ],
+    # ** in a calc (core _op_pow_calc): 0 ^ 0 and 0 ^ -1 are 0 with no flag.
+    "_pow_calc": [
+        "def _pow_calc(base, exp):",
+        "    if base == 0 and exp <= 0:",
+        "        raise _QuietMathError()",
+        "    return _pow(base, exp)",
+        "",
+    ],
     "_permissive_op": [
         "def _permissive_op(op, a, b):",
         "    try:",
@@ -389,9 +395,13 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '        if op == "//":',
         "            return a // b",
         '        if op == "%":',
-        "            return _mod(a, b)",
+        "            return a % b",
         '        if op == "**":',
         "            return _pow(a, b)",
+        '        if op == "mod":',
+        "            return _mod(a, b)",
+        '        if op == "pow0":',
+        "            return _pow_calc(a, b)",
         "        a = _bit_int(a)",
         "        b = _bit_int(b)",
         '        if op == "&":',
@@ -454,10 +464,12 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
     if "_store_copy_value_to_type" in needed:
         needed.add("_store_real")
     if "_permissive_op" in needed:
-        needed.update({"_bit_int", "_math_func", "_pow", "_mod"})
+        needed.update({"_bit_int", "_math_func", "_pow", "_mod", "_pow_calc"})
     if needed & {"_rand_term", "_rand_draw"}:
         needed.update({"_bit_int", "_rand_fail"})
-    if needed & {"_mod", "_pow"}:
+    if "_pow_calc" in needed:
+        needed.add("_pow")
+    if needed & {"_mod", "_pow_calc"}:
         needed.add("_QuietMathError")
     if "_pow" in needed:
         needed.add("_math_func")

@@ -17,7 +17,7 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 | Expression | Destination | Result |
 |------------|-------------|--------|
 | `DS1 + 1` (DS1=32767) | INT (16-bit signed) | −32768 (wraps) |
-| `50000 * 50000` | DINT (32-bit signed) | −1,794,967,296 (wraps) |
+| `DD1 + 1` (DD1=2147483647) | DINT (32-bit signed) | −2,147,483,648 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
 ## Constants past 16 bits
@@ -51,7 +51,7 @@ pyrung checks the range when `calc()` stores its result, not at each step of the
 
 - Division by zero produces result = 0 and sets `system.fault.division_error`. The next `calc()` to run clears it unless it divides by zero too, so read the flag on the next rung; a `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
-- `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign: `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero stores 0 with no flag.
+- In a `calc()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign: `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero stores 0 with no flag. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
 ## Math errors
 
@@ -63,7 +63,7 @@ A math function given an operand outside its domain — `sqrt` of a negative, `l
 
 A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
 
-A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so it is a math error, as `sqrt(-1)` is: the `calc()` stores 0 and sets `math_operation_error`. Zero to the power 0 or to a negative power stores 0 with no flag.
+A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so it is a math error, as `sqrt(-1)` is: the `calc()` stores 0 and sets `math_operation_error`. In a `calc()`, zero to the power 0 or to a negative power stores 0 with no flag (no flag for `0 ** 0` is pyrung's choice, not yet read); anywhere else `0 ** 0` is 1.
 
 ## Math outside `calc()`
 
@@ -128,7 +128,7 @@ Mode inference applies normally: WORD-only ranges infer hex mode, anything else 
 calc(abs(Error), Magnitude)
 ```
 
-Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768 has no 16-bit value, so the `calc()` stores 0 and sets `system.fault.out_of_range`, as a CLICK does.
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768 has no 16-bit value, so a `calc()` into an `Int` stores 0 and sets `system.fault.out_of_range`, as a CLICK does. pyrung does the same into a wider destination, and for a `Dint` tag holding −2147483648; that is pyrung's choice, not yet read on a CLICK.
 
 ## `randint()`
 

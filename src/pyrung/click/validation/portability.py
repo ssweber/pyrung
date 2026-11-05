@@ -1217,7 +1217,10 @@ def _collect_wide_constants(
     else:
         children = list(vars(expr).values())
     for child in children:
-        _collect_wide_constants(child, out, seen, low=low, high=high, rand_cut=rand_cut)
+        # Only subexpressions: a constant is a LiteralExpr (an int attribute, such
+        # as a RAND's site number, is not one).
+        if isinstance(child, Expression):
+            _collect_wide_constants(child, out, seen, low=low, high=high, rand_cut=rand_cut)
 
 
 def _evaluate_wide_constants(
@@ -1229,7 +1232,8 @@ def _evaluate_wide_constants(
     if type(instruction).__name__ != "CalcInstruction":
         return []
     hex_mode = instruction.mode == "hex"
-    low, high = (-32768, 65535) if hex_mode else (-32768, 32767)
+    # A hex Math reads a constant as its low 16 bits, unsigned (& 0xFFFF): -1 is 65535.
+    low, high = (0, 65535) if hex_mode else (-32768, 32767)
     dest = instruction.dest
     dest_type = (
         dest.type if isinstance(dest, Tag) else getattr(getattr(dest, "block", None), "type", None)
@@ -1249,11 +1253,20 @@ def _evaluate_wide_constants(
             severity=_route_severity(CLK_CALC_WIDE_CONSTANT, mode),
             message=(
                 f"calc() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
-                "Math cuts each constant to 16 bits, whatever the destination, so 40000 "
-                "reads -25536."
+                + (
+                    "hex Math reads each constant as its low 16 bits, unsigned, so 70000 "
+                    "reads 4464 and -1 reads 65535."
+                    if hex_mode
+                    else "Math cuts each constant to 16 bits, whatever the destination, so "
+                    "40000 reads -25536."
+                )
             ),
             location=location_text,
-            suggestion="Copy the constant into a DD tag in a rung above and use the tag.",
+            suggestion=(
+                "Write the constant as its 16-bit value, 0..65535 (0h..FFFFh)."
+                if hex_mode
+                else "Copy the constant into a DD tag in a rung above and use the tag."
+            ),
         )
     ]
 

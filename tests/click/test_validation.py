@@ -1808,8 +1808,9 @@ class TestCalcWideConstant:
             (lambda n, w: randint(70000, 70002), TagType.INT),
             (lambda n, w: w + 70000, TagType.WORD),
             (lambda n, w: randint(1, 70000), TagType.WORD),
+            (lambda n, w: w + -1, TagType.WORD),
         ],
-        ids=["dd", "df", "ds", "bare", "rand-into-int", "hex", "rand-into-word"],
+        ids=["dd", "df", "ds", "bare", "rand-into-int", "hex", "rand-into-word", "hex-negative"],
     )
     def test_a_constant_past_16_bits_is_reported(self, build, dest_type):
         found = self._found(build, dest_type)
@@ -1835,6 +1836,18 @@ class TestCalcWideConstant:
         found = self._found(lambda n, w: n * 40000 + 40000 - 70000)
         assert len(found) == 1
         assert "(40000, 70000)" in found[0].message
+
+    def test_a_hex_math_reads_a_constant_unsigned(self):
+        (found,) = self._found(lambda n, w: w + -1 + 70000, TagType.WORD)
+        assert "(-1, 70000)" in found.message
+        assert "70000 reads 4464 and -1 reads 65535" in found.message
+        assert "0..65535" in found.suggestion
+
+    def test_a_rand_site_number_is_not_a_constant(self):
+        from pyrung.core.expression import LiteralExpr, RandIntExpr
+
+        draw = RandIntExpr(LiteralExpr(1), LiteralExpr(6), site=40000)
+        assert self._found(lambda n, w: draw + n) == []
 
 
 def test_export_refuses_a_real_rand_bound_unless_allowed():

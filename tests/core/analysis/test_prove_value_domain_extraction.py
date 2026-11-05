@@ -13,6 +13,7 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    Word,
     calc,
     copy,
     latch,
@@ -107,6 +108,22 @@ class TestValueDomainExtraction:
         assert stateful["D"] == domain
         expected = Counterexample if low < 0 else prove_module.Proven
         assert isinstance(always(logic, ~neg, max_states=5000), expected)
+
+    def test_a_mod_into_a_word_stores_a_negative_remainder_wrapped(self):
+        """-2 MOD 3 into a Word (a decimal Math, an Int operand) is stored as 65534."""
+        n = Int("N", external=True, min=-5, max=5)
+        w = Word("W")
+        high = Bool("High")
+        with Program(strict=False) as logic:
+            with Rung(w > 2):
+                latch(high)
+            with Rung():
+                calc(n % 3, w)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert result[0]["W"] == (0, 1, 2, 65534, 65535)
+        assert isinstance(always(logic, ~high, max_states=5000), Counterexample)
 
     def test_integer_comparison_literals(self):
         """Pure equality-only inputs collapse to {literals..., OTHER}."""

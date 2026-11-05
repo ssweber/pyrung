@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.expression import (
     ABS_OF_TYPE,
+    CALC_OPS,
     DOMAIN_LIMITED_MATH_FUNCS,
     STRICT_DIVISION,
     BinaryExpr,
@@ -174,6 +175,7 @@ class _CalcForm:
     rand: bool = True
     abs_ops: bool = False
     mask_shifts: bool = False
+    calc_ops: bool = True
 
     def cut(self, value: int) -> int:
         return value & 0xFFFF if self.unsigned else _int16(value)
@@ -202,9 +204,10 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
     if isinstance(value, BinaryExpr):
         left = _rebuild(value.left, form)
         right = _rebuild(value.right, form)
+        op = CALC_OPS.get(value.op, value.op) if form.calc_ops else value.op
         node = value
-        if left is not value.left or right is not value.right:
-            node = BinaryExpr(left, right, value.op, value.symbol)
+        if left is not value.left or right is not value.right or op is not value.op:
+            node = BinaryExpr(left, right, op, value.symbol)
         if form.mask_shifts and value.symbol == "<<":
             node = BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
@@ -233,12 +236,15 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
     if isinstance(value, RandIntExpr):
         if not form.rand:
             return value
+        # A bound keeps its ops: only its constants are cut (CLICK's editor takes
+        # no formula as a bound, CLK_CALC_ARG_NOT_PLAIN).
+        form = replace(form, calc_ops=False)
         lo = _rebuild(value.lo, form)
         hi = _rebuild(value.hi, form)
         if lo is value.lo and hi is value.hi:
             return value
         # A Word's cut is its own draw only where it differs from an Int's.
-        signed = _CalcForm()
+        signed = _CalcForm(calc_ops=False)
         unsigned = form.unsigned and not (
             _same(_rebuild(value.lo, signed), lo) and _same(_rebuild(value.hi, signed), hi)
         )
@@ -252,7 +258,7 @@ def cut_int_constants(value: Any) -> Any:
     What a decimal Math into an Int runs (:func:`calc_form`), the bounds of a
     ``randint()`` included: ``randint(70000, 70002)`` draws 4464..4466.
     """
-    return _rebuild(value, _CalcForm())
+    return _rebuild(value, _CalcForm(calc_ops=False))
 
 
 def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any:
@@ -265,10 +271,17 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
     - The constant bounds of a ``randint()`` are cut into an Int and a Word, and
       kept whole into a Dint or a Real (``randint(70000, 70002)`` into a Dint draws
       70000..70002).
+    - ``%`` truncates and ``**`` takes ``0 ^ 0`` and ``0 ^ -1`` for an error that
+      stores 0 with no flag (:data:`~pyrung.core.expression.CALC_OPS`); outside
+      ``calc`` they stay Python's.
     - ``abs()`` of an Int or Dint tag cannot take the bottom of its range:
-      ``abs(DS1)`` with DS1 = -32768 stores 0 and sets SC43.
+      ``abs(DS1)`` with DS1 = -32768 into an Int stores 0 and sets SC43 (read).
+      Keyed on the operand's type, so into a wider destination too, and the
+      same for a Dint at -2147483648: pyrung's choice, not yet read.
     - In hex mode a left shift keeps 16 bits: the bits shifted out are gone, so
-      ``lsh(DH1, 1)`` of 0x8001 is 0x0002 and raises no SC43.
+      ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
+      are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
+      not yet read.
 
     Returns *expression* itself when nothing changes.
     """

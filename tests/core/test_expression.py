@@ -724,22 +724,36 @@ class TestExpressionEdgeCases:
         assert expr.evaluate(ctx) == 0
         assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
 
-    @pytest.mark.parametrize(
-        "symbol, error", [("/", ZeroDivisionError), ("//", ZeroDivisionError), ("%", None)]
-    )
-    def test_division_by_zero_inside_calc_raises(self, symbol, error):
-        """Inside calc (STRICT_DIVISION) a division by zero raises: calc sets SC40.
-        A MOD by 0 raises QuietMathError: calc stores 0 with no flag, as a CLICK."""
-        from pyrung.core.expression import QuietMathError
-
+    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
+    def test_division_by_zero_inside_calc_raises(self, symbol):
+        """Inside calc (STRICT_DIVISION) a division by zero raises: calc sets SC40."""
         DS = Block("DS", TagType.INT, 1, 9)
         expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
         token = STRICT_DIVISION.set(True)
         try:
-            with pytest.raises(error or QuietMathError):
+            with pytest.raises(ZeroDivisionError):
                 expr.evaluate(ctx)
+        finally:
+            STRICT_DIVISION.reset(token)
+
+    def test_calc_form_swaps_in_clicks_mod_and_power(self):
+        """calc runs CLICK's MOD (truncated; by 0 a QuietMathError) and 0 ** 0 as
+        an error; the expression itself keeps Python's ``%`` and ``**``."""
+        from pyrung.core.expression import QuietMathError
+        from pyrung.core.instruction.calc import calc_form
+
+        DS = Block("DS", TagType.INT, 1, 9)
+        ctx = ScanContext(SystemState().with_tags({"DS1": -7, "DS2": 2, "DS3": 0}))
+        mod, by_zero, power = DS[1] % DS[2], DS[1] % DS[3], DS[3] ** DS[3]
+        assert (mod.evaluate(ctx), power.evaluate(ctx)) == (1, 1)
+        assert calc_form(mod, "decimal", TagType.INT).evaluate(ctx) == -1
+        token = STRICT_DIVISION.set(True)
+        try:
+            for expr in (by_zero, power):
+                with pytest.raises(QuietMathError):
+                    calc_form(expr, "decimal", TagType.INT).evaluate(ctx)
         finally:
             STRICT_DIVISION.reset(token)
 
