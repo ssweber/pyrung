@@ -1,6 +1,6 @@
 """Copy forms nothing has read: the ``copy_more`` and ``block_more`` groups.
 
-Part K (``suite.PARTS``).  An expectation is pyrung's reading today; a CLICK that reads
+Part ``copy`` (``suite.PARTS``).  An expectation is pyrung's reading today; a CLICK that reads
 otherwise prints what it read.  Text is read as a pair of characters, 128 * first + second,
 so 6197 is "15" (49, 53); a NUL reads 0.
 

@@ -1,6 +1,6 @@
 """What a Word holds after a store, and what comes out of one: the ``word_store`` group.
 
-Part H (``suite.PARTS``).  pyrung wraps a Copy, Block copy or Fill into a Word
+Part ``copy`` (``suite.PARTS``).  pyrung wraps a Copy, Block copy or Fill into a Word
 modulo 65536 with no flag, where it clamps with SC43 into an Int or a Dint
 (``core/instruction/conversions.py``).  No CLICK has read that.  Expectations are
 what pyrung reads today, so a CLICK that reads otherwise is an answer.  A DH

@@ -1,6 +1,6 @@
 """A Real's raw bits, as Modbus reads them: the ``real_bits`` group.
 
-Part H (``suite.PARTS``).  The harness reads slots, so the raw IEEE bits a CLICK
+Part ``copy`` (``suite.PARTS``).  The harness reads slots, so the raw IEEE bits a CLICK
 keeps in a DF, which is what two Modbus registers would show, come through an
 Unpack Copy into two DH and a compare on each.  Expectations are what pyrung reads
 today (the float64 it keeps packed to a float32), so a CLICK that reads otherwise

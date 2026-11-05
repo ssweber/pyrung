@@ -1,6 +1,6 @@
 """Flag probes: the ``flag_probe`` group (subroutine ``Conf_FlagProbe``).
 
-Part F of the CLICK project (``suite.PARTS``).  The fault-flag model (``bob/flags``)
+Part ``system`` (``suite.PARTS``).  The fault-flag model (``bob/flags``)
 chose several things without a reading; each case here asks a CLICK one of them.
 The model, as pyrung has it: SC40 follows the last Math; SC43 and SC44 follow the
 last Copy or Math, and pyrung counts Block copy, Fill, Pack and Unpack as Copy tabs;

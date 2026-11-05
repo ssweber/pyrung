@@ -1,6 +1,6 @@
 """S6 drum probes, what the others left open: the ``drum_settle`` group (``Conf_DrumSettle``).
 
-Part G of the CLICK project (``suite.PARTS``).  The 2026-11-02 run of ``drum_rule``,
+Part ``drum2`` (``suite.PARTS``).  The 2026-11-02 run of ``drum_rule``,
 ``drum_jump`` and ``drum_idle`` left two kinds of question.  A time & event drum
 did not move on a one-scan event on the harness's scan 1, though the same pulse
 moves it on later scans; and a completed drum did not take a jump, its own time or

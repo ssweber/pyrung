@@ -256,7 +256,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "CT": range(196, 201),
         "DF": range(411, 421),
     },
-    # The grey-area probes, parts H.. (tests/conformance/probe_kit.py).  Their memory is
+    # The grey-area probes (tests/conformance/probe_kit.py).  Their memory is
     # what the groups above leave unused.
     "word_store": {
         "DD": range(810, 850),

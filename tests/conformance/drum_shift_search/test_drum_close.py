@@ -1,6 +1,6 @@
 """S6 drum probes, where the rules stop: ``drum_close`` (``Conf_DrumClose``).
 
-Part G of the CLICK project (``suite.PARTS``).  ``test_drum_settle`` found that a drum takes
+Part ``drum2`` (``suite.PARTS``).  ``test_drum_settle`` found that a drum takes
 no event or time end on the scan its rung returns, that a completed drum's own time and
 event do nothing, and that its accumulator holds.  These asked where those rules stop, on a
 CLICK the same day (2026-11-02).  Snapshots as in ``test_drum_settle``, the first drum named

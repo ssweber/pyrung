@@ -1,6 +1,6 @@
 """Aggregates and RAND past what ``math``, ``numeric`` and ``store_probe`` read: ``agg_more``.
 
-Part J (``suite.PARTS``).  An expectation is pyrung's reading today; a CLICK that reads
+Part ``math`` (``suite.PARTS``).  An expectation is pyrung's reading today; a CLICK that reads
 otherwise prints what it read.  ``numeric`` reads a Real's SUM and a DS AVG, ``math`` a
 MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN and Inf.
 

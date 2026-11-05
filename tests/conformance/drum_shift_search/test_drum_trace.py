@@ -1,8 +1,8 @@
 """A drum's state scan by scan, for when it writes its outputs.
 
-Part A's drum probes record when a bit first comes on; these record the whole
-state, so a reading names what each scan did.  ``drum``'s block is full and part
-A is near its step budget, so they are a group and a part (E) of their own.
+The ``drum`` group's probes record when a bit first comes on; these record the whole
+state, so a reading names what each scan did.  ``drum``'s block is full, so they are a
+group of their own.
 
 Each case records the state at the end of a scan as four digits, SFBA: the step,
 the completion flag, step 2's output (B) and step 1's output (A), so 5010 is

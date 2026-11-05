@@ -1,5 +1,5 @@
 """Timers in different units with one delay are Done on one scan: the ``unit_pairs`` group
-(subroutine ``Conf_UnitPairs``, part N).
+(subroutine ``Conf_UnitPairs``, part ``units``).
 
 Over the wire time is the wall clock, so a case cannot choose a scan's length, or count
 what a scan a timer should end on.  It asks the relation instead, which holds or not

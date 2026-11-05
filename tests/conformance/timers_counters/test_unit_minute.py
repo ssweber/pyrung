@@ -1,5 +1,5 @@
 """The long pairs of ``test_unit_pairs.py``: the ``unit_minute`` group (subroutine
-``Conf_UnitMinute``, part N).  A group of its own for its wait: leave it out with
+``Conf_UnitMinute``, part ``units``).  A group of its own for its wait: leave it out with
 ``GROUP=unit_pairs``.
 
 ``one_minute`` runs a 1 min timer against a 60 s one.  In process, at the 10 ms ``DT``, it

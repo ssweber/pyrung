@@ -9,8 +9,7 @@ bit at the lowest address weighs 1).  The cases own C1001..C1200
 Each case counts its own scans (``scans.py``): clock bits are driven from the
 scan number, and the data bit is the rung's own condition on the scan number.
 
-Every case passed on a CLICK as written (hardware round 1, 2026-10-29, part
-B).  Where a CLICK could differ, and what it would read:
+Every case passed on a CLICK as written (hardware round 1, 2026-10-29).  Where a CLICK could differ, and what it would read:
 
 ``forward_range_shifts_up`` and ``reversed_range_shifts_down``: data enters at
 the first address of the range and leaves at the last.  Clocked on scans 3, 5, 7

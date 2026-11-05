@@ -1,6 +1,6 @@
 """What a Math box does past the recorded forms: the ``math_more`` and ``hex_math`` groups.
 
-Part J (``suite.PARTS``).  ``numeric``, ``faults`` and ``store_probe`` read a Math's
+Part ``math`` (``suite.PARTS``).  ``numeric``, ``faults`` and ``store_probe`` read a Math's
 wrap, its wide intermediates and its Inf; none reads the shapes below.  An expectation
 is pyrung's reading today, and a CLICK that reads otherwise fails and prints what it read,
 which is the answer.  Each case runs once (``probe_kit``), so a flag is read on the rung

@@ -1,7 +1,7 @@
 """Rung semantics: the ``rungs`` group (subroutine ``Conf_Rungs``).
 
 What a rung reads, when, and in what order.  What a CLICK does (hardware
-round 1, 2026-10-29, part B, two identical passes; CLICK manual ch. 1,
+round 1, 2026-10-29, two identical passes; CLICK manual ch. 1,
 "Program Execution"):
 
 - A rung is solved row by row, top to bottom.  Each contact is read once,

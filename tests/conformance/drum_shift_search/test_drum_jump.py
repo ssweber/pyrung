@@ -1,6 +1,6 @@
 """S6 drum probes, jog, jump and pause: the ``drum_jump`` group (subroutine ``Conf_DrumJump``).
 
-Part G of the CLICK project (``suite.PARTS``).  The snapshots are those of
+Part ``drum1`` (``suite.PARTS``).  The snapshots are those of
 ``test_drum_rule`` (two digits a drum, ``S`` then ``4 * flag + 2 * B + A``,
 the time drum's above the time & event drum's), taken on a time drum and a
 time & event drum side by side.  The expectations are what pyrung reads, the

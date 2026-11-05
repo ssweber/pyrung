@@ -1,6 +1,6 @@
 """A write past the bank: the ``past_write`` group (subroutine ``Conf_PastWrite``).
 
-Part F of the CLICK project, the group the other groups never depend on, so it
+The last group of part ``copy``, the group the other groups never depend on, so it
 can be left out.  **It writes into a real CLICK's memory past the DD bank.**  Do
 not load its subroutine, or run its group, on a CLICK whose memory matters; delete
 the ``Conf_PastWrite`` call rung in main to leave it out.  The simulator and

@@ -1,6 +1,6 @@
 """S6 drum probes, the rule: the ``drum_rule`` group (subroutine ``Conf_DrumRule``).
 
-Part G of the CLICK project (``suite.PARTS``).  S5 read the drum rule on event
+Part ``drum1`` (``suite.PARTS``).  S5 read the drum rule on event
 drums (``drum_trace``); these ask the same of ``time_drum`` and
 ``time_event_drum``.  Each scenario runs one of each on the same inputs
 (``drum_rig.Pair``) and records them together: a drum's state at the end of a

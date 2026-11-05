@@ -1,7 +1,6 @@
 """S6 store probes: the ``store_probe`` group (subroutine ``Conf_StoreProbe``).
 
-Part F of the CLICK project (``suite.PARTS``), a project of its own: there is no
-room left in part E, and the editor may refuse a RAND bound form at paste.  What a RAND, a Math of NaN, a
+The last group of part ``math`` (``suite.PARTS``): the editor may refuse a RAND bound form at paste.  What a RAND, a Math of NaN, a
 Copy of an infinity or a Fill stores and which fault flag follows, for the
 stores the ``bob/stores`` arc chose without a reading.  Each case probes as the
 ``faults`` group does (an op once, on the first scan from 3 on which the flag

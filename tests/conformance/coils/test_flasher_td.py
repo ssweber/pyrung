@@ -1,5 +1,5 @@
 """A flasher's frozen off TD when a lowered preset ends its on phase: the ``flasher_td`` group
-(part P).
+(part ``text_flasher``).
 
 A false rung freezes a flasher's TDs and the restart is a fresh on phase (``out``, on hardware).
 An on phase that times out starts its off phase from 0.  One cut short by a lowered preset has not

@@ -3,8 +3,7 @@
 The fault flags a CLICK raises on a store: SC40 (division error), SC43 (out
 of range), SC44 (address error) and SC46 (Math operation error), for a Math
 whose result does not fit its destination, a Copy that clamps, RAND past an
-Int, a pointer past its bank, and Inf and NaN in a Real.  Part E of the
-CLICK project (``suite.PARTS``).
+Int, a pointer past its bank, and Inf and NaN in a Real.  Part ``system`` (``suite.PARTS``).
 
 Each probe runs one instruction (its *op*) once and reads one flag on the
 rung right after it.  A flag that is on shows only that some instruction set
@@ -65,7 +64,7 @@ tells apart:
   (2026-11-01) reads 0, 0, 7, 2233, 0: no flag, the DFs write 0 as
   ``paste_risk/rand_real_bounds`` read, and 2233 is half of 4466, so the wide
   bounds are cut to 16 bits (70000 is 4464).
-- ``rand_real_bounds``: moved to the ``paste_risk`` group (part C), since
+- ``rand_real_bounds``: moved to the ``paste_risk`` group (part ``control``), since
   a CLICK may refuse a DF bound at paste; DF461..DF462 stay unused here and
   ``pointer_past_bank_lands`` has its C bits.
 - ``pointer_past_bank`` (probe): a Copy through a pointer past the DD bank

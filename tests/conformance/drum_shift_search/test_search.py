@@ -10,7 +10,7 @@ the range (1, 2, ...) reads differently from the register number.  Every table
 has several matches, so first-match reads differently from last-match.
 pyrung returns the register number of the first match (``DS4204``, not 2).
 
-The expectations are what a CLICK does (hardware round 1, 2026-10-29, part B:
+The expectations are what a CLICK does (hardware round 1, 2026-10-29:
 every case but one passed as written).  A continuous search on a CLICK
 restarts at the first address when its result is 0, resumes after an old
 result that lies inside the range, and misses (-1) from anything else.

@@ -3,7 +3,7 @@
 CLICK has no nested subroutine calls, so a call has to start in the main
 program.  This group runs its case rungs in main (``Group(in_main=True)``) and
 each case defines the helper subroutine it calls (``Conf_LoopCall...``).  It is
-part C: whether CLICK takes a Call between For and Next is open, and a
+part ``control``: whether CLICK takes a Call between For and Next is open, and a
 refusal at paste or transfer then costs this group's helpers and main rungs.  The
 cases own no raw memory.
 

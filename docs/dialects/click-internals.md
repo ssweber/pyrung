@@ -15,7 +15,7 @@ print(estimate.total, estimate.main, estimate.subroutines)
 
 `estimate.unmeasured` names any instruction no probe has measured yet; each one is costed high (8) on purpose. Validation reports `CLK_STEP_LIMIT` when the estimate passes 95% of the limit (a hint) or the limit itself (a warning).
 
-The estimate reads the exported CSV rows, so it sees what CLICK is given: legs, pin rows and the always-on rail as CLICK lays them out. Against a whole project (the conformance suite's part A, 592 rungs) it came to 6,067 where CLICK reported 6,088, before `break` and `continue` were measured. Leave a few hundred steps of margin.
+The estimate reads the exported CSV rows, so it sees what CLICK is given: legs, pin rows and the always-on rail as CLICK lays them out. Against a whole project (a 592-rung part of the conformance suite) it came to 6,067 where CLICK reported 6,088, before `break` and `continue` were measured. Leave a few hundred steps of margin.
 
 ### Measured costs
 

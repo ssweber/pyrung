@@ -1,6 +1,6 @@
 """Return on a branch: the ``ret_branch`` group (subroutine ``Conf_RetBranch``).
 
-A probe group in part C: a CLICK that refuses the ladder (at paste or at
+A probe group in part ``control``: a CLICK that refuses the ladder (at paste or at
 transfer) costs this group's subroutine and call rung.
 It owns no raw memory.
 

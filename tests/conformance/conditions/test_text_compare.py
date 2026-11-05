@@ -1,4 +1,4 @@
-"""TXT against a literal and TXT against TXT: the ``text_compare`` group (part P).
+"""TXT against a literal and TXT against TXT: the ``text_compare`` group (part ``text_flasher``).
 
 CLICK's Compare dialog takes ``TXT1 = "T"`` and ``TXT1 = TXT2`` and offers only = and not-equal
 on text; the exporter refuses an order compare (``CLK_TEXT_ORDER_COMPARE``), so none is asked.

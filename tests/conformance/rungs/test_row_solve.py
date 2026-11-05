@@ -2,7 +2,7 @@
 
 Hardware questions the live row solve (S4) still had open after round 2, in
 drawings pyrung's exporter writes and CLICK has taken before (branches off the
-trunk, a box with a continued wire below it).  Part C, beside ``rungs`` and ``solve_order``.
+trunk, a box with a continued wire below it).  Part ``control``, beside ``rungs`` and ``solve_order``.
 
 The models, as in ``test_solve_order.py``:
 

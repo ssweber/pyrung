@@ -1,6 +1,6 @@
 """Drum probes: a pin against a step's own end, and every other branch of the routine.
 
-Part I (``suite.PARTS``), three groups: ``drum_pins``, ``drum_branch``, ``drum_limits``.  The cases
+Three groups: ``drum_pins`` (part ``drum2``), ``drum_branch`` (``drum3``), ``drum_limits`` (``drum1``).  The cases
 ask what no recording in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
 ``test_drum_jump.py``, ``test_drum_settle.py``, ``test_drum_close.py`` or
 ``test_drum_idle.py`` separates.  An expectation here is a ``range`` over the candidates,

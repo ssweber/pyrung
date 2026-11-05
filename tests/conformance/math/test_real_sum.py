@@ -1,6 +1,6 @@
 """The order and width of a Real SUM: the ``real_sum`` group.
 
-Part H (``suite.PARTS``).  CLICK's SUM over a DF range adds in some order at some
+Part ``math`` (``suite.PARTS``).  CLICK's SUM over a DF range adds in some order at some
 width.  pyrung adds plain left to right on every backend (core, kernel and
 generated code); the ruling is plain left to right on all backends, and a
 recording overrides the ruling.  Each case sums three orderings of one set into a

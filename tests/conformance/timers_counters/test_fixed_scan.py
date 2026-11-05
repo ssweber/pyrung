@@ -1,5 +1,5 @@
 """The scan a timer is Done on as a CLICK counts it: the ``fixed_scan`` group (subroutine
-``Conf_FixedScan``, part O, run with CLICK's fixed scan on at 100 ms; ``AGENTS.md``, "Fixed
+``Conf_FixedScan``, part ``fixed_scan``, run with CLICK's fixed scan on at 100 ms; ``AGENTS.md``, "Fixed
 scan part").  For curiosity: pyrung's count is exact by rule, whatever a CLICK reads
 (``tests/core/test_timer_exact.py``), and a CLICK that reads otherwise is recorded, not chased.
 

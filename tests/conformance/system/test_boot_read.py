@@ -1,4 +1,4 @@
-"""What a boot leaves behind, flags across a scan and a For past 16 bits: part M.
+"""What a boot leaves behind, flags across a scan and a For past 16 bits: part ``boot``.
 
 The groups ``boot_read``, ``rtc_set``, ``for_wide`` and ``flag_scan``.  ``for_wide`` may make a
 scan of about 1.1 s (``loop/negative_count_reads_unsigned`` measured that for 65535 runs of one

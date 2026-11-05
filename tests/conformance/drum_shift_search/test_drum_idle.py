@@ -1,6 +1,6 @@
 """S6 drum probes, a drum not reached: the ``drum_idle`` group (rungs in main).
 
-Part G of the CLICK project (``suite.PARTS``).  CLICK has no nested call, so
+Part ``drum2`` (``suite.PARTS``).  CLICK has no nested call, so
 the group's rungs run in the main program (``in_main``), and the first case's
 drums live in a subroutine main does not call on some scans.  A drum that is
 not reached on a scan keeps its rung memory, so when it is reached again the

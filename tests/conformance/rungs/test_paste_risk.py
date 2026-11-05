@@ -1,6 +1,6 @@
 """Probes a CLICK may refuse at paste: the ``paste_risk`` group (subroutine ``Conf_PasteRisk``).
 
-Part I of the CLICK project (``suite.PARTS``), a project of its own.  Each
+Part ``control`` (``suite.PARTS``).  Each
 case here writes an operand CLICK may not take where it stands (a register
 the editor or the project check could refuse), so a refusal at paste,
 transfer or project check costs only this small project, and no confirmed
