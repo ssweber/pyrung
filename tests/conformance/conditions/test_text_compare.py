@@ -21,10 +21,11 @@ Each compare is a decimal digit, 1 where it passed power.  A pair is two digits,
 - ``blank_and_space``: a compare could read a blank as a space.  Never written and cleared against " " (Result1, Result2) and a TXT
   holding " " (Result3, Result4): 1 where a blank is not a space, 10 where it is.  ErrorCode, a TXT
   holding " " against " ": 10, the control.
-- ``blank_literal``: ``""`` is how the exporter spells the blank.  Never written and cleared against
-  it (Result1, Result2): 10.  A TXT holding "T" against it (Result3): 1.  The editor may refuse the
-  empty literal, which is an answer: delete this case's rows, the last of the subroutine.  The
-  group's hash is a constant in its first rung, so the other cases still run.
+- ``blank_literal``: ``$00``, CLICK's ASCII-code constant for NUL, is how the exporter spells the
+  blank (a quoted ``""`` writes no TXT).  Never written and cleared against it (Result1, Result2):
+  10.  A TXT holding "T" against it (Result3): 1.  The editor may refuse the literal, which is an
+  answer: delete this case's rows, the last of the subroutine.  The group's hash is a constant in
+  its first rung, so the other cases still run.
 
 The part keeps to TXT addresses no group of the whole suite uses, so no project of the suite has
 written the ones never written here.
@@ -189,12 +190,12 @@ group = Group(
             probe="does a compare read a blank as a space",
         ),
         case(
-            'The empty literal is the blank: never written and cleared equal "" (Result1 = 10, '
+            "The blank literal $00 is the blank: never written and cleared equal it (Result1 = 10, "
             'Result2 = 10), a TXT holding "T" does not (Result3 = 1)',
             ladder=prove_blank_literal,
             init=init_blank_literal,
             expect={"Result1": 10, "Result2": 10, "Result3": 1},
-            probe="a compare with the empty literal; a refusal at paste is an answer",
+            probe="a compare with the blank literal $00; a refusal at paste is an answer",
         ),
     ],
 )

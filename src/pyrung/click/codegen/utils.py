@@ -91,6 +91,18 @@ _MODBUS_984_COIL_MAX = 65536
 _TO_TEXT_RE = re.compile(r"to_text\(([^()]*)\)")
 _TO_TEXT_FLAGS = {"0": "False", "1": "True"}
 _TERMINATION_CODE_RE = re.compile(r"\$[0-9A-Fa-f]{1,2}")
+# CLICK's ASCII-code text constant: ``$0D`` is one CR, ``$00`` the TXT blank.
+_TEXT_CODE_RE = re.compile(r"\$([0-9A-Fa-f]{1,2})")
+
+
+def _text_code_value(text: str) -> str | None:
+    """The character a CLICK ``$hh`` text constant stands for, or None."""
+    match = _TEXT_CODE_RE.fullmatch(text.strip())
+    if match is None:
+        return None
+    return chr(int(match.group(1), 16))
+
+
 _REGISTER_TYPE_MEMBERS = {
     "coil": "COIL",
     "discrete_input": "DISCRETE_INPUT",
@@ -408,6 +420,10 @@ def _sub_operand(
         return text
 
     text = _compact_click_formula(text)
+    code_char = _text_code_value(text)
+    if code_char is not None:
+        # pyrung reads "" as the blank (NUL); keep the source free of \u0000.
+        return _string_literal("" if code_char == "\x00" else code_char)
     modbus_address = _MODBUS_ADDRESS_RE.fullmatch(text)
     if modbus_address:
         return _render_modbus_address(modbus_address.group(1))

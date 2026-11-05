@@ -60,6 +60,9 @@ if TYPE_CHECKING:
 # in indirect addressing without an explicit TagMap block entry.
 _CLICK_BANK_NAMES: frozenset[str] = frozenset(BANKS)
 
+#: CLICK's ASCII-code constant for the TXT blank (NUL).  ``""`` writes no TXT.
+BLANK_TEXT_CONSTANT = "$00"
+
 # ---- Expression/condition operator maps ----
 # Maps Python operator symbol → Click formula-pad symbol for binary expressions
 _BINARY_OP_CLICK: dict[str, str] = {
@@ -377,19 +380,23 @@ class _TranslatorMixin:
         )
 
     def _render_text(self, value: str, *, path: str, source: Any) -> str:
-        """A text constant as CLICK spells it; the blank character is ``""``.
+        """A text constant as CLICK spells it; the blank character is ``$00``.
 
-        A TXT blank is NUL, but CLICK's text constants end at NUL, so a raw
-        NUL inside the quotes would cut the constant short.
+        A TXT blank is NUL.  A quoted CLICK text constant writes one TXT per
+        character, so ``""`` writes nothing (and compares equal to anything);
+        ``$00``, CLICK's ASCII-code constant, is the one-character NUL.  A raw
+        NUL inside quotes would end the constant early.  pyrung's ``""`` is the
+        blank too (a CHAR stores it as NUL), so it exports the same way.
         """
-        if value == BLANK_CHAR:
-            return '""'
+        if value in ("", BLANK_CHAR):
+            return BLANK_TEXT_CONSTANT
         if BLANK_CHAR in value:
             self._raise_issue(
                 path=path,
                 message=(
                     f"Text constant {value!r} holds a NUL, which ends a CLICK text "
-                    'constant. Write the blank character on its own as "".'
+                    "constant. Write the blank character on its own (it exports "
+                    f"as {BLANK_TEXT_CONSTANT})."
                 ),
                 source=source,
             )
