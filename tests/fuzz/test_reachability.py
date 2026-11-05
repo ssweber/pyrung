@@ -197,7 +197,7 @@ def test_simultaneous_rise_cross_product():
 
 
 def test_time_drum_zero_preset_reachability():
-    """time_drum with presets=[0,0,0,0] advances through all steps immediately.
+    """time_drum with presets=[1,1,1,1] advances a step a scan (a preset of 0 never ends one).
 
     The drum reaches step 4 (pattern=[..., [False, True]]) within a few
     scans, setting B1=True.  BFS finds only {B0: False, B1: False}.
@@ -217,7 +217,7 @@ def test_time_drum_zero_preset_reachability():
         with Rung(N0 == 0):
             time_drum(
                 outputs=[B0, B1],
-                presets=[0, 0, 0, 0],
+                presets=[1, 1, 1, 1],
                 unit="ms",
                 pattern=[
                     [False, False],

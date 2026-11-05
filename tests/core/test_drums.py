@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -1151,7 +1152,7 @@ def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
 # mid-step does not end the step, and a preset of 0 or -5 never ends it.
 
 
-def _preset_drum(kind: str, presets: list[int | Int]) -> Program:
+def _preset_drum(kind: str, presets: list[Any]) -> Program:
     """A 2-step timed drum under ``Enable`` with *presets*; ``Go`` jumps to step 1."""
     args = {
         "outputs": [Bool("A"), Bool("B")],
@@ -1214,7 +1215,7 @@ def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend:
 def test_a_preset_of_zero_or_below_never_ends_its_step(
     kind: str, backend: type, preset: int | str
 ) -> None:
-    first: int | Int = preset if isinstance(preset, int) else Int("P")
+    first = preset if isinstance(preset, int) else Int("P")
     plc = backend(_preset_drum(kind, [first, 30_000]), dt=0.01)
     plc.patch({"Enable": True})
     if isinstance(preset, str):

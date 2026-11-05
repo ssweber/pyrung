@@ -466,7 +466,6 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
 
     accumulator: Tag
     unit: TimeUnit
-    presets: tuple[Tag | int | None, ...]
 
     def _step_preset(self, ctx: ScanContext, step: int, preset: Tag | int) -> int:
         """*step*'s preset as the step read it when it started timing."""
