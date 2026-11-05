@@ -15,8 +15,25 @@ scans.  The readings:
 - An on phase of 5 ms, then a scan off, again: Result2 about 20, one a 5 ms phase, and Result1 a
   little under Result3.
 
-Result4, the control, is the rises of a flasher of 5 ms / 5 ms off a DS on the same rung: about
-10, at least 1, so the DS off preset, the window and the count work.
+ErrorCode is the flasher's TDs at 160 ms, ``on TD * 180 + off TD`` (each at most about 165 there,
+so the pair fits an Int and reads back as ``divmod(ErrorCode, 180)``).  It tells apart what the
+counts alone do not:
+
+- Dark, the off phase timing on and never ending (a preset of 0 or below that never ends, or -5
+  read as 65531 ms): off TD about 155, on TD 5 or 0 (about 1055 or 155).  Within 160 ms the two
+  read alike; ``ds_zero`` tells them apart, since 0 is 0 unsigned too.
+- Dark, the off TD standing at 0: ErrorCode a multiple of 180.
+- Dark, the on TD running on past its preset with the coil off: on TD about 160 (about 28800).
+- Lit, the on phase never ending: on TD about 160 and off TD 0 (about 28800), told from the line
+  above by Result1.
+- Lit, an off phase of 0 ending on the scan it starts: both TDs small, ErrorCode under about 1100.
+
+Result4, the control, is the rises of a flasher of 5 ms / 5 ms off a DS, on a rung of its own
+under the same condition: about 10, at least 1, so the DS off preset, the window and the count
+work.
+
+pyrung reads, in-process (10 ms scans), 0, 0, 10, 5 and ErrorCode 28800 (on TD 160, off TD 0) in
+both cases: dark, the on TD running on.  Over the wire the scan counts follow the target's scan.
 
 - ``ds_zero``: the DS holds 0.
 - ``ds_minus_five``: the DS holds -5.
@@ -34,7 +51,7 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, flasher, out, reset
 from tests.conformance.memory import ClickTimer, c, ds, td
-from tests.conformance.probe_kit import between, end_at, in_window, ms_clock
+from tests.conformance.probe_kit import between, end_at, in_window, ms_clock, once
 
 ON_MS = 5
 LOW, HIGH, END = 50, 150, 160
@@ -74,6 +91,8 @@ def _flasher_off(slot: Any, name: str, off: int) -> None:
         out(last)
     with Rung(control):
         out(control_last)
+    with Rung(*once(slot), clock >= END):
+        calc(td[first + 1] * 180 + td[first + 2], slot.ErrorCode)
     end_at(slot, clock, END)
 
 
@@ -100,7 +119,8 @@ def _case(name: str, ladder: Any, holds: str) -> Any:
     return case(
         f"A flasher of 5 ms on, its off preset a DS holding {holds}, from 50 to 150 ms: scans "
         "lit (Result1), scans it turns on (Result2), scans (Result3); 0 and 0 dark, Result3 "
-        "and 0 lit; a 5 ms / 5 ms control turns on (Result4 >= 1)",
+        "and 0 lit; a 5 ms / 5 ms control turns on (Result4 >= 1); the on and off TDs at 160 ms "
+        "(ErrorCode = on * 180 + off)",
         ladder=ladder,
         init=_init(name),
         ready=lambda slot: (~c[bits.start], ~c[bits.start + 2]),
@@ -109,6 +129,7 @@ def _case(name: str, ladder: Any, holds: str) -> Any:
             "Result2": between(0, 32767),
             "Result3": between(1, 32767),
             "Result4": range(1, 32768),
+            "ErrorCode": between(-32768, 32767),
         },
         scans=20,
         fires_within=1.0,
