@@ -103,6 +103,7 @@ All three drums run the same routine:
 - **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then. A write to the step register is not a move: the outputs stay, and the next event, time or jog acts on the step the register holds.
 - **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on the drum's own time and events do nothing, the accumulator holds, and a rung coming back writes nothing. A jump moves the step and leaves the outputs alone; a jog forward writes the row. A reset clears the flag, and so can any other rung: set from outside, the flag stops a drum wherever it is, and cleared from outside it frees the drum to go on from the step it is on.
 - A time drum's accumulator is 0 on the scan of every step change: an advance, a jog, a jump and a reset. Completing and a correction keep it.
+- **A step reads its preset once**, on its first scan of timing, and keeps it until the step changes, so a tag preset changed mid-step applies from the next step. A preset of 0 or less never ends its step.
 
 ### Variadic condition chaining
 

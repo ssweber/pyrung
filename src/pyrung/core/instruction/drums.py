@@ -417,9 +417,9 @@ class _DrumBaseInstruction(Instruction):
         A box reads its pins before its own writes, as the compiled kernel's
         helper legs do: each drum reads them, and the jump step's value, before
         it corrects an invalid step or moves.  A step's event is read from the
-        box's condition view when the drum uses it.  The accumulator and the
-        presets are read from the live scan where the drum uses them, as the
-        compiled kernel reads them.
+        box's condition view when the drum uses it.  The accumulator is read
+        from the live scan where the drum uses it, and a tag preset on the first
+        scan its step times, as the compiled kernel reads them.
         """
         jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
         jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
@@ -443,11 +443,41 @@ class _DrumBaseInstruction(Instruction):
         return jog_curr, jog_curr and not jog_prev
 
 
+PRESET_STEP_MEMORY = "_drum_preset_step"
+"""The step a drum's tag preset was read for (0: none since the last step change)."""
+PRESET_MEMORY = "_drum_preset"
+"""The preset a drum read for that step."""
+
+
+def latches_presets(instr: Any) -> bool:
+    """Whether *instr* is a drum with a tag preset, which it reads once a step."""
+    presets = getattr(instr, "presets", ())
+    return isinstance(instr, _TimedDrumInstruction) and any(isinstance(p, Tag) for p in presets)
+
+
 class _TimedDrumInstruction(_DrumBaseInstruction):
-    """A drum with an accumulator: its time ticks and clears here, for the routine."""
+    """A drum with an accumulator: its time ticks and clears here, for the routine.
+
+    A step's preset is read on the first scan the step times, and held until
+    the step changes (``PRESET_STEP_MEMORY``), as a CLICK reads a DS preset:
+    lowered under Acc mid-step it does not end the step.  A drum with literal
+    presets keeps no such memory.  A preset of 0 or less never ends its step.
+    """
 
     accumulator: Tag
     unit: TimeUnit
+    presets: tuple[Tag | int | None, ...]
+
+    def _step_preset(self, ctx: ScanContext, step: int, preset: Tag | int) -> int:
+        """*step*'s preset as the step read it when it started timing."""
+        if not latches_presets(self):
+            return _resolve_preset_value(preset, ctx)
+        if int(ctx.get_memory(self.memory_key(PRESET_STEP_MEMORY), 0)) == step:
+            return int(ctx.get_memory(self.memory_key(PRESET_MEMORY), 0))
+        value = _resolve_preset_value(preset, ctx)
+        ctx.set_memory(self.memory_key(PRESET_STEP_MEMORY), step)
+        ctx.set_memory(self.memory_key(PRESET_MEMORY), value)
+        return value
 
     def _acc_max(self) -> int:
         return _INT_MAX if self.accumulator.type == TagType.INT else _DINT_MAX
@@ -470,6 +500,10 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     def _clear_time(self, ctx: ScanContext) -> None:
         ctx.set_tag(self.accumulator.name, 0)
         ctx.set_memory(f"_frac:{self.accumulator.name}", 0)
+        if latches_presets(self):
+            # A step change: the step the drum lands on reads its preset afresh.
+            ctx.set_memory(self.memory_key(PRESET_STEP_MEMORY), 0)
+            ctx.set_memory(self.memory_key(PRESET_MEMORY), 0)
 
 
 class EventDrumInstruction(_DrumBaseInstruction):
@@ -647,8 +681,9 @@ class TimeDrumInstruction(_TimedDrumInstruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """The step's time is up."""
-        return acc >= _resolve_preset_value(self.presets[step - 1], ctx)
+        """The step's time is up: a preset above 0, read when the step started timing."""
+        preset = self._step_preset(ctx, step, self.presets[step - 1])
+        return 0 < preset <= acc
 
     def advance_profile(self) -> AdvanceProfile:
         def _auto(until: Eq | Cmp) -> AdvanceStep:
@@ -813,7 +848,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
     ) -> bool:
         """The step's time is up, if it has one, and its event is on, if it has one."""
         preset = self.presets[step - 1]
-        if preset is not None and acc < _resolve_preset_value(preset, ctx):
+        if preset is not None and not 0 < self._step_preset(ctx, step, preset) <= acc:
             return False
         event = self.events[step - 1]
         return event is None or bool(event.evaluate(condition_view))
