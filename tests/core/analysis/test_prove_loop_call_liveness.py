@@ -45,6 +45,7 @@ from pyrung.core import (
     Rung,
     branch,
     break_loop,
+    calc,
     call,
     continue_loop,
     copy,
@@ -83,6 +84,8 @@ Btn = Bool("Btn", external=True)
 G = Bool("G", external=True)
 R = Bool("R", external=True)
 DQ = Int("DQ", external=True, min=0, max=1)
+DDQ = Dint("DDQ", external=True, min=0, max=1)
+ND = Dint("ND")
 P = Int("P", external=True, min=1, max=2, default=1)
 N = Int("N")
 Y2 = Bool("Y2")
@@ -389,6 +392,30 @@ def _internal_count():
     return logic, {"Btn": _BOOL, "DQ": (0, 1)}
 
 
+def _loop_dint_count():
+    # A Dint count declared 0..1: count != 0 decides the call, as for an Int.
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(DDQ):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "DDQ": (0, 1)}
+
+
+def _internal_dint_count():
+    # ND's only producer copies DQ (0..1) into it.
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(DQ, ND)
+        with Rung():
+            with forloop(ND):
+                call("work")
+        _read_y2()
+        _coil_work()
+    return logic, {"Btn": _BOOL, "DQ": (0, 1)}
+
+
 def _two_sites():
     with Program(strict=False) as logic:
         with Rung(G):
@@ -485,6 +512,8 @@ _SHAPES = {
     "indirect_call_guard": _indirect_call_guard,
     "indirect_contact": _indirect_contact,
     "internal_count": _internal_count,
+    "loop_dint_count": _loop_dint_count,
+    "internal_dint_count": _internal_dint_count,
     "two_sites": _two_sites,
     "branch_in_outer": _branch_in_outer,
     "three_levels": _three_levels,
@@ -651,6 +680,103 @@ def test_wide_count_is_necessary_but_not_exact() -> None:
     (entry,) = _build_caller_map(logic)["work"]
     assert [condition.tag.name for condition in entry[4]] == ["Wide"]
     assert _inexact_entry_subroutines(logic) == {"work"}
+
+
+_CAP = 1_000_000  # PROVE_FOR_ITERATION_CAP
+Sel = Int("Sel", external=True, min=0, max=2)
+DDB = Block("DDB", TagType.DINT, 1, 2)
+DDP = Int("DDP", external=True, min=1, max=2, default=1)
+
+
+def _dint_count_loop(count: Any, *producers: Any) -> Program:
+    """forloop(count) calls work; producer i copies into the count when Sel == i."""
+    with Program(strict=False) as logic:
+        for i, source in enumerate(producers):
+            with Rung(Sel == i):
+                if callable(source):
+                    source()
+                else:
+                    copy(source, count)
+        with Rung():
+            with forloop(count):
+                call("work")
+        _out_z_work()
+    return logic
+
+
+def _counting_up(tag: Any) -> Callable[[], None]:
+    def write() -> None:
+        calc(tag + 1, tag)
+
+    return write
+
+
+def _counting_up_loop() -> Program:
+    count = Dint("Dc")
+    return _dint_count_loop(count, _counting_up(count))
+
+
+_DINT_COUNTS: dict[str, tuple[Callable[[], Program], bool]] = {
+    "declared_0_5": (lambda: _dint_count_loop(Dint("Dc", external=True, min=0, max=5)), True),
+    "declared_to_the_cap": (
+        lambda: _dint_count_loop(Dint("Dc", external=True, min=0, max=_CAP)),
+        True,
+    ),
+    "declared_past_the_cap": (
+        lambda: _dint_count_loop(Dint("Dc", external=True, min=0, max=_CAP + 1)),
+        False,
+    ),
+    "declared_negative": (
+        lambda: _dint_count_loop(Dint("Dc", external=True, min=-1, max=1)),
+        False,
+    ),
+    "choices": (
+        lambda: _dint_count_loop(Dint("Dc", external=True, choices={0: "off", 3: "three"})),
+        True,
+    ),
+    "negative_choice": (
+        lambda: _dint_count_loop(Dint("Dc", external=True, choices={-1: "all", 3: "three"})),
+        False,
+    ),
+    "open": (lambda: _dint_count_loop(Dint("Dc", external=True)), False),
+    "min_only": (lambda: _dint_count_loop(Dint("Dc", external=True, min=0)), False),
+    "produced": (lambda: _dint_count_loop(Dint("Dc"), 3, 7), True),
+    "produced_negative": (lambda: _dint_count_loop(Dint("Dc"), 3, -1), False),
+    "produced_past_the_cap": (lambda: _dint_count_loop(Dint("Dc"), 3, _CAP + 1), False),
+    "produced_under_a_wide_declaration": (
+        lambda: _dint_count_loop(Dint("Dc", min=-5, max=_CAP * 2), 3, 7),
+        True,
+    ),
+    "produced_from_a_small_tag": (lambda: _dint_count_loop(Dint("Dc"), DQ), True),
+    "produced_from_an_open_tag": (lambda: _dint_count_loop(Dint("Dc"), Wide), False),
+    "counting_up": (_counting_up_loop, False),
+    "element": (lambda: _dint_count_loop(DDB[1], 3, 7), True),
+    "indirect_element": (lambda: _dint_count_loop(DDB[DDP]), False),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_DINT_COUNTS))
+def test_a_dint_count_is_exact_when_its_values_are_small(case: str) -> None:
+    # count != 0 decides the call only when every value is in 0..cap: a
+    # negative count's reading on CLICK is unread, and the verifier refuses a
+    # loop past the cap.
+    build, exact = _DINT_COUNTS[case]
+    logic = build()
+    (entry,) = _build_caller_map(logic)["work"]
+    assert len(entry[4]) == 1
+    assert (not _inexact_entry_subroutines(logic)) is exact
+    assert ("work" in _build_guard_ctx(logic).caller_guards) is exact
+
+
+def test_a_small_dint_count_reports_a_stuck_coil_as_an_int_does() -> None:
+    # On a scan the count is 0, work does not run and Z holds: out(Z) latches.
+    int_count = _dint_count_loop(Int("Ic", external=True, min=0, max=5))
+    dint_count = _DINT_COUNTS["declared_0_5"][0]()
+    for logic in (int_count, dint_count):
+        findings = validate_stuck_bits(logic).findings
+        assert [f.target_name for f in findings if f.code == COIL_STUCK_HIGH] == ["Z"]
+    open_count = _DINT_COUNTS["open"][0]()
+    assert not [f for f in validate_stuck_bits(open_count).findings if f.code == COIL_STUCK_HIGH]
 
 
 def test_count_condition_follows_zero_count_switch(monkeypatch: pytest.MonkeyPatch) -> None:
