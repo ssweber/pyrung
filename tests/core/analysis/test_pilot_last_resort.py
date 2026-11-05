@@ -48,8 +48,12 @@ def test_a_count_the_program_runs_for_itself_is_a_stated_wait() -> None:
     assert plan.replay().state.tags["Hit"] is True
 
 
-def test_a_wait_is_asked_where_a_bit_moves_and_not_after_a_count_that_runs_on() -> None:
-    """The timer's Acc never stops, so nothing here settles, and one second is what it takes."""
+def test_a_coil_above_the_timer_it_reads_is_waited_for_without_the_last_resort() -> None:
+    """Block reads T.Done above the timer, so it drops the scan after Done: the pilot waits it.
+
+    This was a last-resort rescue: the coil's writer had its one condition already true,
+    and only a writer with no conditions counted as ready to run.
+    """
     timer, block, hit, go = Timer.clone("T"), Bool("Block"), Bool("Hit"), Bool("Go")
     with Program(strict=False) as logic:
         with Rung(~timer.Done):
@@ -62,14 +66,12 @@ def test_a_wait_is_asked_where_a_bit_moves_and_not_after_a_count_that_runs_on() 
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
-    assert list(pilot_events(plc, hit, max_scans=3000))[-1].data["reached"] is False
+    assert list(pilot_events(plc, hit, max_scans=3000))[-1].data["reached"] is True
 
     plan = plc.how(hit, max_scans=3000)
 
     assert plan.status is PlanStatus.REACHED, plan.reason
-    assert plan.last_resort.tag is None
-    assert plan.last_resort.tries == 1
-    assert plan.last_resort.scans <= 100
+    assert plan.last_resort is None
     assert plan.replay().state.tags["Hit"] is True
 
 

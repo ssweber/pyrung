@@ -121,13 +121,14 @@ def _read_trace_disposition(
             ("trace", "satisfied"),
         )
 
-    # Writer found, all conditions satisfied (empty children) — the output
-    # instruction just hasn't fired yet. This readiness has the same meaning at
-    # every trace depth: a timer result can make a nested Step writer ready one
-    # scan before the outer target writer observes Step. Let the loop coast.
+    # Writer found, all conditions satisfied (no children, or only satisfied ones)
+    # — the output instruction just hasn't fired yet. This readiness has the same
+    # meaning at every trace depth: a timer result can make a nested Step writer
+    # ready one scan before the outer target writer observes Step, and a coil above
+    # the timer whose Done it reads sees that Done on the next scan. Let the loop coast.
     if any(
         node.writer_rung is not None
-        and not node.children
+        and all(child.satisfied for child in node.children)
         and not node.satisfied
         and not node.is_steerable
         for node in tree.iter_nodes()
