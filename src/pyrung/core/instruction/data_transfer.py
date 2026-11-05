@@ -101,7 +101,8 @@ class CopyInstruction(OneShotMixin, Instruction):
     flag and skips the copy. A pointer past its bank raises no flag: a
     destination there drops the write, and a source there reads as 0, or, past a
     bank marked ``_past_end_keeps`` (CLICK's DS, DH, DF and TXT), leaves the
-    destination as it was.
+    destination as it was.  A text or its digits written over several elements
+    writes the ones the destination's block holds and drops the rest, with no flag.
 
     **Fault flags:** Each copy that runs sets or clears the out-of-range and
     address-error flags by its own result.

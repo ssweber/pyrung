@@ -30,9 +30,7 @@ def _report(store, mode="warn"):
 
 def _found(report):
     return [
-        f
-        for f in (*report.errors, *report.warnings, *report.hints)
-        if f.code == CLK_TEXT_PAST_BANK
+        f for f in (*report.errors, *report.warnings, *report.hints) if f.code == CLK_TEXT_PAST_BANK
     ]
 
 
