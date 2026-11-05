@@ -1293,7 +1293,8 @@ def _second_route_over_the_cap():
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
-    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+    # The default budget runs out first, and base skips its proof then, hiding the false one.
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit), kwargs=dict(max_scans=1000))
 
 
 def _opaque_avoid_mid_coast(avoid_of):
