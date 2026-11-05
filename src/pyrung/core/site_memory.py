@@ -169,7 +169,12 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         CountUpInstruction,
     )
     from pyrung.core.instruction.drums import EventDrumInstruction, _DrumBaseInstruction
-    from pyrung.core.instruction.out_variants import FlasherInstruction, ToggleInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
 
     slots: list[tuple[str, Any]] = []
     if isinstance(instr, CountUpInstruction):
@@ -182,8 +187,12 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         slots.append(("_oneshot", False))
     if isinstance(instr, ToggleInstruction):
         slots.append(("_toggle", False))
+    if isinstance(instr, DebounceInstruction):
+        slots.append(("_debounce_rung", False))
     if isinstance(instr, FlasherInstruction):
         slots.append(("_flash_idle", True))
+    if isinstance(instr, TimedInstruction):
+        slots.append(("_timed_rung", False))
     if isinstance(instr, ShiftInstruction):
         slots.append(("_shift_prev_clock", False))
     if isinstance(instr, _DrumBaseInstruction):
