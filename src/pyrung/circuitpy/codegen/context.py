@@ -38,6 +38,7 @@ from pyrung.core.expression import (
     Expression,
 )
 from pyrung.core.function_source import embedded_source, is_the_function
+from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -277,6 +278,8 @@ class CodegenContext:
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
+    # Blocks a Copy writes several elements of from a fixed target: never compacted.
+    multi_element_store_blocks: set[int] = field(default_factory=set)
     # Blocks a rung condition indexes: their ``_cond_index_*`` helper reads an
     # address outside the block as 0 rather than raising.
     used_condition_index_blocks: set[int] = field(default_factory=set)
@@ -371,8 +374,26 @@ class CodegenContext:
                 )
             )
 
+    def _note_multi_element_store(self, instr: Any) -> None:
+        """Keep the block of a Copy that writes elements from a fixed one on whole.
+
+        A text and its digits go into the elements after the target, by address, so
+        that block's array holds every address (``build_compact_block_maps``).
+        """
+        if not isinstance(instr, CopyInstruction):
+            return
+        target = instr.target
+        if isinstance(target, ImmediateRef):
+            target = target.value
+        block = getattr(target, "_pyrung_block", None) if isinstance(target, Tag) else None
+        if block is None:
+            return
+        if instr.convert is not None or (isinstance(instr.source, str) and len(instr.source) > 1):
+            self.multi_element_store_blocks.add(id(block))
+
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
+        self.multi_element_store_blocks.clear()
         self.dict_backed_tag_names.clear()
         self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
@@ -388,6 +409,7 @@ class CodegenContext:
                     walk_instruction(item)
 
         def walk_instruction(instr: Any) -> None:
+            self._note_multi_element_store(instr)
             fields = _instruction_fields(instr)
             if fields is None:
                 for key in sorted(vars(instr)):
@@ -647,8 +669,16 @@ class CodegenContext:
     def build_compact_block_maps(self) -> None:
         """Build compact index mappings for blocks with only static access."""
         self.compact_block_map = {}
+        whole = set(self.multi_element_store_blocks)
+        for block_id, (bank_id, _addr_map) in self.block_alias.items():
+            if block_id in whole:
+                whole.add(bank_id)
         for block_id in self.block_bindings:
-            if block_id in self.used_indirect_blocks or block_id in self.block_alias:
+            if (
+                block_id in self.used_indirect_blocks
+                or block_id in self.block_alias
+                or block_id in whole
+            ):
                 continue
             addrs = sorted(
                 addr

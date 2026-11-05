@@ -273,6 +273,20 @@ class PastBankError(IndexError):
     """
 
 
+def elements_that_fit(tag: Tag, count: int) -> int:
+    """How many of *count* consecutive elements from *tag* on are in its block.
+
+    A store of several elements (a text, its digits) writes the ones that fit and
+    drops the rest, with no flag, as a write past the end of the block is dropped.
+    A tag in no block keeps *count*.  Every engine counts the elements here.
+    """
+    block = getattr(tag, "_pyrung_block", None)
+    addr = getattr(tag, "_pyrung_block_addr", None)
+    if not isinstance(block, Block) or not isinstance(addr, int):
+        return count
+    return max(0, min(count, block.end - addr + 1))
+
+
 @dataclass(eq=False)
 class Block:
     """Factory for creating Tags from a typed memory region.

@@ -613,7 +613,14 @@ def _copy_converter_write_lines(
     target_name: str | None = None,
     sequential_reloads: list[tuple[int, str]] | None = None,
     kernel: bool = False,
+    fit: int | None = None,
 ) -> list[str]:
+    """Write *values_var*'s elements from the target on, as many as its block holds.
+
+    *fit* is how many elements a static target's block holds from it
+    (``elements_that_fit``), ``None`` for a tag in no block; an indexed target's
+    block array ends where its block does.  The rest are dropped, with no flag.
+    """
     if target_kind == "scalar":
         seq = _parse_sequential_tag_name(target_name) if target_name else None
         if seq is not None:
@@ -625,15 +632,24 @@ def _copy_converter_write_lines(
             if kernel:
                 # The kernel keeps every tag in ``tags``; generated board code has
                 # no such dict and stores only the registers it references (below).
+                stop = f"len({values_var})" if fit is None else f"min(len({values_var}), {fit})"
                 lines += [
-                    f"    for _seq_i in range(1, len({values_var})):",
+                    f"    for _seq_i in range(1, {stop}):",
                     f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
                 ]
             if sequential_reloads:
                 for offset, symbol in sequential_reloads:
+                    if fit is not None and offset >= fit:
+                        continue
                     lines.append(f"    if len({values_var}) > {offset}:")
                     lines.append(f"        {symbol} = {values_var}[{offset}]")
             return lines
+        if fit == 1:
+            # The target ends its block: the first element is all that fits.
+            return [
+                f"if len({values_var}) >= 1:",
+                f"    {target_symbol} = {values_var}[0]",
+            ]
         return [
             f"if len({values_var}) > 1:",
             *_indent_body(fault_body, 4),
@@ -641,31 +657,19 @@ def _copy_converter_write_lines(
             f"    {target_symbol} = {values_var}[0]",
         ]
 
-    if target_kind == "blockless_dynamic":
-        if target_start_var is None:
-            raise RuntimeError("blockless dynamic target is missing start index")
-        return [
-            f"_copy_count = len({values_var})",
-            "if _copy_count == 0:",
-            "    pass",
-            f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
-            *_indent_body(fault_body, 4),
-            "else:",
-            f"    for _copy_offset, _copy_value in enumerate({values_var}):",
-            f"        tags[{target_symbol}[{target_start_var} + _copy_offset]] = _copy_value",
-        ]
-
     if target_start_var is None:
-        raise RuntimeError("copy modifier block target is missing start index")
+        raise RuntimeError(f"copy modifier {target_kind} target is missing start index")
+    count = f"min(len({values_var}), len({target_symbol}) - {target_start_var})"
+    if fit is not None:
+        count = f"min(len({values_var}), {fit}, len({target_symbol}) - {target_start_var})"
+    store = (
+        f"tags[{target_symbol}[{target_start_var} + _copy_offset]]"
+        if target_kind == "blockless_dynamic"
+        else f"{target_symbol}[{target_start_var} + _copy_offset]"
+    )
     return [
-        f"_copy_count = len({values_var})",
-        "if _copy_count == 0:",
-        "    pass",
-        f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
-        *_indent_body(fault_body, 4),
-        "else:",
-        f"    for _copy_offset, _copy_value in enumerate({values_var}):",
-        f"        {target_symbol}[{target_start_var} + _copy_offset] = _copy_value",
+        f"for _copy_offset in range({count}):",
+        f"    {store} = {values_var}[_copy_offset]",
     ]
 
 

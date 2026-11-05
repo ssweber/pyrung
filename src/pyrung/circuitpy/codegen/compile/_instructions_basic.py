@@ -36,6 +36,7 @@ from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_timing_key
 from pyrung.core.kernel import prove_effective_preset_key
+from pyrung.core.memory_block import elements_that_fit
 from pyrung.core.tag import Tag
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -510,6 +511,13 @@ def _copy_source_fits(source: object, target_type: str) -> bool:
     return -2147483648 <= source <= 2147483647
 
 
+def _target_fit(target: object) -> int | None:
+    """How many elements a static *target*'s block holds from it; ``None`` if it has none."""
+    if not isinstance(target, Tag) or getattr(target, "_pyrung_block", None) is None:
+        return None
+    return elements_that_fit(target, _DINT_MAX)
+
+
 def _compile_copy_converter_instruction(
     instr: CopyInstruction,
     enabled_expr: str,
@@ -553,6 +561,7 @@ def _compile_copy_converter_instruction(
         target_name=target_name,
         sequential_reloads=sequential_reloads,
         kernel=ctx.kernel_runtime,
+        fit=_target_fit(instr.target),
     )
 
     enabled_body: list[str] = [*source_read, *setup]
