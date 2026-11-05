@@ -1,8 +1,10 @@
 """Long runs over the suite's programs: each case alone, loop against stepping against ``expect``.
 
 Here each case runs alone, so a neighbour that declines (a RAND, a read of the scan counter) keeps
-no other case out of the loop.  ``test_loop_corpus_parts.py`` runs the parts whole, and
-``loop_corpus.py`` says why any of this is needed.
+no other case out of the loop.  ``loop_corpus.py`` says why any of this is needed.  ``make test``
+keeps a file on one xdist worker, which is why the corpus is four files: this one has the first
+parts, ``test_loop_corpus_later_parts.py`` the rest, and ``test_loop_corpus_parts.py`` and
+``test_loop_corpus_less.py`` run parts whole.
 """
 
 from __future__ import annotations
@@ -11,60 +13,25 @@ import os
 
 import pytest
 
-from pyrung import Int, Program, Rung, calc, randint
-from pyrung.conformance import Case, Group
-from pyrung.conformance._ladder import case_label
-from pyrung.core import PLC
+from pyrung.core import PLC, Int, Program, Rung, calc, randint
 from tests.conformance import loop_corpus, suite
-from tests.conformance.loop_corpus import HOLES, Tally
-
-#: Each is a program whose scans trace again and again, for seconds (a phase change every few
-#: scans).  Their parts run them in ``test_loop_corpus_parts.py``.
-LEFT_TO_THEIR_PART = {"out_more/preset_mid_phase", "for_more/timers_at_limits"}
-
-#: What a case alone reaches in the loop, by part.  A part under it needs a line in
-#: ``STATED_LOW_SHARE``, and that line goes when the part is back over.
-MIN_LOOP_SHARE = 0.5
-
-STATED_LOW_SHARE: dict[str, str] = {}
+from tests.conformance.loop_corpus import FIRST_PARTS, HOLES, Tally
 
 #: Set it to run every drill of ``loop_corpus.Driver`` on every case: a matter of many minutes,
 #: too long for ``make test``, for a change to the loop or to the suite.
 DEEP = "PYRUNG_LOOP_CORPUS_DEEP"
 
-_EVERY_PART = [*suite.PARTS, *suite.APART_PARTS]
 
-
-def _cases_of(part: str) -> list[tuple[Group, Case]]:
-    return [
-        (group, case)
-        for group in suite.groups(part)
-        for case in group.cases
-        if case_label(group.name, case) not in HOLES
-    ]
-
-
-@pytest.mark.parametrize("part", _EVERY_PART)
+@pytest.mark.parametrize("part", FIRST_PARTS)
 def test_each_case_alone(part: str) -> None:
-    """Loop, stepping and ``expect`` agree on each case of *part*, and the loop did run."""
-    tally = Tally()
-    with loop_corpus.fine_loop():
-        for group, case in _cases_of(part):
-            if case_label(group.name, case) not in LEFT_TO_THEIR_PART:
-                subject = loop_corpus.case_alone(group, case)
-                tally.add(subject, lambda driver: driver.judged_passes(idle=40))
-    print(f"part {part}, each case alone: {tally.report()}")
-    loop_corpus.assert_nothing_found(tally)
-    loop_corpus.assert_the_loop_ran(tally, MIN_LOOP_SHARE, STATED_LOW_SHARE.get(part))
-    # A stop the twin could not be asked about would be a stop not checked.
-    assert not tally.predicates_not_asked
+    loop_corpus.check_each_case_alone(part)
 
 
 @pytest.mark.skipif(DEEP not in os.environ, reason=f"{DEEP} is not set")
-@pytest.mark.parametrize("part", _EVERY_PART)
+@pytest.mark.parametrize("part", [*suite.PARTS, *suite.APART_PARTS])
 def test_every_drill_on_each_case(part: str) -> None:
     tally = Tally()
-    for group, case in _cases_of(part):
+    for group, case in loop_corpus.cases_of(part):
         loop_corpus.every_drill(loop_corpus.case_alone(group, case), tally)
     print(f"part {part}, every drill: {tally.report()}")
     loop_corpus.assert_nothing_found(tally)

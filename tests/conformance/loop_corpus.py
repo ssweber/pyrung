@@ -33,6 +33,7 @@ from pyrung.core.expression import randint_sites
 from pyrung.core.scan_trace import DECLINING_SYSTEM_TAGS
 from pyrung.core.tag import TagType
 from tests import fold_check
+from tests.conformance import suite
 
 __all__ = ["DT", "Driver", "Subject", "Tally"]
 
@@ -89,25 +90,25 @@ class Subject:
     entries: tuple[Entry, ...]
 
 
-def subject_of(picks: Sequence[tuple[Group, Sequence[Case]]], label: str) -> Subject:
-    """*picks* as one program, shaped as ``build_program`` shapes a part, on packed slots."""
-    slots = {group.name: make_slot(len(cases), name=group.title) for group, cases in picks}
+def subject_of(chosen: Sequence[tuple[Group, Sequence[Case]]], label: str) -> Subject:
+    """*chosen* as one program, shaped as ``build_program`` shapes a part, on packed slots."""
+    slots = {group.name: make_slot(len(cases), name=group.title) for group, cases in chosen}
 
     def emit(group: Group, cases: Sequence[Case]) -> None:
         for index, case in enumerate(cases, start=1):
             emit_case(group.name, case, slots[group.name], index)
 
     with Program(strict=False) as program:
-        for group, _ in picks:
+        for group, _ in chosen:
             if not group.in_main:
                 for _ in range(group.calls):
                     with Rung():
                         call(group.subroutine)
-        for group, cases in picks:
+        for group, cases in chosen:
             if not group.in_main:
                 with subroutine(group.subroutine):
                     emit(group, cases)
-        for group, cases in picks:
+        for group, cases in chosen:
             if group.in_main:
                 emit(group, cases)
     return Subject(
@@ -115,7 +116,7 @@ def subject_of(picks: Sequence[tuple[Group, Sequence[Case]]], label: str) -> Sub
         program,
         tuple(
             Entry(case_label(group.name, case), case, slots[group.name][index])
-            for group, cases in picks
+            for group, cases in chosen
             for index, case in enumerate(cases, start=1)
         ),
     )
@@ -123,6 +124,17 @@ def subject_of(picks: Sequence[tuple[Group, Sequence[Case]]], label: str) -> Sub
 
 def case_alone(group: Group, case: Case) -> Subject:
     return subject_of([(group, [case])], case_label(group.name, case))
+
+
+def on_hardware(group: Group, case: Case) -> bool:
+    """A case a part as built holds, and whose program the corpus runs."""
+    return not case.in_process_only and case_label(group.name, case) not in HOLES
+
+
+def picks(part: str, keep: CaseFilter) -> list[tuple[Group, list[Case]]]:
+    """The cases of *part* that *keep* takes, by group, for :func:`subject_of`."""
+    kept = [(group, [c for c in group.cases if keep(group, c)]) for group in suite.groups(part)]
+    return [(group, cases) for group, cases in kept if cases]
 
 
 def subject_of_build(build: Any, label: str) -> Subject:
@@ -218,15 +230,48 @@ def assert_nothing_found(tally: Tally) -> None:
     assert not tally.failures, "\n".join(tally.failures)
 
 
-def assert_the_loop_ran(tally: Tally, at_least: float, stated: str | None) -> None:
-    """A corpus outside the loop proves nothing: under *at_least* it takes a *stated* reason."""
-    if tally.loop_share < at_least:
-        assert stated, (
-            f"only {tally.loop_share:.0%} of the scans ran in the loop, at least "
-            f"{at_least:.0%} expected, with no reason stated:\n{tally.report()}"
-        )
-    else:
-        assert not stated, f"over {at_least:.0%} in the loop: remove the reason {stated!r}"
+def assert_the_loop_ran(tally: Tally, at_least: float) -> None:
+    """A corpus outside the loop proves nothing."""
+    assert tally.loop_share >= at_least, (
+        f"only {tally.loop_share:.0%} of the scans ran in the loop, at least {at_least:.0%} "
+        f"expected:\n{tally.report()}"
+    )
+
+
+#: Each is a program whose scans trace again and again, for seconds (a phase change every few
+#: scans).  Alone they would cost as much as their whole part, which runs them anyway.
+LEFT_TO_THEIR_PART = {"out_more/preset_mid_phase", "for_more/timers_at_limits"}
+
+#: What each case alone reaches in the loop, by part.
+MIN_LOOP_SHARE_ALONE = 0.5
+
+#: The parts of ``test_loop_corpus.py``, about half the time of each case alone: the rest are in
+#: ``test_loop_corpus_later_parts.py``, on another xdist worker.
+FIRST_PARTS = ("A", "B", "C", "E")
+
+
+def cases_of(part: str) -> list[tuple[Group, Case]]:
+    return [
+        (group, case)
+        for group in suite.groups(part)
+        for case in group.cases
+        if case_label(group.name, case) not in HOLES
+    ]
+
+
+def check_each_case_alone(part: str) -> None:
+    """Loop, stepping and ``expect`` agree on each case of *part*, and the loop did run."""
+    tally = Tally()
+    with fine_loop():
+        for group, case in cases_of(part):
+            if case_label(group.name, case) not in LEFT_TO_THEIR_PART:
+                subject = case_alone(group, case)
+                tally.add(subject, lambda driver: driver.judged_passes(idle=40))
+    print(f"part {part}, each case alone: {tally.report()}")
+    assert_nothing_found(tally)
+    assert_the_loop_ran(tally, MIN_LOOP_SHARE_ALONE)
+    # A stop the twin could not be asked about would be a stop not checked.
+    assert not tally.predicates_not_asked
 
 
 class Driver:
