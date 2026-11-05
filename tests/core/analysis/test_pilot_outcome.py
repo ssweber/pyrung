@@ -105,6 +105,28 @@ def test_action_receipt_does_not_hide_a_different_landing() -> None:
     assert assessment.bearing is BearingEffect.DEPARTED
 
 
+def test_a_held_coast_that_ran_out_of_time_is_not_progress() -> None:
+    """The trend dropped because of what the hold did, and the channel never moved."""
+    trial = SimpleNamespace(snap={"State": 11})
+    frame = SimpleNamespace(snap={"State": 11}, distance_before=2)
+    ctx = SimpleNamespace(opaque_loop=frozenset())
+
+    assessment = assess_outcome(
+        trial,
+        (("Resume", False),),
+        frame,
+        ctx,
+        1,
+        False,
+        lambda *_args, **_kwargs: (set(), []),
+        route_prescribed=False,
+        channel_motion=ChannelMotion("State", 16, stop_reason="timeout"),
+        earned_work_receipt=EarnedWorkReceipt(),
+    )
+
+    assert assessment.accepted is False
+
+
 def test_bearing_coast_that_really_departs_elsewhere_is_program_motion() -> None:
     assessment = _bearing_coast(10)
     assert assessment.agency is Agency.PROGRAM

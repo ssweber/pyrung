@@ -6,17 +6,23 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.trace_read as _trace_read
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
     _heuristic_inequality_target,
     _resolve_inequality_target,
+    _resolved_atom_operand,
 )
 from pyrung.core.analysis.pilot.trace_tree import _FORM_TO_OP, _OP_TO_FORM
 from pyrung.core.analysis.pilot.writer_selection import _sole_write_instr
 from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.analysis.simplified import Atom
-from pyrung.core.analysis.sp_values import _FLIP_FORM
-from pyrung.core.crossing import AffineCmp, Cmp, Constraint, Eq
+from pyrung.core.analysis.sp_values import (
+    _FLIP_FORM,
+    _satisfying_value,
+    _written_value_for_tag,
+)
+from pyrung.core.crossing import AffineCmp, Cmp, Constraint, Eq, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -131,6 +137,28 @@ def _lever_note(requirement: Atom, original: Atom, tag: str, value: Any, marker:
     return note + ")"
 
 
+def _written_value_satisfying(
+    atom: Atom,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> Any | None:
+    """The literal a writer of this tag writes that satisfies the comparison, if any."""
+
+    if program is None:
+        return None
+    threshold = _resolved_atom_operand(atom, snapshot)
+    if threshold is None:
+        return None
+    written = []
+    for index in sorted(pdg.writers_of.get(atom.tag, ())):
+        rung = resolve_rung(program, pdg.rung_nodes[index])
+        value = _written_value_for_tag(rung, atom.tag) if rung is not None else None
+        if isinstance(value, Literal):
+            written.append(value.value)
+    return _satisfying_value(atom.form, threshold, tuple(written)) if written else None
+
+
 def _inequality_levers(
     atom: Atom,
     snapshot: dict[str, Any],
@@ -153,11 +181,17 @@ def _inequality_levers(
         target = _resolve_inequality_target(requirement, snapshot, prior, pdg)
         if target is None:
             hit = _heuristic_inequality_target(requirement, snapshot, steerable, pdg)
-            if hit is None:
-                return
-            value, marker = hit
-            target = (requirement.tag, value)
-            heuristic = True
+            if hit is not None:
+                value, marker = hit
+                target = (requirement.tag, value)
+                heuristic = True
+            else:
+                # The domain prior only keeps what the program reads, and a goal can name a
+                # tag nothing reads.  What its writers write says the same thing.
+                value = _written_value_satisfying(requirement, snapshot, pdg, program)
+                if value is None:
+                    return
+                target = (requirement.tag, value)
         tag, value = target
         if tag in seen or not actionable(tag):
             return

@@ -30,9 +30,9 @@ class _AvoidCheckRaised(BaseException):
 # ``_member_on_scan``, ``_avoid_scan_names``.
 #
 # WEIGHED: anything else, such as values laid over a state, the resting baseline, or the
-# state behind the start when a plan rewinds to re-run the entry scan.  A raise there says
-# nothing about the route, so that member is not violated, and the others keep their
-# answers: ``_member_weighed``, ``_avoid_weighed_names`` and what is built on them.
+# state a restart lands on before its first scan.  A raise there says nothing about the
+# route, so that member is not violated, and the others keep their answers:
+# ``_member_weighed``, ``_avoid_weighed_names`` and what is built on them.
 
 
 def _member_on_scan(check: str, pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
@@ -72,7 +72,13 @@ def _avoid_weighed_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
     members = getattr(avoid, "members", None)
     if members is None:
         return (_BARE_CHECK,) if _member_weighed(avoid, snap) else ()
-    return tuple(member.name for member in members if _member_weighed(member.pred, snap))
+    return tuple(
+        member.name
+        for member in members
+        # A condition reads a tag it cannot see as violated, where a callable raises.  Both
+        # are a check with no answer for this state, whichever form it was written in.
+        if all(tag in snap for tag in member.tags) and _member_weighed(member.pred, snap)
+    )
 
 
 def _avoid_weighed_after_clear(
@@ -100,8 +106,8 @@ def _avoid_violations(
     What it asks is weighed.  The baseline has the steerable inputs and nothing else, so a
     callable can raise on it for a tag every real state has, and a hold laid over a state
     is no scan either: both go on, and the gates judge the scans they lead to.  A check
-    that answers keeps its answer, so a condition reading a tag the baseline lacks still
-    refuses the hold.
+    that answers keeps its answer, so one reading only what the baseline has can still
+    refuse the hold.
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:

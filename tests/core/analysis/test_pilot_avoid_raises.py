@@ -417,11 +417,19 @@ def test_a_read_of_a_tag_the_baseline_lacks_denies_no_hold() -> None:
     assert _hold_allowed(_hold_ctx(_compile_avoid(lambda s: s["Ghost"])), ("Hold", True)) is True
 
 
-def test_a_condition_the_baseline_trips_still_refuses_the_hold() -> None:
-    """A condition reads the tag the baseline lacks as violated.  Lifting that is its own step."""
-    condition = _hold_ctx(_compile_avoid(Bool("Danger")))
+def test_a_condition_on_a_tag_the_baseline_lacks_denies_no_hold() -> None:
+    """The same check as the callable above, written as a condition, gets the same answer."""
+    assert _hold_allowed(_hold_ctx(_compile_avoid(Bool("Danger"))), ("Hold", True)) is True
 
-    assert _hold_allowed(condition, ("Hold", True)) is False
+
+def test_a_condition_on_what_the_baseline_has_still_refuses_the_hold() -> None:
+    assert _hold_allowed(_hold_ctx(_compile_avoid(Bool("Hold"))), ("Hold", True)) is False
+
+
+def test_a_condition_on_the_hold_and_a_tag_the_baseline_lacks_is_left_to_the_scans() -> None:
+    both = And(Bool("Hold"), Bool("Danger"))
+
+    assert _hold_allowed(_hold_ctx(_compile_avoid(both)), ("Hold", True)) is True
 
 
 def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> None:
@@ -459,10 +467,10 @@ def test_a_hold_is_asked_about_on_the_baseline_alone() -> None:
 
 def test_each_member_of_a_union_is_judged_on_its_own() -> None:
     """A member the baseline trips stays tripped when another raises on it."""
-    avoid = _compile_avoid((Bool("Danger"), lambda s: s["Level"] > 100))
+    avoid = _compile_avoid((Bool("Hold"), lambda s: s["Level"] > 100))
     ctx = _hold_ctx(avoid)
 
-    assert _avoid_violations(ctx, [("Hold", True)]) == ("Danger",)
+    assert _avoid_violations(ctx, [("Hold", True)]) == ("Hold",)
 
 
 def test_a_bare_callable_that_raises_on_the_baseline_denies_no_hold() -> None:
@@ -701,14 +709,13 @@ def test_releasing_an_input_that_really_is_on_stops() -> None:
     assert plan.status is PlanStatus.STOPPED
 
 
-def test_a_condition_refused_on_the_baseline_stays_refused() -> None:
-    """The baseline has no HoldState, which a condition reads as violated: as it was."""
+def test_the_form_of_a_check_does_not_change_the_answer() -> None:
+    """The baseline has no HoldState: a condition and a callable both have no answer for it."""
     prog, state, *_ = _dwell_program()
+
     assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
-
-    plan = _drive(prog, state == 7, state == 9999)
-
-    assert plan.status is PlanStatus.STOPPED
+    assert _drive(prog, state == 7, lambda s: s["HoldState"] == 9999).status is PlanStatus.REACHED
+    assert _drive(prog, state == 7, state == 9999).status is PlanStatus.REACHED
 
 
 def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
@@ -1108,8 +1115,8 @@ def _state_key(tags) -> tuple:
 
 @pytest.mark.parametrize(
     "program",
-    [_rate_on_speed, _dwell_target, _armed_dwell_target, _entry_preset, _entry_step],
-    ids=["rate", "dwell", "armed", "entry-preset", "entry-step"],
+    [_rate_on_speed, _dwell_target, _armed_dwell_target],
+    ids=["rate", "dwell", "armed"],
 )
 def test_a_check_raising_on_a_hold_laid_over_no_scan_keeps_the_route(program, monkeypatch) -> None:
     """Every overlay the action gates weigh that the plan's scans do not have, one at a time."""
@@ -1145,13 +1152,24 @@ def test_a_check_raising_on_a_hold_laid_over_no_scan_keeps_the_route(program, mo
 
 
 # ---------------------------------------------------------------------------
-# The entry scan: the state behind the start is the plan's start
+# The state a restart lands on has run no scan
 # ---------------------------------------------------------------------------
 
 _FAULT = "fault.out_of_range"
 
 
-@pytest.mark.parametrize("program", [_entry_preset, _entry_step], ids=["preset", "step"])
+def _same_answer(plan, without) -> None:
+    assert plan.status is without.status
+    assert [str(step) for step in plan.journal] == [str(step) for step in without.journal]
+    assert plan.total_scans == without.total_scans
+    assert plan.restart.lines() == without.restart.lines()
+
+
+@pytest.mark.parametrize(
+    ("program", "status"),
+    [(_entry_preset, PlanStatus.REACHED), (_entry_step, PlanStatus.STOPPED)],
+    ids=["preset", "step"],
+)
 @pytest.mark.parametrize(
     "check",
     [
@@ -1159,19 +1177,17 @@ _FAULT = "fault.out_of_range"
         lambda s: s.get(_FAULT, False),
         lambda s: s.get(_FAULT) is None and s["Typo"],
     ],
-    ids=["system-tag", "with-default", "typo-only-behind-the-start"],
+    ids=["system-tag", "with-default", "typo-only-before-the-first-scan"],
 )
-def test_a_raise_about_the_entry_source_keeps_its_designations(program, check) -> None:
-    """The route is the entry scan's own: it rewinds and re-runs that scan with a preset."""
+def test_a_raise_on_the_state_a_restart_lands_on_changes_no_answer(program, status, check) -> None:
     prog, target = program()
     without = _scanned(prog, 1).how(target, max_scans=2000)
-    assert without.total_scans == 0
-    assert without.fork.state.tags["HT"] is True
+    assert without.status is status
+    assert without.restart is not None
 
     plan = _scanned(prog, 1).how(target, avoid=check, max_scans=2000)
 
-    _same_plan(plan, without)
-    assert plan.fork.state.tags["HT"] is True
+    _same_answer(plan, without)
 
 
 @pytest.mark.parametrize("program", [_entry_preset, _entry_step], ids=["preset", "step"])
@@ -1203,69 +1219,80 @@ _ENTRY_REQUIREMENTS = {
         _route_fixture(scan_zero_route.adjacent_logic),
         scan_zero_route.SequenceStep == 81,
         scan_zero_route.SequenceStep.name,
-        (9, 21),
+        PlanStatus.STOPPED,
     ),
     "route-field": (
         _route_fixture(scan_zero_route.logic),
         scan_zero_route.SequenceStep == 81,
         scan_zero_route.SequenceStep.name,
-        (5, 5),
+        PlanStatus.STOPPED,
     ),
     "aborted": (
         _aborted_at_start,
         aborted_on_first_scan.ProcessStep == aborted_on_first_scan.AT_TARGET,
         aborted_on_first_scan.ProcessStep.name,
-        (0, 0),
+        PlanStatus.STOPPED,
     ),
     "alarmed": (
         _alarmed_at_start,
         alarmed_at_start.ProcessStep == alarmed_at_start.COMPLETE,
         alarmed_at_start.ProcessStep.name,
-        (2, None),
+        PlanStatus.REACHED,
     ),
 }
 
 
 @pytest.mark.parametrize("row", sorted(_ENTRY_REQUIREMENTS))
-def test_a_system_tag_behind_the_start_keeps_an_entry_requirement_route(row) -> None:
-    make, target, _step, (total, holds) = _ENTRY_REQUIREMENTS[row]
+def test_a_system_tag_a_restart_lacks_keeps_the_answer(row) -> None:
+    make, target, _step, status = _ENTRY_REQUIREMENTS[row]
     without = make().how(target, max_scans=2000)
-    assert without.total_scans == total
-    assert holds is None or _holds(without) == holds
+    assert without.status is status
 
     plan = make().how(target, avoid=lambda s: s[_FAULT], max_scans=2000)
 
-    _same_plan(plan, without)
+    _same_answer(plan, without)
 
 
-@pytest.mark.parametrize("row", ["route-adjacent", "route-field", "aborted"])
-def test_a_division_by_the_step_behind_the_start_keeps_an_entry_requirement_route(row) -> None:
-    """The step is 0 only on the state behind the start, and the plan re-runs from there."""
-    make, target, step, _answer = _ENTRY_REQUIREMENTS[row]
+def test_a_division_by_a_step_cleared_for_the_restart_keeps_the_answer() -> None:
+    """The step is 0 only on the state the restart lands on, and no scan has that."""
+    make, target, step, _status = _ENTRY_REQUIREMENTS["aborted"]
     without = make().how(target, max_scans=2000)
+    assert step in without.restart.clear
 
     plan = make().how(target, avoid=lambda s: 1 / s[step] > 5, max_scans=2000)
 
-    _same_plan(plan, without)
-    assert [
-        state.scan_id for state in plan.fork.history.latest(100000) if state.tags[step] == 0
-    ] == [0]
+    _same_answer(plan, without)
+
+
+def test_a_division_by_a_step_the_session_really_scans_reaches_the_caller() -> None:
+    """A trial from the session itself puts the step at 0 on a real scan, before any restart."""
+    make, target, step, _status = _ENTRY_REQUIREMENTS["route-field"]
+
+    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
+        make().how(target, avoid=lambda s: 1 / s[step] > 5, max_scans=2000)
 
 
 @pytest.mark.parametrize("row", ["route-adjacent", "route-field"])
-def test_a_raise_on_a_later_scan_of_an_entry_requirement_route_reaches_the_caller(row) -> None:
+def test_a_raise_on_a_scan_of_a_clear_try_loses_the_advice_not_the_answer(row) -> None:
+    """Only a try with tags cleared by hand gets to 81, and how() has its answer by then."""
     make, target, step, _answer = _ENTRY_REQUIREMENTS[row]
 
-    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
-        make().how(target, avoid=lambda s: 1 / (s[step] - 81) > 5, max_scans=2000)
+    plan = make().how(target, avoid=lambda s: 1 / (s[step] - 81) > 5, max_scans=2000)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.restart.clear is None
 
 
-def test_a_raise_on_the_re_run_entry_scan_reaches_the_caller() -> None:
-    """The entry scan is what the plan rewinds to run again, so that run is a real scan."""
+def test_a_raise_on_a_scan_after_the_restart_costs_the_restart_and_not_the_stop() -> None:
     prog, target = _entry_preset()
 
-    with pytest.raises(AvoidCheckError, match="ZeroDivisionError"):
-        _scanned(prog, 1).how(target, avoid=lambda s: 1 / (s["HP"] - 11) > 5, max_scans=2000)
+    plan = _scanned(prog, 1).how(target, avoid=lambda s: 1 / (s["HP"] - 11) > 5, max_scans=2000)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.restart.lines() == [
+        "Restart: no answer, on a scan after it avoid check 'avoid' raised "
+        "ZeroDivisionError: division by zero."
+    ]
 
 
 @pytest.mark.parametrize("row", sorted(_ENTRY_REQUIREMENTS))

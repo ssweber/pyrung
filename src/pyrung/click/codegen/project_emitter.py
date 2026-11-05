@@ -467,14 +467,20 @@ def _generate_launch_json() -> str:
 
 
 def _generate_run_file() -> str:
-    """Generate run.py: instantiate PLC and step the logic."""
+    """Generate run.py: the session a debugger attaches to, at scan 0, and a one-scan check.
+
+    The check scans a fork: a scan on ``runner`` itself would be behind every how() and every
+    first-scan rung of the debug session, and no plan can run it again.
+    """
     return """\
 from pyrung import PLC
 from plc.main import logic
 
 runner = PLC(logic)
-runner.step()
-print(f"Scan {runner.current_state.scan_id}: OK")
+
+check = runner.fork()
+check.step()
+print(f"Scan {check.current_state.scan_id}: OK")
 """
 
 

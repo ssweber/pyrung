@@ -35,14 +35,15 @@ BOUND: dict[str, Any] = {"wall_clock_s": 30.0, "max_scans": 3000}
 
 
 def test_a_scan_already_past_the_entry_stops_with_a_reason() -> None:
-    """Scan 0 gives the target and the next scan overwrites it: the re-run needs a rewind."""
+    """Scan 0 gives the target and the next scan overwrites it, so the state must be cleared."""
     plc = PLC(guard.logic, dt=0.01)
     plc.step()
 
     plan = plc.how(guard.SequenceState == guard.TARGET, **BOUND)
 
     assert plan.status is PlanStatus.STOPPED
-    assert "lost track of its own evidence" in (plan.reason or "")
+    assert (plan.reason or "").startswith("No productive next action was found")
+    assert plan.restart.clear == {guard.SequenceState.name: 0}
 
 
 def test_the_same_entry_from_cold_still_reaches() -> None:

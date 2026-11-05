@@ -314,28 +314,18 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     assert _ordered_accesses(retained_projection) == _ordered_accesses(internal.projection)
 
 
-def test_prescanned_world_imports_the_adjacent_scan_without_executing_another() -> None:
+def test_a_search_of_a_scanned_session_stays_at_or_after_its_tip() -> None:
+    """The scan behind the tip is the machine's past, and no plan can run it again."""
     plc = PLC(first_scan.logic, dt=0.010)
     plc.step()
-    start_scan = plc.state.scan_id
-    events = pilot_events(
-        plc,
-        first_scan.ProcessStep == first_scan.AT_TARGET,
-        max_scans=100,
-    )
-    try:
-        started = _started_event(events)
-        observed = _entry_event(events)
-    finally:
-        events.close()
 
-    assert start_scan == 1
-    assert started.scan == start_scan
-    imported = started.data["bootstrap_execution"]
-    assert isinstance(imported, BootstrapExecutionSnapshot)
-    assert (imported.source_scan, imported.landing_scan) == (0, 1)
-    assert observed.scan == 1
-    assert isinstance(observed.data["execution"], BootstrapExecutionSnapshot)
+    events = tuple(pilot_events(plc, first_scan.ProcessStep == first_scan.AT_TARGET, max_scans=100))
+
+    assert events[0].kind == "started"
+    assert events[0].scan == 1
+    assert "bootstrap_execution" not in events[0].data
+    assert all(event.scan >= 1 for event in events)
+    assert not any(event.kind == "entry_scan_observed" for event in events)
 
 
 def test_entry_route_binding_alone_defers_program_input_receipts(monkeypatch) -> None:

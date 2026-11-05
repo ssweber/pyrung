@@ -220,13 +220,16 @@ def prepare_target_context(
     avoid_pred: Any,
     compass: Compass | None = None,
     work: PLC | None = None,
+    start_had_a_scan: bool = True,
 ) -> tuple[_PilotContext, RouteTaken | None]:
     """Bind one target and its initial route report to a prepared drive."""
 
     target_work = setup.work if work is None else work
     # The state how() starts from is real, and it may be the one state the search never asks
-    # as real: a goal already true runs no trial.
-    _avoid_scan_names(avoid_pred, dict(target_work.state.tags))
+    # as real: a goal already true runs no trial.  The state a restart lands on is the
+    # exception: how() chose it, and a check may have no answer before its first scan.
+    if start_had_a_scan:
+        _avoid_scan_names(avoid_pred, dict(target_work.state.tags))
     route_taken = _target_route.prepare_target_route(
         target_work,
         target_tag,

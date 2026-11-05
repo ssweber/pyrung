@@ -58,6 +58,9 @@ class WallClock:
         if time.monotonic() >= self.stop_at:
             raise SearchOutOfTime
 
+    def left(self) -> float:
+        return self.stop_at - time.monotonic()
+
 
 def search_limits(clock: WallClock | None) -> Callable[[], None]:
     """What a running search polls: its clock, and what it holds since this call."""
