@@ -16,9 +16,13 @@ refused reads apart from one that writes:
   4660, 0 for any other.
 - Result3, a DF holding NaN (+Inf - +Inf, as ``store_probe/inf_and_nan_to_text`` made one): 1
   for 0, 2 for 4660 (no store), 3 for 65535, 4 for 32768, 5 for 32767, 0 for any other.
-- Result4: bit 1 where the DF is a NaN (neither >= 0.0 nor < 0.0), so Result3 asks about one; SC43
-  on the rung after each store, bits 2, 4 and 8, as ``word_store`` reads it (a raise carried from
-  an earlier store reads in a later bit too, if a Copy does not settle SC43).
+- Result4: bit 1 where the DF is a NaN (neither >= 0 nor < 0), so Result3 asks about one.  It
+  assumes a compare with a NaN is false, as IEEE's unordered compares are: 1 shows a NaN, 0 does
+  not rule one out.  Bit 16 is SC43 on just before the first store, the control that no raise
+  carried over from the stage scan; bits 2, 4 and 8 are SC43 on the rung after each store, as
+  ``word_store`` reads it (a raise carried from an earlier store reads in a later bit too, if a
+  Copy does not settle SC43).  The compares ``DF32>=0`` and ``DF32<0`` take forms pasted before
+  (``DF21<0`` in ``real_bits``, ``DF14>=3.0E+38``).
 - ErrorCode: the size of a Result1 of 0, else of a Result2 of 0: that DH copied into a DD and
   halved, 0 where both are classed.  The DH into a DD may read unsigned or signed
   (``word_store/word_into_signed`` asks), so a DH past 32767 reads 16384..32767 or -16384..-1.
@@ -66,10 +70,12 @@ def prove_below_int_and_nan(slot: Any) -> None:
         fill(SENTINEL, dh.select(21, 23))
     with Rung(slot.Scratch == STORE_SCAN):
         copy(1, slot.Result4)
-    with Rung(slot.Scratch == STORE_SCAN, nan >= 0.0):
+    with Rung(slot.Scratch == STORE_SCAN, nan >= 0):
         copy(0, slot.Result4)
-    with Rung(slot.Scratch == STORE_SCAN, nan < 0.0):
+    with Rung(slot.Scratch == STORE_SCAN, nan < 0):
         copy(0, slot.Result4)
+    with Rung(slot.Scratch == STORE_SCAN, SC43):
+        calc(slot.Result4 + 16, slot.Result4)
     for source, word, bit in zip((minus_40000, minus_70000, nan), words, (2, 4, 8), strict=True):
         with Rung(slot.Scratch == STORE_SCAN):
             copy(source, word)
@@ -100,15 +106,15 @@ group = Group(
             "A Copy into a DH preset 4660: DD -40000 writes 25536, all 16 bits wrapped "
             "(Result1 = 1, 2 for 32768 floored at -32768, 3 for 0, 4 for none); DD -70000 "
             "61072 (Result2, as Result1); a DF NaN 0 (Result3 = 1, 2 none, 3 65535, 4 32768, "
-            "5 32767); the NaN made (Result4 bit 1), SC43 after each (bits 2, 4, 8); an "
-            "unclassed DH halved (ErrorCode)",
+            "5 32767); the NaN made (Result4 bit 1), SC43 after each (bits 2, 4, 8) and "
+            "before the first (16); an unclassed DH halved (ErrorCode)",
             ladder=prove_below_int_and_nan,
             init=init_below_int_and_nan,
             expect={
                 "Result1": between(0, 4),
                 "Result2": between(0, 4),
                 "Result3": between(0, 5),
-                "Result4": between(0, 15),
+                "Result4": between(0, 31),
                 "ErrorCode": between(-32768, 32767),
             },
             scans=scans_for(WINDOW),
