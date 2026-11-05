@@ -12,6 +12,7 @@ The whole suite is **one CLICK program**: a main program that calls one subrouti
 | Modbus, local sim | `make test-conformance` (marker `conformance`) | `run_modbus(suite.build())` | wall clock |
 | Modbus, real CLICK | `make test-conformance PLC=host[:port]` (or `--conformance-plc`, or env `PYRUNG_CONFORMANCE_PLC`) | `run_modbus(suite.build(), "host:port")` | wall clock |
 | Modbus, P1AM-200 code | `make test-conformance TARGET=circuitpy` (or `--conformance-target`, or env `PYRUNG_CONFORMANCE_TARGET`) | `run_modbus(suite.build(), sim=CircuitPySim)` | wall clock |
+| Guarded loop | `make test` (unmarked), `test_loop_corpus*.py` | every case's program by `run_for()`/`run_until()` against a stepped twin, `expect` judged (`PYRUNG_LOOP_CORPUS_DEEP=1` for every drill) | exact scan counts |
 
 Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE_GROUP`) to run some groups only. The Modbus runs share every line of client code; only the endpoint differs. `-rP` prints the report: one line per case (`PASS`/`XFAIL`/`FAIL`/`SKIP`/`STALE`, `[confirmed]`/`[unconfirmed]`, the pending step and the probe question; a `FAIL` or `XFAIL` line is followed by what the case read) and totals.
 

@@ -174,17 +174,18 @@ def _fire(
         if plc.mode == "stop":
             break
         plc.step()
+    return {i: read_slot(plc, slot[i], case_list[i - 1]) for i in indexes}
+
+
+def read_slot(plc: Any, fields: Any, c: Case) -> tuple[dict[str, int], bool]:
+    """What case *c* left in its slot's *fields*, and whether it fired."""
     state = plc.current_state
     tags = state.tags
-    out: dict[int, tuple[dict[str, int], bool]] = {}
-    for i in indexes:
-        c = case_list[i - 1]
-        actual = {f: tags.get(getattr(slot[i], f).name, 0) for f in c.expect}
-        for address in c.expect_system:
-            _, value = plc.debug.system_runtime.resolve(system_tag_name(address), state)
-            actual[address] = int(value)
-        out[i] = (actual, tags.get(slot[i].Fired.name, 0) != 0)
-    return out
+    actual = {f: tags.get(getattr(fields, f).name, 0) for f in c.expect}
+    for address in c.expect_system:
+        _, value = plc.debug.system_runtime.resolve(system_tag_name(address), state)
+        actual[address] = int(value)
+    return actual, tags.get(fields.Fired.name, 0) != 0
 
 
 def _edge_tags(plc: PLC) -> dict[str, str]:
