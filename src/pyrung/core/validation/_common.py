@@ -414,9 +414,12 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
     no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
     body item needs ``count != 0``.  That is exact for a 16-bit count.  A Dint,
-    read whole, is 0 exactly when it is too, but is still taken as only a
-    necessary condition (``exact`` False), as a REAL (0.5 truncates to 0) and an
-    expression must be.  While
+    read whole, is 0 exactly when it is too, so ``count != 0`` would be exact
+    for it as well; it stays inexact (``exact`` False) only because marking it
+    exact changes what :func:`_inexact_entry_subroutines` feeds (simplified
+    forms, the stuck-bit validator, pilot's corrections), which a later step
+    takes on.  A REAL (0.5 truncates
+    to 0) and an expression are inexact on their own account.  While
     ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every count runs the body.  A
     constant count that runs no iteration never runs it (None).
     """

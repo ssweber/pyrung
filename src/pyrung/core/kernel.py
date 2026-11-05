@@ -46,9 +46,7 @@ class ForIterationsBeyondCap(Exception):
     for a For whose count is read 32-bit; the verifier answers ``Intractable``.
     """
 
-    def __init__(
-        self, where: str, count: str, iterations: int, tags: tuple[str, ...] = ()
-    ) -> None:
+    def __init__(self, where: str, count: str, iterations: int, tags: tuple[str, ...] = ()) -> None:
         super().__init__(f"forloop({count}) at {where} would run {iterations} times in one scan")
         self.where = where
         self.count = count

@@ -827,7 +827,11 @@ def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...
     if isinstance(count, Tag):
         return _source_location(instr), count.name, (count.name,)
     if isinstance(count, IndirectRef):
-        return _source_location(instr), f"{count.block.name}[{count.pointer.name}]", (count.pointer.name,)
+        return (
+            _source_location(instr),
+            f"{count.block.name}[{count.pointer.name}]",
+            (count.pointer.name,),
+        )
     if isinstance(count, IndirectExprRef):
         return _source_location(instr), f"{count.block.name}[...]", ()
     return _source_location(instr), str(count), ()

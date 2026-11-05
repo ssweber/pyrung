@@ -133,6 +133,7 @@ def test_for_zero_count_switch(monkeypatch):
     assert for_loop_iterations(-1) == 65535
     assert for_loop_iterations(65536) == 0
     assert for_loop_iterations(65536, control.FOR_COUNT_MASK_32) == 65536
+    # pyrung's reading of a negative Dint, not read on a CLICK yet.
     assert for_loop_iterations(-1, control.FOR_COUNT_MASK_32) == 0xFFFFFFFF
     assert for_loop_iterations(7) == 7
     monkeypatch.setattr(control, "FOR_ZERO_COUNT_ITERATIONS", 65536)

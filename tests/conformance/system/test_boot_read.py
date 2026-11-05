@@ -63,11 +63,19 @@ The cases own what ``memory.OWNED`` lists under these groups.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance._ladder import emit_case
+from pyrung.conformance._runner import DT, _fire, _reset
+from pyrung.conformance._slot import make_slot
 from pyrung.core import (
+    PLC,
     Or,
+    Program,
     Rung,
     calc,
+    call,
     copy,
     count_up,
     event_drum,
@@ -78,10 +86,12 @@ from pyrung.core import (
     on_delay,
     out,
     shift,
+    subroutine,
     system,
     timed,
     toggle,
 )
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import (
     ClickCounter,
@@ -514,3 +524,40 @@ def test_flag_scan():
 
 def test_rtc_set():
     assert_all_passed(run(rtc_group))
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC], ids=["interpreter", "kernel"])
+@pytest.mark.parametrize(
+    ("boot", "battery", "after"),
+    [
+        ("reboot", True, (764, 0, 1)),
+        ("reboot", False, (0, 0, 0)),
+        ("stop_run", True, (764, 0, 1)),
+    ],
+)
+def test_what_survives_reads_through_a_boot(engine, boot, battery, after):
+    # The hardware ladder, run, booted, and run again, as AGENTS.md's procedure does.
+    (survives,) = [x for x in boot_group.cases if x.id == "what_survives"]
+    slot = make_slot(1, name=boot_group.title)
+    with Program(strict=False) as logic:
+        for _ in range(boot_group.calls):
+            with Rung():
+                call(boot_group.subroutine)
+        with subroutine(boot_group.subroutine):
+            emit_case("boot_read", survives, slot, 1)
+    plc = engine(logic, dt=DT)
+    plc.battery_present = battery
+
+    def read():
+        _reset(plc, slot, [1])
+        _fire(plc, slot, [survives], [1])
+        tags = plc.current_state.tags
+        return tuple(tags.get(getattr(slot[1], f).name) for f in ("Result1", "Result2", "Result3"))
+
+    assert read() == (0, 0, int(battery))
+    if boot == "reboot":
+        plc.reboot()
+    else:
+        plc.stop()
+        plc.start()
+    assert read() == after

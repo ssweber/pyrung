@@ -271,7 +271,8 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
     As on CLICK, a false loop rung skips the body (its coils hold, its
     one-shots do not re-arm), and a tag count is read once, as unsigned of its
     width: an Int of -1 runs 65535 iterations, a Dint of 65536 runs 65536, and
-    0 runs none.
+    0 runs none.  A negative Dint has not been read on a CLICK; it is read
+    whole too.
 
     Example:
         with Rung(Enable):
