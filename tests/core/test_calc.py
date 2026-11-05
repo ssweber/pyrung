@@ -55,9 +55,9 @@ class TestCalcInstruction:
         assert runner.current_state.tags["fault.division_error"] is True
 
     def test_int_destination_cuts_constants_to_16_bits(self, runner_factory):
-        """A Math into an Int keeps each constant in 16 bits, as a CLICK does:
-        -2147483648 / 65536 divides by 0; the same 65536 read from a Dint does
-        not, and a Dint destination keeps the constant whole."""
+        """A Math keeps each constant in 16 bits whatever the destination, as a
+        CLICK does: -2147483648 / 65536 divides by 0 into an Int and a Dint; the
+        same 65536 read from a Dint does not."""
         Enable = Bool("Enable")
         Num = Dint("Num")
         Den = Dint("Den")
@@ -85,7 +85,7 @@ class TestCalcInstruction:
         assert tags["Flagged"] is True
         assert tags["fault.division_error"] is False
         assert tags["ByTag"] == -32768
-        assert tags["IntoDint"] == -32768
+        assert tags["IntoDint"] == 0
         assert tags["Low"] == 7
 
     def test_real_result(self, runner_factory):
@@ -180,16 +180,24 @@ class TestCutIntConstants:
         assert instr.expression is expr
         assert instr.source_expression is expr
 
-    def test_only_an_int_destination_cuts(self):
+    def test_every_destination_cuts(self):
         from pyrung.core.instruction.calc import CalcInstruction
 
         A = Dint("A")
         expr = A / 65536
-        into_int = CalcInstruction(expr, Int("I"))
-        assert into_int.source_expression is expr
-        assert repr(into_int.expression) == "(TagExpr(A) / LiteralExpr(0))"
+        for dest in (Int("I"), Dint("D"), Real("R")):
+            instr = CalcInstruction(expr, dest)
+            assert instr.source_expression is expr
+            assert repr(instr.expression) == "(TagExpr(A) / LiteralExpr(0))"
+
+    def test_only_an_int_destination_cuts_randint_bounds(self):
+        from pyrung.core.expression import randint
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        roll = randint(70000, 70002)
+        assert CalcInstruction(roll, Int("I")).expression is not roll
         for dest in (Dint("D"), Real("R")):
-            assert CalcInstruction(expr, dest).expression is expr
+            assert CalcInstruction(roll, dest).expression is roll
 
 
 class TestCalcRangeAggregates:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from keyword import iskeyword
 from typing import Any
 
@@ -92,6 +93,7 @@ from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._primitives import (
+    CALC_FLAGS,
     _calc_store_expr,
     _compile_assignment_lines,
     _compile_expression_impl,
@@ -99,6 +101,7 @@ from ._primitives import (
     _compile_set_out_of_range_fault_body,
     _compile_value,
     _snapshot_tag_symbol,
+    calc_site_flags,
     fault_follow_scope,
 )
 
@@ -603,7 +606,10 @@ def _compile_calc_instruction(
     zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
     div_err_line = f"    {div_err} = True" if div_err else "    pass"
     out_of_range_body = _compile_set_out_of_range_fault_body(ctx)
-    enabled_body = [
+    math_err = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
+    site_flags = calc_site_flags(instr.expression)
+    enabled_body = [f"{CALC_FLAGS} = []"] if site_flags else []
+    enabled_body += [
         "try:",
         f"    _calc_value = {value_expr}",
         "except ZeroDivisionError:",
@@ -614,7 +620,7 @@ def _compile_calc_instruction(
         "    _calc_value = 0",
     ]
     if has_domain_limited_func(instr.expression):
-        math_err = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
+        ctx.mark_helper("_math_func")
         enabled_body.extend(
             [
                 "except _MathDomainError:",
@@ -622,6 +628,16 @@ def _compile_calc_instruction(
                 "    _calc_value = 0",
             ]
         )
+    if re.search(r"\b_(mod|pow)\(", value_expr):
+        # 0 ** 0, 0 ** -1, a MOD by 0: 0 and no flag (QuietMathError).
+        enabled_body.extend(["except _QuietMathError:", "    _calc_value = 0"])
+    if site_flags:
+        # A randint() site's math error zeroed only the site: its flag now.
+        if math_err:
+            enabled_body += [f"if 46 in {CALC_FLAGS}:", f"    {math_err} = True"]
+        if out_of_range_body != ["pass"]:
+            enabled_body.append(f"if 43 in {CALC_FLAGS}:")
+            enabled_body.extend(f"    {line}" for line in out_of_range_body)
     dest_type = instr.dest.type.name
     range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
     if dest_type == "REAL" and instr.mode != "hex":

@@ -724,16 +724,21 @@ class TestExpressionEdgeCases:
         assert expr.evaluate(ctx) == 0
         assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
 
-    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
-    def test_division_by_zero_inside_calc_raises(self, symbol):
-        """Inside calc (STRICT_DIVISION) a division by zero raises: calc sets SC40."""
+    @pytest.mark.parametrize(
+        "symbol, error", [("/", ZeroDivisionError), ("//", ZeroDivisionError), ("%", None)]
+    )
+    def test_division_by_zero_inside_calc_raises(self, symbol, error):
+        """Inside calc (STRICT_DIVISION) a division by zero raises: calc sets SC40.
+        A MOD by 0 raises QuietMathError: calc stores 0 with no flag, as a CLICK."""
+        from pyrung.core.expression import QuietMathError
+
         DS = Block("DS", TagType.INT, 1, 9)
         expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
         token = STRICT_DIVISION.set(True)
         try:
-            with pytest.raises(ZeroDivisionError):
+            with pytest.raises(error or QuietMathError):
                 expr.evaluate(ctx)
         finally:
             STRICT_DIVISION.reset(token)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -22,7 +23,10 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.expression import (
+    ABS_FLOORS,
+    ABS_OF_TYPE,
     DOMAIN_LIMITED_MATH_FUNCS,
+    DOUBLE_EXACT_LIMIT,
     BinaryExpr,
     Expression,
     LiteralExpr,
@@ -41,7 +45,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 
 
@@ -159,15 +163,27 @@ def _compile_expression_impl(
             right_int = _bit_int_expr(expr.right, right, ctx)
             if expr.symbol in ("<<", ">>"):
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
-            return f"({left_int} {expr.symbol} {right_int})"
-        if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
-            # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
-            # raises _MathDomainError for a complex result; an integer power is
+            return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
+        if expr.symbol == "**" and (
+            _may_be_float(expr.left)
+            or _may_be_float(expr.right)
+            or not _positive_int_literal(expr.right)
+        ):
+            # _pow gives +/-Inf for a float overflow, as the core's _op_pow,
+            # raises _MathDomainError for a complex result and _QuietMathError
+            # for a zero base to a power of 0 or below; an integer power is
             # exact and never overflows.
             ctx.mark_helper("_math_func")
+            ctx.mark_helper("_quiet_math_error")
             ctx.mark_helper("_pow")
-            return f"_pow({left}, {right})"
-        return f"({left} {expr.symbol} {right})"
+            return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
+        if expr.symbol == "%" and not (_non_negative(expr.left) and _non_zero_literal(expr.right)):
+            # MOD truncates (the dividend's sign) and a MOD by 0 is a
+            # _QuietMathError, as the core's _op_mod; Python's % floors.
+            ctx.mark_helper("_quiet_math_error")
+            ctx.mark_helper("_mod")
+            return f"_mod({left}, {right})"
+        return _calc_step(expr, f"({left} {expr.symbol} {right})", ctx, strict)
 
     if isinstance(expr, UnaryExpr):
         inner = _compile_expression_impl(
@@ -178,12 +194,18 @@ def _compile_expression_impl(
             strict=strict,
         )
         if expr.symbol == "abs":
-            return f"abs({inner})"
+            floor = _abs_floor(expr)
+            if floor is not None:
+                # abs() of an Int or Dint tag in a calc (calc_form): the bottom of
+                # the range raises OverflowError, 0 with SC43.
+                ctx.mark_helper("_abs_int")
+                return f"_abs_int({inner}, {floor})"
+            return _calc_step(expr, f"abs({inner})", ctx, strict)
         if expr.symbol == "~":
             if not strict and _may_be_float(expr.operand):
                 return _permissive_op("~", inner, "0", ctx)
-            return f"(~{_bit_int_expr(expr.operand, inner, ctx)})"
-        return f"({expr.symbol}({inner}))"
+            return _calc_step(expr, f"(~{_bit_int_expr(expr.operand, inner, ctx)})", ctx, strict)
+        return _calc_step(expr, f"({expr.symbol}({inner}))", ctx, strict)
 
     if isinstance(expr, MathFuncExpr):
         if expr.name not in _ALLOWED_MATH_FUNCS:
@@ -229,9 +251,9 @@ def _compile_expression_impl(
         if expr.name in ("lsh", "rsh"):
             count_int = _shift_count_expr(expr.count, count_int, ctx)
         if expr.name == "lsh":
-            return f"({value_int} << {count_int})"
+            return _calc_step(expr, f"({value_int} << {count_int})", ctx, strict)
         if expr.name == "rsh":
-            return f"({value_int} >> {count_int})"
+            return _calc_step(expr, f"({value_int} >> {count_int})", ctx, strict)
         if expr.name == "lro":
             return (
                 f"(((({value_int} & 0xFFFF) << ({count_int} % 16)) | "
@@ -258,31 +280,18 @@ def _compile_expression_impl(
 
     if isinstance(expr, RandIntExpr):
         # As RandIntExpr.evaluate: a bare Real tag as a bound reads 0, and equal
-        # constants are 0, with SC46 in a calc.
+        # bounds, or one holding Inf or NaN, make the site 0.  In a calc the site
+        # appends its flag to the calc's _calc_flags (CALC_FLAGS), which the calc
+        # sets after the formula: only the site is zeroed.
         if expr.real_bounds:
             return "0"
+        flags = CALC_FLAGS if strict else "None"
         if expr.equal_bounds:
             if not strict:
                 return "0"
-            ctx.mark_helper("_math_func")
-            ctx.mark_helper("_rand_equal_bounds")
-            return "_rand_equal_bounds()"
-        lo = hi = ""
-        if expr.checks_bounds or not ctx.kernel_runtime:
-            lo = _compile_expression_impl(
-                expr.lo,
-                ctx,
-                scalar_snapshots=scalar_snapshots,
-                block_snapshots=block_snapshots,
-                strict=strict,
-            )
-            hi = _compile_expression_impl(
-                expr.hi,
-                ctx,
-                scalar_snapshots=scalar_snapshots,
-                block_snapshots=block_snapshots,
-                strict=strict,
-            )
+            ctx.mark_helper("_rand_fail")
+            return f"_rand_fail({flags}, 46)"
+        draw = ""
         if ctx.kernel_runtime:
             # The runner's input drain wrote this scan's draw into the site tag.
             draw = _snapshot_tag_symbol(
@@ -291,22 +300,32 @@ def _compile_expression_impl(
                 scalar_snapshots=scalar_snapshots,
                 block_snapshots=block_snapshots,
             )
-            if not expr.checks_bounds:
+            if not expr.reads_bounds:
                 return draw
-            # A bound holding Inf or NaN raises OverflowError: the calc stores
-            # 0 with SC43 (RandIntExpr.evaluate).  Outside calc the draw
-            # reads as 0 instead.
+        lo = _compile_expression_impl(
+            expr.lo,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
+        )
+        hi = _compile_expression_impl(
+            expr.hi,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
+        )
+        if expr.reads_bounds:
             ctx.mark_helper("_bit_int")
-            helper = "_rand_checked" if strict else "_rand_or_zero"
-            ctx.mark_helper(helper)
-            return f"{helper}({draw}, {lo}, {hi})"
+            ctx.mark_helper("_rand_fail")
+            if ctx.kernel_runtime:
+                ctx.mark_helper("_rand_term")
+                return f"_rand_term({flags}, {draw}, {lo}, {hi})"
+            ctx.uses_random = True
+            ctx.mark_helper("_rand_draw")
+            return f"_rand_draw({flags}, {lo}, {hi})"
         ctx.uses_random = True
-        if expr.checks_bounds and not strict:
-            ctx.mark_helper("_bit_int")
-            ctx.mark_helper("_rand_permissive")
-            return f"_rand_permissive({lo}, {hi})"
-        # A bound holding Inf or NaN raises OverflowError, so the calc stores
-        # 0 with SC43: int() of Inf raises it, _bit_int turns NaN into it.
         lo, hi = _bit_int_expr(expr.lo, lo, ctx), _bit_int_expr(expr.hi, hi, ctx)
         return f"random.randint(min({lo}, {hi}), max({lo}, {hi}))"
 
@@ -371,10 +390,122 @@ def _non_negative_int_literal(expr: Any) -> bool:
     return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value >= 0
 
 
+def _positive_int_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value > 0
+
+
+#: The list a calc's randint() sites append their flags to (``_rand_fail``).
+CALC_FLAGS = "_calc_flags"
+
+#: Tag types whose value is never negative.
+_UNSIGNED_TYPES = frozenset({TagType.BOOL, TagType.WORD})
+
+
+def _non_negative(expr: Any) -> bool:
+    """Whether *expr* is a non-negative constant or a Bool or Word tag."""
+    if isinstance(expr, LiteralExpr):
+        return expr.value >= 0
+    return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
+
+
+def _abs_floor(expr: UnaryExpr) -> int | None:
+    """The range bottom an ``abs()`` that calc_form swapped (ABS_OF_TYPE) refuses."""
+    for type_name, op in ABS_OF_TYPE.items():
+        if expr.op is op:
+            return ABS_FLOORS[type_name]
+    return None
+
+
+def calc_site_flags(expr: Any) -> bool:
+    """Whether a calc of *expr* has a randint() site that can append a flag."""
+    if isinstance(expr, RandIntExpr):
+        return not expr.real_bounds and (expr.equal_bounds or expr.reads_bounds)
+    if isinstance(expr, Expression):
+        return any(calc_site_flags(child) for child in vars(expr).values())
+    return False
+
+
+#: The largest magnitude of each integer tag type.
+_TYPE_BOUNDS = {
+    TagType.BOOL: 1,
+    TagType.INT: 1 << 15,
+    TagType.DINT: 1 << 31,
+    TagType.WORD: 0xFFFF,
+    TagType.REAL: 0,  # a Real holds a float: an integer bound does not apply
+}
+
+
+def _int_bound(expr: Any) -> float:
+    """A bound on the magnitude of *expr* when it is an integer (inf if unknown).
+
+    A step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl`` in a
+    calc, as the core's ``_calc_step``; a float result needs no bound (0).
+    """
+    if isinstance(expr, bool):
+        return 1
+    if isinstance(expr, int):
+        return abs(expr)
+    if isinstance(expr, float):
+        return 0
+    if isinstance(expr, LiteralExpr):
+        return _int_bound(expr.value)
+    if isinstance(expr, TagExpr):
+        return _TYPE_BOUNDS.get(expr.tag.type, math.inf)
+    if isinstance(expr, BinaryExpr):
+        left, right = _int_bound(expr.left), _int_bound(expr.right)
+        symbol = expr.symbol
+        if symbol in ("+", "-"):
+            return left + right
+        if symbol == "*":
+            return left * right
+        if symbol == "/":
+            return 0
+        if symbol in ("//", "%", ">>"):
+            return left
+        if symbol in ("&", "|", "^"):
+            return 2 * max(left, right) + 1
+        if symbol == "<<" and _small_count_literal(expr.right):
+            return left * (1 << expr.right.value)
+        if symbol == "**" and _small_count_literal(expr.right):
+            return left**expr.right.value
+        return math.inf
+    if isinstance(expr, UnaryExpr):
+        return _int_bound(expr.operand) + (1 if expr.symbol == "~" else 0)
+    if isinstance(expr, MathFuncExpr):
+        return 0
+    if isinstance(expr, ShiftFuncExpr):
+        if expr.name in ("lro", "rro"):
+            return 0xFFFF
+        if expr.name == "rsh":
+            return _int_bound(expr.value)
+        if _small_count_literal(expr.count):
+            return _int_bound(expr.value) * (1 << expr.count.value)
+        return math.inf
+    if isinstance(expr, RandIntExpr):
+        return 1 << 31
+    if isinstance(expr, SumExpr):
+        return sum(_TYPE_BOUNDS.get(tag.type, math.inf) for tag in expr.block_range)
+    if isinstance(expr, RangeAggregateExpr):
+        return max((_TYPE_BOUNDS.get(tag.type, math.inf) for tag in expr.block_range), default=0)
+    return math.inf
+
+
+def _small_count_literal(expr: Any) -> bool:
+    return _non_negative_int_literal(expr) and expr.value <= 64
+
+
+def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
+    """*compiled*, a step of a calc, as a double past 2 ** 53 (core ``_calc_step``)."""
+    if not strict or _int_bound(expr) <= DOUBLE_EXACT_LIMIT:
+        return compiled
+    ctx.mark_helper("_dbl")
+    return f"_dbl({compiled})"
+
+
 def _binary_may_raise(expr: BinaryExpr) -> bool:
     """Whether *expr* can raise on a math error (and so, outside calc, give 0).
 
-    A division by a non-zero constant, a power with a non-negative integer
+    A division by a non-zero constant, a power with a positive integer
     constant exponent, a bitwise operation on integers and a shift by a
     non-negative constant cannot; ``+``, ``-`` and ``*`` never do (a float
     overflow is Inf).  Each of them can raise when an operand is an integer too
@@ -384,9 +515,9 @@ def _binary_may_raise(expr: BinaryExpr) -> bool:
     if symbol in ("/", "//", "%"):
         return not _non_zero_literal(expr.right)
     if symbol == "**":
-        # A negative exponent of 0 divides by zero; a fractional one of a
-        # negative base is complex (a math error).
-        return not _non_negative_int_literal(expr.right)
+        # A zero base to a power of 0 or below is a math error, and a
+        # fractional power of a negative base is complex (one too).
+        return not _positive_int_literal(expr.right)
     if symbol in ("&", "|", "^"):
         return _may_be_float(expr.left) or _may_be_float(expr.right)
     if symbol in ("<<", ">>"):
@@ -442,6 +573,8 @@ def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
     """
     ctx.mark_helper("_bit_int")
     ctx.mark_helper("_math_func")
+    ctx.mark_helper("_quiet_math_error")
+    ctx.mark_helper("_mod")
     ctx.mark_helper("_pow")
     ctx.mark_helper("_permissive_op")
     return f"_permissive_op({op!r}, {left}, {right})"
