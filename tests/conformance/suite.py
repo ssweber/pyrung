@@ -62,6 +62,7 @@ from tests.conformance import (
     test_faults,
     test_fixed_scan,
     test_flag_probe,
+    test_flasher_td,
     test_for_count,
     test_loop,
     test_loop_call,
@@ -253,6 +254,7 @@ APART_GROUPS = [
     test_unit_minute.group,
     test_fixed_scan.group,
     test_text_compare.group,
+    test_flasher_td.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -263,7 +265,8 @@ APART_PARTS: dict[str, ApartPart] = {
     "O": ApartPart(("fixed_scan",), fixed_scan_ms=100),
     # What = and not-equal make of a TXT, a blank above all: a project of its own, since no
     # block of the suite has a slot left, and a blank needs TXT that no project has written.
-    "P": ApartPart(("text_compare",)),
+    # And what a flasher's frozen off TD does when a lowered preset ends its on phase.
+    "P": ApartPart(("text_compare", "flasher_td")),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

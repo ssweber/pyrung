@@ -38,3 +38,10 @@ never_written = 2
 cleared = 3
 blank_and_space = 4
 blank_literal = 5
+
+[groups.flasher_td]
+base = 461 # Conf_FlasherTd: DS461..DS480
+slots = 1
+
+[groups.flasher_td.cases]
+frozen_off_td_at_lowered_preset = 1

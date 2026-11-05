@@ -36,7 +36,7 @@ to 50 ms, as in ``out``.
   cleared.  A debounce's on TD, its rung gone at 150 ms: at 300-500 ms Result4 = 1 cleared, 2 kept.
   The reset writes 0 to the first flasher's off TD (TD240), which a false rung only freezes: what
   an off phase entered through a lowered preset does with a TD left mid-phase is not this case's
-  question.  pyrung runs on from it, so a reset that froze TD240 at 700-960 ms lit the coil again
+  question (``flasher_td/frozen_off_td_at_lowered_preset`` asks it).  pyrung runs on from it, so a reset that froze TD240 at 700-960 ms lit the coil again
   inside 420-600 ms, about one repeat in four (the coil's phase at the reset is wall clock).
 
 ``for_more``:
