@@ -417,11 +417,19 @@ def test_a_read_of_a_tag_the_baseline_lacks_denies_no_hold() -> None:
     assert _hold_allowed(_hold_ctx(_compile_avoid(lambda s: s["Ghost"])), ("Hold", True)) is True
 
 
-def test_a_condition_the_baseline_trips_still_refuses_the_hold() -> None:
-    """A condition reads the tag the baseline lacks as violated.  Lifting that is its own step."""
-    condition = _hold_ctx(_compile_avoid(Bool("Danger")))
+def test_a_condition_on_a_tag_the_baseline_lacks_denies_no_hold() -> None:
+    """The same check as the callable above, written as a condition, gets the same answer."""
+    assert _hold_allowed(_hold_ctx(_compile_avoid(Bool("Danger"))), ("Hold", True)) is True
 
-    assert _hold_allowed(condition, ("Hold", True)) is False
+
+def test_a_condition_on_what_the_baseline_has_still_refuses_the_hold() -> None:
+    assert _hold_allowed(_hold_ctx(_compile_avoid(Bool("Hold"))), ("Hold", True)) is False
+
+
+def test_a_condition_on_the_hold_and_a_tag_the_baseline_lacks_is_left_to_the_scans() -> None:
+    both = And(Bool("Hold"), Bool("Danger"))
+
+    assert _hold_allowed(_hold_ctx(_compile_avoid(both)), ("Hold", True)) is True
 
 
 def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> None:
@@ -459,10 +467,10 @@ def test_a_hold_is_asked_about_on_the_baseline_alone() -> None:
 
 def test_each_member_of_a_union_is_judged_on_its_own() -> None:
     """A member the baseline trips stays tripped when another raises on it."""
-    avoid = _compile_avoid((Bool("Danger"), lambda s: s["Level"] > 100))
+    avoid = _compile_avoid((Bool("Hold"), lambda s: s["Level"] > 100))
     ctx = _hold_ctx(avoid)
 
-    assert _avoid_violations(ctx, [("Hold", True)]) == ("Danger",)
+    assert _avoid_violations(ctx, [("Hold", True)]) == ("Hold",)
 
 
 def test_a_bare_callable_that_raises_on_the_baseline_denies_no_hold() -> None:
@@ -701,14 +709,13 @@ def test_releasing_an_input_that_really_is_on_stops() -> None:
     assert plan.status is PlanStatus.STOPPED
 
 
-def test_a_condition_refused_on_the_baseline_stays_refused() -> None:
-    """The baseline has no HoldState, which a condition reads as violated: as it was."""
+def test_the_form_of_a_check_does_not_change_the_answer() -> None:
+    """The baseline has no HoldState: a condition and a callable both have no answer for it."""
     prog, state, *_ = _dwell_program()
+
     assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
-
-    plan = _drive(prog, state == 7, state == 9999)
-
-    assert plan.status is PlanStatus.STOPPED
+    assert _drive(prog, state == 7, lambda s: s["HoldState"] == 9999).status is PlanStatus.REACHED
+    assert _drive(prog, state == 7, state == 9999).status is PlanStatus.REACHED
 
 
 def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
