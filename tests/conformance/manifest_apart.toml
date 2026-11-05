@@ -140,3 +140,10 @@ slots = 4
 off_td_held = 1
 flasher_on_zero = 2
 deb_off_against_tof = 3
+
+[groups.word_floor]
+base = 1021 # Conf_WordFloor: DS1021..DS1050
+slots = 2
+
+[groups.word_floor.cases]
+below_int_and_nan = 1

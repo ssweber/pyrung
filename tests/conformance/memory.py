@@ -471,6 +471,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # DS4226 is past_write's pointer, on its choices.
     "past_clean": {"C": range(231, 233), "DS": range(4226, 4227)},
     "for_dd_minus": {"C": range(401, 403), "DD": range(81, 83)},
+    "word_floor": {"DD": range(91, 93), "DF": range(31, 33), "DH": range(21, 24)},
 }
 
 
