@@ -272,3 +272,37 @@ def test_a_literal_longer_than_the_block_compares_as_written():
     chars = Block("CH", TagType.CHAR, 1, 2)
     assert isinstance(chars[1] == "AB", AllCondition)
     assert isinstance(chars[2] == "AB", CompareEq)
+
+
+def test_a_named_array_window_reads_the_next_slots_of_its_layout(runner_factory):
+    """Instance-major, as ``map_to`` puts it on TXT: ``Pair[1].a == "XY"`` reads
+    Pair1_a then Pair1_b, the two TXTs a CLICK compares."""
+    from pyrung.core import Char, named_array
+
+    @named_array(Char, count=2, stride=2)
+    class Pair:
+        a = ""
+        b = ""
+
+    @named_array(Char, count=2, stride=3)
+    class Padded:
+        a = ""
+        b = ""
+
+    window = Pair.a[1] == "XYZ"
+    assert isinstance(window, AllCondition)
+    assert [c.tag.name for c in window.conditions] == ["Pair1_a", "Pair1_b", "Pair2_a"]
+    # Past the last instance, or onto a slot no field holds: compared as written.
+    assert isinstance(Pair.b[2] == "XY", CompareEq)
+    assert isinstance(Padded.b[1] == "XY", CompareEq)
+
+    same, differs = Bool("Same"), Bool("Differs")
+    with Program() as logic:
+        with Rung(Pair.a[1] == "XY"):
+            out(same)
+        with Rung(Pair.a[1] != "XY"):
+            out(differs)
+    tags = _one_scan(runner_factory, logic, {"Pair1_a": "X", "Pair1_b": "Y", "Pair2_a": "Q"})
+    assert (tags["Same"], tags["Differs"]) == (True, False)
+    tags = _one_scan(runner_factory, logic, {"Pair1_a": "X", "Pair1_b": "Q", "Pair2_a": "Y"})
+    assert (tags["Same"], tags["Differs"]) == (False, True)

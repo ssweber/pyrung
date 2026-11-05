@@ -533,6 +533,11 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
     ``!=``), and every analysis reads it as that.  The compare as written is kept
     on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
     for any other compare, and where the block ends before the literal does.
+
+    The characters after it are the next elements of its block, or, in a
+    ``named_array``, the next slots of its layout (the other fields of the
+    instance first), as that maps to TXT.  Where a TagMap puts them elsewhere,
+    CLICK validation refuses the export (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
     """
     from pyrung.core.tag import TagType
 
@@ -543,8 +548,10 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
     if block is None or not isinstance(addr, int):
         return None
     try:
-        tags = [tag, *(block[addr + offset] for offset in range(1, len(value)))]
+        tags = _text_window_tags(block, addr, len(value))
     except (IndexError, KeyError, ValueError):
+        return None
+    if tags is None:
         return None
     cond: Condition
     if equal:
@@ -555,6 +562,24 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
         written = CompareNe(tag, value)
     setattr(cond, "_text_window", written)  # noqa: B010 - not a field of the condition
     return cond
+
+
+def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
+    """The *length* Chars from ``block[addr]`` on, in the order they map to TXT."""
+    runtime = getattr(block, "_pyrung_structure_runtime", None)
+    if getattr(block, "_pyrung_structure_kind", None) != "named_array" or runtime is None:
+        return [block[addr + offset] for offset in range(length)]
+    # Instance-major: each instance takes ``stride`` slots, its fields first in order.
+    fields: tuple[str, ...] = runtime._field_order
+    stride: int = runtime.stride
+    start = (addr - 1) * stride + fields.index(block._pyrung_structure_field)
+    tags: list[Tag] = []
+    for position in range(start, start + length):
+        instance, offset = divmod(position, stride)
+        if instance >= runtime.count or offset >= len(fields):
+            return None  # past the last instance, or a slot no field holds
+        tags.append(runtime._blocks[fields[offset]][instance + 1])
+    return tags
 
 
 def text_window_of(condition: Condition) -> Condition:

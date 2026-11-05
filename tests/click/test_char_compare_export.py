@@ -6,7 +6,7 @@ import pytest
 
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder, validate_click_program
 from pyrung.click.ladder import LadderExportError
-from pyrung.click.validation import CLK_TEXT_ORDER_COMPARE
+from pyrung.click.validation import CLK_TEXT_ORDER_COMPARE, CLK_TEXT_WINDOW_NOT_CONTIGUOUS
 from pyrung.core import Bool, Char, Program, rung
 from pyrung.core.program import out
 
@@ -88,3 +88,167 @@ def test_a_txt_against_a_longer_literal_exports_as_written(op):
     assert not report.errors
     bundle = pyrung_to_ladder(prog, mapping)
     assert tuple(bundle.main_rows[1][1:3]) == ("C2", f'TXT1{op}"AB"')
+
+
+def _window_codes(prog, mapping):
+    report = validate_click_program(prog, mapping, mode="strict")
+    return [f for f in report.errors if f.code == CLK_TEXT_WINDOW_NOT_CONTIGUOUS]
+
+
+def test_a_window_onto_a_named_array_gap_is_a_finding_and_refused():
+    # Padded1_b's next slot (TXT3) is no field's, so pyrung compares Padded1_b alone;
+    # a CLICK compares TXT2 and TXT3.
+    from pyrung.core import named_array
+
+    @named_array(Char, count=2, stride=3)
+    class Padded:
+        a = ""
+        b = ""
+
+    hit = Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(Padded.b[1] == "XY"):
+            out(hit)
+    mapping = TagMap([*Padded.map_to(txt.select(1, 6)), hit.map_to(c[1])], include_system=False)
+
+    found = _window_codes(prog, mapping)
+    assert len(found) == 1
+    assert found[0].message.isascii() and found[0].suggestion.isascii()
+    assert "Padded1_b (TXT2) alone" in found[0].message
+    assert "TXT2, TXT3" in found[0].message
+    with pytest.raises(LadderExportError, match=CLK_TEXT_WINDOW_NOT_CONTIGUOUS):
+        pyrung_to_ladder(prog, mapping)
+    bundle = pyrung_to_ladder(prog, mapping, allow=(CLK_TEXT_WINDOW_NOT_CONTIGUOUS,))
+    assert bundle.main_rows[1][1] == 'TXT2=="XY"'
+
+
+@pytest.mark.parametrize("op", ["==", "!="])
+def test_a_window_over_a_block_mapped_out_of_order_is_a_finding(op):
+    from pyrung.core import Block, TagType
+
+    msg, hit = Block("Msg", TagType.CHAR, 1, 2), Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(_OPS[op](msg[1], "AB")):
+            out(hit)
+    mapping = TagMap(
+        [msg[1].map_to(txt[5]), msg[2].map_to(txt[3]), hit.map_to(c[1])], include_system=False
+    )
+    found = _window_codes(prog, mapping)
+    assert len(found) == 1
+    assert "Msg1 (TXT5), Msg2 (TXT3)" in found[0].message
+    assert "TXT5, TXT6" in found[0].message
+
+
+def test_a_lone_char_against_a_longer_literal_is_a_finding():
+    # A Char of no block reads only itself; a CLICK reads TXT9 and TXT10.
+    a, hit = Char("A"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(a == "AB"):
+            out(hit)
+    found = _window_codes(prog, TagMap({a: txt[9], hit: c[1]}, include_system=False))
+    assert len(found) == 1
+    assert "A (TXT9) alone" in found[0].message
+    assert "TXT9, TXT10" in found[0].message
+
+
+def test_a_window_in_a_branch_and_a_pin_is_checked_once_each():
+    from pyrung.core import Block, Counter, TagType, branch, count_up
+
+    msg = Block("Msg", TagType.CHAR, 1, 2)
+    hit, other, ok = Bool("Hit"), Bool("Other"), Bool("Ok")
+    cnt = Counter.clone("Cnt")
+    with Program(strict=False) as prog:
+        with rung(other):
+            out(hit)
+            with branch(msg[1] == "XY"):
+                out(ok)
+        with rung(other):
+            count_up(cnt, 5).reset(msg[1] != "XY")
+    mapping = TagMap(
+        [
+            msg[1].map_to(txt[5]),
+            msg[2].map_to(txt[3]),
+            hit.map_to(c[1]),
+            other.map_to(c[2]),
+            ok.map_to(c[3]),
+            cnt.Done.map_to(ct[1]),
+            cnt.Acc.map_to(ctd[1]),
+        ],
+        include_system=False,
+    )
+    found = _window_codes(prog, mapping)
+    assert [f.location for f in found] == ["main rung 0", "main rung 1"]
+
+
+def test_a_window_mapped_to_the_next_txts_is_not_a_finding():
+    from pyrung.core import Block, TagType, named_array
+
+    @named_array(Char, count=3)
+    class Seq:
+        ch = ""
+
+    @named_array(Char, count=2, stride=2)
+    class Pair:
+        a = ""
+        b = ""
+
+    msg, hit = Block("Msg", TagType.CHAR, 1, 4), Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(msg[2] == "ABC", txt[998] != "XYZ", Seq.ch[1] == "AB", Pair.a[1] == "XYZ"):
+            out(hit)
+    mapping = TagMap(
+        [
+            msg.map_to(txt.select(101, 104)),
+            *Seq.map_to(txt.select(11, 13)),
+            *Pair.map_to(txt.select(1, 4)),
+            hit.map_to(c[1]),
+        ],
+        include_system=False,
+    )
+    assert _window_codes(prog, mapping) == []
+    assert pyrung_to_ladder(prog, mapping).main_rows
+
+
+def test_a_pointer_compare_against_a_longer_literal_stays_refused_as_a_pointer():
+    # A CLICK contact takes no pointer, so the window question never reaches one.
+    from pyrung.click.validation import CLK_PTR_CONTEXT_ONLY_COPY
+
+    hit = Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(txt[ds[1]] == "AB"):
+            out(hit)
+    mapping = TagMap({hit: c[1]}, include_system=False)
+    report = validate_click_program(prog, mapping, mode="strict")
+    codes = {f.code for f in report.errors}
+    assert CLK_PTR_CONTEXT_ONLY_COPY in codes
+    assert CLK_TEXT_WINDOW_NOT_CONTIGUOUS not in codes
+
+
+def test_a_named_array_window_imports_back_comparing_the_same_txts(tmp_path):
+    # Exported as TXT1=="XY" and imported back through the nickname file, the
+    # compare is written on the structure and still reads TXT1 and TXT2.
+    from pyrung.click.codegen.api import ladder_to_pyrung
+    from pyrung.core import named_array
+
+    @named_array(Char, count=2, stride=2)
+    class Pair:
+        a = ""
+        b = ""
+
+    hit = Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung(Pair.a[1] == "XY"):
+            out(hit)
+    mapping = TagMap([*Pair.map_to(txt.select(1, 4)), hit.map_to(c[1])], include_system=False)
+    bundle = pyrung_to_ladder(prog, mapping)
+    assert bundle.main_rows[1][1] == 'TXT1=="XY"'
+    nicknames = tmp_path / "Address.csv"
+    mapping.to_nickname_file(nicknames)
+
+    source = ladder_to_pyrung(bundle, nickname_csv=nicknames)
+    assert 'Pair[1].a == "XY"' in source
+    namespace: dict = {}
+    exec(compile(source, "generated.py", "exec"), namespace)
+    window = namespace["logic"].rungs[0]._conditions[0]
+    assert [cond.tag.name for cond in window.conditions] == ["Pair1_a", "Pair1_b"]
+    assert _window_codes(namespace["logic"], namespace["mapping"]) == []
