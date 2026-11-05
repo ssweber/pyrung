@@ -45,7 +45,7 @@ from pyrung.core.analysis.prove import (
     never,
     reachable_states,
 )
-from pyrung.core.analysis.prove.lockfile import write_lock
+from pyrung.core.analysis.prove.lockfile import program_hash, write_lock
 from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 
 _HERE = Path(__file__).name
@@ -153,3 +153,17 @@ def test_only_the_verifiers_kernel_is_capped() -> None:
     logic, _prop = _loop_program(lambda: Dint("N", external=True))
     assert "_ForIterationsBeyondCap" in compile_kernel(logic, proof_metadata=True).source
     assert "_ForIterationsBeyondCap" not in compile_kernel(logic).source
+
+
+def _hash_of_a_loop(blank_lines: int) -> str:
+    # The same program, its For built *blank_lines* source lines further down.
+    n = Dint("N", external=True)
+    y = Bool("Y")
+    source = "\n" * blank_lines + "with Rung():\n    with forloop(n):\n        copy(1, y)\n"
+    with Program(strict=False) as logic:
+        exec(compile(source, "built_elsewhere.py", "exec"), {**globals(), "n": n, "y": y})  # noqa: S102
+    return program_hash(logic)
+
+
+def test_a_capped_loops_place_stays_out_of_the_lock_hash() -> None:
+    assert _hash_of_a_loop(0) == _hash_of_a_loop(1)

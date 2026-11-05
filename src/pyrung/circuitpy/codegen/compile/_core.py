@@ -805,11 +805,13 @@ def _compile_for_loop_instruction(
         ]
     if ctx.proof_metadata and mask > control.FOR_COUNT_MASK_16:
         # The verifier's kernel stops a 32-bit count past its cap rather than
-        # run it (a negative Dint is about 4.29 billion iterations).
-        where, label, tags = _for_count_site(instr)
+        # run it (a negative Dint is about 4.29 billion iterations).  The source
+        # names the loop by index: its file and line stay out of the lock's hash.
+        site = len(ctx.for_cap_sites)
+        ctx.for_cap_sites.append(_for_count_site(instr))
         iterations_lines += [
             f"if {iterations_var} > {PROVE_FOR_ITERATION_CAP}:",
-            f"    raise _ForIterationsBeyondCap({where!r}, {label!r}, {iterations_var}, {tags!r})",
+            f"    raise _ForIterationsBeyondCap(*_for_cap_sites[{site}], {iterations_var})",
         ]
     body = [
         *iterations_lines,

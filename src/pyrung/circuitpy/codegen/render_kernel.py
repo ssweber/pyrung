@@ -141,6 +141,7 @@ def compile_kernel(
         "_dt_to_ns": dt_to_ns,
         # A proof_metadata kernel's For past the verifier's cap raises it.
         "_ForIterationsBeyondCap": ForIterationsBeyondCap,
+        "_for_cap_sites": tuple(ctx.for_cap_sites),
     }
     code = compile(source, "<kernel>", "exec", dont_inherit=True)
     exec(code, namespace)  # noqa: S102
