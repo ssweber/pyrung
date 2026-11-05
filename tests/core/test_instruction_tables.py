@@ -22,11 +22,13 @@ from dataclasses import dataclass
 
 import pytest
 
+import pyrung.core
 from pyrung.circuitpy.validation import _evaluate_timer_resolution
 from pyrung.click.ladder.instructions import _InstructionMixin
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
 from pyrung.click.validation import hardware
+from pyrung.core import Int
 from pyrung.core.analysis.causal.why import _INSTRUCTION_LABELS
 from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
 from pyrung.core.instruction.calc import CalcInstruction
@@ -71,7 +73,7 @@ from pyrung.core.instruction.send_receive._core import (
 from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 from pyrung.core.validation.dead_write import _AMBIGUOUS_INSTRUCTIONS
 from pyrung.core.validation.owned_bit_coil import _COILS, _OWNERS
-from pyrung.core.validation.render import _VERB
+from pyrung.core.validation.render import _VERB, render_instruction
 from pyrung.dap.miner import _instruction_owned_tags
 from tests.core.analysis.test_crossings_coverage import _concrete_instruction_classes
 
@@ -206,16 +208,6 @@ _PIN_CONDITIONS = frozenset(
     {"reset_condition", "clock_condition", "down_condition", "jump_condition", "jog_condition"}
 )
 
-# Render falls back to verb(target), and to the class name without a verb.  These
-# writers have no verb yet, so a finding on one shows FunctionCallInstruction(x).
-_WRITERS_WITHOUT_A_VERB = frozenset(
-    {
-        ForLoopInstruction.__name__,
-        FunctionCallInstruction.__name__,
-        EnabledFunctionCallInstruction.__name__,
-    }
-)
-
 # Declared writes that the two hardware tables do not check, and why that is right.
 _WRITES_CHECKED_ELSEWHERE: dict[tuple[str, str], str] = {
     (CopyInstruction.__name__, "dest"): "the table names it target, a property on dest",
@@ -227,34 +219,22 @@ _WRITES_CHECKED_ELSEWHERE: dict[tuple[str, str], str] = {
     (EnabledFunctionCallInstruction.__name__, "_outs"): "run_function has no CLICK form",
 }
 
-_MODBUS_GAP = (
-    "CLICK validation never checks where send() and receive() write: a dest in read-only "
-    "SD and a status bit on X report nothing, where copy() reports CLK_BANK_NOT_WRITABLE"
-)
-
 
 def _writes_to_check() -> list[object]:
-    params: list[object] = []
-    for cls in sorted(KIND, key=lambda c: c.__name__):
-        for field in cls._writes:
-            if (cls.__name__, field) in _WRITES_CHECKED_ELSEWHERE:
-                continue
-            is_modbus = KIND[cls] == "modbus"
-            params.append(
-                pytest.param(
-                    cls,
-                    field,
-                    id=f"{cls.__name__}.{field}",
-                    marks=(pytest.mark.xfail(strict=True, reason=_MODBUS_GAP),)
-                    if is_modbus
-                    else (),
-                )
-            )
-    return params
+    return [
+        pytest.param(cls, field, id=f"{cls.__name__}.{field}")
+        for cls in sorted(KIND, key=lambda c: c.__name__)
+        for field in cls._writes
+        if (cls.__name__, field) not in _WRITES_CHECKED_ELSEWHERE
+    ]
 
 
 def _hardware_fields() -> list[tuple[str, str]]:
-    fields = set(hardware._WRITE_TARGET_FIELDS) | set(hardware._ROLE_ASSIGNMENT_FIELDS)
+    fields = (
+        set(hardware._WRITE_TARGET_FIELDS)
+        | set(hardware._ROLE_ASSIGNMENT_FIELDS)
+        | set(hardware._MODBUS_WRITE_BANKS)
+    )
     for name, field_names in hardware._TIMER_PRESET_FIELDS.items():
         fields.update((name, field) for field in field_names)
     for name, pairs in hardware._TIMER_PAIR_FIELDS.items():
@@ -307,7 +287,20 @@ def test_every_writer_is_labelled() -> None:
 
 
 def test_every_writer_has_a_verb() -> None:
-    assert frozenset(_VERB) == _WRITERS - _WRITERS_WITHOUT_A_VERB
+    # Render falls back to verb(target), and to the class name without a verb.
+    assert frozenset(_VERB) == _WRITERS
+
+
+@pytest.mark.parametrize("cls_name,verb", sorted(_VERB.items()), ids=lambda v: v)
+def test_findings_show_real_dsl_names(cls_name: str, verb: str) -> None:
+    # A finding prints this as source, so it has to be something the user can write.
+    assert hasattr(pyrung.core, verb), f"{cls_name} renders as {verb}(), not in pyrung.core"
+    assert _INSTRUCTION_LABELS[cls_name] == verb
+
+
+def test_a_calc_finding_shows_calc_as_it_is_written() -> None:
+    a, dest = Int("A"), Int("Dest")
+    assert render_instruction(CalcInstruction(a + 1, dest), "Dest")[0] == "calc((A + 1), Dest)"
 
 
 def test_every_pin_is_exported() -> None:
@@ -317,11 +310,17 @@ def test_every_pin_is_exported() -> None:
 
 @pytest.mark.parametrize("cls,field", _writes_to_check())
 def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None:
-    # Timers, counters and drums reach this through a role, which is the stricter check.
+    # Timers, counters and drums reach this through a role, Send and Receive through
+    # the banks CLICK's help pages list for them.
     name = cls.__name__
-    assert (name, field) in hardware._WRITE_TARGET_FIELDS | set(hardware._ROLE_ASSIGNMENT_FIELDS), (
-        f"nothing checks that CLICK can write {name}.{field}: add it to _WRITE_TARGET_FIELDS or "
-        "_ROLE_ASSIGNMENT_FIELDS, or to _WRITES_CHECKED_ELSEWHERE in this file with the reason"
+    checked = (
+        hardware._WRITE_TARGET_FIELDS
+        | set(hardware._ROLE_ASSIGNMENT_FIELDS)
+        | set(hardware._MODBUS_WRITE_BANKS)
+    )
+    assert (name, field) in checked, (
+        f"nothing checks that CLICK can write {name}.{field}: add it to a hardware table, or to "
+        "_WRITES_CHECKED_ELSEWHERE in this file with the reason"
     )
 
 

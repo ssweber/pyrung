@@ -64,14 +64,14 @@ _VERB: dict[str, str] = {
     "CopyInstruction": "copy",
     "BlockCopyInstruction": "blockcopy",
     "FillInstruction": "fill",
-    "CalcInstruction": "math",
-    "OnDelayInstruction": "ondelay",
-    "OffDelayInstruction": "offdelay",
-    "CountUpInstruction": "countup",
-    "CountDownInstruction": "countdown",
-    "EventDrumInstruction": "eventdrum",
-    "TimeDrumInstruction": "timedrum",
-    "TimeEventDrumInstruction": "timeeventdrum",
+    "CalcInstruction": "calc",
+    "OnDelayInstruction": "on_delay",
+    "OffDelayInstruction": "off_delay",
+    "CountUpInstruction": "count_up",
+    "CountDownInstruction": "count_down",
+    "EventDrumInstruction": "event_drum",
+    "TimeDrumInstruction": "time_drum",
+    "TimeEventDrumInstruction": "time_event_drum",
     "ToggleInstruction": "toggle",
     "DebounceInstruction": "debounce",
     "FlasherInstruction": "flasher",
@@ -83,8 +83,11 @@ _VERB: dict[str, str] = {
     "PackBitsInstruction": "pack_bits",
     "PackWordsInstruction": "pack_words",
     "PackTextInstruction": "pack_text",
-    "UnpackToBitsInstruction": "unpack_bits",
-    "UnpackToWordsInstruction": "unpack_words",
+    "UnpackToBitsInstruction": "unpack_to_bits",
+    "UnpackToWordsInstruction": "unpack_to_words",
+    "ForLoopInstruction": "forloop",
+    "FunctionCallInstruction": "run_function",
+    "EnabledFunctionCallInstruction": "run_enabled_function",
 }
 
 
@@ -272,19 +275,14 @@ def render_instruction(
         code = f"fill({operand_name(instr.value)}, {operand_name(instr.dest)})"
     elif itype == "CalcInstruction":
         written = getattr(instr, "source_expression", instr.expression)
-        code = f"math({operand_name(instr.dest)}, {render_expr(written)})"
+        code = f"calc({render_expr(written)}, {operand_name(instr.dest)})"
     elif itype in (
         "OnDelayInstruction",
         "OffDelayInstruction",
         "CountUpInstruction",
         "CountDownInstruction",
     ):
-        verb = {
-            "OnDelayInstruction": "on_delay",
-            "OffDelayInstruction": "off_delay",
-            "CountUpInstruction": "count_up",
-            "CountDownInstruction": "count_down",
-        }[itype]
+        verb = _VERB[itype]
         owner = operand_name(instr.accumulator)
         if owner.endswith(".Acc"):
             owner = owner[:-4]

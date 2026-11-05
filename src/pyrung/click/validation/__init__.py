@@ -66,6 +66,7 @@ from .hardware import (
     _evaluate_coil_targets,
     _evaluate_copy_compatibility,
     _evaluate_drums,
+    _evaluate_modbus_banks,
     _evaluate_out_variant_unit,
     _evaluate_pack_text,
     _evaluate_role_assignments,
@@ -273,6 +274,7 @@ def validate_click_program(
                 _evaluate_drums(instruction, base_location, tag_map, active_profile, mode, resolver)
             )
             findings.extend(_evaluate_timer_pairs(instruction, base_location, mode, resolver))
+            findings.extend(_evaluate_modbus_banks(instruction, base_location, mode, resolver))
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []

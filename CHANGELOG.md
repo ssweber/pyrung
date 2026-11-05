@@ -207,6 +207,8 @@
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far, where it answered `REACHED` with no scans.
 - `how()` under a harness link answers when the scan before it shows a step on the route, where it raised `TheoryInvariantError`. A scan run before a harness link changed replays on the plant that ran it, where `how()` and causal history saw it under the new link.
 - A harness plant on a block slot only a pointer reaches uses the slot and its default, where a stand-in tag ran from 0 and changed what the program read. An `Approach` whose setpoint tag no rung names and nothing has written warns at install that it starts from 0.
+- CLICK validation reports a `send()` or `receive()` status flag outside `C`, an `exception_response` outside `DS` or `DD`, or a `receive()` `dest` in a bank CLICK's help lists no Receive for (`CLK_BANK_WRONG_ROLE`); nothing checked these before.
+- Findings show the code you can write: `calc(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`, where they showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
 
 ## v0.15.2 (2026-10-11)
 

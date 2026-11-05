@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.click.capabilities import CONVERTER_COMPATIBILITY
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import ProgramLocation, _condition_children
@@ -692,3 +693,69 @@ def _evaluate_out_variant_unit(
             suggestion=f"Use unit= one of {choices} and scale the preset.",
         )
     ]
+
+
+# The banks a Send or Receive may write, from CLICK's help pages for them (the MODBUS
+# TCP and RTU pages agree).  Not probed on hardware: no conformance case runs them.
+# SD is a Receive destination there whole, so this does not apply copy()'s writable
+# SD subset.
+_MODBUS_FLAG_BANKS = frozenset({"C"})
+_MODBUS_EXCEPTION_BANKS = frozenset({"DS", "DD"})
+_MODBUS_RECEIVE_DEST_BANKS = frozenset(
+    {"Y", "C", "CTD", "DS", "DD", "DH", "DF", "SD", "TD", "YD", "TXT"}
+)
+_MODBUS_WRITE_BANKS: dict[tuple[str, str], frozenset[str]] = {
+    ("ModbusReceiveInstruction", "dest"): _MODBUS_RECEIVE_DEST_BANKS,
+    ("ModbusReceiveInstruction", "receiving"): _MODBUS_FLAG_BANKS,
+    ("ModbusReceiveInstruction", "success"): _MODBUS_FLAG_BANKS,
+    ("ModbusReceiveInstruction", "error"): _MODBUS_FLAG_BANKS,
+    ("ModbusReceiveInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
+    ("ModbusSendInstruction", "sending"): _MODBUS_FLAG_BANKS,
+    ("ModbusSendInstruction", "success"): _MODBUS_FLAG_BANKS,
+    ("ModbusSendInstruction", "error"): _MODBUS_FLAG_BANKS,
+    ("ModbusSendInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
+}
+
+
+def _evaluate_modbus_banks(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    findings: list[ClickFinding] = []
+    instruction_type = type(instruction).__name__
+
+    for (candidate_type, field_name), banks in _MODBUS_WRITE_BANKS.items():
+        if instruction_type != candidate_type:
+            continue
+
+        value = getattr(instruction, field_name)
+        # A status bit left off is a hidden tag that never reaches the CLICK project.
+        if isinstance(value, Tag) and is_modbus_status_tag(value.name):
+            continue
+
+        location = _instruction_location(base_location, f"instruction.{field_name}")
+        resolution = resolver.resolve_operand_slots(value)
+        if resolution.unresolved:
+            findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
+            continue
+
+        for slot in resolution.slots:
+            if slot.memory_type in banks:
+                continue
+            location_text = _format_location(location)
+            choices = ", ".join(sorted(banks))
+            findings.append(
+                ClickFinding(
+                    code=CLK_BANK_WRONG_ROLE,
+                    severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
+                    message=(
+                        f"Bank {_bank_label(slot)} is invalid for {field_name} "
+                        f"at {location_text}; CLICK takes {choices}."
+                    ),
+                    location=location_text,
+                )
+            )
+
+    return findings
