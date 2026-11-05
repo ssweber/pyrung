@@ -4,22 +4,23 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as
-twelve projects, one part each (``PARTS``; there is no part D)::
+The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as nine
+projects, one part each, named for what they cover (``PARTS``)::
 
-    make conformance-export PART=A OUT=path/to/a
-    make conformance-export PART=B OUT=path/to/b
-    make conformance-export PART=C OUT=path/to/c
-    make conformance-export PART=E OUT=path/to/e
-    make conformance-export PART=F OUT=path/to/f
-    make conformance-export PART=G OUT=path/to/g
-    make conformance-export PART=H OUT=path/to/h  (and I, J, K, L, M)
+    make conformance-export PART=coils OUT=path/to/coils
+    make conformance-export PART=copy OUT=path/to/copy
+    make conformance-export PART=math OUT=path/to/math
+    make conformance-export PART=drum1 OUT=path/to/drum1  (and drum2, drum3)
+    make conformance-export PART=control OUT=path/to/control
+    make conformance-export PART=system OUT=path/to/system
+    make conformance-export PART=boot OUT=path/to/boot
 
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
 
-Parts N, O and P have memory of their own (``APART_PARTS``), apart from the whole
-suite; part O is run with CLICK's fixed scan on, and its export says how.
+The parts ``units``, ``fixed_scan`` and ``text_flasher`` have memory of their own
+(``APART_PARTS``), apart from the whole suite; ``fixed_scan`` is run with CLICK's fixed
+scan on, and its export says how.
 
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
 
@@ -173,63 +174,72 @@ ALL_GROUPS = [
     test_past_bank_write.group,
 ]
 
-#: Group names per CLICK project, split to keep each part under
-#: ``PART_STEP_BUDGET``: A and B the instructions, C how a rung is solved
-#: (solve order, edges, loops) with the paste probes, E the drum traces and the
-#: fault-flag probes, G the S6 drum probes.  Every group is in exactly one part.  The registers
-#: are the manifest's either way, so a group's subroutine is the same in its
-#: part as in the whole project.
+#: Group names per CLICK project, by instruction chapter (``docs/instructions/``), split to
+#: keep each part under ``PART_STEP_BUDGET``.  Every group is in exactly one part.  The
+#: registers are the manifest's either way, so a group's subroutine is the same in its part as
+#: in the whole project, and moving a group between parts changes no case's hash.  Groups run
+#: in ``ALL_GROUPS`` order, so main calls them in that order, and a group a CLICK may refuse at
+#: paste comes last in its part, so its subroutine and call rung are the last to delete.
 PARTS: dict[str, tuple[str, ...]] = {
-    "A": (
-        "block",
-        "counters",
-        "drum",
-        "math",
-        "math_error",
-        "numeric",
-    ),
-    "B": ("out", "search", "shift", "system", "text", "timers"),
-    # Groups run in ``ALL_GROUPS`` order, so main calls them in that order: the
-    # groups no CLICK has run yet and that it may refuse at paste (``cont_box``,
-    # a box on a continued wire; ``paste_risk``, operands it may not take) are
-    # last, so a refused group's subroutine and its call rung are the last to
-    # delete.  ``loop_call`` runs its rungs in main, after every call rung.
-    "C": (
-        "call_twice",
+    # Contacts, coils, timers and counters.  ``compare`` is last: the editor may refuse its
+    # 2-char literal.
+    "coils": (
+        "out",
         "coils",
-        "loop",
-        "row_solve",
+        "counters",
+        "timers",
+        "out_more",
+        "coil_range",
+        "compare",
+    ),
+    # ``past_write`` is last: it writes past the DD bank on a CLICK, so its subroutine and
+    # call rung can be left out.  Nothing depends on it.
+    "copy": (
+        "text",
+        "block",
+        "word_store",
+        "real_bits",
+        "copy_more",
+        "block_more",
+        "past_write",
+    ),
+    # ``store_probe`` is last: the editor may refuse a RAND bound form (``rand_bound_forms``,
+    # the group's last case), and it raises fault flags no group below may read.
+    "math": (
+        "math",
+        "numeric",
+        "math_error",
+        "real_sum",
+        "math_more",
+        "hex_math",
+        "agg_more",
+        "store_probe",
+    ),
+    # The drums are too many for one project.  ``drum_limits`` may be refused at paste.
+    "drum1": ("drum", "drum_trace", "drum_rule", "drum_jump", "drum_limits"),
+    "drum2": ("drum_settle", "drum_close", "drum_idle", "drum_pins"),
+    "drum3": ("shift", "search", "drum_branch"),
+    # How a rung is solved, and program control.  ``loop_call`` runs its rungs in main, after
+    # every call rung.
+    "control": (
         "rungs",
+        "loop",
         "solve_order",
+        "call_twice",
         "ret_branch",
         "loop_call",
+        "row_solve",
         "cont_box",
-        "paste_risk",
         "for_count",
+        "paste_risk",
+        "for_more",
+        "call_more",
     ),
-    # A drum's state scan by scan and the fault-flag probes, which outgrew
-    # the budget left in parts A and C.
-    "E": ("drum_trace", "faults"),
-    # The S6 drum probes: the drum rule on time and time & event drums, out of
-    # part E when ``drum_settle`` left it no room.  ``drum_idle`` (a drum not
-    # reached; a For body may be refused at paste) is the part's last group.
-    "G": ("drum_rule", "drum_jump", "drum_settle", "drum_close", "drum_idle"),
-    # The S6 store probes (RAND bounds and destinations, Inf and NaN into text
-    # and Words, a Real into a TXT, a clamping Fill): a project of their own,
-    # since part E has no room left and the editor may refuse a RAND bound form
-    # at paste (``rand_bound_forms``, the group's last case).
-    # The fault-flag probes (flag_probe) follow, and ``past_write``, which
-    # writes past the DD bank on a CLICK, is the project's last group so it can be
-    # left out: nothing depends on it.
-    "F": ("store_probe", "flag_probe", "past_write"),
-    # The grey-area probes (probe_kit.py) go in parts of their own, so no confirmed
-    # group changes.  H what Copy and Math store.
-    "H": ("word_store", "real_bits", "real_sum"),
-    "I": ("drum_pins", "drum_branch", "drum_limits"),
-    "J": ("math_more", "hex_math", "agg_more"),
-    "K": ("copy_more", "block_more", "coil_range", "compare"),
-    "L": ("out_more", "for_more", "call_more"),
-    "M": ("boot_read", "rtc_set", "for_wide", "flag_scan"),
+    # ``system`` runs first (see test_system.py), then what reads a fault flag after it.
+    "system": ("system", "faults", "flag_probe"),
+    # Not by chapter: a person boots the PLC between its runs, ``rtc_set`` moves the clock and
+    # ``for_wide`` may make a scan of over a second, so it holds no wall-clock case.
+    "boot": ("boot_read", "rtc_set", "for_wide", "flag_scan"),
 }
 
 
@@ -260,13 +270,13 @@ APART_GROUPS = [
 APART_PARTS: dict[str, ApartPart] = {
     # Timers in different units with one delay, Done on one scan: the relation, which
     # holds or not whatever a scan takes.
-    "N": ApartPart(("unit_pairs", "unit_minute")),
+    "units": ApartPart(("unit_pairs", "unit_minute")),
     # The scan a CLICK counts, for curiosity: only fixed scan mode makes that a number.
-    "O": ApartPart(("fixed_scan",), fixed_scan_ms=100),
+    "fixed_scan": ApartPart(("fixed_scan",), fixed_scan_ms=100),
     # What = and not-equal make of a TXT, a blank above all: a project of its own, since no
     # block of the suite has a slot left, and a blank needs TXT that no project has written.
     # And what a flasher's frozen off TD does when a lowered preset ends its on phase.
-    "P": ApartPart(("text_compare", "flasher_td")),
+    "text_flasher": ApartPart(("text_compare", "flasher_td")),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

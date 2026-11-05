@@ -14,14 +14,10 @@ from tests.conformance.loop_corpus import HOLES, Subject, Tally
 #: Why the loop refuses every run of a part as built, for a case or two in it.  Each case that
 #: does runs alone, and ``test_loop_corpus_less.py`` runs its part without it.
 PARTS_THAT_DECLINE = {
-    "A": "randint",
-    "B": "scan-derived system tag",
-    "C": "randint",
-    "E": "randint",
-    "F": "randint",
-    "J": "randint",
-    "L": "scan-derived system tag",
-    "M": "scan-derived system tag",
+    "math": "randint",
+    "control": "randint",
+    "system": "randint",
+    "boot": "scan-derived system tag",
 }
 
 MIN_LOOP_SHARE = 0.4
@@ -59,7 +55,7 @@ def test_part_as_built(part: str) -> None:
         loop_corpus.assert_the_loop_ran(tally, MIN_LOOP_SHARE)
 
 
-@pytest.mark.parametrize("part", ["O", "P"])
+@pytest.mark.parametrize("part", ["fixed_scan", "text_flasher"])
 def test_a_part_with_nothing_lowered(part: str) -> None:
     """As a user runs it: 1000 scans interpreted, then a run long enough for the loop to take."""
     tally = Tally()

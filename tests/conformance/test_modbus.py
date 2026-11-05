@@ -260,10 +260,10 @@ def test_mismatched_layout_bails_before_writing() -> None:
 
 def test_the_loaded_part_is_read_from_ds1() -> None:
     assert suite.build_for(None).program_hash == suite.build().program_hash
-    part_a = suite.build("A")
-    with SimServer(part_a) as sim:
+    part = suite.build("coils")
+    with SimServer(part) as sim:
         assert sim.endpoint is not None
-        assert suite.build_for(sim.endpoint).program_hash == part_a.program_hash
+        assert suite.build_for(sim.endpoint).program_hash == part.program_hash
     other = build_program([_alpha(), _beta()], _TWO_GROUPS)
     with SimServer(other) as sim:
         assert sim.endpoint is not None

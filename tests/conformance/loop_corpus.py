@@ -253,7 +253,7 @@ MIN_LOOP_SHARE_ALONE = 0.5
 
 #: The parts of ``test_loop_corpus.py``, about half the time of each case alone: the rest are in
 #: ``test_loop_corpus_later_parts.py``, on another xdist worker.
-FIRST_PARTS = ("A", "B", "C", "E")
+FIRST_PARTS = ("coils", "math", "control", "system")
 
 
 def cases_of(part: str) -> list[tuple[Group, Case]]:
