@@ -162,7 +162,7 @@ def whole_run_decline(program: Program) -> str | None:
 
 _REASONS = ("run declined: ", "decline: ", "interpreted: ")
 #: What fold_check lists as a run or a stop gone unchecked, and any other run it skips whole (a
-#: monitor, say): its tuple names only the skips a test can do something about.
+#: monitor, say), which its tuple leaves out.
 _NOT_CHECKED = (*fold_check._SKIPS_LISTED_BY_TEST, "skipped:")
 
 
