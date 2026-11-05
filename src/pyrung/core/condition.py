@@ -551,15 +551,16 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
     if tag.type is not TagType.CHAR or not isinstance(value, str) or len(value) < 2:
         return None
     hw_slot = getattr(tag, "_pyrung_hw_slot", None)
-    if hw_slot is not None:
-        block, addr = hw_slot
-    else:
+    # Held weakly: once the bank is gone, nothing maps the tag there.
+    block, addr = (hw_slot[0](), hw_slot[1]) if hw_slot is not None else (None, None)
+    mapped = block is not None
+    if not mapped:
         block = getattr(tag, "_pyrung_home_block", None)
         addr = getattr(tag, "_pyrung_home_addr", None)
     if block is None or not isinstance(addr, int):
         return None
     try:
-        if hw_slot is not None:
+        if mapped:
             tags = [block[addr + offset] for offset in range(len(value))]
         else:
             tags = _text_window_tags(block, addr, len(value))

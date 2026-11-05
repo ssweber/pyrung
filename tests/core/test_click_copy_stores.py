@@ -404,3 +404,21 @@ def test_a_logical_compare_built_after_mapping_reads_the_hardware(runner_factory
     patch = {"Msg1": "A", "TXT6": "B", "Code": "C", "TXT22": "D"}
     assert _one_scan(runner_factory, logic, {**patch, "Msg2": "Q"})["Same"] is True
     assert _one_scan(runner_factory, logic, {**patch, "Msg2": "B", "TXT6": "Q"})["Same"] is False
+
+
+def test_a_char_mapping_alone_does_not_hold_its_bank():
+    """The slot a Char is mapped to is kept weakly: once nothing holds the bank, the
+    tag is mapped nowhere, and compares as a Char of no block."""
+    import gc
+    import weakref
+
+    from pyrung.core import Char
+
+    code = Char("Code")
+    bank = Block("LifeTxt", TagType.CHAR, 1, 4)
+    code.map_to(bank[2])
+    bank_ref = weakref.ref(bank)
+    del bank
+    gc.collect()
+    assert bank_ref() is None
+    assert _window_shape(code == "AB") == ("as written", "Code")
