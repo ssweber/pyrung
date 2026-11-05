@@ -156,6 +156,10 @@ class ScanRungWriteProjection:
         order = self._run_order_by_identity.get(id(run))
         return self._writes_by_run.get(order, ()) if order is not None else ()
 
+    def reads_of(self, tag_name: str) -> tuple[RungRead, ...]:
+        """Exact reads of one tag, in execution order."""
+        return self._reads_by_tag.get(tag_name, ())
+
     def reads_for_run(self, run: RungRun) -> tuple[RungRead, ...]:
         """Exact direct reads attributed to this dynamic run."""
         order = self._run_order_by_identity.get(id(run))
