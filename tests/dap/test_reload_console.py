@@ -406,6 +406,51 @@ class TestReloadSiteMemory:
         assert adapter._runner.current_state.tags["Pulse"] is True
 
 
+OUT_COIL_SCRIPT = (
+    "from pyrung.core import Bool, PLC, Program, Rung, Timer, debounce, timed\n"
+    "\n"
+    "button = Bool('Button')\n"
+    "horn = Bool('Horn')\n"
+    "tank = Bool('Tank')\n"
+    "t = Timer.clone('Ot', count=4)\n"
+    "\n"
+    "with Program(strict=False) as prog:\n"
+    "    with Rung(button):\n"
+    "        timed(horn, t[1], {on})\n"
+    "    with Rung(button):\n"
+    "        debounce(tank, on=(t[2], {on}), off=(t[3], 20))\n"
+    "\n"
+    "runner = PLC(prog, dt=0.010)\n"
+)
+
+
+class TestReloadRungMemory:
+    def test_an_edited_preset_does_not_restart_a_held_rung(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path, OUT_COIL_SCRIPT.format(on=30))
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 5", seq=11)
+        tags = adapter._runner.current_state.tags
+        assert tags["Horn"] is False  # its pulse is spent
+        assert tags["Tank"] is True
+        assert tags["Ot2_Acc"] == 50
+
+        script_path.write_text(OUT_COIL_SCRIPT.format(on=40), encoding="utf-8")
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+        assert "no matching site" not in resp["body"]["result"]
+        memory = adapter._runner.current_state.memory
+        assert memory["_timed_rung:i1"] is True
+        assert memory["_debounce_rung:i2"] is True
+
+        _repl(adapter, out, "step 2", seq=13)
+        tags = adapter._runner.current_state.tags
+        # The held rung is no new edge: no second pulse, and the on side runs on.
+        assert tags["Horn"] is False
+        assert tags["Ot1_Acc"] == 30
+        assert tags["Tank"] is True
+        assert tags["Ot2_Acc"] == 70
+
+
 class TestReloadTagTypeChange:
     def test_type_change_drops_value(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)

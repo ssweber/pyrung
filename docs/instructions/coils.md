@@ -36,7 +36,7 @@ with rung(LevelSwitch):
     debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
 ```
 
-`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms; a shorter blip changes nothing. Each side is an on-delay timer on the rung (or on its negation): it restarts from 0 when the rung changes to its side, its `Acc` keeps counting past the preset while the rung holds, as `on_delay`'s does, and it keeps that `Acc` while the other side times. CLICK requires both sides.
+`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms; a shorter blip changes nothing. Each side's `Acc` restarts from 0 when the rung changes to its side, keeps counting past the preset while the rung holds, as `on_delay`'s does, and holds while the other side times. CLICK requires both sides.
 
 ### `flasher` — blink while the rung is true
 
