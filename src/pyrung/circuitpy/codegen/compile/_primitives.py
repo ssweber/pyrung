@@ -177,7 +177,7 @@ def _compile_expression_impl(
             ctx.mark_helper("_QuietMathError")
             ctx.mark_helper("_pow")
             return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
-        if expr.symbol == "%" and not (_non_negative(expr.left) and _non_zero_literal(expr.right)):
+        if expr.symbol == "%" and not (_non_negative(expr.left) and _positive_literal(expr.right)):
             # MOD truncates (the dividend's sign) and a MOD by 0 is a
             # _QuietMathError, as the core's _op_mod; Python's % floors.
             ctx.mark_helper("_QuietMathError")
@@ -380,6 +380,10 @@ _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
 
 def _non_zero_literal(expr: Any) -> bool:
     return isinstance(expr, LiteralExpr) and expr.value != 0
+
+
+def _positive_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value > 0
 
 
 def _non_negative_literal(expr: Any) -> bool:

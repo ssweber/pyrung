@@ -2340,6 +2340,7 @@ class TestBoardPeripheralsAndRunStop:
         ("mod_int", lambda n, d, z, w, r: n % 2, Int, -1, (0, 0, 0)),
         ("mod_negative_divisor", lambda n, d, z, w, r: 7 % (n + 5), Int, 1, (0, 0, 0)),
         ("mod_real", lambda n, d, z, w, r: r % 2.0 * 10, Int, -15, (0, 0, 0)),
+        ("mod_word_by_minus_two", lambda n, d, z, w, r: w % -2, Dint, 1, (0, 0, 0)),
         ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
         ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
         ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),

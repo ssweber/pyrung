@@ -158,7 +158,7 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A draw cut into an `Int` is chosen through `expr.cut_tag` instead. Equal constants and a bare `Real` bound read no draw, so patching or forcing their tag changes nothing.
+A draw cut into an `Int` is chosen through `expr.cut_tag` instead. Equal bounds and a bare `Real` bound read no draw, so patching or forcing their tag changes nothing.
 
 The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the site's tag.
 
