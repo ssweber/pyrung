@@ -83,7 +83,7 @@
 
 ### Fixes
 
-- `how()` no longer says `Cannot reach` for a target stepping can get to: a `Pulse` on a rung's other contact, a second route to the target, a one-shot clobber, a force or patch already on the PLC, or an enable the program moves mid-scan. It reaches or says `Stopped`.
+- `how()` no longer says `Cannot reach` for a target stepping can get to: a `Pulse` on a rung's other contact, a second route to the target through a pointer or a for loop, a one-shot clobber, a force or patch already on the PLC, or an enable the program moves mid-scan. It reaches or says `Stopped`.
 - `how()` gives a `Stopped` plan with a reason for a comparison with arithmetic in a rung (`T.Acc + 1 >= N`) and for a search that loses track of its own evidence, where each raised a Python error, and `avoid=Bank[Idx] >= 9000` reads the slot instead of counting as violated everywhere, and ends the plan on any scan it goes true.
 - `how(And(A, B))` is `how(A, B)`, and `how(Or(...))`, `how(T.Acc >= Sp + 1)` and `how(T.Acc >= Tag)` where no rung uses `Tag` raise a `ValueError` saying what to pass.
 - Timers, Out coils and time drums count time exactly in every unit: at a fixed `dt` a timer is Done on scan `ceil(delay / dt)` whichever unit it counts in, where a `60s` timer at `dt=0.1` or a `1min` at `dt=0.01` ended a scan late.

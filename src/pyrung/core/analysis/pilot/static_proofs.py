@@ -3,7 +3,9 @@
 ``CANNOT_REACH`` claims no scan sequence gets there, so each proof here reasons
 about every write to a tag rather than the one route a trace prefers. Whatever
 it cannot enumerate it does not prove: the answer falls back to ``STOPPED``,
-which claims nothing.
+which claims nothing. Two writes are not yet seen, so a proof over them can be false:
+a text Copy from a tag spilling past its first slot, sized at run time, and a block
+write onto a plain tag named like the slot.
 
 Three facts carry both proofs:
 
@@ -31,8 +33,8 @@ its preset exceeds the delay plus some scans of slop.
 
 The plant reads the enable between scans and a rung reads it mid-scan, so this holds
 only while those two agree to within a scan. The enable has no pointer write, and
-either no writer, or one writer, an ``out`` coil on a main-level rung, and is not
-``free``. Anything wider is ``STOPPED``.
+either no writer, or one writer, an ``out`` coil on a main-level rung with no for
+loop, and is not ``free``. Anything wider is ``STOPPED``.
 
 **Mutually exclusive** (``exclusion_evidence``). ``X=a`` and ``Y=b`` cannot both
 hold at the end of a scan when no rung produces both and each rung producing one

@@ -24,7 +24,9 @@ module.
   holds are the replayable witness; replay does not re-plan.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
   unreachability, over every write to the tags involved and not one traced route
-  (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`.
+  (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`. Two writes it
+  does not see yet: a text Copy spilling past its first slot from a tag source, and
+  a block write onto a plain tag named like the slot.
 - `PlanStatus.STOPPED` means PILOT exhausted its bounded supply of safe,
   evidence-backed actions. It is not a proof that no path exists.
 - `Plan.journal`, `journey`, and the event stream explain the drive. They do not
