@@ -447,7 +447,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "TXT": range(1, 3),
         "DS": range(3911, 3914),
     },
-    "math_terms": {"DD": (range(51, 56), range(61, 63)), "DF": range(11, 12), "C": range(181, 186)},
+    "math_terms": {"DD": (range(51, 56), range(61, 65)), "DF": range(11, 16), "C": range(181, 186)},
     "search_more": {
         "C": range(201, 205),
         "DH": range(11, 15),

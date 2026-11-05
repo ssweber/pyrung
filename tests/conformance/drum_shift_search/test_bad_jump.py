@@ -14,7 +14,9 @@ time drum above the time & event drum; on 3 steps row 1 is 11, row 2 is 22.
 - On step 1, a jump to 9 on scan 3, with the time drum's Acc staged past its step's preset and
   the time & event drum's step 1 event (a level) on, on scans 3 and 4.  Result1 is scan 3 and
   Result2 scan 4.  The jump takes the scan: 1111, then 2222 as the time and the event move the
-  drums on scan 4.  The jump is dropped and the drums run: 2222, 2222.  pyrung reads 2222, 2222.
+  drums on scan 4.  The jump takes the scan and clears the time drum's Acc: 1111, then 1122, the
+  event alone moving its drum.  The jump is dropped and the drums run: 2222, 2222.  pyrung reads
+  2222, 2222.
 - On step 2 (a jog on scan 2), step 5 staged on scan 4 with a jump to 9 on that scan, as
   ``jump_on_bad_step``'s ErrorCode, which read 5252 (Result3, scan 4).  Result4 is scan 5 and
   ErrorCode scan 6: corrected to step 1 with the row left as it was, 1212; corrected and the row

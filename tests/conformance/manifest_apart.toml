@@ -71,6 +71,7 @@ slots = 4
 [groups.math_terms.cases]
 wide_values = 1
 error_terms = 2
+error_terms_real = 3
 
 [groups.search_more]
 base = 651 # Conf_SearchMore: DS651..DS680
