@@ -89,6 +89,20 @@ class TestValueDomainExtraction:
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert nd["Flag"] == (False, True)
 
+    def test_a_mod_of_a_whole_number_formula_lists_its_remainders(self):
+        """(Step + 1) % 6 is a whole number: its remainders are -5..5 (an Int may be
+        negative, and MOD takes the dividend's sign)."""
+        step = Int("Step")
+        with Program(strict=False) as logic:
+            with Rung(step == 3):
+                out(Bool("AtThree"))
+            with Rung():
+                calc((step + 1) % 6, step)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert result[0]["Step"] == tuple(range(-5, 6))
+
     @pytest.mark.parametrize("low, domain", [(-5, (-2, -1, 0, 1, 2)), (0, (0, 1, 2))])
     def test_a_mod_takes_the_dividends_sign(self, low, domain):
         """MOD truncates (a CLICK's Math): -5 MOD 3 is -2, so a dividend that may be

@@ -1731,18 +1731,40 @@ def _domain_from_calc_expression(
     return None
 
 
-def _integer_dividend(value: Any) -> bool:
-    """Whether *value* is an integer tag or constant, so its MOD by n is one of n integers.
+#: Operations that keep whole numbers whole (a calc's step past 2 ** 53 is a
+#: double, but still a whole one).
+_WHOLE_BINARY_SYMBOLS = frozenset({"+", "-", "*", "//", "%", "&", "|", "^", "<<", ">>"})
+_WHOLE_UNARY_SYMBOLS = frozenset({"-", "+", "~", "abs"})
 
-    A Real dividend has a fractional remainder (``2.5 % 3`` is 2.5), which the
-    interval bounds cover instead.
+
+def _integer_dividend(value: Any) -> bool:
+    """Whether *value* is a whole number, so its MOD by n is one of n integers.
+
+    Built from integer tags and constants by operations that keep whole numbers
+    whole (``(CurStep + 1) % 6``).  A Real dividend has a fractional remainder
+    (``2.5 % 3`` is 2.5), and so may a ``/``, a ``**`` or a ``mean()``: the
+    interval bounds cover those instead.
     """
-    from pyrung.core.expression import INTEGER_TAG_TYPE_NAMES, LiteralExpr, TagExpr
+    from pyrung.core.expression import (
+        INTEGER_TAG_TYPE_NAMES,
+        BinaryExpr,
+        LiteralExpr,
+        TagExpr,
+        UnaryExpr,
+    )
     from pyrung.core.tag import ImmediateRef
 
     if isinstance(value, TagExpr):
         tag = value.tag.tag if isinstance(value.tag, ImmediateRef) else value.tag
         return tag.type.name in INTEGER_TAG_TYPE_NAMES
+    if isinstance(value, BinaryExpr):
+        return (
+            value.symbol in _WHOLE_BINARY_SYMBOLS
+            and _integer_dividend(value.left)
+            and _integer_dividend(value.right)
+        )
+    if isinstance(value, UnaryExpr):
+        return value.symbol in _WHOLE_UNARY_SYMBOLS and _integer_dividend(value.operand)
     if isinstance(value, LiteralExpr):
         value = value.value
     return isinstance(value, int)
