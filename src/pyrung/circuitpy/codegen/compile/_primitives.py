@@ -445,14 +445,13 @@ def calc_site_flags(expr: Any) -> bool:
     return False
 
 
-#: The largest magnitude of each integer tag type.  A Real is not bounded: it may
-#: hold a Python int (``Real("R", default=300000007)``), so its steps go through
-#: ``_dbl`` as the core's do.
+#: The largest magnitude of each integer tag type.
 _TYPE_BOUNDS = {
     TagType.BOOL: 1,
     TagType.INT: 1 << 15,
     TagType.DINT: 1 << 31,
     TagType.WORD: 0xFFFF,
+    TagType.REAL: 0,  # a Real holds a float (an int default is stored as one)
 }
 
 

@@ -2399,15 +2399,53 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (True, True, 1, 42, False, False, False) for name in results}
 
     @pytest.mark.parametrize("default", [300000007, 10**17 + 1])
-    def test_a_real_holding_an_int_steps_in_doubles_on_every_backend(self, monkeypatch, default):
+    def test_a_real_given_an_int_holds_a_float_on_every_backend(self, monkeypatch, default):
+        """An int default or patch of a Real is stored as a float, so the Real's
+        steps are doubles everywhere and no backend needs to step it as one."""
         r = Real("R", default=default)
         dest = Dint("Dest", default=99)
+        assert type(r.default) is float
         with Program(strict=False) as prog:
             with Rung():
                 calc(r * r + 1 - r * r, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         assert results == {name: (0, False, False, False) for name in results}
+        for cls in (PLC, CompiledPLC):
+            plc = cls(prog)
+            plc.patch({"R": default + 2})
+            plc.step()
+            assert type(plc.current_state.tags["R"]) is float
+            assert plc.current_state.tags["Dest"] == 0
+
+    def test_a_huge_real_power_outside_calc_is_inf_on_every_backend(self, monkeypatch):
+        """A Real given 10**30 holds 1e30: its tenth power is Inf, not an int too
+        large for a float that a division turns into an OverflowError."""
+        r = Real("R", default=10**30)
+        copied = Real("Copied", default=7.0)
+        hit = Bool("Hit")
+
+        def big():
+            return r * r * r * r * r * r * r * r * r * r / 3
+
+        with Program(strict=False) as prog:
+            with Rung(big() > 0):
+                out(hit)
+            with Rung():
+                copy(big(), copied)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, copied), scans=1)
+        assert results == {name: (True, math.inf) for name in results}
+
+    def test_a_real_calc_step_is_not_stepped_as_a_double(self):
+        r1, r2, r3 = Real("R1"), Real("R2"), Real("R3")
+        with Program() as prog:
+            with Rung():
+                calc(r1 + r2 * r1 - r2, r3)
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_dbl(" not in code
 
     @pytest.mark.parametrize("dest_type, floor", [(Int, -32768), (Dint, -2147483648)])
     def test_abs_of_the_bottom_of_a_range_is_zero_and_sc43_on_every_backend(
