@@ -43,7 +43,10 @@ reference area. A fresh `bob-reviewer` reads the result against the same rules.
 A branch that changes how rungs evaluate (rung/condition evaluation, live row solving, executor,
 scan order, edge or site memory) gets a second, focused `bob-reviewer` alongside the general one
 (user, 2026-10-31). What an instruction writes or flags does not need one (user, 2026-11-01):
-the debugger reads those values from the engine. Scope only the debugger, DAP
+the debugger reads those values from the engine. Nor does an instruction's new internal memory
+registered through `site_memory.instruction_memory()` (user, 2026-11-05): the DAP panes, reload
+and history handle it generically (checked once, on timed-coils and drum-click). Edge or site
+memory means a change to how that machinery works, not a new slot in it. Scope only the debugger, DAP
 server (`src/pyrung/dap/`) and VS Code extension (`editors/vscode/pyrung-debug/`) still
 following evaluation (stepping, condition trace, state panes, time travel, reload, recorded
 sessions). Brief it with `editors/vscode/pyrung-debug/AGENTS.md` and
