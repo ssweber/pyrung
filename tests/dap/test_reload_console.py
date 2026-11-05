@@ -477,7 +477,7 @@ COUNTER_SCRIPT = (
     "\n"
     "with Program(strict=False) as prog:\n"
     "    with Rung(part):\n"
-    "        count_up(ctr, preset={preset}).reset({reset})\n"
+    "        count_up(ctr, preset={preset}).down({down}).reset({reset})\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
@@ -533,7 +533,7 @@ DRUM_SCRIPT = (
     "    with Rung(running):\n"
     "        time_drum(\n"
     "            outputs=[Bool('Fill'), Bool('Drain')],\n"
-    "            presets=[{first}, 100],\n"
+    "            presets=[{first}, {second}],\n"
     "            unit='ms',\n"
     "            pattern=[[1, 0], [0, 1]],\n"
     "            current_step=Int('Step'),\n"
@@ -549,7 +549,7 @@ class TestReloadInputMemory:
     """An edit to what an instruction reads keeps its inputs as it last saw them."""
 
     def test_an_edited_counter_preset_does_not_count_a_held_input_again(self, tmp_path: Path):
-        script = COUNTER_SCRIPT.format(preset=10, reset="Bool('Clear')")
+        script = COUNTER_SCRIPT.format(preset=10, down="Bool('Dn')", reset="Bool('Clear')")
         adapter, out, script_path = _setup(tmp_path, script)
         _repl(adapter, out, "force Part true", seq=10)
         _repl(adapter, out, "step 3", seq=11)
@@ -569,20 +569,65 @@ class TestReloadInputMemory:
         _repl(adapter, out, "step 1", seq=17)
         assert adapter._runner.current_state.tags["Parts_Acc"] == 2
 
-    def test_an_edited_counter_reset_leg_resets_its_input_memory(self, tmp_path: Path):
-        script = COUNTER_SCRIPT.format(preset=10, reset="Bool('Clear')")
+    def test_a_preset_and_reset_leg_edit_does_not_count_a_held_input_again(self, tmp_path: Path):
+        script = COUNTER_SCRIPT.format(preset=10, down="Bool('Dn')", reset="Bool('Clear')")
         adapter, out, script_path = _setup(tmp_path, script)
         _repl(adapter, out, "force Part true", seq=10)
         _repl(adapter, out, "step 3", seq=11)
+        assert adapter._runner.current_state.tags["Parts_Acc"] == 1
         script_path.write_text(
-            COUNTER_SCRIPT.format(preset=20, reset="Bool('Clear2')"), encoding="utf-8"
+            COUNTER_SCRIPT.format(preset=20, down="Bool('Dn')", reset="Bool('Clear2')"),
+            encoding="utf-8",
         )
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "reset: _cu:i1" in resp["body"]["result"]
+        # The count input is the rung, which the reset leg does not touch.
+        assert "no matching site" not in resp["body"]["result"]
 
         _repl(adapter, out, "step 1", seq=13)
-        assert adapter._runner.current_state.tags["Parts_Acc"] == 2
+        assert adapter._runner.current_state.tags["Parts_Acc"] == 1
+
+    def _counted_down_once(self, tmp_path: Path) -> tuple[Any, ...]:
+        script = COUNTER_SCRIPT.format(preset=10, down="Bool('Dn')", reset="Bool('Clear')")
+        adapter, out, script_path = _setup(tmp_path, script)
+        _repl(adapter, out, "force Dn true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        assert adapter._runner.current_state.tags["Parts_Acc"] == -1
+        return adapter, out, script_path
+
+    def test_a_preset_and_down_leg_edit_resets_the_down_legs_memory(self, tmp_path: Path):
+        adapter, out, script_path = self._counted_down_once(tmp_path)
+        script_path.write_text(
+            COUNTER_SCRIPT.format(preset=20, down="Bool('Dn2')", reset="Bool('Clear')"),
+            encoding="utf-8",
+        )
+        resp, _ = _repl(adapter, out, "reload", seq=13)
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "1 site memory value(s) had no matching site" in result
+        assert "reset: _cd:i1" in result
+
+        # The new leg, held, is its first edge.
+        _repl(adapter, out, "force Dn2 true", seq=14)
+        _repl(adapter, out, "step 1", seq=15)
+        assert adapter._runner.current_state.tags["Parts_Acc"] == -2
+
+    def test_a_leg_only_edit_keeps_the_edited_legs_memory(self, tmp_path: Path):
+        adapter, out, script_path = self._counted_down_once(tmp_path)
+        script_path.write_text(
+            COUNTER_SCRIPT.format(preset=10, down="Bool('Dn2')", reset="Bool('Clear')"),
+            encoding="utf-8",
+        )
+        resp, _ = _repl(adapter, out, "reload", seq=13)
+        assert resp["success"] is True
+        # A helper leg is no part of the counter's identity: the site matches as it
+        # is, and the new leg's first scan compares with the old leg's last value.
+        assert "site memory" not in resp["body"]["result"]
+        assert adapter._runner.current_state.memory["_cd:i1"] is True
+
+        _repl(adapter, out, "force Dn2 true", seq=14)
+        _repl(adapter, out, "step 1", seq=15)
+        assert adapter._runner.current_state.tags["Parts_Acc"] == -1
 
     def test_an_edited_flasher_preset_runs_on_in_its_phase(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path, FLASHER_SCRIPT.format(on=50))
@@ -634,8 +679,14 @@ class TestReloadInputMemory:
         assert resp["success"] is True
         assert "reset: _toggle:i1" in resp["body"]["result"]
 
-    def test_an_edited_drum_preset_runs_its_step_on(self, tmp_path: Path):
-        adapter, out, script_path = _setup(tmp_path, DRUM_SCRIPT.format(first="short"))
+        _repl(adapter, out, "step 1", seq=13)
+        tags = adapter._runner.current_state.tags
+        # Another coil: the held rung is its first edge.  The old target keeps its value.
+        assert tags["Lamp2"] is True
+        assert tags["Lamp"] is True
+
+    def _drum_mid_step_one(self, tmp_path: Path) -> tuple[Any, ...]:
+        adapter, out, script_path = _setup(tmp_path, DRUM_SCRIPT.format(first="short", second=100))
         _repl(adapter, out, "force Running true", seq=10)
         _repl(adapter, out, "force Jump true", seq=11)
         _repl(adapter, out, "step 6", seq=12)
@@ -643,15 +694,22 @@ class TestReloadInputMemory:
         assert tags["Step"] == 1
         acc = tags["DrumAcc"]
         assert 0 < acc < 100
+        return adapter, out, script_path, acc
+
+    def test_an_edited_drum_preset_runs_its_step_on(self, tmp_path: Path):
+        adapter, out, script_path, acc = self._drum_mid_step_one(tmp_path)
 
         # The step's preset moves from one register to another.
-        script_path.write_text(DRUM_SCRIPT.format(first="long"), encoding="utf-8")
+        script_path.write_text(DRUM_SCRIPT.format(first="long", second=100), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=13)
         assert resp["success"] is True
         result = resp["body"]["result"]
         # The latched preset is read afresh; the rung and the held jump are not new edges.
-        assert "2 site memory value(s) had no matching site" in result
-        assert "reset: _drum_preset:i1, _drum_preset_step:i1" in result
+        assert "no matching site" not in result
+        assert (
+            "2 drum preset value(s) reset, the edited preset is read afresh: "
+            "_drum_preset:i1, _drum_preset_step:i1"
+        ) in result
 
         _repl(adapter, out, "step 1", seq=14)
         tags = adapter._runner.current_state.tags
@@ -661,6 +719,26 @@ class TestReloadInputMemory:
         tags = adapter._runner.current_state.tags
         assert tags["Step"] == 1
         assert tags["Fill"] is True
+
+    def test_an_edit_to_another_steps_preset_keeps_the_latched_one(self, tmp_path: Path):
+        adapter, out, script_path, acc = self._drum_mid_step_one(tmp_path)
+        # Lowered mid-step: the step keeps the preset it read when it started.
+        adapter._runner.patch({"Short": acc // 2})
+        script_path.write_text(DRUM_SCRIPT.format(first="short", second=150), encoding="utf-8")
+        resp, _ = _repl(adapter, out, "reload", seq=13)
+        assert resp["success"] is True
+        assert "Warnings" not in resp["body"]["result"]
+
+        _repl(adapter, out, "step 1", seq=14)
+        tags = adapter._runner.current_state.tags
+        assert tags["Step"] == 1
+        assert tags["DrumAcc"] == acc + 10
+        # It ends at the 100 it latched.
+        scans = (100 - (acc + 10)) // 10
+        _repl(adapter, out, f"step {scans - 1}", seq=15)
+        assert adapter._runner.current_state.tags["Step"] == 1
+        _repl(adapter, out, "step 1", seq=16)
+        assert adapter._runner.current_state.tags["Step"] == 2
 
 
 class TestReloadTagTypeChange:
