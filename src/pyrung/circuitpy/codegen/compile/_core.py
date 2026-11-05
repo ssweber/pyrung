@@ -85,6 +85,7 @@ from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
 )
+from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.site_memory import edge_memory_key, edge_rows
@@ -789,7 +790,8 @@ def _compile_for_loop_instruction(
         # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
         ctx.mark_helper("_bit_int")
         count_expr = f"_bit_int({count_expr})"
-    iterations_expr = f"int({count_expr}) & 0x{control.for_count_mask(instr.count):X}"
+    mask = control.for_count_mask(instr.count)
+    iterations_expr = f"int({count_expr}) & 0x{mask:X}"
     if control.FOR_ZERO_COUNT_ITERATIONS:
         iterations_expr = f"({iterations_expr}) or {int(control.FOR_ZERO_COUNT_ITERATIONS)}"
     iterations_lines = [f"{iterations_var} = {iterations_expr}"]
@@ -801,6 +803,14 @@ def _compile_for_loop_instruction(
             f"    {iterations_var} = 0",
             *_indent_body(_compile_set_out_of_range_fault_body(ctx), 4),
         ]
+    if ctx.proof_metadata and mask > control.FOR_COUNT_MASK_16:
+        # The verifier's kernel stops a 32-bit count past its cap rather than
+        # run it (a negative Dint is about 4.29 billion iterations).
+        where, label, tags = _for_count_site(instr)
+        iterations_lines += [
+            f"if {iterations_var} > {PROVE_FOR_ITERATION_CAP}:",
+            f"    raise _ForIterationsBeyondCap({where!r}, {label!r}, {iterations_var}, {tags!r})",
+        ]
     body = [
         *iterations_lines,
         f"for {index_var} in range({iterations_var}):",
@@ -809,6 +819,18 @@ def _compile_for_loop_instruction(
     ]
     # A false For rung skips its body: only the For's own one-shot re-arms.
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
+
+
+def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...]]:
+    """Where a For is, how its count reads, and the tags it reads (for a refusal)."""
+    count = instr.count
+    if isinstance(count, Tag):
+        return _source_location(instr), count.name, (count.name,)
+    if isinstance(count, IndirectRef):
+        return _source_location(instr), f"{count.block.name}[{count.pointer.name}]", (count.pointer.name,)
+    if isinstance(count, IndirectExprRef):
+        return _source_location(instr), f"{count.block.name}[...]", ()
+    return _source_location(instr), str(count), ()
 
 
 def _compile_loop_body(

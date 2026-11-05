@@ -27,7 +27,7 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
-from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.kernel import BlockSpec, CompiledKernel, ForIterationsBeyondCap
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -139,6 +139,8 @@ def compile_kernel(
         **ctx.function_objects,
         **ctx.function_constants,
         "_dt_to_ns": dt_to_ns,
+        # A proof_metadata kernel's For past the verifier's cap raises it.
+        "_ForIterationsBeyondCap": ForIterationsBeyondCap,
     }
     code = compile(source, "<kernel>", "exec", dont_inherit=True)
     exec(code, namespace)  # noqa: S102

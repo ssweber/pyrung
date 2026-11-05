@@ -77,7 +77,11 @@ from pyrung.core.condition import (
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.executor import execute_program
 from pyrung.core.instruction.advanced import ShiftInstruction
-from pyrung.core.instruction.control import ForLoopInstruction
+from pyrung.core.instruction.control import (
+    FOR_COUNT_MASK_16,
+    ForLoopInstruction,
+    for_count_mask,
+)
 from pyrung.core.instruction.drums import (
     EventDrumInstruction,
     TimeDrumInstruction,
@@ -445,6 +449,14 @@ class _SliceElision:
         )
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
+        # The checks run scans on the interpreter, which has no iteration cap:
+        # a 32-bit For count can run about 4.29 billion times (a negative
+        # Dint), so a program with one gets no enumerated check.
+        self.runs_a_wide_for = any(
+            isinstance(instr, ForLoopInstruction)
+            and for_count_mask(instr.count) > FOR_COUNT_MASK_16
+            for instr in _iter_program_instructions(program)
+        )
 
         # Memoized scan-locality results, plus a recursion guard.  Determining
         # whether one tag is scan-local can require recursively checking
@@ -533,6 +545,8 @@ class _SliceElision:
 
     def _slice_check(self, candidate: str, tag: Tag) -> bool:
         """Run the full enumerate-and-scan write-before-read check."""
+        if self.runs_a_wide_for:
+            return False
         graph = self.graph
         writer_rungs = graph.writers_of.get(candidate, frozenset())
         reader_rungs = graph.all_readers_of.get(candidate, frozenset())
