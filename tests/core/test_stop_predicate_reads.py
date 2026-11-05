@@ -12,7 +12,7 @@ import pickle
 from typing import Any
 
 import pytest
-from pyrsistent import pmap
+from pyrsistent import PMap, pmap
 
 from pyrung import Bool, Program, Rung, Timer, on_delay, out
 from pyrung.core import SystemState
@@ -78,6 +78,15 @@ READS: dict[str, tuple[Any, set[str]]] = {
     "tag map remove": (lambda s: s.tags.remove("Lamp"), {_READ_ALL}),
     "tag map plus": (lambda s: s.tags + {"z": 1}, {_READ_ALL}),
     "tag map evolver": (lambda s: s.tags.evolver(), {_READ_ALL}),
+    "map method named": (lambda s: PMap.__getitem__(s.tags, "Lamp"), {_READ_ALL}),
+    "map in named": (lambda s: PMap.__contains__(s.tags, "Lamp"), {_READ_ALL}),
+    "map items named": (lambda s: list(PMap.iteritems(s.tags)), {_READ_ALL}),
+    "map length named": (lambda s: PMap.__len__(s.tags), {_READ_ALL}),
+    "map equality named": (lambda s: PMap.__eq__(s.tags, pmap()), {_READ_ALL}),
+    "map hash named": (lambda s: PMap.__hash__(s.tags), {_READ_ALL}),
+    "map evolver named": (lambda s: PMap.evolver(s.tags), {_READ_ALL}),
+    "map buckets by name": (lambda s: s.tags._buckets, {_READ_ALL}),
+    "map size by name": (lambda s: s.tags._size, {_READ_ALL}),
     "state equality": (lambda s: s == SAVED, EVERY_FIELD),
     "state inequality": (lambda s: s != SAVED, EVERY_FIELD),
     "state equality the other way": (lambda s: SAVED == s, EVERY_FIELD),
@@ -114,6 +123,34 @@ def test_the_answer_is_the_answer_on_the_same_values() -> None:
     assert _traced_call(lambda s: s == state, plc)[0] is True
     assert _traced_call(lambda s: hash(s) == hash(state), plc)[0] is True
     assert _traced_call(lambda s: s.tags == state.tags, plc)[0] is True
+    assert _traced_call(lambda s: repr(s) == repr(state), plc)[0] is True
+
+
+def test_the_state_and_map_say_they_are_the_real_ones() -> None:
+    plc = _plc()
+    assert _traced_call(lambda s: s.__class__ is SystemState, plc)[0] is True
+    assert _traced_call(lambda s: s.tags.__class__ is PMap, plc)[0] is True
+    assert _traced_call(lambda s: type(s).__name__ == "SystemState", plc)[0] is True
+    assert _traced_call(lambda s: type(s.tags).__name__ == "PMap", plc)[0] is True
+    assert _traced_call(lambda s: isinstance(s, SystemState), plc)[0] is True
+    assert _traced_call(lambda s: isinstance(s.tags, PMap), plc)[0] is True
+
+
+class _Key(str):
+    """As ``class K(str, Enum)`` is: it finds its tag, and prints as no tag's name."""
+
+    def __str__(self) -> str:
+        return "no tag's name"
+
+
+ACC_KEY = _Key(ACC)
+
+
+def test_a_key_of_a_str_subclass_is_recorded_by_its_value() -> None:
+    plc = _plc()
+    # The coast watches str(read).
+    assert {str(name) for name in _traced_call(lambda s: s.tags[ACC_KEY], plc)[1]} == {ACC}
+    assert {str(name) for name in _traced_call(lambda s: ACC_KEY in s.tags, plc)[1]} == {ACC}
 
 
 def test_a_read_of_plc_state_instead_of_the_argument_is_recorded() -> None:
@@ -185,6 +222,7 @@ def test_a_predicate_reading_plc_state_stays_in_the_loop() -> None:
         pytest.param(lambda s: s.get("timestamp") >= 7.77, id="timestamp get"),
         pytest.param(lambda s: dict(s)["scan_id"] >= 777, id="as a dict"),
         pytest.param(lambda s: s.tags[ACC] >= 20, id="an accumulator"),
+        pytest.param(lambda s: s.tags[ACC_KEY] >= 20, id="a key of a str subclass"),
         pytest.param(lambda s: dict(s.items())["tags"][ACC] >= 20, id="items"),
         pytest.param(lambda s: s.tags.set("z", 1)[ACC] >= 20, id="map set"),
         pytest.param(lambda s: s.tags.update({"z": 1})[ACC] >= 20, id="map update"),
@@ -202,6 +240,21 @@ def test_a_predicate_reading_plc_state_stays_in_the_loop() -> None:
         pytest.param(lambda s: s.with_tags({"z": 1}).tags[ACC] >= 20, id="state with tags"),
         pytest.param(lambda s: s.next_scan(0.01).tags[ACC] >= 20, id="state next scan"),
         pytest.param(lambda s: type(s)(tags=s.tags).tags[ACC] >= 20, id="state rebuilt"),
+        pytest.param(lambda s: PMap.__getitem__(s.tags, ACC) >= 20, id="map method named"),
+        pytest.param(lambda s: dict(PMap.iteritems(s.tags))[ACC] >= 20, id="map items named"),
+        pytest.param(lambda s: PMap._getitem(s.tags._buckets, ACC) >= 20, id="map buckets"),
+        pytest.param(
+            lambda s: PMap._getitem(object.__getattribute__(s.tags, "_buckets"), ACC) >= 20,
+            id="map buckets past getattr",
+        ),
+        pytest.param(lambda s: s.__class__ is SystemState and s.tags[ACC] >= 20, id="state class"),
+        pytest.param(lambda s: s.tags.__class__ is PMap and s.tags[ACC] >= 20, id="map class"),
+        pytest.param(
+            lambda s: type(s).__name__ == "SystemState" and s.tags[ACC] >= 20, id="state type name"
+        ),
+        pytest.param(
+            lambda s: type(s.tags).__name__ == "PMap" and s.tags[ACC] >= 20, id="map type name"
+        ),
     ],
 )
 def test_a_predicate_reading_what_moves_lands_as_stepping(predicate: Any) -> None:
@@ -217,6 +270,9 @@ def test_a_predicate_reading_what_moves_lands_as_stepping(predicate: Any) -> Non
         pytest.param(lambda s: SystemState.scan_id.__get__(s) >= 1777, id="scan_id slot"),
         pytest.param(lambda s: SystemState.timestamp.__get__(s) >= 17.77, id="timestamp slot"),
         pytest.param(lambda s: len(SystemState.memory.__get__(s)) > 99, id="memory slot"),
+        pytest.param(
+            lambda s: PMap._getitem(PMap._buckets.__get__(s.tags), ACC) >= 20, id="map slot"
+        ),
         pytest.param(
             lambda s: (
                 super(type(s), s).tags[ACC] >= 20
