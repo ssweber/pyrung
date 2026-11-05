@@ -11,6 +11,8 @@ from pyrung.core.expression import (
     DOMAIN_LIMITED_MATH_FUNCS,
     STRICT_DIVISION,
     BinaryExpr,
+    CalcBinaryExpr,
+    CalcUnaryExpr,
     Expression,
     LiteralExpr,
     MathDomainError,
@@ -205,20 +207,27 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         left = _rebuild(value.left, form)
         right = _rebuild(value.right, form)
         op = CALC_OPS.get(value.op, value.op) if form.calc_ops else value.op
+        cls = CalcBinaryExpr if form.calc_ops else type(value)
         node = value
-        if left is not value.left or right is not value.right or op is not value.op:
-            node = BinaryExpr(left, right, op, value.symbol)
+        if (
+            left is not value.left
+            or right is not value.right
+            or op is not value.op
+            or type(value) is not cls
+        ):
+            node = cls(left, right, op, value.symbol)
         if form.mask_shifts and value.symbol == "<<":
-            node = BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
+            node = cls(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, UnaryExpr):
         operand = _rebuild(value.operand, form)
         op = value.op
         if form.abs_ops and value.symbol == "abs" and isinstance(operand, TagExpr):
             op = ABS_OF_TYPE.get(operand.tag.type.name, op)
-        if operand is value.operand and op is value.op:
+        cls = CalcUnaryExpr if form.calc_ops else type(value)
+        if operand is value.operand and op is value.op and type(value) is cls:
             return value
-        return UnaryExpr(operand, op, value.symbol)
+        return cls(operand, op, value.symbol)
     if isinstance(value, MathFuncExpr):
         operand = _rebuild(value.operand, form)
         if operand is value.operand:
@@ -271,6 +280,8 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
     - The constant bounds of a ``randint()`` are cut into an Int and a Word, and
       kept whole into a Dint or a Real (``randint(70000, 70002)`` into a Dint draws
       70000..70002).
+    - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
+      ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
     - ``%`` truncates and ``**`` takes ``0 ^ 0`` and ``0 ^ -1`` for an error that
       stores 0 with no flag (:data:`~pyrung.core.expression.CALC_OPS`); outside
       ``calc`` they stay Python's.
@@ -283,7 +294,7 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
       not yet read.
 
-    Returns *expression* itself when nothing changes.
+    Returns *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
         form = _CalcForm(unsigned=True, mask_shifts=True)

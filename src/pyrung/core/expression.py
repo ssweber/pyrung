@@ -464,12 +464,9 @@ class BinaryExpr(Expression):
         left = self.left.evaluate(ctx)
         right = self.right.evaluate(ctx)
         try:
-            result = self.op(left, right)
+            return self.op(left, right)
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)
-        if type(result) is int and not -DOUBLE_EXACT_LIMIT <= result <= DOUBLE_EXACT_LIMIT:
-            return _calc_step(result)
-        return result
 
     def __repr__(self) -> str:
         return f"({self.left} {self.symbol} {self.right})"
@@ -490,6 +487,28 @@ def _calc_step(result: Numeric) -> Numeric:
     return result
 
 
+_NEG_DOUBLE_EXACT_LIMIT = -DOUBLE_EXACT_LIMIT
+
+
+class CalcBinaryExpr(BinaryExpr):
+    """A :class:`BinaryExpr` of a ``calc`` formula, whose steps are doubles
+    (:func:`_calc_step`).  ``calc_form`` builds these, so an expression anywhere
+    else pays nothing for the check and its integer steps stay exact."""
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        left = self.left.evaluate(ctx)
+        right = self.right.evaluate(ctx)
+        try:
+            result = self.op(left, right)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
+        if type(result) is int and (
+            result > DOUBLE_EXACT_LIMIT or result < _NEG_DOUBLE_EXACT_LIMIT
+        ):
+            return _calc_step(result)
+        return result
+
+
 # =============================================================================
 # Unary Expression (replaces Neg/Pos/Abs/Invert)
 # =============================================================================
@@ -506,17 +525,31 @@ class UnaryExpr(Expression):
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         operand = self.operand.evaluate(ctx)
         try:
-            result = self.op(operand)
+            return self.op(operand)
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)
-        if type(result) is int and not -DOUBLE_EXACT_LIMIT <= result <= DOUBLE_EXACT_LIMIT:
-            return _calc_step(result)
-        return result
 
     def __repr__(self) -> str:
         if self.symbol == "abs":
             return f"abs({self.operand})"
         return f"({self.symbol}{self.operand})"
+
+
+class CalcUnaryExpr(UnaryExpr):
+    """A :class:`UnaryExpr` of a ``calc`` formula, whose steps are doubles (as
+    :class:`CalcBinaryExpr`)."""
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        operand = self.operand.evaluate(ctx)
+        try:
+            result = self.op(operand)
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
+        if type(result) is int and (
+            result > DOUBLE_EXACT_LIMIT or result < _NEG_DOUBLE_EXACT_LIMIT
+        ):
+            return _calc_step(result)
+        return result
 
 
 # =============================================================================
@@ -673,7 +706,9 @@ class ShiftFuncExpr(Expression):
             result = self.func(bit_operand(value), bit_operand(count))
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)
-        if type(result) is int and not -DOUBLE_EXACT_LIMIT <= result <= DOUBLE_EXACT_LIMIT:
+        if type(result) is int and (
+            result > DOUBLE_EXACT_LIMIT or result < _NEG_DOUBLE_EXACT_LIMIT
+        ):
             return _calc_step(result)
         return result
 

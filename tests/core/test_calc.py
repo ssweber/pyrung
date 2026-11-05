@@ -171,14 +171,19 @@ class TestCutIntConstants:
         assert isinstance(cut.right, LiteralExpr)
 
     def test_returns_the_expression_itself_when_no_constant_changes(self):
+        from pyrung.core.expression import BinaryExpr, CalcBinaryExpr
         from pyrung.core.instruction.calc import CalcInstruction, cut_int_constants
 
         A = Int("A")
         expr = (A + 32767) * -32768
         assert cut_int_constants(expr) is expr
         instr = CalcInstruction(expr, Int("Dest"))
-        assert instr.expression is expr
         assert instr.source_expression is expr
+        # The calc runs the same formula, its steps doubles; the written one is untouched.
+        assert repr(instr.expression) == repr(expr)
+        assert isinstance(instr.expression, CalcBinaryExpr)
+        assert isinstance(instr.expression.left, CalcBinaryExpr)
+        assert type(expr) is BinaryExpr and type(expr.left) is BinaryExpr
 
     def test_every_destination_cuts(self):
         from pyrung.core.instruction.calc import CalcInstruction

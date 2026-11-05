@@ -611,7 +611,7 @@ class TestConditionAndExpressionCompiler:
         assert " * " in compile_expression(a * 2, ctx)
         assert " / " in compile_expression(a / 2, ctx)
         assert " // " in compile_expression(a // 2, ctx)
-        assert "_mod(" in compile_expression(a % 2, ctx)
+        assert " % " in compile_expression(a % 2, ctx)
         assert " ** " in compile_expression(a**2, ctx)
         assert "abs(" in compile_expression(abs(a), ctx)
         assert "&" in compile_expression(a & b, ctx)

@@ -30,6 +30,8 @@ from pyrung.core.expression import (
     DOMAIN_LIMITED_MATH_FUNCS,
     DOUBLE_EXACT_LIMIT,
     BinaryExpr,
+    CalcBinaryExpr,
+    CalcUnaryExpr,
     Expression,
     LiteralExpr,
     MathFuncExpr,
@@ -515,8 +517,16 @@ def _small_count_literal(expr: Any) -> bool:
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
-    """*compiled*, a step of a calc, as a double past 2 ** 53 (core ``_calc_step``)."""
-    if not strict or _int_bound(expr) <= DOUBLE_EXACT_LIMIT:
+    """*compiled*, a step of a calc, as a double past 2 ** 53 (core ``_calc_step``).
+
+    As the core decides it: a ``CalcBinaryExpr`` or ``CalcUnaryExpr`` (what
+    ``calc_form`` builds), or a shift in a calc.
+    """
+    if isinstance(expr, (BinaryExpr, UnaryExpr)):
+        stepped = isinstance(expr, (CalcBinaryExpr, CalcUnaryExpr))
+    else:
+        stepped = strict
+    if not stepped or _int_bound(expr) <= DOUBLE_EXACT_LIMIT:
         return compiled
     ctx.mark_helper("_dbl")
     return f"_dbl({compiled})"
