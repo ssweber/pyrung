@@ -862,8 +862,9 @@ def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[Cl
 def _text_literal_compares(condition: Any, out: list[tuple[Any, list[Tag]]]) -> None:
     """Collect each ``==``/``!=`` of a Char with a longer literal, and the Chars pyrung reads.
 
-    A text window (``txt[1] == "AB"``) reads the next elements of its block; any
-    other such compare reads its one Char against the whole literal.
+    A text window (``txt[1] == "AB"``) reads the Chars that follow in its block
+    (``text_window_condition``); any other such compare reads its one Char
+    against the whole literal.
     """
     from pyrung.core.condition import CompareEq, CompareNe, Condition, text_window_of
 
@@ -894,8 +895,8 @@ def _evaluate_text_windows(
 ) -> list[ClickFinding]:
     """A CLICK compares a longer literal over a TXT and the TXTs after it.
 
-    pyrung compares the next elements of the Char's block, so the two agree only
-    where those are mapped to the next TXT addresses, one for each character.
+    pyrung compares the Chars that follow in the Char's block, so the two agree
+    only where those are mapped to the next TXT addresses, one for each character.
     """
     from pyrung.core.validation.render import render_condition
 
