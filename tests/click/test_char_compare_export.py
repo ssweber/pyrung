@@ -124,6 +124,7 @@ def test_a_window_onto_a_named_array_gap_is_a_finding_and_refused():
 
 @pytest.mark.parametrize("op", ["==", "!="])
 def test_a_window_over_a_block_mapped_out_of_order_is_a_finding(op):
+    # Built before the mapping, the compare reads its block: Msg1 then Msg2.
     from pyrung.core import Block, TagType
 
     msg, hit = Block("Msg", TagType.CHAR, 1, 2), Bool("Hit")
@@ -140,7 +141,8 @@ def test_a_window_over_a_block_mapped_out_of_order_is_a_finding(op):
 
 
 def test_a_lone_char_against_a_longer_literal_is_a_finding():
-    # A Char of no block reads only itself; a CLICK reads TXT9 and TXT10.
+    # Built before the mapping, a Char of no block reads only itself; a CLICK
+    # reads TXT9 and TXT10.
     a, hit = Char("A"), Bool("Hit")
     with Program(strict=False) as prog:
         with rung(a == "AB"):
@@ -178,6 +180,46 @@ def test_a_window_in_a_branch_and_a_pin_is_checked_once_each():
     )
     found = _window_codes(prog, mapping)
     assert [f.location for f in found] == ["main rung 0", "main rung 1"]
+
+
+def test_a_compare_built_after_its_mapping_is_not_a_finding():
+    # Mapped first, every spelling reads the TXTs a CLICK compares: the logical
+    # tag and the raw slot, out of order, a lone Char, in order, onto padding.
+    from pyrung.core import Block, TagType, named_array
+
+    blocks = ClickBlocks()
+    bank = blocks.txt
+    msg, inorder = Block("Msg", TagType.CHAR, 1, 2), Block("MsgC", TagType.CHAR, 1, 4)
+    code, hit = Char("Code"), Bool("Hit")
+
+    @named_array(Char, count=2, stride=3)
+    class Padded:
+        a = ""
+        b = ""
+
+    mapping = TagMap(
+        [
+            msg[1].map_to(bank[5]),
+            msg[2].map_to(bank[3]),
+            code.map_to(bank[21]),
+            inorder.map_to(bank.select(31, 34)),
+            *Padded.map_to(bank.select(41, 46)),
+            hit.map_to(blocks.c[1]),
+        ],
+        include_system=False,
+    )
+    # The dict form records the slot too.
+    other = Char("Other")
+    TagMap({other: bank[25]}, include_system=False)
+    assert [cond.tag.name for cond in (other == "AB").conditions] == ["Other", "TXT26"]
+
+    with Program(strict=False) as prog:
+        with rung(msg[1] == "AB", code != "AB", Padded.b[1] == "XY"):
+            out(hit)
+        with rung(bank[5] == "AB", bank[21] == "AB", bank[34] == "XY", bank[42] == "XY"):
+            out(hit)
+    assert _window_codes(prog, mapping) == []
+    assert pyrung_to_ladder(prog, mapping).main_rows
 
 
 def test_a_window_mapped_to_the_next_txts_is_not_a_finding():

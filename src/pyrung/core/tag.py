@@ -409,6 +409,8 @@ class Tag:
             block._mapped_tags[addr] = self
             block._slot_names_changed += 1
             block._tag_cache.pop(addr, None)
+            # The hardware slot, for a text compare's window (`text_window_condition`).
+            object.__setattr__(self, "_pyrung_hw_slot", (block, addr))
         return MappingEntry(source=self, target=target)
 
     # =========================================================================

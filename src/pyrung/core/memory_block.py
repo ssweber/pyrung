@@ -988,6 +988,8 @@ class Block:
                 hw_block._slot_names_changed += 1
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)
+                # The hardware slot, for a text compare's window (`text_window_condition`).
+                object.__setattr__(slot_tag, "_pyrung_hw_slot", (hw_block, hw_addr))
 
         return MappingEntry(source=self, target=target)
 

@@ -534,24 +534,35 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
     on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
     for any other compare, and where the block ends before the literal does.
 
-    The characters after it are the next elements of the block that declared
-    the tag, or, in a ``named_array``, the next slots of its layout (the other
-    fields of the instance first), as that maps to TXT.  A tag mapped onto a
-    bank keeps its own block for this however the bank was read before, and a
-    ``Char`` of no block is compared as written.  Where a TagMap puts those
-    characters elsewhere, CLICK validation refuses the export
-    (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
+    A tag mapped onto a bank slot reads the slots after the one it was mapped
+    to, ``bank[addr + 1]`` on, whichever tags hold them; the mapping is recorded
+    when it is made (``Tag.map_to``, ``Block.map_to``, a TagMap), so how the
+    bank was read before does not matter.  A tag with no mapping reads the next
+    elements of the block that declared it, or, in a ``named_array``, the next
+    slots of its layout (the other fields of the instance first), and a
+    ``Char`` of no block is compared as written.
+
+    A logical compare mapped before the program is built is CLICK-exact, with
+    no finding.  One mapped after the program is built reads the layout, and
+    export refuses it where it differs (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
     """
     from pyrung.core.tag import TagType
 
     if tag.type is not TagType.CHAR or not isinstance(value, str) or len(value) < 2:
         return None
-    block = getattr(tag, "_pyrung_home_block", None)
-    addr = getattr(tag, "_pyrung_home_addr", None)
+    hw_slot = getattr(tag, "_pyrung_hw_slot", None)
+    if hw_slot is not None:
+        block, addr = hw_slot
+    else:
+        block = getattr(tag, "_pyrung_home_block", None)
+        addr = getattr(tag, "_pyrung_home_addr", None)
     if block is None or not isinstance(addr, int):
         return None
     try:
-        tags = _text_window_tags(block, addr, len(value))
+        if hw_slot is not None:
+            tags = [block[addr + offset] for offset in range(len(value))]
+        else:
+            tags = _text_window_tags(block, addr, len(value))
     except (IndexError, KeyError, ValueError):
         return None
     if tags is None:

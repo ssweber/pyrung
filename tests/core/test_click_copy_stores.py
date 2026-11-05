@@ -314,49 +314,93 @@ def _window_shape(cond):
     return ("as written", cond.tag.name)
 
 
-def test_a_window_reads_the_tags_own_block_however_its_bank_was_read(runner_factory):
-    """A tag mapped onto TXT keeps its declaring block (or layout) for the window,
-    whether or not ``txt[n]`` was read first; a lone Char stays as written."""
+def _mapped_banks():
+    """The reviewer's four mappings onto a fresh TXT bank, and the compares over them."""
     from pyrung.core import Char, named_array
 
     bank = ClickBlocks().txt
-    msg = Block("Msg", TagType.CHAR, 1, 2)
+    msg = Block("Msg", TagType.CHAR, 1, 2)  # out of order: Msg1 on TXT5, Msg2 on TXT3
     msg[1].map_to(bank[5])
     msg[2].map_to(bank[3])
+    code = Char("Code")  # a lone Char on TXT21
+    code.map_to(bank[21])
+    inorder = Block("MsgC", TagType.CHAR, 1, 4)  # in order on TXT31..34
+    inorder.map_to(bank.select(31, 34))
 
     @named_array(Char, count=2, stride=3)
-    class Padded:
+    class Padded:  # TXT41..46, a padding slot after each instance
         a = ""
         b = ""
 
-    Padded.map_to(bank.select(11, 16))
-    lone = Char("Lone")
-    lone.map_to(bank[21])
+    Padded.map_to(bank.select(41, 46))
+    return bank, msg, code
+
+
+def test_a_mapped_tag_reads_the_txts_after_the_one_it_was_mapped_to(runner_factory):
+    """``bank[n] == "AB"`` compares TXTn and TXTn+1, as a CLICK does, whichever
+    tags hold them, whether or not the bank's slots were read before."""
+    bank, _, _ = _mapped_banks()
+    expected = [
+        ["Msg1", "TXT6"],
+        ["Code", "TXT22"],
+        ["MsgC4", "TXT35"],
+        ["Padded1_b", "TXT43"],
+    ]
 
     def shapes():
         return [
-            _window_shape(msg[1] == "AB"),
-            _window_shape(Padded.b[1] == "XY"),
-            _window_shape(lone == "AB"),
+            _window_shape(bank[5] == "AB"),
+            _window_shape(bank[21] == "AB"),
+            _window_shape(bank[34] == "XY"),
+            _window_shape(bank[42] == "XY"),
         ]
 
-    before = shapes()
-    for addr in (3, 5, 6, 12, 13, 21, 22):
+    assert shapes() == expected
+    for addr in (3, 5, 6, 21, 22, 34, 35, 42, 43):
         _ = bank[addr]
-    assert (
-        shapes()
-        == before
-        == [
-            ["Msg1", "Msg2"],
-            ("as written", "Padded1_b"),
-            ("as written", "Lone"),
-        ]
-    )
+    assert shapes() == expected
+
+    names = ("OutOfOrder", "Lone", "InOrder", "PaddedHit")
+    out_of_order, lone, in_order, padded = (Bool(n) for n in names)
+    with Program() as logic:
+        with Rung(bank[5] == "AB"):
+            out(out_of_order)
+        with Rung(bank[21] == "AB"):
+            out(lone)
+        with Rung(bank[34] == "XY"):
+            out(in_order)
+        with Rung(bank[42] == "XY"):
+            out(padded)
+    hit = {"Msg1": "A", "TXT6": "B", "Code": "A", "TXT22": "B"}
+    hit |= {"MsgC4": "X", "TXT35": "Y", "Padded1_b": "X", "TXT43": "Y"}
+    tags = _one_scan(runner_factory, logic, {**hit, "Msg2": "Q"})
+    assert [tags[n] for n in names] == [True] * 4
+    # Msg2 (on TXT3) is not the character after Msg1: a CLICK reads TXT6.
+    tags = _one_scan(runner_factory, logic, {**hit, "Msg2": "B", "TXT6": "Q"})
+    assert tags["OutOfOrder"] is False
+
+
+def test_a_logical_compare_built_after_mapping_reads_the_hardware(runner_factory):
+    """``msg[1] == "AB"`` with Msg1 on TXT5 compares TXT5 and TXT6; built before
+    the mapping it reads its block (and export refuses it, tests/click)."""
+    from pyrung.core import Char
+
+    before_msg = Block("Msg", TagType.CHAR, 1, 2)
+    before_code = Char("Code")
+    built_before = [_window_shape(before_msg[1] == "AB"), _window_shape(before_code == "AB")]
+    assert built_before == [["Msg1", "Msg2"], ("as written", "Code")]
+
+    bank, msg, code = _mapped_banks()
+    assert _window_shape(msg[1] == "AB") == ["Msg1", "TXT6"]
+    assert _window_shape(code == "AB") == ["Code", "TXT22"]
+    for addr in (5, 6, 21, 22):
+        _ = bank[addr]
+    assert _window_shape(msg[1] == "AB") == ["Msg1", "TXT6"]
 
     same = Bool("Same")
     with Program() as logic:
-        with Rung(bank[5] == "AB"):
+        with Rung(msg[1] == "AB", code == "CD"):
             out(same)
-    assert _window_shape(logic.rungs[0]._conditions[0]) == ["Msg1", "Msg2"]
-    tags = _one_scan(runner_factory, logic, {"Msg1": "A", "Msg2": "B", "TXT6": "Q"})
-    assert tags["Same"] is True
+    patch = {"Msg1": "A", "TXT6": "B", "Code": "C", "TXT22": "D"}
+    assert _one_scan(runner_factory, logic, {**patch, "Msg2": "Q"})["Same"] is True
+    assert _one_scan(runner_factory, logic, {**patch, "Msg2": "B", "TXT6": "Q"})["Same"] is False
