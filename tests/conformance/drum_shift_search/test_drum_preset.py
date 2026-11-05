@@ -1,4 +1,4 @@
-"""When a time drum reads a step's preset: the ``drum_preset`` group (part ``follow_drums``).
+"""When a time drum reads a step's preset: the ``drum_preset`` group (part ``follow_timing``).
 
 ``drum_limits/preset_from_ds`` read on a CLICK that a step's preset from a DS is read on entering
 the step, not live, and that a DS preset of 0 or -5 never ends the step.  Two things it does not
@@ -32,10 +32,10 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, reset
+from pyrung.core import Rung, copy, fill
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put
 from tests.conformance.drum_shift_search.test_drum_pins import time_box
-from tests.conformance.memory import c, ds, td
+from tests.conformance.memory import ds, td
 from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -94,16 +94,9 @@ def prove_entry_or_first_timing_scan(slot: Any) -> None:
     done(slot)
 
 
-def _init(bits: range, steps: range, tds: range, presets: range | None = None) -> Any:
-    def init(slot: Any) -> None:
-        reset(c.select(bits.start, bits.stop - 1))
-        fill(0, ds.select(steps.start, steps.stop - 1))
-        for n in tds:
-            copy(0, td[n])
-        if presets is not None:
-            fill(0, ds.select(presets.start, presets.stop - 1))
-
-    return init
+def init_entry_or_first_timing_scan(slot: Any) -> None:
+    # The drums' own reset pins (``Cmd == 0``) put their steps, TDs and bits back.
+    fill(0, ds.select(PRESETS.start, PRESETS.stop - 1))
 
 
 group = Group(
@@ -113,7 +106,6 @@ group = Group(
             "A time drum step with the constant preset 0 never ends, as one from a DS does "
             "(Result1 = 1, 2 if it ends at once); a constant 1 ms step ends (Result2 = 2)",
             ladder=prove_literal_zero,
-            init=_init(LITERAL_BITS, LITERAL_STEPS, LITERAL_TDS),
             expect={"Result1": between(1, 2), "Result2": 2},
             scans=scans_for(),
             probe="a drum step's constant preset of 0: ends at once or never (6)",
@@ -123,7 +115,7 @@ group = Group(
             "jog: 1 ms only at the jog stays (Result1 = 2), 1 ms only the scan after ends "
             "(Result2 = 3); a bad step corrected to step 1 reads its preset again (Result3 = 2)",
             ladder=prove_entry_or_first_timing_scan,
-            init=_init(TIMING_BITS, TIMING_STEPS, TIMING_TDS, PRESETS),
+            init=init_entry_or_first_timing_scan,
             expect={
                 "Result1": between(2, 3),
                 "Result2": between(2, 3),

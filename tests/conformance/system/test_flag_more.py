@@ -381,8 +381,8 @@ flag_halves = Group(
             probe="does a Copy read SC43 before it settles it (4b)",
         ),
         case(
-            "A Copy of DF 1.0E+10 into a DD clamps to 2147483647 (Result1 = 1, Result2 = DD / "
-            "100000) with SC43 (Result3 = 1)",
+            "What a Copy of DF 1.0E+10 into a DD writes: 2147483647 for a clamp (Result1 = 1, "
+            "Result2 = DD / 100000), and SC43 after it (Result3), which the round read off",
             ladder=prove_df_into_dd,
             init=init_df_into_dd,
             expect={

@@ -1,4 +1,4 @@
-"""A drum jump toward a step the drum does not have: the ``bad_jump`` group (part ``follow_drums``).
+"""A drum jump toward a step the drum does not have: the ``bad_jump`` group (part ``follow_timing``).
 
 ``drum_branch`` read two answers on a CLICK that one rule fits: a jump that fires takes the scan
 even when its target is bad, so a jog on that scan does nothing (``jump_to_bad_step`` Result3)

@@ -1,4 +1,4 @@
-"""A debounce of 0/0, scan by scan: the ``deb_zero`` group (part ``follow_flags``).
+"""A debounce of 0/0, scan by scan: the ``deb_zero`` group (part ``follow_timing``).
 
 ``out_more/zero_and_below`` read the first off of a 0/0 debounce at scan 7 on a CLICK, a scan after
 its rung's 6, where pyrung reads 6.  One reading cannot say whether the off side always takes a

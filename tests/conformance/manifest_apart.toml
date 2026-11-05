@@ -130,3 +130,12 @@ slots = 3
 [groups.drum_preset.cases]
 literal_zero = 1
 entry_or_first_timing_scan = 2
+
+[groups.coil_timing]
+base = 971 # Conf_CoilTiming: DS971..DS1020
+slots = 4
+
+[groups.coil_timing.cases]
+off_td_held = 1
+flasher_on_zero = 2
+deb_off_against_tof = 3
