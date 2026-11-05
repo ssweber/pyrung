@@ -200,3 +200,18 @@ def test_block_indexed_real_does_not_crash():
             copy(1, out)
 
     assert not _hits(_prog(build))
+
+
+def test_calc_into_pointer_destination_raises_type_error():
+    import pytest
+
+    from pyrung.core import Block, TagType
+
+    blk = Block("Blk", TagType.REAL, 1, 10)
+    idx = Int("Idx")
+    raw = Real("Raw", external=True)
+    for dest in (blk[idx], blk[idx + 1]):
+        with pytest.raises(TypeError, match="not a pointer address"):
+            with Program(strict=False):
+                with Rung(Bool("En", external=True)):
+                    calc(raw * 0.5, dest)
