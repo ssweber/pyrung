@@ -251,6 +251,12 @@ def run_row(case):
             plan_hash=digest([str(j) for j in plan.journal]),
         )
         row["anchor"] = plan.anchor_scan
+        last_resort = getattr(plan, "last_resort", None)
+        if last_resort is not None:
+            row["last_resort"] = (
+                f"{last_resort.tag}={last_resort.value!r} {last_resort.scans} "
+                f"tries={last_resort.tries}"
+            )
         if status == "REACHED" and plan.fork is None:
             row["no_fork"] = True
         if plan.fork is not None and status == "REACHED":

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from pyrung import PLC, Bool, Program, Rung, Timer, latch, on_delay, reset
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
@@ -45,12 +43,9 @@ def test_a_bit_reset_above_the_rung_is_already_off_for_it() -> None:
     assert plan.replay().state.tags["Hit"] is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the tree offers nothing under the plant's En=True while the rung needs En=False, both "
-    "true in the same scan at different points; stops on dev too, a job for the last resort",
-)
 def test_the_input_is_pressed_when_the_plant_needs_it() -> None:
+    """Nothing in the trace offers Go: the plant needs En=True while the rung needs En=False,
+    both in the same scan at different points.  The last resort finds it."""
     plc, hit = _reset_at_the_top(go=False)
     assert plc.state.tags["En"] is False
 

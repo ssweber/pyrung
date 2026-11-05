@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pyrung import PLC, Bool, Program, latch, rung, system
-from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot import pilot_events, pilot_how
 
 
 def _delayed_startup_program() -> tuple[Program, Bool, Bool, Bool, Bool, Bool]:
@@ -49,12 +49,15 @@ def test_unselected_seed_departure_does_not_start_independent_blocker_search() -
 
     program, _enable, _guard, _start, _trip, target = _delayed_startup_program()
 
-    plan = pilot_how(PLC(program), target, max_scans=40)
+    finished = list(pilot_events(PLC(program), target, max_scans=40))[-1].data
+    assert finished["reached"] is False
+    assert "No productive next action" in finished["reason"]
 
-    assert not plan.reachable
-    assert not plan.ordered_steps
-    assert plan.reason is not None
-    assert "No productive next action" in plan.reason
+    # The last resort may try the guard with no reason, and a plan that needs it says so.
+    plan = pilot_how(PLC(program), target, max_scans=40)
+    assert plan.reachable
+    assert plan.last_resort.tag == "StartupGuard"
+    assert plan.replay().state.tags == plan.fork.state.tags
 
 
 def test_unselected_cold_faults_do_not_compose_as_retained_rebases() -> None:

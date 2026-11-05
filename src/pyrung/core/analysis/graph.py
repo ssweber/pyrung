@@ -438,6 +438,9 @@ class Plan:
     restart: Any = None
     # The forces this plan releases, when nothing worked with them on.  Its first step.
     released: Any = None
+    # The move this plan rests on, which nothing in the trace pointed to.  how() tried it because
+    # it was about to stop, and a plan that has one says so.
+    last_resort: Any = None
     # The session's own forces and pending patches.  They run in the plan but are not its steps.
     session_inputs: dict[str, Any] = field(default_factory=dict)
     # Those of them no scan had applied, so the plan's first scan is theirs.
@@ -648,6 +651,8 @@ class Plan:
                 f"{len(steps) + 1}. Let one scan run, so the session's own patch or force on"
                 f" {names} takes effect."
             )
+        if self.last_resort is not None:
+            steps.append(self.last_resort.step_line(len(steps) + 1))
         return steps
 
     def __repr__(self) -> str:

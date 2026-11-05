@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.budget as _budget
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
+import pyrung.core.analysis.pilot.last_resort as _last_resort
 import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.restart as _restart
 import pyrung.core.analysis.pilot.static_proofs as _static_proofs
@@ -331,6 +332,17 @@ def pilot_how(
 
         return ask
 
+    if not outcome.cut_short:
+        moved = _last_resort.try_moves(
+            plan,
+            setup,
+            _goal_check(conditions),
+            avoid_pred,
+            asker(start_had_a_scan=True),
+            max_scans,
+        )
+        if moved is not None:
+            return moved
     released, finished = _restart.try_release(plan, plc, asker(start_had_a_scan=True))
     if released is not None:
         return released
@@ -348,6 +360,17 @@ def pilot_how(
         if blocked is not None:
             return replace(plan, reason=blocked, status=PlanStatus.CANNOT_REACH)
     return _restart.try_restart(plan, plc, setup, avoid_pred, asker(start_had_a_scan=False))
+
+
+def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool] | None:
+    """The goal as a check on a state's tags, or None if a condition does not compile to one."""
+    from pyrung.core.analysis.prove import _compile_property
+
+    try:
+        checks = [_compile_property(condition)[0] for condition in conditions]
+    except Exception:
+        return None
+    return lambda tags: all(check(tags) for check in checks)
 
 
 def _how_from(

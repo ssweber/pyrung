@@ -215,9 +215,9 @@ def test_the_restart_shares_the_callers_time(monkeypatch) -> None:
 
     _scanned(prog).how(target, max_scans=2000, wall_clock_s=5.0)
 
-    assert len(limits) == 2
+    assert len(limits) >= 2
     assert limits[0] == 5.0
-    assert 0 < limits[1] <= 5.0
+    assert all(0 < limit <= 5.0 for limit in limits[1:])
 
 
 def _fake(reachable: bool, scans: int = 0):

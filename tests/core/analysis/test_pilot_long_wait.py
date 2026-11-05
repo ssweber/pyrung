@@ -14,6 +14,7 @@ import pytest
 
 from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, latch, on_delay, out, time_drum
 from pyrung.core import PLC
+from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
 from pyrung.core.coast_run import coast_until, work_charged
@@ -220,9 +221,15 @@ def test_a_small_ledger_is_not_spent_on_one_wait() -> None:
     prog, goal = _chain(3, 2, "min")
     plc = PLC(prog, dt=0.01)
     plc.step()
+    finished = list(pilot_events(plc, goal, max_scans=400))[-1].data
+    assert finished["reached"] is False
+    assert finished["cut_short"] is False
+
     path = plc.how(goal, wall_clock_s=60.0, max_scans=400)
-    assert not path.reachable
     assert "budget exhausted" not in str(path)
+    assert path.reachable
+    assert path.last_resort.tag == "LwGo"
+    assert path.replay().state.tags == path.fork.state.tags
 
 
 def test_a_goal_no_rung_can_reach_declines_at_once() -> None:
