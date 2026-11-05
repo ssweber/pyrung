@@ -125,6 +125,35 @@ class TestValueDomainExtraction:
         assert result[0]["W"] == (0, 1, 2, 65534, 65535)
         assert isinstance(always(logic, ~high, max_states=5000), Counterexample)
 
+    @staticmethod
+    def _real_mod_program():
+        r = Real("R", external=True, min=-5.0, max=5.0)
+        x = Real("X")
+        hi = Bool("Hi")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(r % 3, x)
+            with Rung(x > 2.2):
+                latch(hi)
+        return logic, hi
+
+    def test_a_mod_of_a_real_is_not_listed_as_whole_remainders(self):
+        """2.5 MOD 3 is 2.5: a Real dividend's remainder is not one of -2..2, so
+        X keeps a value on each side of its compare with 2.2."""
+        logic, _hi = self._real_mod_program()
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert any(value > 2.2 for value in result[0]["X"])
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="a Real input with whole-number min/max is searched at its whole numbers "
+        "(_declared_domain), so R = 2.5 is never tried",
+    )
+    def test_a_mod_of_a_real_reaches_its_fraction(self):
+        logic, hi = self._real_mod_program()
+        assert isinstance(always(logic, ~hi, max_states=5000), Counterexample)
+
     def test_integer_comparison_literals(self):
         """Pure equality-only inputs collapse to {literals..., OTHER}."""
         state = Int("State", external=True)

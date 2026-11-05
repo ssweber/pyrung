@@ -1690,7 +1690,11 @@ def _domain_from_calc_expression(
     if direct is not None:
         return direct
 
-    if isinstance(expression, BinaryExpr) and expression.symbol == "%":
+    if (
+        isinstance(expression, BinaryExpr)
+        and expression.symbol == "%"
+        and _integer_dividend(expression.left)
+    ):
         modulus = _literal_value_from_value(expression.right)
         if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
             # A calc's MOD truncates: a dividend that may be negative reaches
@@ -1725,6 +1729,23 @@ def _domain_from_calc_expression(
     if isinstance(lo_t, int) and isinstance(hi_t, int):
         return tuple(range(lo_t, hi_t + 1))
     return None
+
+
+def _integer_dividend(value: Any) -> bool:
+    """Whether *value* is an integer tag or constant, so its MOD by n is one of n integers.
+
+    A Real dividend has a fractional remainder (``2.5 % 3`` is 2.5), which the
+    interval bounds cover instead.
+    """
+    from pyrung.core.expression import INTEGER_TAG_TYPE_NAMES, LiteralExpr, TagExpr
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(value, TagExpr):
+        tag = value.tag.tag if isinstance(value.tag, ImmediateRef) else value.tag
+        return tag.type.name in INTEGER_TAG_TYPE_NAMES
+    if isinstance(value, LiteralExpr):
+        value = value.value
+    return isinstance(value, int)
 
 
 def _domain_from_drum_instruction(
