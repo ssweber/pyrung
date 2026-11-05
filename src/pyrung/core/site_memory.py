@@ -28,10 +28,10 @@ key, and asking for one raises (there is no ``id()`` fallback).
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and
 its contacts (an edge also its row as source text), so hot reload can carry
 memory to the matching site of the new program, and drop it where no site
-matches unambiguously (:func:`remap_site_memory`); an instruction's rung
-power last scan also follows an edit of its operands.  An edge site with no match
-in the old program (added or edited) starts from its tag's current value
-(:func:`seed_new_edge_memory`).
+matches unambiguously (:func:`remap_site_memory`); an instruction's inputs as it
+last saw them (its rung, its helper legs) also follow an edit of what it reads.
+An edge site with no match in the old program (added or edited) starts from its
+tag's current value (:func:`seed_new_edge_memory`).
 
 Keys are stamped on the objects.  A bound object is never renamed: a bare rung
 list whose objects would clash (rungs of two programs, or of two lists) is
@@ -117,6 +117,12 @@ class Site:
     """``(_frac key, nanoseconds to a unit)`` for each accumulator a timed instruction
     ticks.  A carry is no site's own memory (it follows its accumulator's name), but reload
     has only this table to learn the unit of the program it is moving to."""
+    targets: tuple[str, ...] = ()
+    """An instruction's written operands (its ``_writes``) as source text."""
+    legs: tuple[str, ...] = ()
+    """An instruction's helper legs (reset, jump, jog, clock, events, a counter's
+    down leg) as source text.  Reload pairs an edited instruction's input memory
+    (:data:`_INPUT_MEMORY`) on these, its targets and its contacts."""
 
 
 @dataclass(frozen=True)
@@ -255,9 +261,30 @@ def _operand_text(value: Any) -> str:
         return type(value).__name__
 
 
+def _operand_texts(instr: Instruction) -> dict[str, str]:
+    """Each operand field of *instr* (reads, then writes) -> its source text."""
+    fields = dict.fromkeys(type(instr)._reads + type(instr)._writes)
+    return {name: _operand_text(getattr(instr, name, None)) for name in fields}
+
+
 def _instruction_operands(instr: Instruction) -> tuple[str, ...]:
-    fields = tuple(dict.fromkeys(type(instr)._reads + type(instr)._writes))
-    return tuple(_operand_text(getattr(instr, name, None)) for name in fields)
+    return tuple(_operand_texts(instr).values())
+
+
+def _leg_texts(instr: Instruction) -> tuple[str, ...]:
+    """*instr*'s helper legs (every ``_conditions`` field but its rung's) as source text."""
+    out: list[str] = []
+    for name in type(instr)._conditions:
+        if _is_power_field(instr, name):
+            continue
+        value = getattr(instr, name, None)
+        items = value if isinstance(value, tuple) else (value,)
+        out.append(
+            name
+            + "="
+            + ", ".join("None" if item is None else _contacts_text((item,))[0] for item in items)
+        )
+    return tuple(out)
 
 
 def _row_text(rung: Rung) -> tuple[str, ...]:
@@ -493,6 +520,8 @@ class _Binder:
     ) -> None:
         kind = type(instr).__name__
         line = getattr(instr, "source_line", None)
+        texts = _operand_texts(instr)
+        memory = instruction_memory(instr)
         self.sites.append(
             Site(
                 key=key,
@@ -503,12 +532,15 @@ class _Binder:
                 row=row,
                 leg="instruction",
                 source_line=line,
-                fingerprint=(scope, line, kind, _instruction_operands(instr)),
+                fingerprint=(scope, line, kind, tuple(texts.values())),
                 contacts=contacts,
-                memory=tuple(
-                    (f"{prefix}:{key}", default) for prefix, default in instruction_memory(instr)
-                ),
+                memory=tuple((f"{prefix}:{key}", default) for prefix, default in memory),
                 carries=_timer_carries(instr),
+                targets=tuple(texts[name] for name in dict.fromkeys(type(instr)._writes)),
+                # Only reload's input-memory pairing reads them.
+                legs=_leg_texts(instr)
+                if any(prefix in _INPUT_MEMORY for prefix, _default in memory)
+                else (),
             )
         )
 
@@ -1036,28 +1068,54 @@ def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
     return matched
 
 
-_RUNG_MEMORY = frozenset({"_debounce_rung", "_timed_rung"})
-"""Memory prefixes that hold the instruction's own rung power as of its last scan."""
+_INPUT_MEMORY = frozenset(
+    {
+        # The rung as the instruction last saw it.
+        "_oneshot",
+        "_toggle",
+        "_debounce_rung",
+        "_timed_rung",
+        "_flash_idle",
+        "_drum_rung_prev",
+        # A count input (COUNT_UP_MEMORY, COUNT_DOWN_MEMORY) or helper leg, as last seen.
+        "_cu",
+        "_cd",
+        "_shift_prev_clock",
+        "_drum_jump_prev",
+        "_drum_jog_prev",
+        # The step's event as last seen, and the step it was seen on.
+        "_drum_event_prev",
+        "_drum_last_step",
+    }
+)
+"""Memory prefixes that hold an instruction's inputs (its rung, a helper leg) as it
+last saw them.  An edit to what the instruction reads (a preset, a source, a jump
+step) does not change those inputs, so on reload this memory follows the edited
+instruction (:func:`_match_input_memory`).  A drum's latched preset
+(``_drum_preset``, ``_drum_preset_step``) is not here: an edited preset is read
+afresh."""
 
 
-def _match_rung_memory(
+def _match_input_memory(
     old: Sequence[Site], new: Sequence[Site], matched: Mapping[str, str]
 ) -> dict[str, str]:
-    """Old site key -> new site key for rung memory (:data:`_RUNG_MEMORY`) of sites
+    """Old site key -> new site key for input memory (:data:`_INPUT_MEMORY`) of sites
     :func:`_match_sites` left unmatched.
 
-    Rung power depends on the contacts alone, so the cell follows a site whose
-    operands changed (a preset edited) when exactly one old and one new site share
-    its scope, kind, first tag and contacts.  Without it a held rung would read as a
-    rising edge after reload and start a pulse again.
+    The memory depends on the instruction's contacts and helper legs alone, so it
+    follows a site whose read operands changed (a preset, a source) when exactly one
+    old and one new site share its scope, kind, written operands, contacts and legs.
+    Without it a held input would read as a rising edge after reload: a timed coil
+    or a one-shot would fire again, a counter count once more, a flasher restart.
+    A changed target, contact or leg drops it.
     """
 
     def _owns(site: Site) -> bool:
-        return any(name.split(":", 1)[0] in _RUNG_MEMORY for name, _default in site.memory)
+        return any(name.split(":", 1)[0] in _INPUT_MEMORY for name, _default in site.memory)
 
     def _key(site: Site) -> Any:
         scope, _line, kind, _operands = site.fingerprint
-        return (site.site, scope, kind, site.tag, site.contacts)
+        return (site.site, scope, kind, site.targets, site.contacts, site.legs)
 
     used = set(matched.values())
     olds: dict[Any, list[Site]] = {}
@@ -1096,8 +1154,8 @@ def remap_site_memory(
     :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
     sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
     for the new program.  Edge memory (``_edge:e{N}``) is site memory like any
-    other.  A site left unmatched still carries its rung memory to an edited
-    counterpart (:func:`_match_rung_memory`).  Other memory (timer carries, system
+    other.  A site left unmatched still carries its input memory to an edited
+    counterpart (:func:`_match_input_memory`).  Other memory (timer carries, system
     memory) is kept as is, except that a
     carry is cut to below one unit of its timer in *new*: it is less than a unit by what
     it means, and an edit to the timer's unit must not finish the timer.
@@ -1112,8 +1170,8 @@ def remap_site_memory(
     if new is not None:
         new_names = {name for site in new.sites for name, _default in site.memory}
     matched = _match_sites(old.sites, new.sites) if old is not None and new is not None else {}
-    rung_matched = (
-        _match_rung_memory(old.sites, new.sites, matched)
+    input_matched = (
+        _match_input_memory(old.sites, new.sites, matched)
         if old is not None and new is not None
         else {}
     )
@@ -1129,8 +1187,8 @@ def remap_site_memory(
             continue
         site_key, prefix = owner
         target = matched.get(site_key)
-        if target is None and prefix in _RUNG_MEMORY:
-            target = rung_matched.get(site_key)
+        if target is None and prefix in _INPUT_MEMORY:
+            target = input_matched.get(site_key)
         new_name = f"{prefix}:{target}" if target is not None else None
         if new_name is None or new_name not in new_names:
             dropped.append(name)
