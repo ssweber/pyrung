@@ -418,10 +418,10 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     for it as well; it stays inexact (``exact`` False) only because marking it
     exact changes what :func:`_inexact_entry_subroutines` feeds (simplified
     forms, the stuck-bit validator, pilot's corrections), which a later step
-    takes on.  A REAL (0.5 truncates
-    to 0) and an expression are inexact on their own account.  While
-    ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every count runs the body.  A
-    constant count that runs no iteration never runs it (None).
+    takes on.  A REAL (0.5 truncates to 0) and an expression are inexact on
+    their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every
+    count runs the body.  A constant count that runs no iteration never runs it
+    (None).
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations

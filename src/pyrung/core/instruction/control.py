@@ -124,8 +124,9 @@ class EnabledFunctionCallInstruction(Instruction):
 # What a For does with a count of 0.  CLICK reads the count as an unsigned
 # number of its register's width: a DS of -1 runs 65535 iterations (hardware
 # 2026-10-29), a DD of 65536 runs 65536 (hardware 2026-11-05).  A negative DD
-# has not been read; it is read whole too.  A count of 0 runs none.  The runtime, the debugger and the generated P1AM-200 code all
-# read this one switch.
+# has not been read; it is read whole too.  A count of 0 runs none.  The
+# runtime, the debugger and the generated P1AM-200 code all read this one
+# switch.
 FOR_ZERO_COUNT_ITERATIONS = 0
 
 #: The mask of a 16-bit count (DS, TD, SD, a literal) and of a 32-bit one (DD, CTD).
