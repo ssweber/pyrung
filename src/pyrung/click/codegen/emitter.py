@@ -260,6 +260,12 @@ def _generate_code(
     # Slot name overrides for nicknamed addresses inside ranges
     _emit_slot_overrides(lines, collection)
 
+    # Tag map: before the program, so a text compare built below reads the
+    # hardware slot its tag is mapped to
+    lines.append("# --- Tag Map ---")
+    _emit_tag_map(lines, collection)
+    lines.append("")
+
     # Program body
     lines.append("# --- Program ---")
     _emit_program(
@@ -270,11 +276,6 @@ def _generate_code(
         subroutines=subroutines,
         structured_map=structured_map,
     )
-    lines.append("")
-
-    # Tag map
-    lines.append("# --- Tag Map ---")
-    _emit_tag_map(lines, collection)
     lines.append("")
 
     return "\n".join(lines) + "\n"

@@ -1990,13 +1990,14 @@ class TestRoundTrip:
             DS134 = ds[134]
             DH051 = dh[51]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung():
                     copy(dh[DS134], DH051)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
         # Must be valid Python
@@ -2961,13 +2962,14 @@ class TestNicknameMerge:
             start_button = x[1]  # X001
             motor_out = y[1]  # Y001
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(start_button):
                     out(motor_out)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -2992,13 +2994,14 @@ class TestNicknameMerge:
             _False = ds[2]  # DS2
             X001 = x[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     copy(_True, _False)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
             nicknames={"DS1": "True", "DS2": "False"},
         )
@@ -3032,13 +3035,14 @@ class TestNicknameMerge:
             _True_2 = ds[2]  # DS2
             X001 = x[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     copy(_True, _True_2)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -3062,13 +3066,14 @@ class TestNicknameMerge:
             start_button = x[1]  # X001
             motor_out = y[1]  # Y001
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(start_button):
                     out(motor_out)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
             nicknames={"X001": "start_button", "Y001": "motor_out"},
         )
@@ -3098,13 +3103,14 @@ class TestNicknameMerge:
             X001 = x[1]
             Y001 = y[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     out(Y001)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -3136,16 +3142,17 @@ class TestNicknameMerge:
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
 
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    on_delay(OvenTimer, 100)
-
             # --- Tag Map ---
             mapping = TagMap([
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    on_delay(OvenTimer, 100)
+
             """,
             nicknames={"T1": "OvenTimer"},
         )
@@ -3170,16 +3177,17 @@ class TestNicknameMerge:
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer_Done', 'Acc': 'TD1'})
 
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    on_delay(OvenTimer, 100)
-
             # --- Tag Map ---
             mapping = TagMap([
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    on_delay(OvenTimer, 100)
+
             """,
             nicknames={"T1": "OvenTimer_Done"},
         )
@@ -3361,16 +3369,17 @@ class TestNicknameMerge:
             # --- Clones ---
             PartCounter = Counter.clone("PartCounter", nicknames={'Done': 'PartCounter', 'Acc': 'CTD1'})
 
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    count_up(PartCounter, 10).reset(X002)
-
             # --- Tag Map ---
             mapping = TagMap([
                 PartCounter.Done.map_to(ct[1]),
                 PartCounter.Acc.map_to(ctd[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    count_up(PartCounter, 10).reset(X002)
+
             """,
             nicknames={"CT1": "PartCounter"},
         )
@@ -3425,16 +3434,17 @@ class TestNicknameMerge:
             # --- Clones ---
             T1 = Timer.clone("T1", nicknames={'Done': 'T1', 'Acc': 'TD1'})
 
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    on_delay(T1, 100)
-
             # --- Tag Map ---
             mapping = TagMap([
                 T1.Done.map_to(t[1]),
                 T1.Acc.map_to(td[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    on_delay(T1, 100)
+
             """,
         )
 
@@ -3479,6 +3489,12 @@ class TestNicknameMerge:
             # --- Clones ---
             OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
 
+            # --- Tag Map ---
+            mapping = TagMap([
+                OvenTimer.Done.map_to(t[1]),
+                OvenTimer.Acc.map_to(td[1]),
+            ])
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
@@ -3487,11 +3503,6 @@ class TestNicknameMerge:
                 with rung(OvenTimer.Done):
                     out(Y001)
 
-            # --- Tag Map ---
-            mapping = TagMap([
-                OvenTimer.Done.map_to(t[1]),
-                OvenTimer.Acc.map_to(td[1]),
-            ])
             """,
             nicknames={"T1": "OvenTimer"},
         )
@@ -3560,7 +3571,9 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-        mapping_block = code.split("# --- Tag Map ---", maxsplit=1)[1]
+        mapping_block = code.split("# --- Tag Map ---", maxsplit=1)[1].split(
+            "# --- Program ---", maxsplit=1
+        )[0]
         assert normalize_pyrung(mapping_block) == normalize_pyrung(
             textwrap.dedent(
                 """
@@ -4820,13 +4833,14 @@ class TestStructuredCodegen:
             # --- Tags ---
             X001 = x[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     reset(c.select(1004, 1006))
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -5889,3 +5903,59 @@ class TestIndexedMarkerImport:
         )
         files = ladder_to_pyrung_project(bundle, index=False)
         assert "# R" not in files["src/plc/main.py"]
+
+
+class TestMapBeforeProgram:
+    """The generated code maps before it builds the program, so a text compare reads the hardware."""
+
+    @pytest.mark.parametrize(
+        ("addr", "lit", "expected"),
+        [
+            (13, "AB", ["Rec3_a", "Rec1_b"]),
+            (2, "XY", ["Padded1_b", "TXT3"]),
+        ],
+    )
+    def test_text_window_round_trips_with_no_finding(self, tmp_path, addr, lit, expected):
+        from pyrung.click.validation import CLK_TEXT_WINDOW_NOT_CONTIGUOUS, validate_click_program
+        from pyrung.core import Char, named_array, udt
+        from pyrung.core.condition import AllCondition
+
+        @named_array(Char, count=2, stride=3)
+        class Padded:
+            a = ""
+            b = ""
+
+        @udt(count=3)
+        class Rec:
+            a: Char
+            b: Char
+
+        blocks = ClickBlocks()
+        src_map = TagMap(
+            [
+                *Padded.map_to(blocks.txt.select(1, 6)),
+                Rec.a.map_to(blocks.txt.select(11, 13)),
+                Rec.b.map_to(blocks.txt.select(14, 16)),
+                Bool("Hit").map_to(blocks.c[1]),
+            ],
+            include_system=False,
+        )
+        nick = tmp_path / "Address.csv"
+        src_map.to_nickname_file(nick)
+
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with rung(blocks.txt[addr] == lit):
+                out(hit)
+        bundle = pyrung_to_ladder(prog, TagMap({hit: blocks.c[1]}, include_system=False))
+        source = ladder_to_pyrung(bundle, nickname_csv=nick)
+        assert source.index("mapping = TagMap") < source.index("with Program")
+
+        ns: dict = {}
+        exec_with_source(source, ns)
+        cond = ns["logic"].rungs[0]._conditions[0]
+        assert isinstance(cond, AllCondition)
+        assert [c.tag.name for c in cond.conditions][:1] == expected[:1]
+        assert [c.tag.name for c in cond.conditions][1] == expected[1]
+        report = validate_click_program(ns["logic"], ns["mapping"], mode="strict")
+        assert [f for f in report.errors if f.code == CLK_TEXT_WINDOW_NOT_CONTIGUOUS] == []
