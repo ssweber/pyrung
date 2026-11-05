@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.target_route as _target_route
@@ -57,8 +58,12 @@ class DriveSetup:
     compass: Compass
     opaque_loop: frozenset[str]
     configured_inputs: frozenset[str]
-    # Forced or patched on the PLC how() was asked of; the fork has neither.
+    # Forced or patched on the PLC how() was asked of.  The fork has them too.
     session_overrides: frozenset[str] = frozenset()
+    # The session's own forces and pending patches, which are not the plan's steps.
+    session_inputs: Mapping[str, Any] = field(default_factory=dict)
+    # Those of them a scan still had to apply, which the drive's first scan did.
+    waiting_overrides: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -180,6 +185,11 @@ def prepare_drive(
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
+    # What the session already has waiting decides the next scan.  Until a scan applies it the
+    # tags say nothing of it, so that scan comes before anything reads them.
+    waiting = _waiting_overrides(plc)
+    if waiting:
+        work.step()
     ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
     steerable = compute_steerable(pdg, work._known_tags_by_name, program) - harness_fb - ref_consts
     edge_tags = compute_edge_tags(pdg, program)
@@ -197,7 +207,7 @@ def prepare_drive(
         steerable=steerable,
         edge_tags=edge_tags,
         resting=resting,
-        anchor_scan=work.state.scan_id,
+        anchor_scan=plc.state.scan_id,
         diag_snapshot=diag_snapshot,
         nd_domains=prover.nd_domains,
         stateful_domains=prover.stateful_domains,
@@ -207,7 +217,22 @@ def prepare_drive(
         opaque_loop=detect_opaque_loop(pdg, program),
         configured_inputs=configured_inputs,
         session_overrides=frozenset(plc._forces) | frozenset(plc._pending_patches),
+        session_inputs={**plc._pending_patches, **plc._forces},
+        waiting_overrides=waiting,
     )
+
+
+def _waiting_overrides(plc: PLC) -> tuple[str, ...]:
+    """Tags whose pending patch or force no scan has applied, in the order a person set them."""
+    tags = plc.state.tags
+    known = plc._known_tags_by_name
+    names = dict.fromkeys(plc._pending_patches)
+    for name, value in plc._forces.items():
+        tag = known.get(name)
+        current = tags.get(name, None if tag is None else tag.default)
+        if current != value:
+            names[name] = None
+    return tuple(names)
 
 
 def prepare_target_context(

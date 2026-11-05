@@ -1,9 +1,10 @@
-"""What how() tries when it is about to stop: restarting the program.
+"""What how() tries when it is about to stop: releasing forces, then restarting the program.
 
-A session is a machine that already ran, and a plan starts from where it is.  When nothing
-works from there, the machine may only want what a tech would try next: STOP -> RUN.  That
-leaves the session, so it is never an ordinary step.  It runs on a fork, only when how() was
-about to stop, and a plan that needs it says so as its first step.
+A session is a machine that already ran, with whatever its person forced, and a plan starts
+from there.  When nothing works from there, the machine may only want what a tech would try
+next: release the force, or STOP -> RUN.  Those leave the session, so they are never ordinary
+steps.  They run on a fork, only when how() was about to stop, and a plan that needs one says
+so as its first step.
 
 A restart that falls short is still worth reporting.  Retentive tags keep their values through
 STOP -> RUN, which is often why.  The scans decide which of them matter: each is written back
@@ -27,6 +28,7 @@ from pyrung.core.scan_trace import SYSTEM_TAGS_BY_NAME
 # the report behind it is not, though the route programs need 13 s for theirs.
 _RESTART_WALL_S = 30.0
 _CLEAR_WALL_S = 20.0
+_RELEASE_WALL_S = 20.0
 _MAX_SURVIVORS = 12
 _RUNGS_SHOWN = 4
 
@@ -62,9 +64,9 @@ class RestartReport:
     # Time ran out with survivors in *clear* still untried, so it may not be the smallest.
     clear_untried: bool = False
 
-    def step_line(self) -> str:
+    def step_line(self, number: int = 1) -> str:
         """The first step of a plan that needed the restart."""
-        line = "1. Stop the program and go back to RUN."
+        line = f"{number}. Stop the program and go back to RUN."
         if self.released_forces:
             line += f" This releases the force on {', '.join(self.released_forces)}."
         reason = (self.session_reason or "No productive next action was found").removeprefix(
@@ -108,9 +110,71 @@ class RestartReport:
         return lines
 
 
+@dataclass(frozen=True)
+class ReleaseReport:
+    """The forces a plan had to release, because nothing worked with them on."""
+
+    forces: tuple[str, ...]
+    # What how() said with them on.
+    session_reason: str | None = None
+
+    def step_line(self, number: int = 1) -> str:
+        reason = (self.session_reason or "No productive next action was found").removeprefix(
+            "pilot: "
+        )
+        return (
+            f"{number}. Release the force on {', '.join(self.forces)}.\n"
+            f"   how() found no way with it on: {reason.rstrip('.')}."
+        )
+
+
+def try_release(
+    stopped: Any,
+    plc: Any,
+    ask: Callable[[Any, float], tuple[Any, bool]],
+) -> tuple[Any | None, bool]:
+    """A plan with the forces it must release off, and whether a search with all of them off ended.
+
+    The plan is None if releasing them does not help.  The search having ended, with no plan,
+    means it found nothing left to do rather than running out of time or work.
+
+    Forces are the person's own, so as many as can stay on do.  how() has its answer here,
+    so a check that raises on a scan of a try costs that try and not the answer.
+    """
+    forces = tuple(sorted(plc._forces))
+    if not forces:
+        return None, False
+    clock = WallClock.starting_now(_RELEASE_WALL_S)
+
+    def reaches(names: tuple[str, ...]) -> tuple[Any | None, bool]:
+        wall_s = _RELEASE_WALL_S if clock is None else clock.left()
+        fork = fork_with_pilot_rungs(plc, ())
+        for name in names:
+            fork.unforce(name)
+        try:
+            plan, cut_short = ask(fork, wall_s)
+        except _AvoidCheckRaised:
+            return None, False
+        return (plan if plan.reachable else None), not cut_short
+
+    plan, finished = reaches(forces)
+    if plan is None:
+        return None, finished
+    needed = forces
+    if len(forces) <= _MAX_SURVIVORS:
+        for name in forces:
+            if clock is not None and clock.left() <= 0:
+                break
+            fewer = tuple(other for other in needed if other != name)
+            smaller, _finished = reaches(fewer)
+            if smaller is not None:
+                plan, needed = smaller, fewer
+    return replace(plan, released=ReleaseReport(needed, stopped.reason)), finished
+
+
 def _restarted(plc: Any, writes: Mapping[str, Any] | None = None) -> Any:
     """A fork of *plc* after STOP -> RUN, with *writes* made while stopped."""
-    fork = fork_with_pilot_rungs(plc, ())
+    fork = fork_with_pilot_rungs(plc, (), keep_overrides=False)
     fork.stop()
     if writes:
         fork._state = fork._state.with_tags(dict(writes))

@@ -173,7 +173,6 @@ def facts_for(setup: DriveSetup) -> ProofFacts:
     work = setup.work
     harness = getattr(work, "_harness", None)
     couplings = tuple(harness.couplings()) if harness is not None else ()
-    # The fork drops the session's forces and patches, and the proof is about the session.
     overridden = setup.session_overrides
     free = (
         frozenset(setup.steerable)

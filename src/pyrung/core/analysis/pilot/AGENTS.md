@@ -20,6 +20,10 @@ module.
 ## Public contract
 
 - PILOT never drives the caller's PLC. It works on forks.
+- A drive's forks carry the session's forces and pending patches
+  (`fork_with_pilot_rungs`), so a plan holds on the session as it is. Those are
+  not the plan's steps. A plan that needs a force off says so as its first step
+  (`restart.try_release`); the public `PLC.fork()` still starts clean.
 - `PlanStatus.REACHED` carries the reached fork. Its scan log and synthesis
   holds are the replayable witness; replay does not re-plan.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or

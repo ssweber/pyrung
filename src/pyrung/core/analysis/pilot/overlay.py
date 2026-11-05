@@ -531,6 +531,7 @@ def fork_with_pilot_rungs(
     scan_id: int | None = None,
     history_budget: int | float | None = None,
     inherit_log: bool = True,
+    keep_overrides: bool = True,
 ) -> PLC:
     """Fork *source* and rebuild its scoped steering overlay verbatim.
 
@@ -541,12 +542,19 @@ def fork_with_pilot_rungs(
     boundary to ``source``, including synthetic rung resolution. Internal
     replay of the child's later scans may therefore use its current synthesis
     without redefining inherited historical scans.
+
+    A public fork also starts with no forces or pending patches, but a plan is about
+    what stepping the session does, so these keep them unless told otherwise.
     """
     fork = source.fork(
         scan_id=scan_id,
         history_budget=history_budget,
         inherit_log=inherit_log,
     )
+    if keep_overrides:
+        fork._forces.update(source._forces)
+        if scan_id is None:
+            fork._pending_patches.update(source._pending_patches)
     _set_pilot_rungs(fork, pilot_rungs)
     return fork
 

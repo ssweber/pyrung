@@ -436,6 +436,12 @@ class Plan:
     # reached plan the restart is its first step, and ``fork`` and ``anchor_scan`` are the new
     # run: scan 0 is the restart, not the session's.
     restart: Any = None
+    # The forces this plan releases, when nothing worked with them on.  Its first step.
+    released: Any = None
+    # The session's own forces and pending patches.  They run in the plan but are not its steps.
+    session_inputs: dict[str, Any] = field(default_factory=dict)
+    # Those of them no scan had applied, so the plan's first scan is theirs.
+    waiting_overrides: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         status = self.status
@@ -467,12 +473,9 @@ class Plan:
         """
         if self.fork is None:
             return {}
-        snap = self.fork._scan_log.snapshot()
         out: dict[str, Any] = {}
-        scans = set(snap.patches_by_scan) | set(snap.force_changes_by_scan)
-        for scan_id in sorted(s for s in scans if s > self.anchor_scan):
-            out.update(snap.patches_by_scan.get(scan_id, {}))
-            out.update(snap.force_changes_by_scan.get(scan_id, {}))
+        for _scan_id, inputs in self.ordered_steps:
+            out.update(inputs)
         return out
 
     @property
@@ -500,11 +503,22 @@ class Plan:
         result: list[tuple[int, dict[str, Any]]] = []
         for scan_id in scans:
             inputs: dict[str, Any] = {}
-            inputs.update(snap.patches_by_scan.get(scan_id, {}))
-            inputs.update(snap.force_changes_by_scan.get(scan_id, {}))
+            inputs.update(self._not_the_sessions(snap.patches_by_scan.get(scan_id, {}), scan_id))
+            inputs.update(self._not_the_sessions(snap.force_changes_by_scan.get(scan_id, {})))
             if inputs:
                 result.append((scan_id, inputs))
         return result
+
+    def _not_the_sessions(
+        self, inputs: dict[str, Any], patched_on: int | None = None
+    ) -> dict[str, Any]:
+        """Drop what the session set itself: its forces on any scan, its patches on the first."""
+        if patched_on is not None and patched_on != self.anchor_scan + 1:
+            return dict(inputs)
+        own = self.session_inputs
+        return {
+            name: value for name, value in inputs.items() if name not in own or own[name] != value
+        }
 
     @property
     def tags(self) -> Any:
@@ -578,12 +592,14 @@ class Plan:
                     redirects.extend(redirect.split(" | "))
             if redirects:
                 lines.append(f"  Other routes: {' | '.join(dict.fromkeys(redirects))}")
-        first_step = 1
-        if self.restart is not None:
-            lines.extend(("", "Steps:", "", self.restart.step_line()))
-            first_step = 2
+        leading = self._leading_steps()
+        first_step = len(leading) + 1
+        if leading:
+            lines.extend(("", "Steps:"))
+            for step_line in leading:
+                lines.extend(("", step_line))
         if self.journal:
-            lines.extend(("",) if self.restart is not None else ("", "Steps:", ""))
+            lines.extend(("",) if leading else ("", "Steps:", ""))
             previous_holds: tuple[Any, ...] | None = None
             installed_at: dict[tuple[str, str], int] = {}
             for i, step in enumerate(self.journal, first_step):
@@ -618,6 +634,21 @@ class Plan:
                 if i != len(self.journal) + first_step - 1:
                     lines.append("")
         return "\n".join(lines)
+
+    def _leading_steps(self) -> list[str]:
+        """What a plan has to do before PILOT's own steps, each numbered in order."""
+        steps: list[str] = []
+        if self.restart is not None:
+            steps.append(self.restart.step_line(len(steps) + 1))
+        if self.released is not None:
+            steps.append(self.released.step_line(len(steps) + 1))
+        if self.waiting_overrides:
+            names = ", ".join(self.waiting_overrides)
+            steps.append(
+                f"{len(steps) + 1}. Let one scan run, so the session's own patch or force on"
+                f" {names} takes effect."
+            )
+        return steps
 
     def __repr__(self) -> str:
         return (

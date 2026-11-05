@@ -219,6 +219,8 @@ def _plan_from_outcome(
         hold_log=outcome.knowledge.get("hold_log", ()),
         lever_notes=outcome.knowledge.get("lever_notes", {}),
         avoid_names=outcome.knowledge.get("avoid_names", ()),
+        session_inputs=dict(setup.session_inputs),
+        waiting_overrides=setup.waiting_overrides,
     )
 
 
@@ -305,24 +307,47 @@ def pilot_how(
     plan, setup, outcome = _how_from(
         plc, conditions, max_scans, avoid_pred, unlink, on_event, wall_clock_s
     )
-    # A search that ran out of time or work did not find there was nothing left to do.
-    if plan.status is not PlanStatus.STOPPED or outcome is None or outcome.cut_short:
+    if plan.status is not PlanStatus.STOPPED or outcome is None:
+        return plan
+    # A search that ran out of time or work did not find there was nothing left to do.  Under a
+    # force it may only have run out: the guarded loop declines those, so its waits cost full
+    # scans.  The try without them has a budget of its own, and settles what comes next.
+    if outcome.cut_short and not plc._forces:
         return plan
 
-    def ask(fork: PLC, wall_s: float) -> tuple[Plan, bool]:
-        answer, _setup, asked = _how_from(
-            fork,
-            conditions,
-            max_scans,
-            avoid_pred,
-            unlink,
-            None,
-            wall_s if clock is None else min(wall_s, clock.left()),
-            start_had_a_scan=False,
-        )
-        return answer, asked is not None and asked.cut_short
+    def asker(*, start_had_a_scan: bool) -> Callable[[PLC, float], tuple[Plan, bool]]:
+        def ask(fork: PLC, wall_s: float) -> tuple[Plan, bool]:
+            answer, _setup, asked = _how_from(
+                fork,
+                conditions,
+                max_scans,
+                avoid_pred,
+                unlink,
+                None,
+                wall_s if clock is None else min(wall_s, clock.left()),
+                start_had_a_scan=start_had_a_scan,
+            )
+            return answer, asked is not None and asked.cut_short
 
-    return _restart.try_restart(plan, plc, setup, avoid_pred, ask)
+        return ask
+
+    released, finished = _restart.try_release(plan, plc, asker(start_had_a_scan=True))
+    if released is not None:
+        return released
+    if outcome.cut_short:
+        if not finished:
+            return plan
+        # Forces are free tags to the proof, so what it proves holds with them on.
+        blocked = (
+            None
+            if plan.target_predicate is not None
+            else _static_proofs.linked_feedback_block(
+                plan.target_tag, plan.target_value, _static_proofs.facts_for(setup)
+            )
+        )
+        if blocked is not None:
+            return replace(plan, reason=blocked, status=PlanStatus.CANNOT_REACH)
+    return _restart.try_restart(plan, plc, setup, avoid_pred, asker(start_had_a_scan=False))
 
 
 def _how_from(

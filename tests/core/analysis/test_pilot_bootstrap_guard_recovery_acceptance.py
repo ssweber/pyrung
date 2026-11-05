@@ -136,7 +136,8 @@ def test_forced_false_guard_is_authoritative_and_not_assigned() -> None:
     assert events[-1].data["reached"] is False
 
 
-def test_pending_false_guard_is_authoritative_and_not_assigned() -> None:
+def test_pending_false_guard_gets_its_scan_and_is_not_assigned() -> None:
+    """The patch decides the first scan, so the overwrite has happened before the search reads."""
     plc = PLC(fixture.logic, dt=0.010)
     plc.patch({fixture.OverwriteInterlock.name: False})
     events = tuple(
@@ -146,13 +147,8 @@ def test_pending_false_guard_is_authoritative_and_not_assigned() -> None:
             max_scans=20,
         )
     )
-    requirement = next(
-        event.data["requirement"] for event in events if event.kind == "requirement_activated"
-    )
 
-    assert isinstance(requirement.condition, GuardRequirementAtom)
-    assert requirement.condition.operand_authority is OperandAuthority.CONFIGURED
-    assert requirement.operand_authority is OperandAuthority.CONFIGURED
+    assert events[-1].data["work"].state.tags[fixture.SequenceState.name] == fixture.DIVERTED
     assert not any(
         tag == fixture.OverwriteInterlock.name
         for event in events
