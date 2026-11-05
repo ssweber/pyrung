@@ -408,53 +408,39 @@ def _collect_write_sites(
 _EXACT_COUNT_TYPES = frozenset({"BOOL", "INT", "WORD"})
 
 
-def _small_count_values(values: Iterable[Any]) -> bool:
-    """Whether every one of *values* is a whole count in ``0..PROVE_FOR_ITERATION_CAP``."""
-    from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
+def _dint_count_is_small(tag: Tag) -> bool:
+    """Whether the Dint count *tag* is declared to hold only ``0..PROVE_FOR_ITERATION_CAP``.
 
-    values = tuple(values)
-    return bool(values) and all(
-        isinstance(v, int) and 0 <= v <= PROVE_FOR_ITERATION_CAP for v in values
-    )
-
-
-def _dint_count_is_small(tag: Tag, scan_writes: _ScanWrites | None) -> bool:
-    """Whether the Dint count *tag* only ever holds ``0..PROVE_FOR_ITERATION_CAP``.
-
-    Either its declared domain (``choices=``, or an integer ``min``/``max``
-    pair) or its producer-derived one (:func:`produced_value_domains` of
-    *scan_writes*' program; none without it) says so.  A negative value is not
-    small: how CLICK reads one is unread.
+    Its declared ``choices`` all lie there, or its declared ``min`` and ``max``
+    both do; a lone ``min`` or ``max`` says nothing.  What the program writes
+    into it is not read.  A negative value is not small: how CLICK reads one
+    is unread.
     """
     from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 
-    lo, hi = tag.min, tag.max
-    if tag.choices:
-        if _small_count_values(tag.choices):
-            return True
-    elif isinstance(lo, int) and isinstance(hi, int) and 0 <= lo <= hi <= PROVE_FOR_ITERATION_CAP:
+    def small(value: Any) -> bool:
+        return isinstance(value, int) and 0 <= value <= PROVE_FOR_ITERATION_CAP
+
+    choices = tag.choices
+    if choices and all(small(value) for value in choices):
         return True
-    if scan_writes is None:
-        return False
-    return _small_count_values(scan_writes.produced_domains().get(tag.name, ()))
+    return small(tag.min) and small(tag.max)
 
 
-def _loop_count_conditions(
-    loop: Any, scan_writes: _ScanWrites | None = None
-) -> tuple[tuple[Condition, ...], bool] | None:
+def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | None:
     """What a forloop's count says about its body running, or None if it never does.
 
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
     no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
     body item needs ``count != 0``.  That is exact for a 16-bit count, and for a
-    Dint tag (read whole) whose values are all in ``0..PROVE_FOR_ITERATION_CAP``
-    (:func:`_dint_count_is_small`; *scan_writes* lends its program's
-    producer-derived domains).  Any other Dint, and a Dint element, stays
-    inexact (``exact`` False): a negative count's reading on CLICK is unread,
-    and past the cap the verifier refuses the loop.  A REAL (0.5 truncates to
-    0) and an expression are inexact on their own account.  While
-    ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every count runs the body.  A
-    constant count that runs no iteration never runs it (None).
+    Dint tag or element (read whole) declared to hold only
+    ``0..PROVE_FOR_ITERATION_CAP`` (:func:`_dint_count_is_small`).  Any other
+    Dint, and an indirect Dint element, stays inexact (``exact`` False): a
+    negative count's reading on CLICK is unread, and past the cap the verifier
+    refuses the loop.  A REAL (0.5 truncates to 0) and an expression are
+    inexact on their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is
+    nonzero every count runs the body.  A constant count that runs no
+    iteration never runs it (None).
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations
@@ -468,7 +454,7 @@ def _loop_count_conditions(
     if isinstance(count, Tag):
         type_name = count.type.name
         exact = type_name in _EXACT_COUNT_TYPES or (
-            type_name == "DINT" and _dint_count_is_small(count, scan_writes)
+            type_name == "DINT" and _dint_count_is_small(count)
         )
         return (CompareNe(count, 0),), exact
     if isinstance(count, (IndirectRef, IndirectExprRef)):
@@ -628,18 +614,6 @@ class _ScanWrites:
         self._subroutines: dict[str, tuple[_Footprint, frozenset[str]]] = {}
         self._memo: dict[int, _Footprint] = {}
         self._slot_names: dict[int, tuple[Any, frozenset[str] | None]] = {}
-        self._produced: dict[str, tuple[Any, ...]] | None = None
-
-    def produced_domains(self) -> dict[str, tuple[Any, ...]]:
-        """:func:`produced_value_domains` for the program, once, on first use."""
-        if self._produced is None:
-            from pyrung.core.analysis.pdg import build_program_graph
-            from pyrung.core.analysis.value_domains import produced_value_domains
-
-            self._produced = produced_value_domains(
-                self._program, build_program_graph(self._program)
-            )
-        return self._produced
 
     def slot_names(self, block: Any) -> frozenset[str] | None:
         """:func:`_block_slot_names`, once per block for this build."""
@@ -777,7 +751,7 @@ def _iter_rung_calls(
             if isinstance(instr, CallInstruction):
                 yield instr.subroutine_name, extra, exact
             elif isinstance(instr, ForLoopInstruction):
-                count = _loop_count_conditions(instr, scan_writes)
+                count = _loop_count_conditions(instr)
                 if count is None:
                     continue
                 count_conditions, count_exact = count

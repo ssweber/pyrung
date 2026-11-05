@@ -45,7 +45,6 @@ from pyrung.core import (
     Rung,
     branch,
     break_loop,
-    calc,
     call,
     continue_loop,
     copy,
@@ -404,7 +403,7 @@ def _loop_dint_count():
 
 
 def _internal_dint_count():
-    # ND's only producer copies DQ (0..1) into it.
+    # ND's only producer copies DQ (0..1) into it; undeclared, its count is inexact.
     with Program(strict=False) as logic:
         with Rung():
             copy(DQ, ND)
@@ -704,16 +703,10 @@ def _dint_count_loop(count: Any, *producers: Any) -> Program:
     return logic
 
 
-def _counting_up(tag: Any) -> Callable[[], None]:
-    def write() -> None:
-        calc(tag + 1, tag)
-
-    return write
-
-
-def _counting_up_loop() -> Program:
-    count = Dint("Dc")
-    return _dint_count_loop(count, _counting_up(count))
+def _declared_element_loop() -> Program:
+    block = Block("DDS", TagType.DINT, 1, 2)
+    block.slot(1, min=0, max=5)
+    return _dint_count_loop(block[1], 3)
 
 
 _DINT_COUNTS: dict[str, tuple[Callable[[], Program], bool]] = {
@@ -740,26 +733,26 @@ _DINT_COUNTS: dict[str, tuple[Callable[[], Program], bool]] = {
     ),
     "open": (lambda: _dint_count_loop(Dint("Dc", external=True)), False),
     "min_only": (lambda: _dint_count_loop(Dint("Dc", external=True, min=0)), False),
-    "produced": (lambda: _dint_count_loop(Dint("Dc"), 3, 7), True),
-    "produced_negative": (lambda: _dint_count_loop(Dint("Dc"), 3, -1), False),
-    "produced_past_the_cap": (lambda: _dint_count_loop(Dint("Dc"), 3, _CAP + 1), False),
+    "max_only": (lambda: _dint_count_loop(Dint("Dc", external=True, max=5)), False),
+    "declared_internal": (lambda: _dint_count_loop(Dint("Dc", min=0, max=5), 3), True),
+    # What the program writes is not read: only a declaration makes a Dint exact.
+    "produced": (lambda: _dint_count_loop(Dint("Dc"), 3, 7), False),
     "produced_under_a_wide_declaration": (
         lambda: _dint_count_loop(Dint("Dc", min=-5, max=_CAP * 2), 3, 7),
-        True,
+        False,
     ),
-    "produced_from_a_small_tag": (lambda: _dint_count_loop(Dint("Dc"), DQ), True),
-    "produced_from_an_open_tag": (lambda: _dint_count_loop(Dint("Dc"), Wide), False),
-    "counting_up": (_counting_up_loop, False),
-    "element": (lambda: _dint_count_loop(DDB[1], 3, 7), True),
+    "produced_from_a_small_tag": (lambda: _dint_count_loop(Dint("Dc"), DQ), False),
+    "element": (lambda: _dint_count_loop(DDB[1], 3, 7), False),
+    "declared_element": (_declared_element_loop, True),
     "indirect_element": (lambda: _dint_count_loop(DDB[DDP]), False),
 }
 
 
 @pytest.mark.parametrize("case", sorted(_DINT_COUNTS))
-def test_a_dint_count_is_exact_when_its_values_are_small(case: str) -> None:
-    # count != 0 decides the call only when every value is in 0..cap: a
-    # negative count's reading on CLICK is unread, and the verifier refuses a
-    # loop past the cap.
+def test_a_dint_count_is_exact_when_declared_small(case: str) -> None:
+    # count != 0 decides the call only when the declared values are all in
+    # 0..cap: a negative count's reading on CLICK is unread, and the verifier
+    # refuses a loop past the cap.
     build, exact = _DINT_COUNTS[case]
     logic = build()
     (entry,) = _build_caller_map(logic)["work"]
