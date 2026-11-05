@@ -18,9 +18,9 @@ projects, one part each, named for what they cover (``PARTS``)::
 Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
 
-The parts ``units``, ``fixed_scan`` and ``text_flasher`` have memory of their own
-(``APART_PARTS``), apart from the whole suite; ``fixed_scan`` is run with CLICK's fixed
-scan on, and its export says how.
+The parts ``units``, ``fixed_scan``, ``text_flasher``, ``follow_flags``, ``follow_values``
+and ``follow_drums`` have memory of their own (``APART_PARTS``), apart from the whole suite;
+``fixed_scan`` is run with CLICK's fixed scan on, and its export says how.
 
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
 
@@ -46,6 +46,7 @@ from pyrung.conformance import (
 from tests.conformance.coils import (
     test_coil_range,
     test_coils,
+    test_deb_zero,
     test_flasher_td,
     test_out,
     test_out_more,
@@ -58,12 +59,16 @@ from tests.conformance.copy import (
     test_block,
     test_copy_more,
     test_past_bank_write,
+    test_past_clean,
     test_real_bits,
+    test_real_text,
     test_text,
     test_word_store,
 )
 from tests.conformance.drum_shift_search import (
+    test_bad_jump,
     test_drum,
+    test_drum_preset,
     test_drum_close,
     test_drum_idle,
     test_drum_jump,
@@ -72,6 +77,7 @@ from tests.conformance.drum_shift_search import (
     test_drum_settle,
     test_drum_trace,
     test_search,
+    test_search_more,
     test_shift,
 )
 from tests.conformance.math import (
@@ -79,6 +85,7 @@ from tests.conformance.math import (
     test_math,
     test_math_error,
     test_math_more,
+    test_math_terms,
     test_numeric,
     test_real_sum,
     test_store_probe,
@@ -87,6 +94,7 @@ from tests.conformance.program_control import (
     test_call_more,
     test_call_twice,
     test_for_count,
+    test_for_dd_minus,
     test_for_more,
     test_loop,
     test_loop_call,
@@ -102,6 +110,7 @@ from tests.conformance.rungs import (
 from tests.conformance.system import (
     test_boot_read,
     test_faults,
+    test_flag_more,
     test_flag_probe,
     test_system,
 )
@@ -284,6 +293,19 @@ APART_GROUPS = [
     test_fixed_scan.group,
     test_text_compare.group,
     test_flasher_td.group,
+    # The groups that read a flag run first in their part.
+    test_flag_more.flag_boxes,
+    test_flag_more.flag_halves,
+    test_deb_zero.group,
+    test_math_terms.group,
+    test_search_more.group,
+    test_real_text.group,
+    # Writes past the DD bank: deletable, last but one of its part.
+    test_past_clean.group,
+    # May stop the PLC: run alone, last, with C401 set by hand.
+    test_for_dd_minus.group,
+    test_bad_jump.group,
+    test_drum_preset.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -296,6 +318,16 @@ APART_PARTS: dict[str, ApartPart] = {
     # block of the suite has a slot left, and a blank needs TXT that no project has written.
     # And what a flasher's frozen off TD does when a lowered preset ends its on phase.
     "text_flasher": ApartPart(("text_compare", "flasher_td")),
+    # The 2026-11-05 round's follow-up, for the fixes of the conform-fix arc, in three parts
+    # since CLICK's editor freezes on a paste much over 150 rungs: what SC43 and SC44 follow,
+    # and a 0/0 debounce scan by scan;
+    "follow_flags": ApartPart(("flag_boxes", "flag_halves", "deb_zero")),
+    # the values the round read as none of the candidates, or left unread;
+    "follow_values": ApartPart(
+        ("math_terms", "search_more", "real_text", "past_clean", "for_dd_minus")
+    ),
+    # and a drum's jump to a bad step, and when it reads a step's preset.
+    "follow_drums": ApartPart(("bad_jump", "drum_preset")),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

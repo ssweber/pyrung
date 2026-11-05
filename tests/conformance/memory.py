@@ -432,6 +432,44 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # On no address of OWNED: its never written TXT must be unwritten by any part's project.
     "text_compare": {"TXT": range(801, 851)},
     "flasher_td": {"T": range(41, 51), "C": range(11, 21), "DS": range(3903, 3905)},
+    "flag_boxes": {
+        "C": range(101, 116),
+        "T": range(101, 103),
+        "CT": range(1, 3),
+        "DD": range(1, 9),
+        "DS": range(3905, 3911),
+    },
+    "flag_halves": {
+        "C": range(141, 174),
+        "DD": range(21, 38),
+        "DH": range(1, 6),
+        "DF": range(1, 2),
+        "TXT": range(1, 3),
+        "DS": range(3911, 3914),
+    },
+    "math_terms": {"DD": (range(51, 56), range(61, 63)), "DF": range(11, 12), "C": range(181, 186)},
+    "search_more": {
+        "C": range(201, 205),
+        "DH": range(11, 15),
+        "DD": range(41, 43),
+        "DS": range(3916, 3918),
+    },
+    "bad_jump": {
+        "C": range(301, 322),
+        "DS": range(3918, 3923),
+        "T": range(201, 205),
+        "DD": range(71, 75),
+    },
+    "drum_preset": {
+        "C": (range(331, 337), range(341, 353)),
+        "DS": range(3923, 3931),
+        "T": range(205, 210),
+    },
+    "real_text": {"DF": range(21, 31), "TXT": range(101, 301)},
+    "deb_zero": {"C": range(221, 223), "T": range(111, 115)},
+    # DS4226 is past_write's pointer, on its choices.
+    "past_clean": {"C": range(231, 233), "DS": range(4226, 4227)},
+    "for_dd_minus": {"C": range(401, 402), "DD": range(81, 83)},
 }
 
 
