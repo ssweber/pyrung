@@ -274,7 +274,7 @@ def test_divisor_cut_to_zero_in_an_int_math_shows_the_constant_as_written() -> N
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
     (message,) = _messages(program, MATH_DIV_ZERO)
     assert "(Wide / 65536)" in message
-    assert "65536 is cut to 0 in an Int Math" in message
+    assert "65536 is cut to 0 in a CLICK Math" in message
     assert "/ 0)" not in message
 
 

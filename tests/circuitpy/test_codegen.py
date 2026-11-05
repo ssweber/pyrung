@@ -2345,7 +2345,13 @@ class TestBoardPeripheralsAndRunStop:
         ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
         ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, 0.0, (0, 0, 0)),
         ("zero_to_literal_zero", lambda n, d, z, w, r: z**0, Int, 0, (0, 0, 0)),
-        ("wide_constant_into_dint", lambda n, d, z, w, r: (d - d + 131072) / 65536, Dint, 0, (1, 0, 0)),
+        (
+            "wide_constant_into_dint",
+            lambda n, d, z, w, r: (d - d + 131072) / 65536,
+            Dint,
+            0,
+            (1, 0, 0),
+        ),
         ("wide_constant_times", lambda n, d, z, w, r: (n - n + 2) * 40000, Dint, -51072, (0, 0, 0)),
         ("hex_lsh_drops_the_bit", lambda n, d, z, w, r: lsh(w, 1), Word, 2, (0, 0, 0)),
     ]

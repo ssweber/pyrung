@@ -650,7 +650,7 @@ class ShiftFuncExpr(Expression):
         self.func = func
         self.name = name
 
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         value = self.value.evaluate(ctx)
         count = self.count.evaluate(ctx)
         try:
@@ -924,9 +924,10 @@ def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntEx
     Use it inside ``calc()``.  Draws are deterministic per scan, so replay, seek
     and fork see the same values; ``patch()`` or ``force()`` the site's tag
     (``expr.tag``) to choose a draw in a test.  A bare ``Real`` tag as a bound reads
-    0 with no flag, and equal constants are a math error; each has no draw to choose.
+    0 with no flag.  Equal bounds, constants or tag values, are a math error: the
+    ``randint`` reads 0, the rest of the formula runs, and a ``calc`` sets SC46.
     Into an ``Int`` a constant bound past 16 bits is cut, and that draw is its own
-    (``expr.cut_tag``).
+    (``expr.cut_tag``); into a ``Dint`` or ``Real`` it is not.
     """
     return RandIntExpr(_wrap(lo), _wrap(hi))
 
