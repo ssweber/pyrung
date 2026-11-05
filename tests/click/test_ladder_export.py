@@ -1846,7 +1846,11 @@ def test_calc_randint_renders_rand():
 
 
 def test_calc_randint_of_words_is_hex():
-    """The hidden draw tag is not an operand: RAND of WORD bounds into a WORD is hex mode."""
+    """The hidden draw tag is not an operand: RAND of WORD bounds into a WORD is hex mode.
+
+    The editor refuses WORD bounds (CLK_RAND_BOUND_TYPE), so the finding is allowed here
+    to reach the mode inference.
+    """
     Enable = Bool("Enable")
     Lo = Tag("Lo", TagType.WORD)
     Hi = Tag("Hi", TagType.WORD)
@@ -1859,7 +1863,7 @@ def test_calc_randint_of_words_is_hex():
     mapping = TagMap(
         {Enable: x[1], Lo: dh[105], Hi: dh[106], Result: dh[205]}, include_system=False
     )
-    bundle = pyrung_to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_RAND_BOUND_TYPE",))
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens == ["math(RAND ( DH105 , DH106 ),DH205,mode=hex)", "end()"]
 

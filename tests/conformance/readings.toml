@@ -1,0 +1,265 @@
+# What the probes with no answer yet read on a real CLICK, oldest first, written by
+# `make test-conformance PLC=...`.  A case here is not confirmed: its range holds every
+# candidate, so a pass says nothing.  hash: the case's exported rows when it read this.
+
+[[reading]]
+case = "out_more/zero_and_below"
+hash = "098fbd29c048"
+on = "2026-11-05"
+read = { Result1 = 3, Result2 = 7, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "baseline"
+read = { Result1 = 0, Result2 = 0, Result3 = 0 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "baseline"
+read = { Result1 = 95, Result2 = 0, Result3 = 3, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "baseline-battery-set"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "baseline-battery-set"
+read = { Result1 = 95, Result2 = 0, Result3 = 0, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "stop-run"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "stop-run"
+read = { Result1 = 95, Result2 = 0, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "power-cycle-battery"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "power-cycle-battery"
+read = { Result1 = 95, Result2 = 0, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "power-cycle-no-battery"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "power-cycle-no-battery"
+read = { Result1 = 95, Result2 = 0, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+read = { Result1 = 95, Result2 = 0, Result3 = 0, Result4 = 1 }
+
+[[reading]]
+case = "rtc_set/date_and_time_apply"
+hash = "d869d11c9355"
+on = "2026-11-05"
+read = { Result1 = 1, Result2 = 1, Result3 = 11, Result4 = 1, ErrorCode = 1 }
+
+[[reading]]
+case = "drum_limits/preset_from_ds"
+hash = "197d29eb89fa"
+on = "2026-11-05"
+read = { Result2 = 1111, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "drum_limits/units"
+hash = "b229f1f7ef51"
+on = "2026-11-05"
+read = { Result2 = 2, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "drum_limits/single_step"
+hash = "b084f665e745"
+on = "2026-11-05"
+read = { Result2 = 1411, Result3 = 1414, Result4 = 14 }
+
+[[reading]]
+case = "drum_pins/event_and_jog"
+hash = "d17c8e9b5977"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 2222 }
+
+[[reading]]
+case = "drum_pins/time_and_jog"
+hash = "9179854b5f82"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 2222 }
+
+[[reading]]
+case = "drum_pins/end_and_jog_on_last"
+hash = "d1af1c7f35f0"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 2222 }
+
+[[reading]]
+case = "drum_pins/last_time_and_jump"
+hash = "0dbda9ddcef4"
+on = "2026-11-05"
+read = { Result1 = 2222, Result2 = 1111, Result3 = 1111, Result4 = 0 }
+
+[[reading]]
+case = "drum_pins/last_event_and_jump"
+hash = "5fcbae70a997"
+on = "2026-11-05"
+read = { Result1 = 2222, Result2 = 1111, Result3 = 1111 }
+
+[[reading]]
+case = "drum_pins/acc_jog_completing"
+hash = "bc2828f9ca58"
+on = "2026-11-05"
+read = { Result2 = 0, Result3 = 9, Result4 = 0, ErrorCode = 2422 }
+
+[[reading]]
+case = "drum_pins/paused_jog_with_flag"
+hash = "aaadae683fe6"
+on = "2026-11-05"
+read = { Result1 = 1414, Result2 = 2424, Result3 = 2424, Result4 = 2424 }
+
+[[reading]]
+case = "drum_pins/paused_jog_with_flag_mid"
+hash = "6bc36f08e159"
+on = "2026-11-05"
+read = { Result1 = 1414, Result2 = 2424, Result3 = 2424, Result4 = 2424 }
+
+[[reading]]
+case = "drum_pins/paused_flag_moves"
+hash = "79b85ff89c39"
+on = "2026-11-05"
+read = { Result2 = 1414, Result3 = 1414, Result4 = 2424, ErrorCode = 2424 }
+
+[[reading]]
+case = "drum_branch/jump_to_bad_step"
+hash = "69efb9df2a64"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 1111, Result3 = 1111, ErrorCode = 9 }
+
+[[reading]]
+case = "drum_branch/jump_on_bad_step"
+hash = "c7b2c3d42a18"
+on = "2026-11-05"
+read = { Result1 = 2222, Result2 = 2222, Result3 = 2222, Result4 = 2222, ErrorCode = 5252 }
+
+[[reading]]
+case = "drum_branch/correction_with_flag"
+hash = "1c4fdc6c4bac"
+on = "2026-11-05"
+read = { Result2 = 1414, Result3 = 1414, Result4 = 5454, ErrorCode = 1414 }
+
+[[reading]]
+case = "drum_branch/flag_cleared"
+hash = "7f04a17fe297"
+on = "2026-11-05"
+read = { Result2 = 1010, Result3 = 2222, Result4 = 2222 }
+
+[[reading]]
+case = "drum_branch/reset_paths"
+hash = "f7bba5fd42fc"
+on = "2026-11-05"
+read = { Result2 = 1010, Result3 = 1111, Result4 = 1111, ErrorCode = 1111 }
+
+[[reading]]
+case = "drum_branch/written_and_paused_acc"
+hash = "ec902c90547e"
+on = "2026-11-05"
+read = { Result2 = 3333, Result3 = 9, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "drum_branch/event_rises_in_pause"
+hash = "97f89b78f612"
+on = "2026-11-05"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1122 }
+
+[[reading]]
+case = "drum_branch/te_event_before_time"
+hash = "839de1312cff"
+on = "2026-11-05"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1 }
+
+[[reading]]
+case = "drum_branch/drum_in_loop"
+hash = "b8eaae081f30"
+on = "2026-11-05"
+read = { Result2 = 30, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "fixed_scan/scan_setup"
+hash = "a02928677ee4"
+on = "2026-11-05"
+read = { Result1 = 1, Result2 = 100, Result3 = 100, Result4 = 100 }
+
+[[reading]]
+case = "fixed_scan/seconds_and_ms"
+hash = "99679db70be0"
+on = "2026-11-05"
+read = { Result1 = 10, Result2 = 10, Result3 = 100, Result4 = 100, ErrorCode = 1 }
+
+[[reading]]
+case = "fixed_scan/off_delay_and_drum"
+hash = "2f1b2471ec30"
+on = "2026-11-05"
+read = { Result1 = 10, Result2 = 11, Result3 = 100, Result4 = 100, ErrorCode = 1 }
+
+[[reading]]
+case = "real_sum/f64_row"
+hash = "efaaae94f85e"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "agg_more/rand_sites"
+hash = "eeb469b70006"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 7, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "real_sum/f64_row"
+hash = "efaaae94f85e"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "agg_more/rand_sites"
+hash = "eeb469b70006"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 7, Result3 = 0, Result4 = 0 }
