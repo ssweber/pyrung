@@ -1648,9 +1648,15 @@ def _interval_bounds(
     if node.symbol == "/" and b_lo <= 0 <= b_hi:
         return None
 
+    if node.symbol == "%":
+        # MOD truncates: below the divisor's size, with the dividend's sign, and
+        # 0 for a MOD by 0.  Not monotone, so not from the corners.
+        size = max(abs(b_lo), abs(b_hi))
+        return (max(a_lo, -size) if a_lo < 0 else 0, min(a_hi, size) if a_hi > 0 else 0)
+
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
-    except (ZeroDivisionError, OverflowError):
+    except (ArithmeticError, ValueError):
         return None
     return (min(corners), max(corners))
 
@@ -1683,7 +1689,13 @@ def _domain_from_calc_expression(
     if isinstance(expression, BinaryExpr) and expression.symbol == "%":
         modulus = _literal_value_from_value(expression.right)
         if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
-            return tuple(range(modulus))
+            # MOD truncates: a dividend that may be negative reaches -(modulus - 1).
+            dividend = _interval_bounds(
+                expression.left, graph, all_exprs, known_domains, atom_index
+            )
+            if dividend is not None and dividend[0] >= 0:
+                return tuple(range(modulus))
+            return tuple(range(1 - modulus, modulus))
 
     bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
     if bounds is None:

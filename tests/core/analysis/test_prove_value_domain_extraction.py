@@ -88,6 +88,26 @@ class TestValueDomainExtraction:
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert nd["Flag"] == (False, True)
 
+    @pytest.mark.parametrize("low, domain", [(-5, (-2, -1, 0, 1, 2)), (0, (0, 1, 2))])
+    def test_a_mod_takes_the_dividends_sign(self, low, domain):
+        """MOD truncates (a CLICK's Math): -5 MOD 3 is -2, so a dividend that may be
+        negative gives a domain below 0 too."""
+        n = Int("N", external=True, min=low, max=5)
+        d = Int("D")
+        neg = Bool("Neg")
+        with Program(strict=False) as logic:
+            with Rung(d < 0):
+                latch(neg)
+            with Rung():
+                calc(n % 3, d)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful = result[0]
+        assert stateful["D"] == domain
+        expected = Counterexample if low < 0 else prove_module.Proven
+        assert isinstance(always(logic, ~neg, max_states=5000), expected)
+
     def test_integer_comparison_literals(self):
         """Pure equality-only inputs collapse to {literals..., OTHER}."""
         state = Int("State", external=True)
