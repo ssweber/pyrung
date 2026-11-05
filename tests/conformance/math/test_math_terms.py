@@ -28,7 +28,10 @@ pass answers nothing and a run on a CLICK records what it read.
 - ``error_terms_real``: the same three formulas into DFs preset 99.0, where a non-finite value is
   kept.  Result1 (7 / 0 + 5), Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0
   (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
-  by 0 carried through), 0 for any other (NaN).  pyrung reads 2, 2, 2.
+  by 0 carried through), 5 for -Inf, 0 for any other: NaN or a finite value none of these (7 / 0
+  stored as 7 makes 12.0).  Result4 is DF12 * 10 and ErrorCode DF14 * 10, each into an Int, to
+  size a finite other reading of Result1 and Result3 (a NaN or an infinity there writes what a
+  Math into an Int makes of one).  pyrung reads 2, 2, 2, 0, 0.
 
 SC46 stays on to the end of the scan, so the root and the power each run on the first scan whose
 SC46 is off right before them, as ``probe_kit.GuardedProbes`` does; SC40 and SC43 follow the last
@@ -134,7 +137,7 @@ def init_error_terms(slot: Any) -> None:
     reset(c.select(181, 185))
 
 
-#: What a formula into a DF may hold, in each field's order; 0 for any other (NaN).
+#: What a formula into a DF may hold, in each field's order; 4 and 5 are +/-Inf, 0 any other.
 REAL_READINGS = (5.0, 0.0, 99.0)
 
 
@@ -155,6 +158,11 @@ def prove_error_terms_real(slot: Any) -> None:
         class_of(slot, result, REAL_READINGS, field)
         with Rung(*once(slot), result >= 3.0e38):
             copy(4, field)
+        with Rung(*once(slot), result <= -3.0e38):
+            copy(5, field)
+    with Rung(*once(slot)):
+        calc(results[0] * 10, slot.Result4)
+        calc(results[2] * 10, slot.ErrorCode)
     finish(slot)
 
 
@@ -199,13 +207,16 @@ group = Group(
         case(
             "A math error's 0 in a larger formula into a DF: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 "
             "(Result2), SQRT(-4.0) + 5 (Result3) read 1 for 5.0, the term alone 0; 2 for 0.0, the "
-            "formula; 4 for +Inf; 0 for NaN",
+            "formula; 4 for +Inf, 5 for -Inf; 0 for NaN or another value, sized by Result4 "
+            "(Result1's DF * 10) and ErrorCode (Result3's)",
             ladder=prove_error_terms_real,
             init=init_error_terms_real,
             expect={
-                "Result1": between(0, 4),
-                "Result2": between(0, 4),
-                "Result3": between(0, 4),
+                "Result1": between(0, 5),
+                "Result2": between(0, 5),
+                "Result3": between(0, 5),
+                "Result4": between(-32768, 32767),
+                "ErrorCode": between(-32768, 32767),
             },
             probe="into a DF: a math error zeroes its term, its formula, or carries through (2)",
         ),

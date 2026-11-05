@@ -1,5 +1,5 @@
 """A Copy into a Word from below an Int and from NaN: the ``word_floor`` group (part
-``follow_values``).
+``follow_timing``, where there is room).
 
 ``word_store/word_below_zero`` read on a CLICK that DD -1 copied into a DH writes 65535, the
 wrap.  It does not say what a value below -32768 writes, where a store could wrap all 16 bits or

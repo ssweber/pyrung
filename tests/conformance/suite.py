@@ -301,7 +301,6 @@ APART_GROUPS = [
     test_math_terms.group,
     test_search_more.group,
     test_real_text.group,
-    test_word_floor.group,
     # Writes past the DD bank: deletable, last but one of its part.
     test_past_clean.group,
     # May stop the PLC: run alone, last, with C401 set by hand.
@@ -310,6 +309,7 @@ APART_GROUPS = [
     test_drum_preset.group,
     test_deb_zero.group,
     test_coil_timing.group,
+    test_word_floor.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -327,11 +327,13 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow_flags": ApartPart(("flag_boxes", "flag_halves")),
     # the values the round read as none of the candidates, or left unread;
     "follow_values": ApartPart(
-        ("math_terms", "search_more", "real_text", "word_floor", "past_clean", "for_dd_minus")
+        ("math_terms", "search_more", "real_text", "past_clean", "for_dd_minus")
     ),
     # and timing: a drum's jump to a bad step and when it reads a step's preset, a debounce's
-    # off side and a flasher's on phase of 0.
-    "follow_timing": ApartPart(("bad_jump", "drum_preset", "deb_zero", "coil_timing")),
+    # off side and a flasher's on phase of 0; and, for room, a Word store below -32768.
+    "follow_timing": ApartPart(
+        ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
+    ),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
