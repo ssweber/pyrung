@@ -59,7 +59,7 @@ def _sides(bits: range, steps: range, tds: range) -> list[Side]:
 def _read(slot: Any, sides: list[Side]) -> None:
     fields = (slot.Result1, slot.Result2, slot.Result3)
     with Rung(slot.Scratch == READ_SCAN):
-        for side, field in zip(sides, fields):
+        for side, field in zip(sides, fields[: len(sides)], strict=True):
             copy(side.step, field)
 
 

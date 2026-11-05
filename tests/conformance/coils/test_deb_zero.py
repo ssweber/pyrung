@@ -27,7 +27,7 @@ from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Or, Rung, calc, copy, debounce, off_delay, on_delay, out
-from tests.conformance.memory import ClickTimer, c, t, td
+from tests.conformance.memory import ClickTimer, c, t
 from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 

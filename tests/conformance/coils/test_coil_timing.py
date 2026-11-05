@@ -84,9 +84,7 @@ def prove_deb_off_against_tof(slot: Any) -> None:
     with Rung(rung):
         off_delay(tof, 5)
     for bit, field in ((deb, slot.Result1), (tof.Done, slot.Result2)):
-        with Rung(
-            slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= OFF_WINDOW, ~bit, field == 0
-        ):
+        with Rung(slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= OFF_WINDOW, ~bit, field == 0):
             copy(slot.Scratch, field)
     with Rung(slot.Cmd != 0, slot.Scratch == OFF_WINDOW + 1, slot.Fired == 0):
         calc(slot.Result1 - slot.Result2, slot.ErrorCode)

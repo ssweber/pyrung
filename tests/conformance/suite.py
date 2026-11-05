@@ -69,11 +69,11 @@ from tests.conformance.copy import (
 from tests.conformance.drum_shift_search import (
     test_bad_jump,
     test_drum,
-    test_drum_preset,
     test_drum_close,
     test_drum_idle,
     test_drum_jump,
     test_drum_pins,
+    test_drum_preset,
     test_drum_rule,
     test_drum_settle,
     test_drum_trace,
