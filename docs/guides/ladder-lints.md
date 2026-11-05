@@ -168,7 +168,7 @@ The check looks at contacts: a rung's or continued rung's conditions, a branch's
 | `CMP_ALWAYS_TRUE` | Info | An equality or inequality comparison that is true for every value in a complete domain. Ordered range comparisons are retained as defensive guards. |
 | `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
 | `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. Configured defaults, external and physical inputs, read-only constants, and numeric `0`/`1` Boolean conventions are left alone. |
-| `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are left alone. |
+| `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer, counter or drum step preset has an implicit zero start and no ladder writer, so a timer or counter completes at once and a drum step never ends. Configured and literal zero presets are left alone. |
 | `CMP_STEPPER_VALUE_NOT_SET` | Warning | A discrete stepping tag is compared with a value that none of its understood producers can establish. Dynamic, external, and unresolved producer paths are left alone. |
 | `CMP_REPEATED_STATE_VALUE` | Advisory | Literal equality comparisons against the same discrete values are repeated heavily or spread across the program. Numeric `0`/`1`-only conventions are left alone. |
 | `CMP_TRUE_AT_RESET` | Warning | A timer or counter completion comparison is already true when the accumulator resets. |

@@ -196,11 +196,11 @@ def test_simultaneous_rise_cross_product():
     assert state in bfs_result
 
 
-def test_time_drum_zero_preset_reachability():
-    """time_drum with presets=[1,1,1,1] advances a step a scan (a preset of 0 never ends one).
+def test_time_drum_one_ms_preset_reachability():
+    """time_drum with presets=[1,1,1,1] advances a step a scan.
 
-    The drum reaches step 4 (pattern=[..., [False, True]]) within a few
-    scans, setting B1=True.  BFS finds only {B0: False, B1: False}.
+    The drum is reset by B0 and runs only with N0 == 0, and the BFS projection
+    must hold the state the concrete PLC reaches in a few scans.
     """
     In0 = Bool("In0", external=True)
     B0 = Bool("B0")
