@@ -350,15 +350,15 @@ class Driver:
         as over the wire, where a case is read however late the scans come.
         """
         outcomes: dict[str, list[tuple[dict[str, int], bool]]] = {}
-        for run in (self.run_scans, None):
+        for to_each_fired in (False, True):
             ready = self._reset()
             self.run_scans(idle)
             scans = max(e.case.scans for e in ready)
             self._command(ready)
-            if run is None:
+            if to_each_fired:
                 self._run_to_each_fired(ready, scans)
             else:
-                run(scans)
+                self.run_scans(scans)
             for e in ready:
                 outcomes.setdefault(e.label, []).append(read_slot(self.plc, e.fields, e.case))
             self.run_scans(idle)
