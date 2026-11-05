@@ -184,10 +184,10 @@ def _plan_from_outcome(
     target_tag, target_value = target.tag, target.value
     targets = tuple((member.tag, member.value) for member in target.members)
 
-    # The proof reads the program, not the search, so a search cut short does not weaken it.
+    # A search that did not finish found no block.  The link may still be on its way to one.
     linked_block = (
         None
-        if outcome.reached or target.predicate is not None
+        if outcome.reached or outcome.cut_short or target.predicate is not None
         else _static_proofs.linked_feedback_block(
             target_tag, target_value, _static_proofs.facts_for(setup)
         )

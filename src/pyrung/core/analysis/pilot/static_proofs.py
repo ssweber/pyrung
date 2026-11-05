@@ -9,7 +9,9 @@ Three facts carry both proofs:
 
 * ``ProofFacts.producers`` lists every rung able to put a value in a tag, and
   refuses when a write can happen outside the rung's condition (a coil going
-  false, a timer), through a pointer, or in a for loop.
+  false, a timer), through a pointer, or in a for loop. A pointer write counts
+  against every slot of its block, whatever range the pointer declares: a declared
+  range only warns.
 * A tag the plan, the plant or the outside may set (``free``: steerable, forced or
   patched in the session how() was asked from, harness feedback, external, an input
   block's slot, system) has no such list.
@@ -60,6 +62,7 @@ from pyrung.core.synthesis import plant_timer
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import ImmediateRef, InputTag, TagType
 from pyrung.core.time_mode import TimeMode
+from pyrung.core.validation._common import walk_instructions
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
@@ -84,6 +87,7 @@ class ProofFacts:
     overridden: frozenset[str]
     couplings: tuple[Coupling, ...]
     dt_ms: float | None
+    pointer_written_blocks: frozenset[str]
 
     def holds(self, tag: str, value: Any) -> bool:
         """Does *tag* have *value* now?  A tag no scan has written yet has its default."""
@@ -97,31 +101,7 @@ class ProofFacts:
 
     def _writable_through_pointer(self, tag: str) -> bool:
         block = getattr(self.pdg.tags.get(tag), "_pyrung_block", None)
-        return block is not None and (
-            block.name in self.pdg.opaque_write_blocks
-            or any(ref.block is block for ref in self.pdg.indirect_writes)
-        )
-
-    def _writes_unseen(self, instr: Any, tag: str) -> bool:
-        """Might *instr* write *tag* where ``instruction_writes_tag`` cannot see it?
-
-        ``writers_of`` knows the rung, so comparing rungs does not help when this rung also
-        writes the tag in plain sight.
-        """
-        if isinstance(instr, ForLoopInstruction):
-            return True
-        block = getattr(self.pdg.tags.get(tag), "_pyrung_block", None)
-        if block is None:
-            return False
-        targets = (
-            target.value if isinstance(target, ImmediateRef) else target
-            for target in instruction_write_targets(instr)
-        )
-        return any(
-            isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange))
-            and target.block is block
-            for target in targets
-        )
+        return block is not None and block.name in self.pointer_written_blocks
 
     def _can_write(self, written: Any, tag: str, value: Any) -> bool:
         """Might this static write leave *tag* at *value*?  Only a literal can rule it out."""
@@ -150,10 +130,10 @@ class ProofFacts:
         found: list[int] = []
         for node_index in sorted(writers):
             rung = self.rung_of(node_index)
-            if rung is None or any(self._writes_unseen(i, tag) for i in rung._instructions):
+            if rung is None or _has_a_loop(rung):
                 return None
             writes = [instr for instr in rung._instructions if instruction_writes_tag(instr, tag)]
-            if not writes:  # through a pointer or inside another instruction
+            if not writes:
                 return None
             produces = False
             for instr in writes:
@@ -167,6 +147,23 @@ class ProofFacts:
             if produces:
                 found.append(node_index)
         return tuple(found)
+
+
+def _has_a_loop(rung: Any) -> bool:
+    """``instruction_writes_tag`` does not see into a for loop, so a rung with one can hide a write."""
+    return any(isinstance(instr, ForLoopInstruction) for instr in rung._instructions)
+
+
+def _pointer_written_blocks(program: Any) -> frozenset[str]:
+    """Every block some instruction writes at an address only the scan knows."""
+    names: set[str] = set()
+    for instr in walk_instructions(program):
+        for target in instruction_write_targets(instr):
+            if isinstance(target, ImmediateRef):
+                target = target.value
+            if isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
+                names.add(target.block.name)
+    return frozenset(names)
 
 
 def facts_for(setup: DriveSetup) -> ProofFacts:
@@ -195,6 +192,7 @@ def facts_for(setup: DriveSetup) -> ProofFacts:
         overridden=overridden,
         couplings=couplings,
         dt_ms=work._dt * 1000 if work._time_mode is TimeMode.FIXED_STEP else None,
+        pointer_written_blocks=_pointer_written_blocks(setup.program),
     )
 
 
@@ -327,10 +325,10 @@ class _LinkProof:
 
     def _rung_also_writes(self, node_index: int, timer: Any, tags: tuple[str, ...]) -> bool:
         """Does anything on the timer's rung other than the timer write these tags?"""
-        facts = self.facts
-        return any(
-            instruction_writes_tag(instr, tag) or facts._writes_unseen(instr, tag)
-            for instr in facts.rung_of(node_index)._instructions
+        rung = self.facts.rung_of(node_index)
+        return _has_a_loop(rung) or any(
+            instruction_writes_tag(instr, tag)
+            for instr in rung._instructions
             if instr is not timer
             for tag in tags
         )
@@ -398,7 +396,9 @@ class _LinkProof:
         if facts.pdg.rung_nodes[node_index].subroutine is not None:
             return False
         rung = facts.rung_of(node_index)
-        writes = [i for i in getattr(rung, "_instructions", ()) if instruction_writes_tag(i, en)]
+        if rung is None or _has_a_loop(rung):
+            return False
+        writes = [i for i in rung._instructions if instruction_writes_tag(i, en)]
         return len(writes) == 1 and isinstance(writes[0], OutInstruction)
 
 

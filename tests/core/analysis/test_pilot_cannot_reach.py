@@ -243,10 +243,10 @@ class TestLinkProofStillProves:
         program, hit = _linked(Physical("Fb", on_delay="200ms", off_delay="100ms"), build)
         assert _step_to(_harnessed(program), hit, {"Enable": True}, 600) is None
 
-        plan = _harnessed(program).how(hit, **BOUND)
-        assert plan.status is PlanStatus.CANNOT_REACH, plan.reason
-        assert "Fb<-Enable" in (plan.reason or "")
-        assert "unlink=['Fb']" in (plan.reason or "")
+        reason = _proved_on(_harnessed(program), hit)
+        assert reason is not None
+        assert "Fb<-Enable" in reason
+        assert "unlink=['Fb']" in reason
 
         freed = _harnessed(program).how(hit, unlink=["Fb"], **BOUND)
         assert freed.status is PlanStatus.REACHED, freed.reason
@@ -264,9 +264,9 @@ class TestLinkProofStillProves:
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Enable": False}, 600) is None
 
-        plan = _harnessed(program).how(hit, **BOUND)
-        assert plan.status is PlanStatus.CANNOT_REACH, plan.reason
-        assert "Fb<-Enable" in (plan.reason or "")
+        reason = _proved_on(_harnessed(program), hit)
+        assert reason is not None
+        assert "Fb<-Enable" in reason
 
 
 def _state_machine() -> tuple[Program, Any, Any]:
@@ -911,7 +911,7 @@ class TestAnEnableThatKeepsTheProof:
 
         program, hit = _mid_scan(build)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is None
-        assert _harnessed(program).how(hit, max_scans=1000).status is PlanStatus.CANNOT_REACH
+        assert _proved_on(_harnessed(program), hit) is not None
 
 
 def _plain_rung(enable: Any, feedback: Any, watch: Any) -> None:
@@ -1246,3 +1246,185 @@ class TestAWriteTheRungHides:
         assert _both(PLC(program, dt=0.01), [({"A": True}, 1)], {"X": True, "Y": True})
         facts = facts_for(prepare_drive(PLC(program, dt=0.01), unlink=None))
         assert exclusion_evidence(facts, ("X", True), ("Y", True)) is None
+
+
+# ---------------------------------------------------------------------------
+# The timer in a branch of the coil's own rung
+# ---------------------------------------------------------------------------
+
+
+def _both_ways_link() -> Any:
+    return Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
+
+
+class TestABranchOfTheCoilsRung:
+    """A branch reads its contacts when execution reaches it, so the rung moves the enable first."""
+
+    def test_a_loop_clears_it_after_the_branch(self) -> None:
+        go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
+        feedback = _both_ways_link()
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                out(enable)
+                with branch(enable, ~feedback):
+                    on_delay(watch, 3000)
+                with forloop(1):
+                    reset(enable)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_a_loop_sets_it_after_the_branch(self) -> None:
+        go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
+        feedback = _both_ways_link()
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                out(enable)
+                with forloop(1):
+                    reset(enable)
+                with branch(~enable, feedback):
+                    on_delay(watch, 3000)
+                with forloop(1):
+                    latch(enable)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_a_pointer_clears_it_after_the_branch(self) -> None:
+        go, hit = Bool("Go", external=True), Bool("Hit")
+        bits = Block("B", TagType.BOOL, 1, 3)
+        index = Int("Idx", default=1)
+        feedback = Bool(
+            "Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="B1"
+        )
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                out(bits[1])
+                with branch(bits[1], ~feedback):
+                    on_delay(watch, 3000)
+                copy(0, bits[index])
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_a_separate_timer_rung_keeps_the_proof(self) -> None:
+        go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
+        feedback = _both_ways_link()
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                out(enable)
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is None
+        assert _proved_on(_harnessed(program), hit) is not None
+
+
+# ---------------------------------------------------------------------------
+# A pointer's declared range
+# ---------------------------------------------------------------------------
+
+
+_DECLARED_RANGES = [
+    pytest.param({"min": 2, "max": 3}, id="min and max"),
+    pytest.param({"choices": {2: "two", 3: "three"}}, id="choices"),
+]
+
+
+class TestAPointersDeclaredRangeIsOnlyAWarning:
+    """``C[P]`` with P declared 2..3 writes C1 when P holds 1, so C1 has a writer after all."""
+
+    @pytest.mark.parametrize("size", [8, 2000])
+    @pytest.mark.parametrize("declared", _DECLARED_RANGES)
+    def test_the_program_steps_it_out_of_range(self, declared: dict[str, Any], size: int) -> None:
+        go, enable = Bool("Go", external=True), Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        bits = Block("C", TagType.BOOL, 1, size)
+        pointer = Int("P", default=2, **declared)
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                copy(1, pointer)
+                copy(1, bits[pointer])
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(bits[1])
+            with Rung(bits[1]):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+        assert _harnessed(program).how(hit, max_scans=100).status is not PlanStatus.CANNOT_REACH
+
+    def test_a_read_through_the_same_pointer_keeps_the_proof(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit, other = Bool("Hit"), Bool("Other")
+        bits = Block("C", TagType.BOOL, 1, 8)
+        pointer = Int("P", default=2, min=2, max=3)
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung():
+                copy(bits[pointer], other)
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _proved_on(_harnessed(program), hit) is not None
+
+    def test_a_pointer_into_another_block_keeps_the_proof(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        words = Block("D", TagType.INT, 1, 8)
+        pointer = Int("P", default=2, min=2, max=3)
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung():
+                copy(1, words[pointer])
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _proved_on(_harnessed(program), hit) is not None
+
+
+def test_a_loop_body_at_an_index_expression_over_the_cap() -> None:
+    go, enable = Bool("Go", external=True), Bool("En", external=True)
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+    hit = Bool("Hit")
+    bits, index, offset = _big_block()
+    watch = Timer.clone("W")
+    with Program(strict=False) as program:
+        with Rung(go), forloop(1):
+            copy(1, bits[index + offset])
+        with Rung(enable, ~feedback):
+            on_delay(watch, 3000)
+        with Rung(watch.Done):
+            latch(bits[1])
+        with Rung(bits[1]):
+            latch(hit)
+    assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
+    assert _proved_on(_harnessed(program), hit) is None
+
+
+# ---------------------------------------------------------------------------
+# A search that ran out of budget
+# ---------------------------------------------------------------------------
+
+
+def test_a_search_cut_short_makes_no_claim() -> None:
+    """The proof holds, but with the search unfinished how() says it stopped, as it always has."""
+    program, hit, _watch = _watchdog_chain()
+    assert _proved_on(_harnessed(program), hit) is not None
+    plan = _harnessed(program).how(hit, max_scans=1)
+    assert plan.status is PlanStatus.STOPPED, plan.reason
