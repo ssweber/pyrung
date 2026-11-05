@@ -63,6 +63,7 @@ from .findings import (
     CLK_RAND_EQUAL_BOUNDS,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TEXT_ORDER_COMPARE,
+    CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
     ValidationMode,
@@ -845,6 +846,104 @@ def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[Cl
                     ),
                 )
             )
+        for branch in rung._branches:
+            _walk_rung(branch, location_str)
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung, location_str)
+
+    for rung_index, rung in enumerate(program.rungs):
+        _walk_rung(rung, f"main rung {rung_index}")
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+    return findings
+
+
+def _text_literal_compares(condition: Any, out: list[tuple[Any, list[Tag]]]) -> None:
+    """Collect each ``==``/``!=`` of a Char with a longer literal, and the Chars pyrung reads.
+
+    A text window (``txt[1] == "AB"``) reads the next elements of its block; any
+    other such compare reads its one Char against the whole literal.
+    """
+    from pyrung.core.condition import CompareEq, CompareNe, Condition, text_window_of
+
+    if isinstance(condition, (list, tuple)):
+        for item in condition:
+            _text_literal_compares(item, out)
+        return
+    if not isinstance(condition, Condition):
+        return
+    written = text_window_of(condition)
+    if written is not condition:
+        out.append((written, [child.tag for child in getattr(condition, "conditions", ())]))
+        return
+    if (
+        isinstance(condition, (CompareEq, CompareNe))
+        and condition.tag.type == TagType.CHAR
+        and isinstance(condition.value, str)
+        and len(condition.value) > 1
+    ):
+        out.append((condition, [condition.tag]))
+        return
+    for attr_name in ("condition", "conditions"):
+        _text_literal_compares(getattr(condition, attr_name, None), out)
+
+
+def _evaluate_text_windows(
+    program: Any, mode: ValidationMode, resolver: _ResolutionCache
+) -> list[ClickFinding]:
+    """A CLICK compares a longer literal over a TXT and the TXTs after it.
+
+    pyrung compares the next elements of the Char's block, so the two agree only
+    where those are mapped to the next TXT addresses, one for each character.
+    """
+    from pyrung.core.validation.render import render_condition
+
+    findings: list[ClickFinding] = []
+
+    def _check(written: Any, tags: list[Tag], location_str: str) -> None:
+        slots = [resolver.resolve_direct_tag(tag) for tag in tags]
+        resolved = [slot for slot in slots if slot is not None and slot.address is not None]
+        if len(resolved) != len(tags):
+            return  # unresolved mappings are reported by the bank checks
+        first = resolved[0]
+        if first.memory_type != "TXT" or first.address is None:
+            return
+        expected = [f"TXT{first.address + offset}" for offset in range(len(written.value))]
+        actual = [_bank_label(slot) for slot in resolved]
+        if actual == expected:
+            return
+        if len(tags) == 1:
+            read = f"compares {tags[0].name} ({actual[0]}) alone with the whole literal"
+        else:
+            pairs = ", ".join(
+                f"{tag.name} ({label})" for tag, label in zip(tags, actual, strict=True)
+            )
+            read = f"compares {pairs}"
+        findings.append(
+            ClickFinding(
+                code=CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
+                severity=_route_severity(CLK_TEXT_WINDOW_NOT_CONTIGUOUS, mode),
+                message=(
+                    f"{render_condition(written)} at {location_str} {read} in pyrung; "
+                    f"a CLICK compares {', '.join(expected)}, one character each."
+                ),
+                location=location_str,
+                suggestion=(
+                    "Compare one character at a time, or map the Chars to consecutive "
+                    "TXT addresses in order (a Char block mapped to a txt.select() range)."
+                ),
+            )
+        )
+
+    def _walk_rung(rung: Any, location_str: str) -> None:
+        compares: list[tuple[Any, list[Tag]]] = []
+        _text_literal_compares(rung._conditions[rung._branch_condition_start :], compares)
+        for instruction in rung._instructions:
+            for field_name in getattr(type(instruction), "_conditions", ()):
+                _text_literal_compares(getattr(instruction, field_name, None), compares)
+        for written, tags in compares:
+            _check(written, tags, location_str)
         for branch in rung._branches:
             _walk_rung(branch, location_str)
         for body_rung in iter_loop_body_rungs(rung._instructions):
