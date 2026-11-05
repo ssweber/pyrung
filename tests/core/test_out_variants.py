@@ -244,9 +244,7 @@ class TestShortPhases:
     than a scan does not show.  A preset of 0 or below gives no pulse (hardware,
     ``out_more/zero_and_below``)."""
 
-    def test_flasher_shows_an_on_time_under_a_scan_only_after_an_off_phase(
-        self, runner_factory
-    ):
+    def test_flasher_shows_an_on_time_under_a_scan_only_after_an_off_phase(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):

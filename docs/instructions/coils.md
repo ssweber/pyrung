@@ -36,7 +36,7 @@ with rung(LevelSwitch):
     debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
 ```
 
-`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms; a shorter blip changes nothing. Each side is an on-delay timer on the rung (or on its negation): it restarts when the rung changes, and its `Acc` keeps counting past the preset while the rung holds, as `on_delay`'s does. CLICK requires both sides.
+`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms; a shorter blip changes nothing. Each side is an on-delay timer on the rung (or on its negation): it restarts from 0 when the rung changes to its side, its `Acc` keeps counting past the preset while the rung holds, as `on_delay`'s does, and it keeps that `Acc` while the other side times. CLICK requires both sides.
 
 ### `flasher` — blink while the rung is true
 
@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. The phase is read from the two `Acc` values: the off phase runs while the on timer's `Acc` has reached its preset and the off timer's has not. The rung going false turns `Beacon` off and freezes both `Acc` values where they are; when the rung comes back, the on phase restarts from 0 while the off timer keeps its frozen value until the on phase ends.
+The on phase starts when the rung goes true. The phase is read from the two `Acc` values: the off phase runs while the on timer's `Acc` has reached its preset and the off timer's has not. The rung going false turns `Beacon` off and freezes both `Acc` values where they are; when the rung comes back, both restart from 0 with an on phase.
 
 ### `timed` — on for a set time
 
@@ -55,9 +55,9 @@ with rung(CallButton):
     timed(Lamp, Timer[6], 3, "sec", maintained=True)   # at least 3 s, then follows the rung
 ```
 
-A rung edge starts the on time, and the on time runs out whatever the rung does; an edge during it does not restart it. Not maintained, the next pulse needs the rung to go false and true again. The coil has timed out while its `Acc` holds at or past the preset, and the `Acc` clears once the rung is false. The timed-out state is read from `Acc >= preset` each scan, so lowering a register preset below a running `Acc` reads as timed out on the next scan.
+A rung edge starts the on time, and the on time runs out whatever the rung does; an edge during it does not restart it. Not maintained, the next pulse needs the rung to go false and true again. The coil has timed out while its `Acc` holds at or past the preset, and the `Acc` keeps its value after the rung falls; the next edge starts it from 0. The timed-out state is read from `Acc >= preset` each scan, so lowering a register preset below a running `Acc` reads as timed out on the next scan.
 
-The first phase counts the rung's first scan, as `on_delay` does, and every phase shows for at least one scan, so an on time shorter than a scan still pulses once. None of the variants writes a Timer's `Done`, `EN` or `TT` (a CLICK Out coil never turns `T<n>` on, so a contact on that `Done` is always off), and none takes `immediate(...)` except `toggle`. A timer used by a variant belongs to it: `on_delay` on the same timer is a conflicting-output finding, as CLICK reports it.
+The first phase counts the rung's first scan, as `on_delay` does, so a `timed` or first `flasher` on time of a scan or less never shows, and an on preset of 0 or below gives no pulse at all. None of the variants writes a Timer's `Done`, `EN` or `TT` (a CLICK Out coil never turns `T<n>` on, so a contact on that `Done` is always off), and none takes `immediate(...)` except `toggle`. A timer used by a variant belongs to it: `on_delay` on the same timer is a conflicting-output finding, as CLICK reports it.
 
 ## `latch` — set and hold (SET)
 
