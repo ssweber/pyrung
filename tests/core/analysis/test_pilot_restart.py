@@ -104,7 +104,7 @@ def test_a_restart_that_falls_short_says_what_it_needs() -> None:
     assert report.lines() == [
         "Restart: alone it falls short, because Step=10 survives it.",
         "  With Step=0 written while stopped, a restart reaches it in 1 scan.",
-        "  Clear those by hand while stopped, or make them non-retentive.",
+        "  Write Step by hand while stopped, or make it non-retentive.",
         "  Step is written by rung 2.",
     ]
     assert "Restart: alone it falls short" in str(plan)
