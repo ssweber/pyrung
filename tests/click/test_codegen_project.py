@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from pyrung.click import (
     ClickBlocks,
@@ -1124,3 +1125,21 @@ class TestMathFormulaImports:
         original_rows = list(pyrung_to_ladder(logic, mapping).main_rows)
         ns = _exec_project(files, tmp_path)
         assert list(pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows) == original_rows
+
+
+class TestRunFile:
+    def test_a_debug_session_starts_before_the_first_scan(self, tmp_path: Path, monkeypatch):
+        """A debugger attaches to ``runner``, and a scan behind it is one no plan can run again."""
+        with Program() as logic:
+            with rung(x[1]):
+                out(y[1])
+        files = _project_from_program(logic, TagMap({}, include_system=False), tmp_path)
+
+        ns = _exec_project(files, tmp_path)
+        monkeypatch.setitem(sys.modules, "plc", SimpleNamespace())
+        monkeypatch.setitem(sys.modules, "plc.main", SimpleNamespace(logic=ns["logic"]))
+        run: dict = {}
+        exec(files["run.py"], run)
+
+        assert run["runner"].current_state.scan_id == 0
+        assert run["check"].current_state.scan_id == 1

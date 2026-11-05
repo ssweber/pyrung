@@ -654,11 +654,6 @@ def _search_events(
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
         logger.debug("pilot: earned-work build failed", exc_info=True)
 
-    # A warmed runner already owns its adjacent execution history. Import one
-    # exact edge; at boundary zero Compass instead chooses ObserveScan and
-    # produces the same receipt through the ordinary execution lifecycle.
-    bootstrap_execution = _entry_execution.import_adjacent_entry_scan(state, ctx)
-
     yield PilotEvent(
         "started",
         state.work.state.scan_id,
@@ -669,11 +664,6 @@ def _search_events(
             "pipeline_roles": ctx.pipeline_roles,
             "pipeline_internal_tags": ctx.pipeline_internal_tags,
             "route": ctx.route,
-            "bootstrap_execution": (
-                bootstrap_execution.diagnostic_snapshot()
-                if bootstrap_execution is not None
-                else None
-            ),
             "active_requirements": tuple(
                 requirement.diagnostic_snapshot() for requirement in state.active_requirements
             ),

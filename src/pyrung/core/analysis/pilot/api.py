@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pyrung.core.analysis.pilot.budget as _budget
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
+import pyrung.core.analysis.pilot.restart as _restart
 import pyrung.core.analysis.pilot.static_proofs as _static_proofs
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
@@ -301,6 +302,42 @@ def pilot_how(
     confirmed observations return to a fresh Compass read.
     """
     clock = _budget.WallClock.starting_now(wall_clock_s)
+    plan, setup, outcome = _how_from(
+        plc, conditions, max_scans, avoid_pred, unlink, on_event, wall_clock_s
+    )
+    # A search that ran out of time or work did not find there was nothing left to do.
+    if plan.status is not PlanStatus.STOPPED or outcome is None or outcome.cut_short:
+        return plan
+
+    def ask(fork: PLC, wall_s: float) -> tuple[Plan, bool]:
+        answer, _setup, asked = _how_from(
+            fork,
+            conditions,
+            max_scans,
+            avoid_pred,
+            unlink,
+            None,
+            wall_s if clock is None else min(wall_s, clock.left()),
+            start_had_a_scan=False,
+        )
+        return answer, asked is not None and asked.cut_short
+
+    return _restart.try_restart(plan, plc, setup, avoid_pred, ask)
+
+
+def _how_from(
+    plc: PLC,
+    conditions: tuple[Any, ...],
+    max_scans: int,
+    avoid_pred: Any,
+    unlink: list[str] | None,
+    on_event: Callable[[PilotEvent], None] | None,
+    wall_clock_s: float | None,
+    *,
+    start_had_a_scan: bool = True,
+) -> tuple[Plan, _drive_setup.DriveSetup, _engine._DriveOutcome | None]:
+    """One how() from where *plc* stands, with what the caller needs to decide what comes next."""
+    clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
     _check_operands(targets, setup)
@@ -312,7 +349,7 @@ def pilot_how(
 
         ok, reason = multitarget.analyze(_static_proofs.facts_for(setup), targets)
         if not ok:
-            return Plan(
+            refused = Plan(
                 reachable=False,
                 target_tag=goal.tag,
                 target_value=goal.value,
@@ -322,6 +359,7 @@ def pilot_how(
                 status=PlanStatus.CANNOT_REACH,
                 anchor_scan=setup.anchor_scan,
             )
+            return refused, setup, None
     target_tag, target_value, target_predicate = goal.tag, goal.value, goal.predicate
     ctx, route_taken = _drive_setup.prepare_target_context(
         setup,
@@ -330,6 +368,7 @@ def pilot_how(
         target_predicate,
         max_scans=max_scans,
         avoid_pred=avoid_pred,
+        start_had_a_scan=start_had_a_scan,
     )
     ctx = replace(ctx, target=goal, wall_clock=clock)
     outcome = _engine._pilot_loop(
@@ -338,4 +377,4 @@ def pilot_how(
         on_event=on_event,
     )
 
-    return _plan_from_outcome(setup, outcome, goal, route_taken)
+    return _plan_from_outcome(setup, outcome, goal, route_taken), setup, outcome

@@ -432,6 +432,10 @@ class Plan:
     # Preserve relational and conjunctive goal semantics in the public result;
     # the scalar pairs above are display representatives for such predicates.
     target_predicate: Any = None
+    # How a restart went, when how() tried one because nothing worked from the session.  On a
+    # reached plan the restart is its first step, and ``fork`` and ``anchor_scan`` are the new
+    # run: scan 0 is the restart, not the session's.
+    restart: Any = None
 
     def __post_init__(self) -> None:
         status = self.status
@@ -545,12 +549,17 @@ class Plan:
             )
             reason = self.reason or "No productive next action was found."
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
+            restart = (
+                "".join(f"\n  {line}" for line in self.restart.lines())
+                if self.restart is not None
+                else ""
+            )
             if "; still waiting on " in reason:
                 reason, waiting = reason.split("; still waiting on ", 1)
                 reason = reason if reason.endswith((".", "!", "?")) else reason + "."
-                return f"{headline}\n  Reason: {reason}\n  Waiting for: {waiting}"
+                return f"{headline}\n  Reason: {reason}\n  Waiting for: {waiting}{restart}"
             reason = reason if reason.endswith((".", "!", "?")) else reason + "."
-            return f"{headline}\n  Reason: {reason}"
+            return f"{headline}\n  Reason: {reason}{restart}"
 
         dt = self.dt
         elapsed = ""
@@ -569,11 +578,15 @@ class Plan:
                     redirects.extend(redirect.split(" | "))
             if redirects:
                 lines.append(f"  Other routes: {' | '.join(dict.fromkeys(redirects))}")
+        first_step = 1
+        if self.restart is not None:
+            lines.extend(("", "Steps:", "", self.restart.step_line()))
+            first_step = 2
         if self.journal:
-            lines.extend(("", "Steps:", ""))
+            lines.extend(("",) if self.restart is not None else ("", "Steps:", ""))
             previous_holds: tuple[Any, ...] | None = None
             installed_at: dict[tuple[str, str], int] = {}
-            for i, step in enumerate(self.journal, 1):
+            for i, step in enumerate(self.journal, first_step):
                 if step.kind == "force":
                     for rung in step.rungs:
                         installed_at.setdefault(_display_rung_key(rung), i)
@@ -602,7 +615,7 @@ class Plan:
                         installed_at.pop(_display_rung_key(rung), None)
                 if step.kind == "coast" and holds:
                     previous_holds = holds
-                if i != len(self.journal):
+                if i != len(self.journal) + first_step - 1:
                     lines.append("")
         return "\n".join(lines)
 

@@ -30,9 +30,9 @@ class _AvoidCheckRaised(BaseException):
 # ``_member_on_scan``, ``_avoid_scan_names``.
 #
 # WEIGHED: anything else, such as values laid over a state, the resting baseline, or the
-# state behind the start when a plan rewinds to re-run the entry scan.  A raise there says
-# nothing about the route, so that member is not violated, and the others keep their
-# answers: ``_member_weighed``, ``_avoid_weighed_names`` and what is built on them.
+# state a restart lands on before its first scan.  A raise there says nothing about the
+# route, so that member is not violated, and the others keep their answers:
+# ``_member_weighed``, ``_avoid_weighed_names`` and what is built on them.
 
 
 def _member_on_scan(check: str, pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:

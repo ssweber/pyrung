@@ -14,7 +14,6 @@ from typing import Any
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
-from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.requirement_derivation import (
     derive_overwriter_guard_requirement_from_write,
 )
@@ -33,7 +32,7 @@ from pyrung.core.analysis.pilot.requirements import (
 )
 from pyrung.core.analysis.pilot.types import _PilotContext, _PilotState
 from pyrung.core.analysis.pilot.world import _CausalCheckpoint
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
+from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.advance import constraint_holds
@@ -205,66 +204,6 @@ def _program_guard_transition_candidates(
     return tuple(sorted(candidates, reverse=True))
 
 
-def _preinvocation_program_guard_surfaces(
-    state: _PilotState,
-    ctx: _PilotContext,
-    rung_ids: frozenset[RungId],
-    tag: str,
-    *,
-    before_scan: int,
-) -> tuple[tuple[_CausalCheckpoint, Any, Any], ...]:
-    """Reconstruct exact retained boundaries for pre-drive transition candidates."""
-
-    invocation = state.invocation_checkpoint
-    if invocation is None:
-        return ()
-    invocation_work = invocation.world.work
-    invocation_scan = invocation_work.state.scan_id
-    surfaces: list[tuple[_CausalCheckpoint, Any, Any]] = []
-    for epoch, owner in invocation_work._causal_lineage.seal_through(invocation_scan):
-        bounded_before = min(before_scan, invocation_scan + 1, epoch.last_scan + 1)
-        for candidate_scan in _program_guard_transition_candidates(
-            owner,
-            rung_ids,
-            tag,
-            before_scan=bounded_before,
-        ):
-            source_scan = candidate_scan - 1
-            if source_scan < 0:
-                continue
-            try:
-                source_work = fork_with_pilot_rungs(
-                    invocation_work,
-                    tuple(invocation.world.pilot_rungs),
-                    scan_id=source_scan,
-                )
-            except KeyError:
-                continue
-            source_key = (
-                _pilot_world_key(
-                    dict(source_work.state.tags),
-                    state.key_config,
-                    invocation.world.pilot_rungs,
-                    (),
-                )
-                if state.key_config is not None
-                else None
-            )
-            surfaces.append(
-                (
-                    _CausalCheckpoint(
-                        key=source_key,
-                        world=invocation.world.set(work=source_work),
-                        objective=invocation.objective,
-                        configured_inputs=invocation.configured_inputs,
-                    ),
-                    epoch,
-                    owner,
-                )
-            )
-    return tuple(surfaces)
-
-
 def _program_guard_rebase_requirement(
     blocker: GuardRequirementAtom,
     parent: ActiveRequirement,
@@ -292,17 +231,7 @@ def _program_guard_rebase_requirement(
 
     failed_scan = parent.source_checkpoint.world.work.state.scan_id
     ranked: list[tuple[int, int, _CausalCheckpoint, Any, Any]] = []
-    surfaces = (
-        *_program_guard_rebase_surfaces(state, ctx),
-        *_preinvocation_program_guard_surfaces(
-            state,
-            ctx,
-            rung_ids,
-            condition.tag,
-            before_scan=failed_scan + 1,
-        ),
-    )
-    for checkpoint, epoch, owner in surfaces:
+    for checkpoint, epoch, owner in _program_guard_rebase_surfaces(state, ctx):
         checkpoint_scan = checkpoint.world.work.state.scan_id
         if (
             checkpoint_scan >= failed_scan

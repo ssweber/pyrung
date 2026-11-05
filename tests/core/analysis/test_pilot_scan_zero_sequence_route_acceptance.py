@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from pyrung import PLC
+from pyrung.core.analysis.graph import PlanStatus
 from tests.fixtures import pilot_scan_zero_sequence_route as fixture
 
 
@@ -178,20 +179,33 @@ def test_neutral_route_resolves_clicknick_sequential_corrections() -> None:
     _assert_clicknick_success(recorded, plan, anchor_scan=0)
 
 
-def test_neutral_route_resolves_corrections_after_runner_has_already_stepped() -> None:
-    runner = PLC(fixture.adjacent_logic, dt=0.010)
+@pytest.mark.parametrize(
+    ("logic", "clear_scans"),
+    [(fixture.adjacent_logic, 10), (fixture.logic, 6)],
+    ids=["adjacent", "field"],
+)
+def test_a_route_a_scan_has_already_spoiled_says_what_a_restart_needs(logic, clear_scans) -> None:
+    """The first scan latched what the route needs clear, and a restart keeps it."""
+    runner = PLC(logic, dt=0.010)
     runner.step()
 
     assert runner.state.scan_id == 1
     assert runner.state.tags[fixture.SequenceStep.name] == 99
 
-    events: list[Any] = []
-    plan = runner.how(
-        fixture.SequenceStep == 81,
-        max_scans=120,
-        on_event=events.append,
-    )
-    _assert_clicknick_success(tuple(events), plan, anchor_scan=1)
+    plan = runner.how(fixture.SequenceStep == 81, max_scans=2000)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.restart.clear == {"RouteSequenceInterrupted": 0, fixture.SequenceStep.name: 0}
+    assert plan.restart.clear_scans == clear_scans
+
+    # What the report says a person can do works.
+    runner.stop()
+    runner._state = runner.state.with_tags(dict(plan.restart.clear))
+    runner.start()
+    followed = runner.how(fixture.SequenceStep == 81, max_scans=2000)
+    assert followed.reachable, followed.reason
+    assert followed.total_scans == clear_scans
+    assert followed.replay().state.tags[fixture.SequenceStep.name] == 81
 
 
 def test_neutral_reconnect_boundary_uses_one_exact_intrascan_pulse() -> None:
@@ -379,26 +393,24 @@ def test_field_order_reconnect_reaches_step_10(make_logic: Any) -> None:
 
 
 def test_field_order_route_reaches_the_terminal_step() -> None:
-    for prestep in (False, True):
-        events: list[Any] = []
-        runner = PLC(fixture.logic, dt=0.010)
-        if prestep:
-            runner.step()
-        plan = runner.how(fixture.SequenceStep == 81, max_scans=120, on_event=events.append)
+    events: list[Any] = []
+    plan = PLC(fixture.logic, dt=0.010).how(
+        fixture.SequenceStep == 81, max_scans=120, on_event=events.append
+    )
 
-        assert plan.reachable, plan.reason
-        reconnect_overwrite = next(
-            observation
-            for event in events
-            if event.kind == "candidate_accepted"
-            for observation in event.data.get("effect_observations", ())
-            if observation.appeared is not None
-            and observation.displacement is not None
-            and observation.appeared.tag == fixture.SequenceStep.name
-            and observation.appeared.values == (98, 10)
-        )
-        assert reconnect_overwrite.displacement.values == (10, 94)
-        assert reconnect_overwrite.displacement.scan_id == reconnect_overwrite.appeared.scan_id
-        replay = plan.replay()
-        assert replay.state.scan_id == plan.state.scan_id
-        assert replay.state.tags[fixture.SequenceStep.name] == 81
+    assert plan.reachable, plan.reason
+    reconnect_overwrite = next(
+        observation
+        for event in events
+        if event.kind == "candidate_accepted"
+        for observation in event.data.get("effect_observations", ())
+        if observation.appeared is not None
+        and observation.displacement is not None
+        and observation.appeared.tag == fixture.SequenceStep.name
+        and observation.appeared.values == (98, 10)
+    )
+    assert reconnect_overwrite.displacement.values == (10, 94)
+    assert reconnect_overwrite.displacement.scan_id == reconnect_overwrite.appeared.scan_id
+    replay = plan.replay()
+    assert replay.state.scan_id == plan.state.scan_id
+    assert replay.state.tags[fixture.SequenceStep.name] == 81
