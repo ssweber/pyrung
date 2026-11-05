@@ -2332,6 +2332,56 @@ class TestBoardPeripheralsAndRunStop:
             assert stored == value or (math.isnan(value) and math.isnan(stored)), label
             assert faults == [False, flagged, False], label
 
+    #: (label, formula of (n, d, z, w, r), destination type, stored, flags as
+    #: (SC40, SC43, SC46)) with n = -7, d = 2147483647, z = 0, w = 0x8001, r = -7.5.
+    #: As a CLICK's Math reads them (hardware, 2026-11-05).
+    _CLICK_MATH = [
+        ("double_steps", lambda n, d, z, w, r: d * d - (d * d - 1), Dint, 0, (0, 0, 0)),
+        ("mod_int", lambda n, d, z, w, r: n % 2, Int, -1, (0, 0, 0)),
+        ("mod_negative_divisor", lambda n, d, z, w, r: 7 % (n + 5), Int, 1, (0, 0, 0)),
+        ("mod_real", lambda n, d, z, w, r: r % 2.0 * 10, Int, -15, (0, 0, 0)),
+        ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
+        ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
+        ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
+        ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, 0.0, (0, 0, 0)),
+        ("zero_to_literal_zero", lambda n, d, z, w, r: z**0, Int, 0, (0, 0, 0)),
+        ("wide_constant_into_dint", lambda n, d, z, w, r: (d - d + 131072) / 65536, Dint, 0, (1, 0, 0)),
+        ("wide_constant_times", lambda n, d, z, w, r: (n - n + 2) * 40000, Dint, -51072, (0, 0, 0)),
+        ("hex_lsh_drops_the_bit", lambda n, d, z, w, r: lsh(w, 1), Word, 2, (0, 0, 0)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make", "dest_type", "stored", "flags"),
+        _CLICK_MATH,
+        ids=[case[0] for case in _CLICK_MATH],
+    )
+    def test_click_math_rules_on_every_backend(
+        self, monkeypatch, label, make, dest_type, stored, flags
+    ):
+        n, d, z = Int("N", default=-7), Dint("D", default=2147483647), Int("Z")
+        w, r = Word("W", default=0x8001), Real("R", default=-7.5)
+        dest = dest_type("Dest", default=99)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(make(n, d, z, w, r), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    @pytest.mark.parametrize("dest_type, floor", [(Int, -32768), (Dint, -2147483648)])
+    def test_abs_of_the_bottom_of_a_range_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, dest_type, floor
+    ):
+        source = dest_type("Source", default=floor)
+        dest = dest_type("Dest", default=99)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(abs(source), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        assert results == {name: (0, False, True, False) for name in results}
+
     _COMPLEX = [
         ("literal_exponent", lambda n, h: n**0.5),
         ("tag_exponent", lambda n, h: n**h),

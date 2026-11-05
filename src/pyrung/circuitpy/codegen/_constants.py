@@ -47,7 +47,7 @@ _HELPER_ORDER = (
     "_rand_fail",
     "_rand_term",
     "_rand_draw",
-    "_quiet_math_error",
+    "_QuietMathError",
     "_mod",
     "_dbl",
     "_abs_int",

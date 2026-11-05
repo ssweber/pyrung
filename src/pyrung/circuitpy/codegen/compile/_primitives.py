@@ -174,13 +174,13 @@ def _compile_expression_impl(
             # for a zero base to a power of 0 or below; an integer power is
             # exact and never overflows.
             ctx.mark_helper("_math_func")
-            ctx.mark_helper("_quiet_math_error")
+            ctx.mark_helper("_QuietMathError")
             ctx.mark_helper("_pow")
             return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
         if expr.symbol == "%" and not (_non_negative(expr.left) and _non_zero_literal(expr.right)):
             # MOD truncates (the dividend's sign) and a MOD by 0 is a
             # _QuietMathError, as the core's _op_mod; Python's % floors.
-            ctx.mark_helper("_quiet_math_error")
+            ctx.mark_helper("_QuietMathError")
             ctx.mark_helper("_mod")
             return f"_mod({left}, {right})"
         return _calc_step(expr, f"({left} {expr.symbol} {right})", ctx, strict)
@@ -573,7 +573,7 @@ def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
     """
     ctx.mark_helper("_bit_int")
     ctx.mark_helper("_math_func")
-    ctx.mark_helper("_quiet_math_error")
+    ctx.mark_helper("_QuietMathError")
     ctx.mark_helper("_mod")
     ctx.mark_helper("_pow")
     ctx.mark_helper("_permissive_op")

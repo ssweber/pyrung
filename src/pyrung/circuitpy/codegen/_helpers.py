@@ -311,7 +311,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
     ],
     # 0 ** 0, 0 ** -1 and a MOD by 0: a CLICK's Math gives 0 with no flag
     # (pyrung.core.expression.QuietMathError).
-    "_quiet_math_error": [
+    "_QuietMathError": [
         "class _QuietMathError(ArithmeticError):",
         "    pass",
         "",
@@ -458,7 +458,7 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
     if needed & {"_rand_term", "_rand_draw"}:
         needed.update({"_bit_int", "_rand_fail"})
     if needed & {"_mod", "_pow"}:
-        needed.add("_quiet_math_error")
+        needed.add("_QuietMathError")
     if "_pow" in needed:
         needed.add("_math_func")
     return needed

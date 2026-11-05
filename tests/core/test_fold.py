@@ -1894,6 +1894,30 @@ class TestSoftRtcRefusals:
         self._assert_matches_stepped(build)
         self._assert_matches_stepped(build, Req=True)
 
+    def test_click_math_steps(self) -> None:
+        """A MOD that truncates and one by 0 (no flag), 0 ^ 0, a double step, an
+        ABS at the bottom of an Int, each fed by the clock."""
+
+        def build() -> Program:
+            Sec, Back, Wide = Int("Sec"), Int("Back"), Dint("Wide", default=2147483647)
+            Mod, ModZero, Pow, Dbl, Abs = (Int(name) for name in ("Mod", "Zm", "Pw", "Db", "Ab"))
+            Floor = Int("Floor")
+            with Program(strict=False) as prog:
+                with Rung():
+                    copy(system.rtc.second, Sec)
+                    calc(Sec - 30, Back)
+                    calc(Back % 7, Mod)
+                    calc(Sec % (Sec - 10), ModZero)
+                    calc((Sec - 10) ** (Sec - 10), Pow)
+                    calc(Wide * Wide - (Wide * Wide - Sec), Dbl)
+                    calc(Back * 0 - 32768, Floor)
+                    calc(abs(Floor), Abs)
+                with Rung(system.fault.out_of_range):
+                    latch(Bool("Err"))
+            return prog
+
+        self._assert_matches_stepped(build)
+
     def test_fault_flag_reader(self) -> None:
         def build() -> Program:
             Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
