@@ -1276,6 +1276,26 @@ def _enable_moved_mid_scan():
     return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit), kwargs=dict(max_scans=30000))
 
 
+def _second_route_over_the_cap():
+    """``C[Idx*2-1]`` is in no element list of a block this big, and lands on C1 at once."""
+    go, enable, hit = Bool("Go", external=True), Bool("En", external=True), Bool("Hit")
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+    bits, index = Block("C", TagType.BOOL, 1, 2000), Int("Idx", default=1)
+    watch = Timer.clone("W")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            copy(1, bits[index * 2 - 1])
+        with Rung(enable, ~feedback):
+            on_delay(watch, 3000)
+        with Rung(watch.Done):
+            latch(bits[1])
+        with Rung(bits[1]):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    Harness(plc).install()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+
+
 def _opaque_avoid_mid_coast(avoid_of):
     def build():
         timer, bank = Timer.clone("T"), Block("B", TagType.INT, 1, 3)
@@ -1338,6 +1358,7 @@ _add("truth", "truth/proof fill station FlowAlarm", _proof_fill_station)
 _add("truth", "truth/pulse on the other contact", lambda: _pulse_other_contact(held=False))
 _add("truth", "truth/pulse on the other contact held", lambda: _pulse_other_contact(held=True))
 _add("truth", "truth/enable moved mid-scan", _enable_moved_mid_scan)
+_add("truth", "truth/second route over the cap", _second_route_over_the_cap)
 _add(
     "truth",
     "truth/pointer avoid true mid-coast",

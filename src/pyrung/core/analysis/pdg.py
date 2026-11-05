@@ -177,6 +177,9 @@ class ProgramGraph:
     # range bounds.
     pointer_uses: tuple[PointerUse, ...] = ()
     opaque_index_blocks: frozenset[str] = frozenset()
+    # Blocks past the cap written at such an index.  Those writes are in neither
+    # ``writers_of`` nor ``indirect_writes``, and may land on any element.
+    opaque_write_blocks: frozenset[str] = frozenset()
     # Every tag an index reads: pointers, the tags of index expressions, and
     # ``IndirectBlockRange`` bounds.
     index_tags: frozenset[str] = frozenset()
@@ -1965,6 +1968,7 @@ def _build_program_graph(
         indirect_read_reach=_unbounded_read_reach(),
         pointer_uses=pointer_uses,
         opaque_index_blocks=opaque_index_blocks,
+        opaque_write_blocks=_opaque_write_blocks(program),
         index_tags=index_tags,
         fault_writes=fault_writes,
         unread_fault_writes=frozenset(implicit) - fault_writes,
@@ -2122,6 +2126,24 @@ def _build_writer_instrs(program: Program) -> dict[str, list[Any]]:
         for name in _named_write_dests(instr):
             writer_instrs.setdefault(name, []).append(instr)
     return writer_instrs
+
+
+def _opaque_write_blocks(program: Program) -> frozenset[str]:
+    """The blocks past the cap written at an index ``_indirect_affine`` cannot read."""
+    from pyrung.core.validation._common import walk_instructions
+
+    names: set[str] = set()
+    for instr in walk_instructions(program):
+        for dest in instruction_write_targets(instr):
+            if isinstance(dest, ImmediateRef):
+                dest = dest.value
+            if (
+                isinstance(dest, IndirectExprRef)
+                and dest.block.end - dest.block.start + 1 > _INDIRECT_BLOCK_CAP
+                and _indirect_affine(dest.expr) is None
+            ):
+                names.add(dest.block.name)
+    return frozenset(names)
 
 
 def _collect_indirect_writes(

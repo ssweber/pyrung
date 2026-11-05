@@ -29,17 +29,23 @@ from pyrung import (
     branch,
     call,
     copy,
+    forloop,
     latch,
     on_delay,
     out,
     reset,
     return_early,
     rise,
+    run_function,
     subroutine,
 )
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.drive_setup import prepare_drive
-from pyrung.core.analysis.pilot.static_proofs import facts_for, linked_feedback_block
+from pyrung.core.analysis.pilot.static_proofs import (
+    exclusion_evidence,
+    facts_for,
+    linked_feedback_block,
+)
 from pyrung.core.harness import Coupling
 from pyrung.core.physical import Physical
 
@@ -911,3 +917,332 @@ class TestAnEnableThatKeepsTheProof:
 def _plain_rung(enable: Any, feedback: Any, watch: Any) -> None:
     with Rung(enable, ~feedback):
         on_delay(watch, 3000)
+
+
+# ---------------------------------------------------------------------------
+# Writes the graph has no element list for
+# ---------------------------------------------------------------------------
+
+_INDEX_EXPRESSIONS = [
+    pytest.param(lambda index, offset, plus=0: index * 2 - 1 + plus, id="Idx*2-1"),
+    pytest.param(lambda index, offset, plus=0: index + offset + plus, id="Idx+Off"),
+]
+
+
+def _big_block(kind: TagType = TagType.BOOL) -> tuple[Any, Any, Any]:
+    name = "C" if kind is TagType.BOOL else "D"
+    return Block(name, kind, 1, 2000), Int("Idx", default=1), Int("Off", default=0)
+
+
+@pytest.mark.parametrize("index_of", _INDEX_EXPRESSIONS)
+class TestIndexExpressionsOverTheCap:
+    """Past the cap ``C[Idx*2-1]`` is listed nowhere, and may be any slot of the block."""
+
+    def test_the_timers_done(self, index_of: Any) -> None:
+        go, enable = Bool("Go", external=True), Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        bits, index, offset = _big_block()
+        timer = SimpleNamespace(Done=bits[1], Acc=Int("Acc"))
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(timer, 3000)
+            with Rung(go):
+                copy(1, bits[index_of(index, offset)])
+            with Rung(bits[1]):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_the_timers_count(self, index_of: Any) -> None:
+        go, enable = Bool("Go", external=True), Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit, done = Bool("Hit"), Bool("Done")
+        words, index, offset = _big_block(TagType.INT)
+        timer = SimpleNamespace(Done=done, Acc=words[1])
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(timer, 3000)
+            with Rung(go):
+                copy(2995, words[index_of(index, offset)])
+            with Rung(done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True, "En": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_the_enable(self, index_of: Any) -> None:
+        go = Bool("Go", external=True)
+        hit = Bool("Hit")
+        bits, index, offset = _big_block()
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link=bits[1].name)
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                copy(1, bits[index_of(index, offset)])
+            with Rung(bits[1], ~feedback):
+                on_delay(watch, 3000)
+            with Rung(go):
+                copy(0, bits[index_of(index, offset)])
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_the_feedback(self, index_of: Any) -> None:
+        go, enable = Bool("Go", external=True), Bool("En", external=True)
+        hit = Bool("Hit")
+        bits, index, offset = _big_block()
+        feedback = bits[1]
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                copy(0, bits[index_of(index, offset)])
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(hit)
+
+        def session() -> PLC:
+            plc = PLC(program, dt=0.01)
+            harness = Harness(plc)
+            harness.install()
+            harness.set_overrides(
+                {
+                    feedback.name: Coupling(
+                        "En", feedback.name, Physical(feedback.name, on_delay="100ms")
+                    )
+                }
+            )
+            return plc
+
+        assert _step_to(session(), hit, {"Go": True, "En": True}, 500) is not None
+        assert _proved_on(session(), hit) is None
+
+    @pytest.mark.parametrize("through_a_function", [False, True], ids=["copy", "run_function"])
+    def test_a_second_route(self, index_of: Any, through_a_function: bool) -> None:
+        go, enable = Bool("Go", external=True), Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        bits, index, offset = _big_block()
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                if through_a_function:
+                    run_function(lambda: {"v": True}, outs={"v": bits[index_of(index, offset)]})
+                else:
+                    copy(1, bits[index_of(index, offset)])
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+            with Rung(watch.Done):
+                latch(bits[1])
+            with Rung(bits[1]):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+        assert _harnessed(program).how(hit, max_scans=100).status is not PlanStatus.CANNOT_REACH
+
+    def test_exclusion(self, index_of: Any) -> None:
+        a, b, go = (Bool(name, external=True) for name in ("A", "Bx", "Go"))
+        bits, index, offset = _big_block()
+        with Program(strict=False) as program:
+            with Rung(a):
+                latch(bits[1])
+                reset(bits[2])
+            with Rung(b):
+                latch(bits[2])
+                reset(bits[1])
+            with Rung(go):
+                copy(1, bits[index_of(index, offset)])
+                copy(1, bits[index_of(index, offset, 1)])
+
+        def stepped() -> bool:
+            return _both(
+                PLC(program, dt=0.01),
+                [({"Go": True}, 2)],
+                {bits[1].name: True, bits[2].name: True},
+            )
+
+        assert stepped()
+        facts = facts_for(prepare_drive(PLC(program, dt=0.01), unlink=None))
+        assert exclusion_evidence(facts, (bits[1].name, True), (bits[2].name, True)) is None
+        plan = PLC(program, dt=0.01).how(bits[1], bits[2], max_scans=100)
+        assert plan.status is not PlanStatus.CANNOT_REACH, plan.reason
+
+
+def test_a_read_at_an_index_expression_keeps_the_proof() -> None:
+    """Only a write goes opaque: reading ``C[Idx*2]`` moves no slot."""
+    enable = Bool("En", external=True)
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+    hit, other = Bool("Hit"), Bool("Other")
+    bits, index, _offset = _big_block()
+    done = bits[1]
+    timer = SimpleNamespace(Done=done, Acc=Int("Acc"))
+    with Program(strict=False) as program:
+        with Rung():
+            copy(bits[index * 2], other)
+        with Rung(enable, ~feedback):
+            on_delay(timer, 3000)
+        with Rung(done):
+            latch(hit)
+    assert _proved_on(_harnessed(program), hit) is not None
+
+
+# ---------------------------------------------------------------------------
+# Other writes on the one rung
+# ---------------------------------------------------------------------------
+
+
+def _load_by_copy(watch: Any, saved: Any) -> None:
+    copy(saved, watch.Acc)
+
+
+def _load_by_literal(watch: Any, _saved: Any) -> None:
+    copy(3000, watch.Acc)
+
+
+def _load_by_function(watch: Any, saved: Any) -> None:
+    run_function(lambda s: {"v": s}, ins={"s": saved}, outs={"v": watch.Acc})
+
+
+def _done_by_function(watch: Any, _saved: Any) -> None:
+    run_function(lambda: {"v": True}, outs={"v": watch.Done})
+
+
+def _load_in_a_loop(watch: Any, saved: Any) -> None:
+    with forloop(1):
+        copy(saved, watch.Acc)
+
+
+class TestOtherWritesInTheTimersRung:
+    @pytest.mark.parametrize(
+        "extra",
+        [_load_by_copy, _load_by_literal, _load_by_function, _done_by_function, _load_in_a_loop],
+        ids=["copy a tag", "copy a literal", "function to Acc", "function to Done", "forloop"],
+    )
+    def test_with_an_external_enable(self, extra: Any) -> None:
+        enable = Bool("En", external=True)
+        saved = Int("Saved", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+                extra(watch, saved)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"En": True, "Saved": 3000}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+        assert _harnessed(program).how(hit, max_scans=1).status is not PlanStatus.CANNOT_REACH
+
+    def test_with_one_coil(self) -> None:
+        go, switch = Bool("Go", external=True), Bool("Sw", external=True)
+        enable, boost = Bool("En"), Int("Boost")
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(go):
+                out(enable)
+            with Rung(switch):
+                copy(3000, boost)
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+                copy(boost, watch.Acc)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True, "Sw": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    @pytest.mark.parametrize("slot", ["Acc", "Done"])
+    def test_through_a_pointer_into_a_small_block(self, slot: str) -> None:
+        """A small block lists the slot on this very rung, so the writer's node looks like the timer's."""
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit = Bool("Hit")
+        index = Int("Idx", default=1)
+        kind = TagType.INT if slot == "Acc" else TagType.BOOL
+        small = Block("S", kind, 1, 10)
+        timer = SimpleNamespace(
+            Done=small[1] if slot == "Done" else Bool("TD"),
+            Acc=small[1] if slot == "Acc" else Int("TA"),
+        )
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(timer, 3000)
+                copy(3000 if slot == "Acc" else 1, small[index])
+            with Rung(timer.Done):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"En": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_a_harmless_write_keeps_the_proof(self) -> None:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        hit, other = Bool("Hit"), Int("Other")
+        watch = Timer.clone("W")
+        with Program(strict=False) as program:
+            with Rung(enable, ~feedback):
+                on_delay(watch, 3000)
+                copy(5, other)
+            with Rung(watch.Done):
+                latch(hit)
+        assert _proved_on(_harnessed(program), hit) is not None
+
+
+class TestAWriteTheRungHides:
+    """One instruction on the rung cannot make the value, and a second one it cannot see does."""
+
+    def _watchdog(self) -> tuple[Any, Any, Any]:
+        enable = Bool("En", external=True)
+        feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
+        watch = Timer.clone("W")
+        with Rung(enable, ~feedback):
+            on_delay(watch, 3000)
+        return watch.Done, Bool("Go", external=True), Bool("Hit")
+
+    def test_through_a_pointer(self) -> None:
+        bits = Block("B", TagType.BOOL, 1, 5)
+        index = Int("Idx", default=1)
+        with Program(strict=False) as program:
+            done, go, hit = self._watchdog()
+            with Rung(done):
+                latch(bits[1])
+            with Rung(go):
+                reset(bits[1])
+                copy(1, bits[index])
+            with Rung(bits[1]):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_in_a_loop(self) -> None:
+        target = Bool("Y")
+        with Program(strict=False) as program:
+            done, go, hit = self._watchdog()
+            with Rung(done):
+                latch(target)
+            with Rung(go):
+                reset(target)
+                with forloop(1):
+                    latch(target)
+            with Rung(target):
+                latch(hit)
+        assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
+        assert _proved_on(_harnessed(program), hit) is None
+
+    def test_exclusion_in_a_loop(self) -> None:
+        a, b = Bool("A", external=True), Bool("Bx", external=True)
+        x, y = Bool("X"), Bool("Y")
+        with Program(strict=False) as program:
+            with Rung(a):
+                latch(x)
+                reset(y)
+                with forloop(1):
+                    latch(y)
+            with Rung(b):
+                latch(y)
+                reset(x)
+        assert _both(PLC(program, dt=0.01), [({"A": True}, 1)], {"X": True, "Y": True})
+        facts = facts_for(prepare_drive(PLC(program, dt=0.01), unlink=None))
+        assert exclusion_evidence(facts, ("X", True), ("Y", True)) is None
