@@ -5,12 +5,16 @@ Enabled by ``--fold-check`` (``make test-fold``).  The entry points
 twin is built from the same tip state, forces, pending patches and synthesis overlay; after
 the run, the twin steps the same number of scans one by one, and every state the run itself
 produced (executed scans and landings, as cached) must equal the twin's state at that scan,
-tags, memory and timestamp exactly.  A driver with a stop predicate also hands it to the twin:
-if it is true on the twin at a scan before the one where the run stopped, the run overshot
-and :class:`FoldMismatch` says so.  A predicate that reads the real runner instead of its
+tags, memory and timestamp exactly.  A driver with a stop predicate also hands it to the twin,
+on its plain state and not through the read trace, which is what is being checked: if it is
+true on the twin at a scan before the one where the run stopped, the run overshot and
+:class:`FoldMismatch` says so.  A predicate that reads the real runner instead of its
 argument (it would answer about the wrong runner on a twin) or that raises on the twin is not
-asked, and is counted.  A mismatch raises :class:`FoldMismatch` inside the test that ran it,
-naming the scan and the differing keys.
+asked, and is counted.  PILOT's opaque ``avoid=`` is judged on the scans a coast really executes,
+by contract, so a true answer from one is let off on the scans between them, and that is counted
+too; the other triggers of the same predicate are still judged there (:class:`_OpaqueAvoid`).  A
+mismatch raises :class:`FoldMismatch` inside the test that ran it, naming the scan and the
+differing keys.
 
 The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
@@ -55,9 +59,9 @@ import os
 import threading
 import warnings
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -132,8 +136,9 @@ def deliberate() -> Iterator[None]:
     message = "fold-check: deliberate() expects one mismatch, this block had {}"
     try:
         yield
-    except Exception:
-        # The test's own failure goes on, and the count is held to as well.
+    except BaseException:
+        # The test's own failure goes on, pytest's being a BaseException, and the count is
+        # held to as well.  A block left open would swallow the next test's mismatch.
         blocks.pop()
         if block[0] != 1:
             _mismatch(message.format(block[0]))
@@ -739,6 +744,35 @@ def compare_history(kind: str, plc: Any, twin: Any, start: int, truth: dict[int,
 _SEARCH_LIMITS = (SearchOutOfTime, SearchOutOfMemory, SearchQuestionRefused)
 
 
+class _OpaqueAvoid:
+    """What an opaque ``avoid=`` member said on the twin's scan, apart from the rest of the ask.
+
+    The contract judges such a member on the scans a coast executes and not in between, and
+    nothing else in the predicate shares that.  So on a twin's scan it answers here and False to
+    the ask, which goes on to the triggers after it; :func:`_predicate_on_twin` puts the answers
+    together, and ``alone`` says an opaque member was all that made it true.
+
+    A class because it is what a predicate's private copy shares with the original.
+    """
+
+    on_twin = False
+    answered_true = False
+    alone = False
+
+
+def _judged_apart(trigger: Any) -> Any:
+    """*trigger*, an opaque ``avoid=`` member, answering a twin through :class:`_OpaqueAvoid`."""
+
+    def predicate(state: Any, _member: Any = trigger.predicate) -> bool:
+        if not _OpaqueAvoid.on_twin:
+            return _member(state)
+        if _member(state):
+            _OpaqueAvoid.answered_true = True
+        return False
+
+    return replace(trigger, predicate=predicate)
+
+
 class _NotTheTwin(BaseException):
     """The predicate touched the real runner's state while the twin was asked.
 
@@ -775,9 +809,10 @@ def _shared_types() -> tuple[type, ...]:
     from pyrung.core.memory_block import Block
     from pyrung.core.program import Program
     from pyrung.core.state import SystemState
+    from pyrung.core.structure import _StructRuntime
     from pyrung.core.tag import Tag
 
-    return (Tag, Condition, Expression, Block, Program, SystemState)
+    return (Tag, Condition, Expression, Block, Program, SystemState, _StructRuntime)
 
 
 def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], bool] | None:
@@ -914,18 +949,19 @@ def _filled(cell: Any) -> bool:
 def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) -> bool | None:
     """``predicate`` as the twin sees it, or None when the twin cannot answer it.
 
-    Reuses the read trace's ``_traced_call`` (it swaps the twin's tip for the traced
-    state, so a predicate reading ``twin.state`` works).  The real runner's state is
-    poisoned for the call: a closure over the real runner is detected, not answered.
-    A predicate that raises is unknown on this scan only (``False`` is not assumed).
+    Asked on the twin's plain state, as a user's predicate would read it, and not through
+    the read trace: the twin is the truth a trace that misreads a predicate has to answer
+    to.  The real runner's state is poisoned for the call: a closure over the real runner
+    is detected, not answered.  A predicate that raises is unknown on this scan only
+    (``False`` is not assumed).
     """
-    from pyrung.core.read_trace import _traced_call
-
+    _OpaqueAvoid.answered_true = False
+    _OpaqueAvoid.on_twin = True
     real = plc._state
     poison = _PoisonedState()
     plc._state = poison
     try:
-        hit = _traced_call(predicate, twin)[0]
+        hit = bool(predicate(twin._state))
     except _NotTheTwin:
         return None
     except Exception as exc:
@@ -933,7 +969,9 @@ def _predicate_on_twin(predicate: Callable[[Any], bool], plc: Any, twin: Any) ->
         return _Raised(type(exc))
     finally:
         plc._state = real
-    return None if poison.touched else hit
+        _OpaqueAvoid.on_twin = False
+    _OpaqueAvoid.alone = _OpaqueAvoid.answered_true and not hit
+    return None if poison.touched else hit or _OpaqueAvoid.answered_true
 
 
 class _Raised:
@@ -1162,10 +1200,14 @@ def _checked(
     budget: int | None = None,
     out_of_work: Callable[[], bool] | None = None,
     loop_scans_per_unit: int = 1,
+    executed_scans: Collection[int] | None = None,
 ) -> Any:
     """Run *call* and check it against a stepped twin; *budget* is the scans asked of it.
 
     *loop_scans_per_unit* is what a unit of *budget* buys of them in the loop.
+
+    *executed_scans* are the scans a coast ran interpreted, filled by *call*: an opaque
+    ``avoid=`` is held to its answer on those, and without them on every scan.
 
     *out_of_work* says how() stopped the run for its ledger: as with its clock that is no
     scan's doing, so it isn't held to its budget.  The coast asks its predicate first, so the
@@ -1307,6 +1349,7 @@ def _checked(
         sample.update((scan - 1, scan))
     stop_held = None
     stop_raised = None
+    let_off = False
     for _ in range(n):
         try:
             twin._run_single_scan(consume_pause_request=False)
@@ -1336,6 +1379,15 @@ def _checked(
                 STATS["predicate scans"] += 1
                 if sid == end:
                     stop_held = bool(hit)
+                elif (
+                    hit
+                    and _OpaqueAvoid.alone
+                    and executed_scans is not None
+                    and sid not in executed_scans
+                ):
+                    if not let_off:
+                        _note_skip("predicate let off: true between the scans it is judged on")
+                    let_off = True
                 elif hit:
                     raise _mismatch(
                         f"fold-check ({kind}): stop predicate true at scan {sid}, "
@@ -1428,20 +1480,42 @@ def install() -> None:
         said.pop("kernel_scans", None)
         memo = plc._coast_memo
         left = None if memo is None or memo.work_left is None else max(1, memo.work_left())
+        executed: set[int] = set()
+        noted = kwargs.pop("on_kernel_scan", None)
+
+        def on_kernel_scan(scan: int) -> None:
+            executed.add(scan)
+            if noted is not None:
+                noted(scan)
+
         result = _checked(
             "coast",
             plc,
-            lambda: coast(plc, predicate, budget=budget, stats=said, **kwargs),
+            lambda: coast(
+                plc, predicate, budget=budget, stats=said, on_kernel_scan=on_kernel_scan, **kwargs
+            ),
             predicate,
             budget=budget,
             out_of_work=lambda: "out_of_work" in said,
             loop_scans_per_unit=kwargs.get("loop_scans_per_unit", 1),
+            executed_scans=executed,
         )
         _hold_to_the_ledger("coast", left, said)
         return result
 
     setattr(coast_run, "coast_until", coast_until)  # noqa: B010
     setattr(pilot_coast, "coast_until", coast_until)  # noqa: B010
+
+    arm_avoid = pilot_coast.CoastSession.arm_avoid
+
+    def arm_avoid_apart(session: Any, avoid: Any) -> None:
+        arm_avoid(session, avoid)
+        session._avoid_triggers = tuple(
+            _judged_apart(t) if t.condition is None and t.predicate_reads is None else t
+            for t in session._avoid_triggers
+        )
+
+    setattr(pilot_coast.CoastSession, "arm_avoid", arm_avoid_apart)  # noqa: B010
 
 
 def export() -> dict[str, Any]:
@@ -1517,6 +1591,7 @@ def files_without_the_loop() -> list[tuple[str, int]]:
 
 _SKIPS_LISTED_BY_TEST = (
     "predicate skipped",
+    "predicate let off",
     "compared at the landing",
     "skipped: longer",
     "skipped: the test steps its own twin",

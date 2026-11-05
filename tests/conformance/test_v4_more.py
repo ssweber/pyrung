@@ -34,6 +34,11 @@ to 50 ms, as in ``out``.
   from 200 up to 2000 ms at 150 ms: still off at 300-600 ms (Result2 = 0) live, on (1) if taken at
   the start.  A flasher's off TD through its second on phase: Result3 = 1 holds its last value, 2
   cleared.  A debounce's on TD, its rung gone at 150 ms: at 300-500 ms Result4 = 1 cleared, 2 kept.
+  The reset writes 0 to the first flasher's off TD (TD240), which a false rung only freezes: what
+  an off phase entered through a lowered preset does with a TD left mid-phase is not this case's
+  question (``flasher_td/frozen_off_td_at_lowered_preset`` asks it).  pyrung runs on from it, so a
+  reset that froze TD240 at 700-960 ms lit the coil again inside 420-600 ms, about one repeat in
+  four (the coil's phase at the reset is wall clock).
 
 ``for_more``:
 
@@ -67,6 +72,10 @@ The cases own what ``memory.OWNED`` lists under these groups.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
@@ -241,6 +250,9 @@ def prove_preset_mid_phase(slot):
 
 def init_preset_mid_phase(slot):
     fill(0, ds.select(3927, 3928))
+    # A false rung freezes the flasher's TDs.  An on phase cut short by its lowered
+    # preset goes straight to the off phase, and pyrung runs that from the frozen TD.
+    copy(0, td[240])
 
 
 group = Group(
@@ -293,8 +305,6 @@ group = Group(
             keep=[
                 t[239],
                 td[239],
-                t[240],
-                td[240],
                 t[242],
                 td[242],
                 t[225],
@@ -537,6 +547,13 @@ call_group = Group(
 
 def test_out_more():
     assert_all_passed(run(group))
+
+
+@pytest.mark.parametrize("scans", range(200, 310, 10))
+def test_preset_mid_phase_holds_wherever_the_last_run_stopped(scans):
+    """One flasher cycle (1100 ms) in 100 ms steps: where the reset cuts the off phase."""
+    mid_phase = next(c for c in group.cases if c.id == "preset_mid_phase")
+    assert_all_passed(run(Group("out_more", [replace(mid_phase, scans=scans)])))
 
 
 def test_for_more():

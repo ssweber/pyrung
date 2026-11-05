@@ -129,7 +129,7 @@ def test_the_groups_apart_on_a_local_target(
     conformance_groups: list[str] | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
-    """Parts N and O, once, on pyrung's own target: a minute's wait, whichever groups run.
+    """Parts N, O and P, once, on pyrung's own target: a minute's wait, whichever groups run.
 
     ``test_all_groups_over_modbus`` takes them on a CLICK loaded with one, or by ``GROUP=``.
     Off fixed scan the counts are wall clock, and no case fails on them.

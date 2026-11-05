@@ -16,8 +16,6 @@ from pyrsistent import PMap
 
 from pyrung.core.state import SystemState, _put_tags
 
-_PMAP: Any = PMap  # its bucket accessors are private API
-
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
@@ -116,44 +114,50 @@ _READ_ALL = "*"  # iterated, compared, counted or evolved the whole tag map
 _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
 
 
-class _TracedTags(PMap):
-    """A tag map that records which keys are read while a trace is active."""
+def _whole_map_read(name: str) -> Any:
+    """A property for what every read of a map goes through: reading it is a read of all of it."""
 
-    __slots__ = ()
+    def get(self: Any) -> Any:
+        if _READ_TRACES:
+            _READ_TRACES[-1].add(_READ_ALL)
+        return getattr(self._untraced, name)
+
+    return property(get)
+
+
+def _key_read(key: Any) -> Any:
+    """The name a key reads, whatever a ``str`` subclass says it is when printed."""
+    return str.__str__(key) if isinstance(key, str) else key
+
+
+class _TracedTags(PMap):
+    """A tag map that records which keys are read while a trace is active.
+
+    A key read through the two methods here is recorded as that key.  Anything else that
+    reads the map (iterating, counting, comparing, hashing, evolving, ``PMap.__getitem__``
+    named directly, ``_buckets`` by name) goes through the two properties below, and that
+    is a read of the whole map.  ``PMap``'s own slots stay empty, so a read past the
+    properties raises, and a predicate that lets the raise out keeps the coast interpreted.
+    """
+
+    __slots__ = ("_untraced",)
+
+    __class__ = property(lambda _self: PMap)
+    _buckets = _whole_map_read("_buckets")
+    _size = _whole_map_read("_size")
 
     def __getitem__(self, key: Any) -> Any:
         if _READ_TRACES:
-            _READ_TRACES[-1].add(key)
-        return _PMAP._getitem(self._buckets, key)
+            _READ_TRACES[-1].add(_key_read(key))
+        return self._untraced[key]
 
     def __contains__(self, key: Any) -> bool:
         if _READ_TRACES:
-            _READ_TRACES[-1].add(key)
-        return _PMAP._contains(self._buckets, key)
+            _READ_TRACES[-1].add(_key_read(key))
+        return key in self._untraced
 
-    def iteritems(self) -> Any:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
-        return PMap.iteritems(self)
 
-    def __eq__(self, other: object) -> bool:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
-        return PMap.__eq__(self, other)
-
-    __hash__ = PMap.__hash__
-
-    def __len__(self) -> int:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
-        return PMap.__len__(self)
-
-    def evolver(self) -> Any:
-        # ``set``, ``update``, ``remove``, ``+`` and ``transform`` start here: what they
-        # return is a plain map, and a read of it would go unrecorded.
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
-        return PMap.evolver(self)
+_TracedTags.__name__ = _TracedTags.__qualname__ = PMap.__name__
 
 
 def _recorded_field(name: str) -> Any:
@@ -177,14 +181,21 @@ class _TracedState(SystemState):
     ``timestamp`` and ``memory`` slots stay empty, so a read past the properties raises,
     and a predicate that lets the raise out keeps the coast interpreted.
 
-    It does not see a predicate that names private attributes (``s.tags._buckets``),
-    unbound base methods (``PMap.__getitem__(s.tags, key)``), or a slot descriptor whose
-    AttributeError it catches, or that branches on the type or identity of the state or
-    map, which are not those of the real ones.
+    The state and map answer ``__class__`` and ``__name__`` as the real ones do.
+
+    An accepted limit: a predicate can overshoot a coast if it branches on the exact type or
+    identity of the state or map (``type(s) is SystemState``), names the trace's own
+    ``_untraced``, or catches the AttributeError of a slot descriptor.  The trace does not see
+    what these read on a real state.  Lockstep catches them under ``--fold-check``.
+
+    A second accepted limit, which lockstep does not catch: a predicate reading ``plc.playhead``
+    can overshoot too.  It moves with the scans and is no read of a state, and a twin asked the
+    same predicate reads the real runner's playhead where the run landed.
     """
 
     __slots__ = ("_untraced",)
 
+    __class__ = property(lambda _self: SystemState)
     scan_id = _recorded_field("scan_id")
     timestamp = _recorded_field("timestamp")
     memory = _recorded_field("memory")
@@ -206,14 +217,18 @@ class _TracedState(SystemState):
         return SystemState(scan_id=scan_id, timestamp=timestamp, tags=tags, memory=memory)
 
 
+_TracedState.__name__ = _TracedState.__qualname__ = SystemState.__name__
+
 _put_untraced: Any = cast(Any, _TracedState)._untraced.__set__
+_put_untraced_map: Any = cast(Any, _TracedTags)._untraced.__set__
 
 
 def _traced_state(state: SystemState) -> _TracedState:
     """A state answering as *state* does, recording what is read of it."""
-    tags: Any = state.tags
+    tags = object.__new__(_TracedTags)
+    _put_untraced_map(tags, state.tags)
     traced = object.__new__(_TracedState)
-    _put_tags(traced, _PMAP.__new__(_TracedTags, tags._size, tags._buckets))
+    _put_tags(traced, tags)
     _put_untraced(traced, state)
     return traced
 
