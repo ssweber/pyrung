@@ -431,6 +431,7 @@ class CompiledPLC:
 
     @property
     def battery_present(self) -> bool:
+        """Whether the PLC has its backup battery (see ``PLC.battery_present``)."""
         return self._battery_present
 
     @battery_present.setter
@@ -477,10 +478,8 @@ class CompiledPLC:
     def reboot(self) -> SystemState:
         if self._kernel_pass_open:
             raise refused_inside_its_own_scan()
-        tag_values = self._rebuild_tags_for_reset(
-            preserve_all=self._battery_present,
-            preserve_retentive=False,
-        )
+        # A battery keeps the retentive tags, as STOP -> RUN does (runner.PLC.reboot).
+        tag_values = self._rebuild_tags_for_reset(preserve_retentive=self._battery_present)
         self._reset_runtime_scope(
             tag_values=tag_values,
             mode_run=True,
@@ -885,26 +884,18 @@ class CompiledPLC:
         if self._running:
             return
         kept_forces = dict(self._forces) if self._keep_forces_on_run else {}
-        tag_values = self._rebuild_tags_for_reset(preserve_all=False, preserve_retentive=True)
+        tag_values = self._rebuild_tags_for_reset(preserve_retentive=True)
         self._reset_runtime_scope(
             tag_values=tag_values, mode_run=True, preserve_rtc_continuity=True
         )
         self._forces.update(kept_forces)
         self._running = True
 
-    def _rebuild_tags_for_reset(
-        self,
-        *,
-        preserve_all: bool,
-        preserve_retentive: bool,
-    ) -> dict[str, Any]:
+    def _rebuild_tags_for_reset(self, *, preserve_retentive: bool) -> dict[str, Any]:
         current_tags = self._state.tags
         rebuilt: dict[str, Any] = {}
         for tag in self._known_tags_by_name.values():
             if not self._should_seed_tag(tag.name):
-                continue
-            if preserve_all:
-                rebuilt[tag.name] = current_tags.get(tag.name, tag.default)
                 continue
             if preserve_retentive and tag.retentive and tag.name in current_tags:
                 rebuilt[tag.name] = current_tags[tag.name]
@@ -913,7 +904,6 @@ class CompiledPLC:
         self._tags_rungs_reach.kept_through_a_reset(
             current_tags,
             rebuilt,
-            preserve_all=preserve_all,
             preserve_retentive=preserve_retentive,
         )
         return rebuilt

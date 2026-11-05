@@ -116,16 +116,13 @@ def test_a_retentive_slot_a_rung_names_keeps_its_value(engine, reset) -> None:
 
 
 @ON_EITHER_ENGINE
+@RESETS
 @pytest.mark.parametrize("named", [False, True], ids=["unnamed", "named"])
-def test_a_slot_that_is_not_retentive_goes_on_a_restart_and_stays_on_a_reboot(
-    engine, named
-) -> None:
+def test_a_slot_that_is_not_retentive_goes(engine, reset, named) -> None:
     rc, sink = _blocks(retentive=False)
     if named:
         assert rc[2].name == "Rc2"
-    program = _through_a_range(rc, sink)
-    assert _after(engine, program, sink, _restart) == 0
-    assert _after(engine, program, sink, _reboot) == 7
+    assert _after(engine, _through_a_range(rc, sink), sink, reset) == 0
 
 
 @ON_EITHER_ENGINE

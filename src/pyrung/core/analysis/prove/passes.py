@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import PROVE_EFFECTIVE_PRESET_PREFIX, CompiledKernel
+from pyrung.core.kernel import (
+    PROVE_EFFECTIVE_PRESET_PREFIX,
+    PROVE_FOR_ITERATION_CAP,
+    CompiledKernel,
+    ForIterationsBeyondCap,
+)
 from pyrung.core.site_memory import program_memory_defaults
 from pyrung.core.structure import _DoneAccRuntime
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -2237,6 +2242,27 @@ def _build_merged_intractable(ctx: _PassContext) -> Intractable:
     return intractable
 
 
+def _for_iterations_intractable(
+    exc: ForIterationsBeyondCap, dimensions: int, journal: Journal | None = None
+) -> Intractable:
+    """The refusal of a For the kernel stopped past ``PROVE_FOR_ITERATION_CAP``."""
+    return Intractable(
+        reason=(
+            f"forloop({exc.count}) at {exc.where} can run {exc.iterations} times in one"
+            f" scan, more than the verifier runs ({PROVE_FOR_ITERATION_CAP})"
+        ),
+        dimensions=dimensions,
+        estimated_space=0,
+        tags=list(exc.tags),
+        hints=[
+            f"  {exc.count}: a Dint count is read as unsigned 32-bit, so a negative one"
+            " runs about 4.29 billion times; narrow it with min=/max=/choices=, or"
+            " test the loop with run_for()",
+        ],
+        journal=journal,
+    )
+
+
 def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
@@ -2248,7 +2274,12 @@ def _run_pre_bfs_pipeline(
         if not p.enabled:
             continue
         t0 = time.monotonic()
-        p.run(ctx)
+        try:
+            p.run(ctx)
+        except ForIterationsBeyondCap as exc:
+            ctx.intractable = _for_iterations_intractable(
+                exc, len(ctx.stateful_dims or {}) + len(ctx.nondeterministic_dims or {})
+            )
         logger.info("pass %s completed in %.2fs", p.name, time.monotonic() - t0)
         if ctx.intractable is not None:
             return _attach_partial_journal(ctx)
