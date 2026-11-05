@@ -7,6 +7,7 @@ Enables native Python expressions with Tags in conditions and instruction argume
 
 from __future__ import annotations
 
+import functools
 import itertools
 import math
 import operator
@@ -838,14 +839,29 @@ def _range_dsl(block_range: BlockRange) -> str:
     return text
 
 
+def sum_values(values: Iterable[Any]) -> Numeric:
+    """Add *values* plain left to right, as the compiled backends do (``a + b + c``).
+
+    Builtin ``sum()`` adds floats with compensation on Python 3.12+, so a Real
+    range sum would differ in the last bit by interpreter version and from the
+    generated code.  An empty range yields 0.
+    """
+    iterator = iter(values)
+    try:
+        total = next(iterator)
+    except StopIteration:
+        return 0
+    return functools.reduce(operator.add, iterator, total)
+
+
 class SumExpr(Expression):
-    """Sum of all tag values in a block range."""
+    """Sum of all tag values in a block range (added plain left to right)."""
 
     def __init__(self, block_range: BlockRange) -> None:
         self.block_range = block_range
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return sum(ctx.get_tag(tag.name, tag.default) for tag in self.block_range)
+        return sum_values(ctx.get_tag(tag.name, tag.default) for tag in self.block_range)
 
     def __repr__(self) -> str:
         return f"{_range_dsl(self.block_range)}.sum()"

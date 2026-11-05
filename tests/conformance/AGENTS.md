@@ -224,7 +224,7 @@ Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a regist
 2. -- (no case stages inputs; each case's reset rung initializes it while `Cmd = 0`).
 3. Poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1).
 4. Write `Cmd = 1` to every ready slot, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
-5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans) * 10 ms`.
+5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s; longer if a case's `fires_within` says so). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans)` scans of 10 ms, leaving out a case with `fires_within`, which has nothing left to settle.
 6. Read every slot (and every system bit a case's `expect_system` names), wait `max(100 ms, settle)`, read them again.
 7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads. On a local target a `pending` case passes as `XFAIL` only if neither read meets `expect`.
 8. Report. `assert_all_passed` lists stale groups (`STALE: ...`, once per group) and failures; in-process-only skips do not fail. `format_report` gives the per-case lines.
@@ -274,6 +274,24 @@ Then, per edit:
 
 If you forget step 3, that group reports `Conf_<Group> is stale: repush` and its cases do not run; every other group still runs. Adding, removing, or moving a group changes the main program and the layout hash in `DS1`, so Preview Changes shows main's rungs too. A new group's subroutine does not show there at all (ClickNick only diffs subroutines CLICK already has): paste its `subroutines/Conf_<Group>.csv` from `make conformance-export` with Guided Paste, then take main from Preview Changes. The harness self-checks in `test_modbus.py` always use their own local sim. When a real-PLC answer differs from pyrung's, that is a finding: either pyrung's semantics change, or the difference becomes a documented CLICK deviation. A case that passes on the real CLICK is recorded in `confirmed.toml`.
 
+## Parts with memory of their own
+
+The whole suite's memory is full: DS, T and CT have no run left for a new group. `suite.APART_PARTS` holds the parts that do not join it: parts N and O, with their own `manifest_apart.toml` and their own table of raw memory, `memory.OWNED_APART`. Their registers and timers may repeat the suite's, since they run in no project with its groups, and so they change no other part's hash and no layout hash however they grow. `test_build.py` holds them to the same rules as the rest: every tag inside its group's ranges, no two groups on one address, each part under the step budget. In-process they run from their own module (`test_unit_pairs.py`); on a local target `test_the_groups_apart_on_a_local_target` runs them once, or `GROUP=unit_pairs` runs one on its own; `build_for` knows their layout hash in `DS1` on a CLICK.
+
+A case whose answer is a wait passes `fires_within=` (seconds): `Fired` comes last, the harness waits that long for it, and its `scans` (still what it takes in-process) adds no settle time. Part N: `unit_pairs` and `unit_minute`, the relation (timers in different units with one delay on one rung are Done on one scan). Leave the minute's wait out with `GROUP=unit_pairs`.
+
+### Fixed scan part
+
+Part O is for curiosity: pyrung's count is exact by rule (`ceil(delay / dt)`, `tests/core/test_timer_exact.py`), and a differing CLICK reading is recorded, not chased. With CLICK's fixed scan on (SC202, `system.sys.fixed_scan_mode`, with the time SD13, `system.sys.scan_time_fixed_setup_ms`) a scan is a known time, so a case can count scans and report a number, which over the wire nothing else gives. An `ApartPart` with `fixed_scan_ms=` is run that way, and `make conformance-export` prints the setting a person must make (`suite.fixed_scan_note`). A person sets it; the program cannot.
+
+To run part O on a CLICK:
+
+1. `make conformance-export PART=O`, and paste it as a project of its own (first load, under "Running against the real PLC").
+2. In the CLICK software, open the scan time setup: fixed scan on, 100 ms. Write the project to the PLC and put it in RUN.
+3. `make test-conformance PLC=192.168.0.10`, and read the `read fixed_scan/...` lines; they go in `readings.toml`, never in `confirmed.toml`. `scan_setup` says what the PLC reports of its scan (`Result1` SC202, `Result2` SD13, `Result3` SD10, `Result4` SD12). Each other case holds two counts in `Result1` and `Result2`, as its module docstring says, and the setting they were counted under, latched on the scan it fired: `Result3` SD13, `Result4` SD12, `ErrorCode` SC202. SC202 off, or SD12 above SD13, says the count was not at the setting.
+
+To add a case: a slot in `fixed_scan` in `manifest_apart.toml` and raw memory in `OWNED_APART`. `count_scans` and `latch_count` (`test_fixed_scan.py`) count from the scan the rung goes true and latch the count at a bit, and `fire_with_the_scan_setting` latches the setting with the pair: a slot holds two counts, so more take more cases. Every expectation comes from `between` (`probe_kit.py`), a range holding any count, so a pass confirms nothing and the case passes where a scan is not fixed (the soft PLC, `TARGET=circuitpy`, a CLICK without the setting). Pin what pyrung reads at the in-process `DT` in a test of its own, not in `expect`: in process `SC202` is on and `SD13` is 10. The soft PLC reports SC202 off and SD13 0 and paces itself, so it says nothing here.
+
 ## Coverage checklist
 
 Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines name the cases that cover them (`group/id`); `[ ]` lines are still open, most of them waiting on a harness that does not exist yet (mode switching for STOP->RUN, a subroutine home called from main, send/receive).
@@ -293,6 +311,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] first_scan true once, on scan 0 (`boot_read/first_scan_edges`, probe)
 - [ ] first_scan re-triggers on STOP->RUN: read by a person (`boot_read/first_scan_edges`, see "First load")
 - [x] scan clock on when SD9 is even (`system/scan_clock_follows_counter`)
+- [ ] fixed scan mode (SC202, SD13) gives a scan count as a number: read in part O, for curiosity (each case holds the setting it was counted under; "Fixed scan part")
 - [x] scan_counter steps by one every scan (`system/scan_counter_steps_by_one`)
 - [ ] scan_counter resets on STOP->RUN: read by a person (`boot_read/first_scan_edges`)
 - [x] clock toggles fire at their nominal rate (`system/clock_bits_toggle_at_their_rate`)
@@ -392,6 +411,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] timer Acc clamp at 32767 (`timers/acc_clamps_at_32767`, TD seeded at 32000)
 - [x] timer Acc continues past preset up to 32767 clamp (`timers/acc_clamps_at_32767`, `timers/tof_times_only_when_false`)
 - [x] timer fractional ms accumulation across scans (`timers/fractional_accumulation`)
+- [ ] timers in different units with one delay are Done on one scan: do all units come off one clock (part N, `unit_pairs/one_second`, `unit_pairs/three_seconds`, `unit_minute/one_minute`, `unit_minute/thirty_seconds`)
+- [ ] the scan a timer, an off-delay and a time drum's step end on as a CLICK counts them at a 100 ms scan, for curiosity (part O, `fixed_scan/seconds_and_ms`, `fixed_scan/off_delay_and_drum`)
 - [x] timer resumes if preset raised mid-count (`timers/preset_raised_resumes`)
 - [x] timer fires immediately if preset lowered below Acc (`timers/preset_lowered_fires_at_once`)
 - [x] timer preset resolved dynamically each tick (the two preset cases above)

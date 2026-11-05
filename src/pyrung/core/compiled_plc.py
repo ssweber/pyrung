@@ -694,7 +694,12 @@ class CompiledPLC:
         self._stored_system_tags_bound = False
         self._steady_system_key = None
         self._kernel.tags.update(snapshot_dict(state.tags))
-        self._kernel.memory.update(dict(state.memory))
+        memory = self._kernel.memory
+        memory.update(dict(state.memory))
+        # Carried time saved as a fraction of a unit: the kernel counts in whole ns.
+        for key, value in state.memory.items():
+            if value.__class__ is float and key.startswith("_frac:"):
+                memory[key] = round(value * self._compiled.timer_unit_ns.get(key[6:], 0))
         self._kernel.scan_id = state.scan_id
         self._kernel.timestamp = state.timestamp
         self._running = bool(self._kernel.memory.get(_MODE_RUN_KEY, True))

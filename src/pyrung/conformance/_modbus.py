@@ -553,14 +553,17 @@ async def _drive(
             await client.ds.write(g.register(i, "Cmd"), 1)
 
         # 5. Wait for every Fired (a case that never fires is judged, not raised).
+        # A case that fires last may take longer, and leaves nothing to settle.
         fired_registers = [g.register(i, "Fired") for g, i in ready]
-        deadline = time.monotonic() + timeout
+        cases = [c for g in live for _, c in g.cases]
+        deadline = time.monotonic() + max([timeout, *(c.fires_within or 0.0 for c in cases)])
         while True:
             regs = _by_register(live, await _read_spans(client, live))
             if all(regs[r] != 0 for r in fired_registers) or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(POLL_S)
-        settle = max(c.scans for g in live for _, c in g.cases) * NOMINAL_SCAN_S
+        scans = max((c.scans for c in cases if c.fires_within is None), default=1)
+        settle = scans * NOMINAL_SCAN_S
         await asyncio.sleep(settle)
 
         # 6. Read every slot (and every system bit a case expects) twice; both

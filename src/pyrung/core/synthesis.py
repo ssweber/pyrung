@@ -132,8 +132,7 @@ def bool_feedback_rungs(
     resets the accumulator, so feedback that was never sustained is never
     fabricated — the dwell semantics, now native (no transport-delay heap).
     Presets are in the unit :func:`plant_timer` picks, ms unless the delay is too
-    long for it, so a held enable crosses after ``ceil(delay_ms / dt_ms)`` scans, one
-    more where the longer unit's ``dt`` does not sum exactly.
+    long for it, so a held enable crosses after ``ceil(delay_ms / dt_ms)`` scans.
     """
     from pyrung.core.condition import BitCondition
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
@@ -241,8 +240,7 @@ def pulse_feedback_rungs(
     as the rungs above it left them, so a half-cycle costs one scan of slop —
     inconsequential for a pulse train.
     Presets are in the unit :func:`plant_timer` picks, ms unless the dwell is too long
-    for it, so a dwell lasts ``ceil(dwell_ms/dt_ms)`` scans, one more where the longer
-    unit's ``dt`` does not sum exactly.
+    for it, so a dwell lasts ``ceil(dwell_ms/dt_ms)`` scans.
     """
     from pyrung.core.condition import AllCondition, BitCondition
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction

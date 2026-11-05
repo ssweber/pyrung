@@ -943,10 +943,9 @@ def _concretely_settled(context: _ExploreContext, plc: Any) -> bool:
         return False
     defaults = {name: tag.default for name, tag in context.graph.tags.items()}
 
-    def progress(snapshot: Any, name: str) -> float:
+    def progress(snapshot: Any, name: str) -> tuple[Any, Any]:
         acc = snapshot.tags.get(name, defaults.get(name, 0)) or 0
-        frac = snapshot.memory.get(f"_frac:{name}", 0.0) or 0.0
-        return float(acc) + float(frac)
+        return acc, snapshot.memory.get(f"_frac:{name}", 0) or 0
 
     for name in model.branch:
         site = model.sites[name]

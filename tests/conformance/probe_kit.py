@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from pyrung.conformance import Case, CaseResult
+from pyrung.conformance import Case, CaseResult, record_confirmations
 from pyrung.core import Rung, calc, copy, latch, out
 
 
@@ -106,6 +106,17 @@ def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str)
         text = path.read_text(encoding="utf-8") if path.exists() else _READINGS_HEADER
         path.write_text(text + "\n" + "\n".join(entries), encoding="utf-8")
     return keys
+
+
+def record_run(
+    confirmed: str | Path, readings: str | Path, results: Iterable[CaseResult], *, on: str
+) -> tuple[list[str], list[str], list[str]]:
+    """A real CLICK's run: what passed goes in *confirmed*, what failed comes out, and a
+    case asking for a reading goes in *readings* alone.  Returns (added, dropped, read)."""
+    results = list(results)
+    asserted = [r for r in results if not asks_for_a_reading(r.case)]
+    added, dropped = record_confirmations(confirmed, asserted, on=on)
+    return added, dropped, record_readings(readings, results, on=on)
 
 
 class GuardedProbes:

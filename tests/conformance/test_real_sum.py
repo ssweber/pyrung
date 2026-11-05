@@ -1,8 +1,8 @@
 """The order and width of a Real SUM: the ``real_sum`` group.
 
 Part H (``suite.PARTS``).  CLICK's SUM over a DF range adds in some order at some
-width.  pyrung's interpreter reads ``sum()``, compensated from Python 3.12, its
-kernel adds left to right; the ruling is plain left to right on all backends, and a
+width.  pyrung adds plain left to right on every backend (core, kernel and
+generated code); the ruling is plain left to right on all backends, and a
 recording overrides the ruling.  Each case sums three orderings of one set into a
 DF and reads each sum, truncated, into an Int.
 
@@ -24,9 +24,8 @@ compensated (Neumaier, fsum)      1, 1, 1      1, 1, 1      2
   the 1, so left to right is 0, 0, 1 and right to left 0, 1, 0.  At double the 1
   survives every order.  pyrung reads 1, 1, 1 on every backend.
 - ``f64_row``: the same orderings of {1e30, 1, -1e30}, where double absorbs the 1 too.
-  Only a compensated sum reads 1, 1, 1 at a width a CLICK could have.  pyrung's
-  backends differ here today (interpreter 1, 1, 1; kernel 0, 0, 1), so the case
-  expects a range and ``make test-conformance`` prints its reading on a PASS.
+  Only a compensated sum reads 1, 1, 1 at a width a CLICK could have.  pyrung reads
+  0, 0, 1 on every backend, and the case expects a range and ``make test-conformance`` prints its reading on a PASS.
 - ``sum_absorbs``: {16777216, 1, 1}, read as the sum less 16777216.  float32 left to right
   or largest first absorbs each 1 (0); anything else reads 2.  It alone tells float32
   largest first from compensated.  pyrung reads 2.
@@ -122,7 +121,7 @@ group = Group(
             ladder=prove_f64_row,
             init=init_f64_row,
             expect={"Result1": between(0, 1), "Result2": between(0, 1), "Result3": between(0, 1)},
-            probe="a compensated SUM or a plain one; pyrung's backends differ",
+            probe="a compensated SUM or a plain one (pyrung adds plain)",
         ),
         case(
             "SUM of {16777216, 1, 1} keeps both 1s: the sum less 16777216 is 2 (Result1), 0 if "

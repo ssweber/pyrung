@@ -174,6 +174,15 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
     return None
 
 
+_NS_PER_MS = 1_000_000
+
+
+def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
+    """A plant timer's carry, in ns as the timer keeps it.  A saved float is of its unit."""
+    carry = state.memory.get(f"_frac:{acc_name}", 0) or 0
+    return round(carry * unit_ns) if carry.__class__ is float else carry
+
+
 def _program_writer(plc: PLC, tag_name: str) -> str | None:
     """Location of the first program instruction that writes *tag_name*, if any."""
     from pyrung.core.validation._common import _collect_write_sites, compact_site_location
@@ -257,8 +266,8 @@ class Harness:
 
         The fork inherits the parent's committed state — including each bool
         timer's accumulator registers — so the dwell carries over with no
-        re-seed; only the (stateless) timer instructions and the fractional
-        remainder are copied.  This is the seam the synthesis-overlay install
+        re-seed; only the (stateless) timer instructions and the carry are
+        copied.  This is the seam the synthesis-overlay install
         grows into.
 
         A state from before a link changed may hold a count in another unit's register,
@@ -413,23 +422,21 @@ class Harness:
         memory: dict[str, Any] = {}
         for stem, fb_name, delay_ms in self._plant_timers():
             current = plant_acc_name(stem, fb_name, delay_ms)
-            counted_ms: dict[str, float] = {}
+            counted_ns: dict[str, Any] = {}
             for name, unit_ms in plant_acc_registers(stem, fb_name):
-                count = int(state.tags.get(name, 0) or 0)
-                frac = float(state.memory.get(f"_frac:{name}", 0.0) or 0.0)
-                if count != 0 or frac != 0.0:
-                    counted_ms[name] = (count + frac) * unit_ms
-            if not counted_ms.keys() - {current}:
+                unit_ns = unit_ms * _NS_PER_MS
+                ns = int(state.tags.get(name, 0) or 0) * unit_ns + _carry_ns(state, name, unit_ns)
+                if ns != 0:
+                    counted_ns[name] = ns
+            if not counted_ns.keys() - {current}:
                 continue
-            for name in counted_ms:
+            for name in counted_ns:
                 tags[name] = 0
-                memory[f"_frac:{name}"] = 0.0
-            elapsed_ms = max(counted_ms.values())
+                memory[f"_frac:{name}"] = 0
             _preset, _unit, unit_ms = plant_timer(delay_ms)
-            new_count = int(elapsed_ms // unit_ms)
-            new_frac = elapsed_ms / unit_ms - new_count
+            new_count, new_frac = divmod(max(counted_ns.values()), unit_ms * _NS_PER_MS)
             if new_count > TIMER_ACC_MAX:
-                new_count, new_frac = TIMER_ACC_MAX, 0.0
+                new_count, new_frac = TIMER_ACC_MAX, 0
             tags[current] = new_count
             memory[f"_frac:{current}"] = new_frac
         if tags:
@@ -459,8 +466,10 @@ class Harness:
             else:
                 delay_ms, acc_name = c.on_delay_ms, c.ton_acc_name
             preset, _unit, unit_ms = plant_timer(delay_ms)
-            counted = int(snap.get(acc_name, 0) or 0) + state.memory.get(f"_frac:{acc_name}", 0.0)
-            left[c.fb_name] = max(0, round((preset - counted) * unit_ms))
+            unit_ns = unit_ms * _NS_PER_MS
+            remaining_ns = (preset - int(snap.get(acc_name, 0) or 0)) * unit_ns
+            remaining_ns -= _carry_ns(state, acc_name, unit_ns)
+            left[c.fb_name] = max(0, round(remaining_ns / _NS_PER_MS))
         return left
 
     @property
@@ -700,9 +709,8 @@ class Harness:
         bit, holds the feedback for ``off_delay`` after the enable drops.  Presets
         are the declared delays, in ms unless one is too long for it (see
         :func:`~pyrung.core.synthesis.plant_timer`), so a held enable
-        crosses after ``ceil(delay_ms / dt_ms)`` scans, one more where the longer unit's
-        ``dt`` does not sum exactly (``delay_ms == 0`` ⇒ the program sees the feedback
-        next scan, from the scan boundary).
+        crosses after ``ceil(delay_ms / dt_ms)`` scans (``delay_ms == 0`` ⇒ the program
+        sees the feedback next scan, from the scan boundary).
 
         Idempotent — used at install, on each fork (fresh instructions reading the
         fork's tags; accumulator *state* rides the inherited committed state), and

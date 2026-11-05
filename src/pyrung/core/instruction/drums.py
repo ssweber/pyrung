@@ -22,7 +22,7 @@ from .advance import (
     scalar_boundary,
 )
 from .base import Instruction
-from .utils import instruction_condition_view, to_condition
+from .utils import elapsed_units, instruction_condition_view, to_condition
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -460,17 +460,16 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
             return 0
         frac_key = f"_frac:{self.accumulator.name}"
         acc = _read_step_tag_value(ctx, self.accumulator, fallback=0)
-        dt = float(ctx.get_memory("_dt", 0.0))
-        dt_units = self.unit.dt_to_units(dt) + float(ctx.get_memory(frac_key, 0.0))
-        int_units = int(dt_units)
+        dt = ctx.get_memory("_dt", 0.0)
+        int_units, frac = elapsed_units(ctx.get_memory(frac_key, 0), dt, self.unit)
         acc = min(acc + int_units, self._acc_max())
         ctx.set_tag(self.accumulator.name, acc)
-        ctx.set_memory(frac_key, dt_units - int_units)
+        ctx.set_memory(frac_key, frac)
         return acc
 
     def _clear_time(self, ctx: ScanContext) -> None:
         ctx.set_tag(self.accumulator.name, 0)
-        ctx.set_memory(f"_frac:{self.accumulator.name}", 0.0)
+        ctx.set_memory(f"_frac:{self.accumulator.name}", 0)
 
 
 class EventDrumInstruction(_DrumBaseInstruction):

@@ -32,14 +32,14 @@ from pyrung.conformance import (
     case,
     format_report,
     load_confirmations,
-    record_confirmations,
     run_modbus,
     wait_for_scan_counter_wrap,
 )
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
-from pyrung.core import Rung, calc, copy
+from pyrung.core import Rung, calc, copy, on_delay
 from tests.conformance import suite, test_system
-from tests.conformance.probe_kit import asks_for_a_reading, reading_lines, record_readings
+from tests.conformance.memory import ClickTimer
+from tests.conformance.probe_kit import reading_lines, record_run
 
 ds = ClickBlocks().ds
 
@@ -52,9 +52,9 @@ def test_all_groups_over_modbus(
     conformance_sim: type[SimServer] | type[CircuitPySim],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    build = suite.build_for(conformance_endpoint)
+    build = suite.build_for(conformance_endpoint, conformance_groups)
     # Without GROUP=, every loaded group.
-    loaded = [g for g in suite.ALL_GROUPS if g.name in build.names]
+    loaded = [g for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS) if g.name in build.names]
     groups = conformance_groups or [g.name for g in loaded]
     # system/scan_counter_wraps_to_zero only tells once SD9 has passed 32767.
     # pyrung's own targets read 0 either way, so only a CLICK waits.
@@ -66,14 +66,10 @@ def test_all_groups_over_modbus(
         # A real CLICK: record what passed, drop what failed (confirmed.toml).  A case
         # whose range holds every candidate answers nothing by passing: it records what
         # it read instead (readings.toml).
-        today = date.today().isoformat()
-        added, dropped = record_confirmations(
-            suite.CONFIRMED_PATH,
-            [r for r in results if not asks_for_a_reading(r.case)],
-            on=today,
+        added, dropped, read = record_run(
+            suite.CONFIRMED_PATH, suite.READINGS_PATH, results, on=date.today().isoformat()
         )
         print(f"confirmed.toml: {len(added)} newly confirmed, {len(dropped)} dropped {dropped}")
-        read = record_readings(suite.READINGS_PATH, results, on=today)
         print(f"readings.toml: {len(read)} read")
     print(format_report(results, load_confirmations(suite.CONFIRMED_PATH)))
     for line in reading_lines(results):
@@ -116,7 +112,7 @@ def test_suite_repeats_without_restarting(
     Every case resets its own state while ``Cmd == 0``, so a run never depends
     on what ran before it on the same PLC.
     """
-    build = suite.build_for(conformance_endpoint)
+    build = suite.build_for(conformance_endpoint, conformance_groups)
     local = conformance_endpoint is None
     names = conformance_groups or [g.name for g in build.groups]
     with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
@@ -128,7 +124,48 @@ def test_suite_repeats_without_restarting(
             _passes(results, f"step {step}: {name} alone")
 
 
+def test_the_groups_apart_on_a_local_target(
+    conformance_endpoint: Endpoint | None,
+    conformance_groups: list[str] | None,
+    conformance_sim: type[SimServer] | type[CircuitPySim],
+) -> None:
+    """Parts N and O, once, on pyrung's own target: a minute's wait, whichever groups run.
+
+    ``test_all_groups_over_modbus`` takes them on a CLICK loaded with one, or by ``GROUP=``.
+    Off fixed scan the counts are wall clock, and no case fails on them.
+    """
+    if conformance_endpoint is not None or conformance_groups is not None:
+        pytest.skip("runs when the whole suite runs on a local target")
+    results = run_modbus(suite.build_apart(), sim=conformance_sim)
+    print(format_report(results))
+    for line in reading_lines(results):
+        print(line)
+    assert_all_passed(results)
+
+
 # --- harness self-checks (always on the local sim) ---------------------------
+
+
+def _prove_fires_after_half_a_second(slot):
+    timer = ClickTimer(1)
+    with Rung(slot.Cmd != 0):
+        on_delay(timer, preset=500)
+    with Rung(slot.Cmd != 0, timer.Done):
+        copy(1, slot.Fired)
+
+
+def test_a_case_that_fires_last_waits_past_the_timeout_and_does_not_settle() -> None:
+    slow = case(
+        "Fires when its timer is done",
+        ladder=_prove_fires_after_half_a_second,
+        expect={"Fired": 1},
+        scans=100_000,
+        fires_within=5.0,
+    )
+    started = time.monotonic()
+    assert_all_passed(run_modbus(Group("slow", [slow]), timeout=0.1))
+    # 100_000 scans is 1000 s of settle time, had it counted.
+    assert time.monotonic() - started < 30.0
 
 
 @pytest.mark.parametrize(
