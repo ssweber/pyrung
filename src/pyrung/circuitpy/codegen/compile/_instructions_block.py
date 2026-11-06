@@ -604,7 +604,9 @@ def _drum_end_lines(
             lines.append(f"_end_met = {ends[0]}")
         else:
             lines.extend(
-                _compile_step_selector_lines(step_var="_step", target_var="_end_met", value_exprs=ends)
+                _compile_step_selector_lines(
+                    step_var="_step", target_var="_end_met", value_exprs=ends
+                )
             )
         return lines
 
