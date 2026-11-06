@@ -363,7 +363,7 @@ class CalcInstruction(OneShotMixin, Instruction):
     the scan; the next scan starts with it off.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
     hardware does not).  ``0 ** 0``, ``0 ** -1`` and a MOD by 0 are 0 and set
-    no flag (into a REAL alone, 0.0: unread, the reading went through an Int).
+    no flag (into a REAL 0.0: unread, the reading went through an Int).
     MOD truncates: the result has the dividend's sign.
 
     **Constants:** each integer constant in `expression` is cut to 16 bits, as

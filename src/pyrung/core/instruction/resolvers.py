@@ -213,18 +213,6 @@ def _set_fault_out_of_range(ctx: ScanContext) -> None:
     _raise_fault(ctx, system.fault.out_of_range.name)
 
 
-def _set_fault_division_error(ctx: ScanContext) -> None:
-    from pyrung.core.system_points import system
-
-    _raise_fault(ctx, system.fault.division_error.name)
-
-
-def _set_fault_math_operation_error(ctx: ScanContext) -> None:
-    from pyrung.core.system_points import system
-
-    _raise_fault(ctx, system.fault.math_operation_error.name)
-
-
 def _set_fault_address_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
