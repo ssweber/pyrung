@@ -50,6 +50,7 @@ from .findings import (
     CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_IMMEDIATE_CONTACT_MUST_BE_X,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
@@ -332,6 +333,85 @@ def _evaluate_immediate_coil_target(
                     )
                 )
 
+    return findings
+
+
+def _evaluate_immediate_contacts(
+    program: Any, tag_map: TagMap, mode: ValidationMode, resolver: _ResolutionCache
+) -> list[ClickFinding]:
+    """An immediate NO/NC contact must read an input: CLICK offers it on X addresses only."""
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        NormallyClosedCondition,
+    )
+
+    findings: list[ClickFinding] = []
+
+    def contacts(condition: Any, out: list[Tag]) -> None:
+        if isinstance(condition, (AllCondition, AnyCondition)):
+            for child in condition.conditions:
+                contacts(child, out)
+        elif isinstance(condition, (BitCondition, NormallyClosedCondition)) and isinstance(
+            condition.tag, ImmediateRef
+        ):
+            out.append(condition._resolved_tag)
+
+    def walk(rung: Any, location: ProgramLocation) -> None:
+        wrapped: list[Tag] = []
+        for condition in rung._conditions[rung._branch_condition_start :]:
+            contacts(condition, wrapped)
+        location_text = _format_location(location)
+        for tag in wrapped:
+            slot = resolver.resolve_direct_tag(tag)
+            if slot is None or slot.memory_type == "X":
+                continue  # an unmapped tag has its own finding
+            findings.append(
+                ClickFinding(
+                    code=CLK_IMMEDIATE_CONTACT_MUST_BE_X,
+                    severity=_route_severity(CLK_IMMEDIATE_CONTACT_MUST_BE_X, mode),
+                    message=(
+                        f"Immediate contact on {tag.name} ({_bank_label(slot)}) at "
+                        f"{location_text}; an immediate contact must read an input "
+                        "(an InputBlock tag, or one mapped to X)."
+                    ),
+                    location=location_text,
+                    suggestion=_build_suggestion(CLK_IMMEDIATE_CONTACT_MUST_BE_X, None, tag_map),
+                )
+            )
+        for index, branch in enumerate(rung._branches):
+            walk(
+                branch,
+                ProgramLocation(
+                    scope=location.scope,
+                    subroutine=location.subroutine,
+                    rung_index=location.rung_index,
+                    branch_path=(*location.branch_path, index),
+                    instruction_index=None,
+                    instruction_type=None,
+                    arg_path="condition",
+                ),
+            )
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            walk(body_rung, location)
+
+    def top(scope: Any, subroutine: str | None, rung_index: int) -> ProgramLocation:
+        return ProgramLocation(
+            scope=scope,
+            subroutine=subroutine,
+            rung_index=rung_index,
+            branch_path=(),
+            instruction_index=None,
+            instruction_type=None,
+            arg_path="condition",
+        )
+
+    for rung_index, rung in enumerate(program.rungs):
+        walk(rung, top("main", None, rung_index))
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            walk(rung, top("subroutine", sub_name, rung_index))
     return findings
 
 
