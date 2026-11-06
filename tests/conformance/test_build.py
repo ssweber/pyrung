@@ -177,7 +177,9 @@ def test_each_part_apart_fits_a_click_project(part: str) -> None:
     assert estimate.total <= suite.PART_STEP_BUDGET
 
 
-@pytest.mark.parametrize("part", sorted(p for p in suite.APART_PARTS if p.startswith("follow_")))
+@pytest.mark.parametrize(
+    "part", sorted(p for p in suite.APART_PARTS if p.startswith(("follow_", "follow2_")))
+)
 def test_each_follow_part_pastes_under_the_rung_limit(part: str, tmp_path) -> None:
     out = suite.build(part).export(tmp_path / part)
     csvs = [out / "main.csv", *sorted((out / "subroutines").glob("*.csv"))]

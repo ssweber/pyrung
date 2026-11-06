@@ -19,7 +19,8 @@ Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
 
 The parts ``units``, ``fixed_scan``, ``text_flasher``, ``follow_flags``, ``follow_values``,
-``follow_timing`` and ``follow_extra`` have memory of their own (``APART_PARTS``), apart from the whole suite;
+``follow_timing``, ``follow_extra`` and the ``follow2_*`` parts have memory of their own
+(``APART_PARTS``), apart from the whole suite;
 ``fixed_scan`` is run with CLICK's fixed scan on, and its export says how.
 
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
@@ -44,6 +45,7 @@ from pyrung.conformance import (
     read_program_hash,
 )
 from tests.conformance.coils import (
+    test_coil_phase,
     test_coil_range,
     test_coil_timing,
     test_coils,
@@ -61,6 +63,7 @@ from tests.conformance.conditions import (
 from tests.conformance.copy import (
     test_block,
     test_copy_more,
+    test_pack_point,
     test_past_bank_write,
     test_past_clean,
     test_real_bits,
@@ -74,6 +77,7 @@ from tests.conformance.drum_shift_search import (
     test_bad_jump,
     test_drum,
     test_drum_close,
+    test_drum_ds,
     test_drum_idle,
     test_drum_jump,
     test_drum_pins,
@@ -94,6 +98,7 @@ from tests.conformance.math import (
     test_numeric,
     test_real_sum,
     test_store_probe,
+    test_term_zero,
 )
 from tests.conformance.program_control import (
     test_call_more,
@@ -101,6 +106,7 @@ from tests.conformance.program_control import (
     test_for_count,
     test_for_dd_minus,
     test_for_more,
+    test_for_signed,
     test_loop,
     test_loop_call,
     test_ret_branch,
@@ -115,14 +121,17 @@ from tests.conformance.rungs import (
 from tests.conformance.system import (
     test_boot_read,
     test_faults,
+    test_flag_carry,
     test_flag_more,
     test_flag_probe,
+    test_flag_steps,
     test_system,
 )
 from tests.conformance.timers_counters import (
     test_counters,
     test_fixed_scan,
     test_timers,
+    test_tof_rewrite,
     test_unit_minute,
     test_unit_pairs,
 )
@@ -316,6 +325,20 @@ APART_GROUPS = [
     test_word_floor.group,
     test_flasher_off.group,
     test_txt_end.group,
+    # The 2026-11-06 round's follow-up, the follow2_* parts.
+    test_flag_steps.flag_steps,
+    test_flag_steps.flag_reads,
+    # Alone in its part: its op is the scan's last Math, its reads the next scan's first rungs.
+    test_flag_carry.group,
+    test_term_zero.group,
+    test_pack_point.group,
+    test_drum_ds.drum_ds,
+    test_drum_ds.jump_return,
+    test_coil_phase.deb_fall,
+    test_coil_phase.flash_zero,
+    test_tof_rewrite.group,
+    # May stop the PLC: run alone, with C411 set by hand.
+    test_for_signed.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -343,6 +366,20 @@ APART_PARTS: dict[str, ApartPart] = {
     # A fourth, of what the others left: a flasher's off phase of 0 or below, a TD written
     # into a running debounce and flasher, and a Real's text running past TXT1000.
     "follow_extra": ApartPart(("flasher_off", "td_write", "txt_end")),
+    # The 2026-11-06 round's follow-up, for the probes the convergence audit asked for: what
+    # leaves a fault flag on, each flag read by a coil right after its step;
+    "follow2_flags": ApartPart(("flag_steps",)),
+    # a flag after a box that did not run, a quiet math error's 0 in a larger formula, and a
+    # decimal point packed into a DD;
+    "follow2_values": ApartPart(("flag_reads", "term_zero", "pack_point")),
+    # SC40 and SC46 across a scan boundary, alone so nothing runs between the op and the reads;
+    "follow2_carry": ApartPart(("flag_carry",)),
+    # a DS drum preset held from the reset, and a bad jump on the drum rung's return;
+    "follow2_drums": ApartPart(("drum_ds", "jump_return")),
+    # a debounce's off count at its fall, flashers on presets of 0, a TOF's TD written to 0.
+    "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
+    # For counts that may stop the PLC on its watchdog, alone: C411 set by hand arms it.
+    "follow2_for": ApartPart(("for_signed",)),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
@@ -350,8 +387,8 @@ APART_PARTS: dict[str, ApartPart] = {
 #: measured.
 PART_STEP_BUDGET = 7500
 
-#: Rungs a ``follow_*`` part may export (``R,`` rows of the CSVs): CLICK's editor freezes on a
-#: larger paste.  ``test_build.py`` holds each part to it.
+#: Rungs a ``follow_*`` or ``follow2_*`` part may export (``R,`` rows of the CSVs): CLICK's
+#: editor freezes on a larger paste.  ``test_build.py`` holds each part to it.
 FOLLOW_RUNG_LIMIT = 150
 
 
