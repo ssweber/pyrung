@@ -1430,8 +1430,16 @@ def _group_domains(
     any_integral = any(tags[name].type in _INTEGRAL_TYPE_RANGE for name in members)
     any_real = any(tags[name].type == TagType.REAL for name in members)
     gaps = list(zip(ordered, ordered[1:], strict=False))
-    gaps.insert(0, (ordered[0] - k - 1, ordered[0]))
-    gaps.append((ordered[-1], ordered[-1] + k + 1))
+    lowest, highest = ordered[0] - k - 1, ordered[-1] + k + 1
+    if any_real:
+        # Past 2**53 the step of k + 1 rounds back onto the point: go k + 1 floats out.
+        below, above = float(ordered[0]), float(ordered[-1])
+        for _ in range(k + 1):
+            below = math.nextafter(below, -math.inf)
+            above = math.nextafter(above, math.inf)
+        lowest, highest = min(lowest, below), max(highest, above)
+    gaps.insert(0, (lowest, ordered[0]))
+    gaps.append((ordered[-1], highest))
     candidates: set[Any] = set(ordered)
     for low, high in gaps:
         ints: list[int] = []
@@ -1446,8 +1454,7 @@ def _group_domains(
         if any_real:
             anchors = [low, *ints, high]
             for left, right in zip(anchors, anchors[1:], strict=False):
-                step = (right - left) / (k + 1)
-                candidates.update(left + step * j for j in range(1, k + 1))
+                candidates.update(_floats_between(float(left), float(right), k))
     for name in members:
         tag = tags[name]
         allowed = set(domains[name])
@@ -2766,7 +2773,8 @@ def _backward_propagate_comparison_boundaries(
                 split_points: set[Any] = set(hop.values)
                 back_values: set[Any] = set()
                 for raw in hop.values:
-                    back_values.update((raw, raw - 1, raw + 1))
+                    back_values.add(raw)
+                    back_values.update(_neighbours(raw, source_tag.type))
                 if not back_values:
                     continue
 
@@ -2780,8 +2788,7 @@ def _backward_propagate_comparison_boundaries(
                     ):
                         split_points.add(own_boundary)
                         back_values.add(own_boundary)
-                        back_values.add(own_boundary - 1)
-                        back_values.add(own_boundary + 1)
+                        back_values.update(_neighbours(own_boundary, source_tag.type))
                 if real_gap_points and source_tag.type == TagType.REAL:
                     splits = real_splits.setdefault(source_name, set())
                     splits |= split_points
@@ -2995,8 +3002,7 @@ def _extract_value_domain(
     for lit in literals:
         partitioned.add(lit)
         if isinstance(lit, (int, float)):
-            partitioned.add(lit - 1)
-            partitioned.add(lit + 1)
+            partitioned.update(_neighbours(lit, tag.type))
         elif tag.type == TagType.CHAR and isinstance(lit, str):
             partitioned |= _char_cuts(lit)
     if real_gap_points and tag.type == TagType.REAL:
@@ -3055,6 +3061,39 @@ def _char_cuts(literal: str) -> set[str]:
     """
     code = ord(literal[:1] or BLANK_CHAR)
     return {chr(point) for point in (code - 1, code, code + 1) if 0 <= point <= sys.maxunicode}
+
+
+def _neighbours(value: Any, tag_type: TagType | None) -> tuple[Any, ...]:
+    """A value just below *value* and one just above, standing for the cells beside it.
+
+    ``value - 1`` and ``value + 1``.  On a REAL past 2**53 those round back to *value*
+    (``1e20 + 1 == 1e20``), so there the next float either way stands in.
+    """
+    if tag_type != TagType.REAL and not isinstance(value, float):
+        return (value - 1, value + 1)
+    number = float(value)
+    if math.isnan(number):
+        return ()
+    below, above = number - 1, number + 1
+    if below == number:
+        below = math.nextafter(number, -math.inf)
+    if above == number:
+        above = math.nextafter(number, math.inf)
+    return (below, above)
+
+
+def _floats_between(low: float, high: float, count: int) -> set[float]:
+    """Up to *count* REAL values strictly between *low* and *high*, spread evenly.
+
+    Where the gap is a few floats wide, even steps round onto its ends, so the
+    floats next to *low* fill in.
+    """
+    step = (high - low) / (count + 1)
+    found = {value for j in range(1, count + 1) if low < (value := low + step * j) < high}
+    value = low
+    while len(found) < count and (value := math.nextafter(value, high)) < high:
+        found.add(value)
+    return found
 
 
 def _real_gap_points(points: Iterable[Any]) -> set[float]:
