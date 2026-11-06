@@ -409,6 +409,8 @@ class _LadderExporter(
         if any(type(instr).__name__ == "ForLoopInstruction" for instr in rung._instructions):
             return rung
         outputs = self._collect_instruction_trees(rung)
+        if not outputs:
+            return rung  # branches that hold no output draw no rows
         order = ReadOrder(self._program, rung, [instr for _tree, instr in outputs])
         factored = self._build_normalized_rung_from_trees(
             outputs, order=order, members=[(index, 0) for index in range(len(outputs))]

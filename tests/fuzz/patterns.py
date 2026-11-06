@@ -817,7 +817,10 @@ def colocated_crossing_accumulators(pool: TagPool) -> list[RungSpec] | None:
 
 
 def latch_reset_near_accumulator(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: latch(B) and count_up(C).reset(B) share a rung — latch target is the reset."""
+    """Adjacency: latch(B) on the rung above count_up(C).reset(B) — latch target is the reset.
+
+    A box with pins ends its rung, so the latch sits on a rung of its own above it.
+    """
     if not pool.counters or len(pool.writable_bool()) < 2:
         return None
     counter = pool.counters[-1]
@@ -826,8 +829,11 @@ def latch_reset_near_accumulator(pool: TagPool) -> list[RungSpec] | None:
     return [
         RungSpec(
             conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[InstrSpec(kind="latch", args={"target": target})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
             instructions=[
-                InstrSpec(kind="latch", args={"target": target}),
                 InstrSpec(
                     kind="count_up",
                     args={"counter": counter, "preset": 5, "reset": target, "down": None},

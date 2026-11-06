@@ -102,7 +102,7 @@ on_delay(OvenTimer, preset=100) \
 - rung False → holds acc and done (does not reset)
 - `.reset(tag)` → resets acc and done regardless of rung state
 
-`on_delay(...).reset(...)` (RTON) is terminal — no later instruction or branch can follow in the same flow.
+`on_delay(...).reset(...)` (RTON) ends its rung: no other instruction or branch shares the rung.
 
 ### Off-delay timer (TOF)
 
@@ -114,7 +114,7 @@ off_delay(CoolDown, preset=100)
 - rung True → done = True, acc = 0
 - rung False → accumulator counts up; done = False when acc ≥ preset
 
-TOF is non-terminal — instructions can follow it in the same rung.
+TOF can share its rung with other instructions.
 
 ### Time units
 
@@ -167,7 +167,7 @@ count_up(PartCounter, preset=100) \
 - rung goes True → accumulator increments by one; done = True when acc ≥ preset
 - `.reset(tag)` → resets acc and done while that tag is True (a level: it wins over a count on the same scan)
 
-`count_up(...).reset(...)` is terminal.
+`count_up(...).reset(...)` ends its rung.
 
 ### Count down (CTD)
 
@@ -179,7 +179,7 @@ count_down(Dispense, preset=-100) \
 - Accumulator starts at 0 (a reset puts it back there) and goes down by one on each rising edge
 - done = True when acc ≤ preset, so the example is done after 100 counts. A positive preset is done from the counter's first scan unless the accumulator is staged above it with `copy()` first (as on a CLICK)
 
-`count_down(...).reset(...)` is terminal.
+`count_down(...).reset(...)` ends its rung.
 
 ### Bidirectional counter
 

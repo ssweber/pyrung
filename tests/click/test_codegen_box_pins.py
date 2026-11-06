@@ -27,7 +27,6 @@ from pyrung.core import PLC, Counter, Or, Program, Rung, Timer
 from pyrung.core.program import (
     branch,
     call,
-    copy,
     count_up,
     event_drum,
     forloop,

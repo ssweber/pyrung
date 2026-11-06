@@ -85,9 +85,9 @@ on_delay(BatchTimer, preset=3600, unit="sec") \
 
 Without `.reset()`, the timer clears its accumulator the moment the rung drops — that's TON. With `.reset()`, the timer holds its accumulator and only clears when the reset condition fires — that's RTON. Same instruction, mode determined by the chain. This chained-builder pattern returns in [Lesson 6](counters.md) with counters.
 
-!!! note "Why is `.reset()` terminal?"
+!!! note "Why does `.reset()` end the rung?"
 
-    In most ladder editors, the reset input on a retentive timer is its own wire — you can power it from the rail with completely independent conditions. That flexibility makes rungs hard to read: reset logic *looks* tied to the main rung when it isn't. pyrung makes `.reset()` terminal so the syntax matches the semantics — conditions inside `.reset(...)` belong to the reset, not the rung. If you need more instructions after, write a separate rung. Counters use the same pattern.
+    In most ladder editors, the reset input on a retentive timer is its own wire — you can power it from the rail with completely independent conditions. That flexibility makes rungs hard to read: reset logic *looks* tied to the main rung when it isn't. pyrung ends the rung at the timer so the syntax matches the semantics — conditions inside `.reset(...)` belong to the reset, not the rung. If you need more instructions, give them a rung of their own. Counters use the same pattern.
 
 ## Exercise
 

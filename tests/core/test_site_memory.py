@@ -1121,7 +1121,9 @@ class TestEdgeFrames:
         ]
         # The box's pin is scanned at the box, on its own rung.
         assert build_edge_frames(box_rung) == ()
-        assert [edge._resolved_tag.name for row in edge_rows(box_rung).values() for _k, edge in row] == ["D"]
+        assert [
+            edge._resolved_tag.name for row in edge_rows(box_rung).values() for _k, edge in row
+        ] == ["D"]
         assert build_edge_frames(loop_rung) == ()
         assert body_rung._edge_frame is not None
         assert [name for _key, name in body_rung._edge_frame] == ["E", "F"]

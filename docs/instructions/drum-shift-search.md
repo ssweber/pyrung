@@ -89,7 +89,7 @@ A step ends when its time is up **and** its event is on. `None` leaves out eithe
 
 Events are levels, unlike `event_drum`'s rising edges: an event already on when the time comes up ends the step on that scan, and one level held across several event-only steps ends one step per scan. The accumulator times from step entry and keeps counting while a timed step waits for its event; a step with no preset does not time.
 
-`event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
+`event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` end their rung. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
 
 ### What a drum does each scan
 

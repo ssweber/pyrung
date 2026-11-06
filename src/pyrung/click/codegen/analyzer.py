@@ -815,10 +815,7 @@ def _output_runs(
     start = 0
     while start < len(instructions):
         stop = start + 1
-        while (
-            stop < len(instructions)
-            and _shares_prefix(instructions[start : stop + 1], order)
-        ):
+        while stop < len(instructions) and _shares_prefix(instructions[start : stop + 1], order):
             stop += 1
         runs.append(list(instructions[start:stop]))
         start = stop

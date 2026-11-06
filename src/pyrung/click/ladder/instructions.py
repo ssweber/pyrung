@@ -90,7 +90,9 @@ class _InstructionMixin:
             child_path = f"{path}.body[{child_index}]({type(child_instruction).__name__})"
             if is_own_rung(child_instruction):
                 # A conditioned body rung, or a nested loop: a rung of its own.
-                rows.extend(self._render_source_rung(loop_item_rung(child_instruction), path=child_path))
+                rows.extend(
+                    self._render_source_rung(loop_item_rung(child_instruction), path=child_path)
+                )
                 continue
             child_condition_rows = self._expand_conditions([], path=f"{child_path}.condition")
             child_rows = self._single_output_rows(
