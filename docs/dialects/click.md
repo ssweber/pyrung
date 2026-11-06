@@ -475,9 +475,18 @@ Both forms produce identical CSV output.
 
 A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK will not hold: an empty rung with conditions (`with Rung(C1): pass`; CLICK rejects a contact in front of NOP) and an empty rung next to a `.continued()` rung (they would share one CLICK rung, and CLICK deletes the NOP row).
 
-A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) needs a CLICK rung of its own. CLICK takes all inputs (pins) of a box from the same branch, so a box whose input wire also feeds another output (`latch(C3)` then `count_up(...).reset(...)` on one rung, or the box in one `branch()` beside another) can be drawn but does not compile (C000A). The exporter splits such a rung: the outputs above the box stay on the first CLICK rung, the box starts a rung of its own, and the outputs below it follow as continued wires. Each CLICK rung the split makes repeats the contacts in front of its outputs, and since CLICK reads a contact where its row stands, the split solves as the pyrung rung does. The exporter refuses only when it cannot: a repeated contact reads a tag that an output above it on the same rung writes (`with Rung(C5): reset(C5)` then a box in a branch), so the second copy would read the new value. Move the output that writes it off the rung: to a rung of its own, or to a separate rung before the box. A box with no pins, such as a TON, can share the wire.
+A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung. CLICK takes all inputs (pins) of a box from the same branch, so a box whose input wire also feeds another output can be drawn but does not compile (C000A), and pyrung refuses that rung when the program is built. Put what comes before the box in a rung above it, and what follows in a `.continued()` rung, a further wire of the same CLICK rung:
 
-On import, outputs that share a contact by label are grouped under one `with rung(...)` or `with branch(...)` only when no output between them writes what the contact reads, so the generated code reads each contact where the CLICK rung does.
+```python
+with Rung(Start):
+    latch(Running)
+with Rung(Start).continued():
+    count_up(Parts, preset=10).reset(Clear)
+```
+
+A box with no pins, such as a TON, can share the wire.
+
+On import, each wire of a CLICK rung comes back as a rung of its own, `.continued()` after the first, and outputs share a `with rung(...)` or `with branch(...)` only where the rows tee them off one contact, so the generated code draws and reads as the CLICK rung does. Two contacts with the same label stay two contacts.
 
 ## Loading PLC state
 

@@ -3765,9 +3765,14 @@ class TestTimedDrumCorrectedEveryScan:
                 if writer == "above":
                     with Rung(Bool("Stage")):
                         copy(0, Int("Step"))
-                with Rung(Bool("En")):
-                    if writer == "same rung":
+                if writer == "wire above":
+                    # The same CLICK rung: the wire above the drum's.
+                    with Rung(Bool("En")):
                         copy(0, Int("Step"))
+                drum_rung = Rung(Bool("En"))
+                if writer == "wire above":
+                    drum_rung.continued()
+                with drum_rung:
                     cls._drum(kind).reset(Bool("R"))
                 if writer == "below":
                     with Rung(Bool("Stage")):
@@ -3783,7 +3788,7 @@ class TestTimedDrumCorrectedEveryScan:
             assert _full_state(folded.replay_to(target)) == want
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
-    @pytest.mark.parametrize("writer", ["above", "below", "same rung"])
+    @pytest.mark.parametrize("writer", ["above", "below", "wire above"])
     def test_written_bad_every_scan_matches_stepping(self, kind: str, writer: str) -> None:
         folded, stepped = _folded_and_stepped(
             self._build(kind, writer), _scans(300), patch={"En": True, "Stage": True}
@@ -3831,7 +3836,7 @@ class TestTimedDrumCorrectedEveryScan:
         assert folded.state.tags["DAcc"] == stepped.state.tags["DAcc"] > 0
         assert kernel_scans[True] < kernel_scans[False]
 
-    @pytest.mark.parametrize("writer", ["none", "above", "below", "same rung"])
+    @pytest.mark.parametrize("writer", ["none", "above", "below", "wire above"])
     def test_replay_of_every_writer_matches_stepping(self, writer: str) -> None:
         folded, stepped = _folded_and_stepped(
             self._build("time", writer), _scans(300), patch={"En": True, "Stage": True}

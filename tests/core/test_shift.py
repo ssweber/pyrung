@@ -50,7 +50,7 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C3"] is False
 
     def test_clock_reads_at_box_entry(self, runner_factory):
-        """clock() reads at box entry, so a clock latched a row above shifts this scan."""
+        """clock() reads at box entry, so a clock latched on the wire above shifts this scan."""
         Data = Bool("Data")
         Clock = Bool("Clock")
         Reset = Bool("Reset")
@@ -59,6 +59,7 @@ class TestShiftInstruction:
         with Program() as logic:
             with Rung(Data):
                 latch(Clock)
+            with Rung(Data).continued():
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)

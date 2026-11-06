@@ -64,24 +64,22 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
 
     with Program() as prog:
         with Rung(enable):
-            math(scale + 1, result)
             on_delay(pdg_timer, preset=preset, unit="Ts").reset(reset)
+        with Rung(enable):
+            math(scale + 1, result)
 
     graph = build_program_graph(prog)
-    node = graph.rung_nodes[0]
+    timer_node, math_node = graph.rung_nodes[0], graph.rung_nodes[1]
 
-    assert node.condition_reads == frozenset({"Enable", "Reset"})
-    assert node.data_reads == frozenset({"Preset", "Scale"})
-    assert node.writes == frozenset(
-        {
-            "PdgTimer_Acc",
-            "PdgTimer_Done",
-            "PdgTimer_EN",
-            "PdgTimer_TT",
-            "Result",
-        }
+    assert timer_node.condition_reads == frozenset({"Enable", "Reset"})
+    assert timer_node.data_reads == frozenset({"Preset"})
+    assert timer_node.writes == frozenset(
+        {"PdgTimer_Acc", "PdgTimer_Done", "PdgTimer_EN", "PdgTimer_TT"}
     )
-    assert node.implicit_writes == frozenset(
+    assert math_node.condition_reads == frozenset({"Enable"})
+    assert math_node.data_reads == frozenset({"Scale"})
+    assert math_node.writes == frozenset({"Result"})
+    assert math_node.implicit_writes == frozenset(
         {"fault.division_error", "fault.out_of_range", "fault.address_error"}
     )
 

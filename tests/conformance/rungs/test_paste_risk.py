@@ -34,15 +34,15 @@ and DF411..DF420.
   in, so this is what a pasted one does.
   ``faults/rand_unequal_bounds`` asks DF bounds that differ.  (Moved here from
   ``faults`` before any CLICK ran it.)
-- ``loop_body_split`` (probe, S5 #4): a For body rung with an instruction above
-  a box.  pyrung's exporter splits the rung at the box (C000A: a box starts a
-  CLICK rung of its own), so the body is two body rungs, the calc and then the
-  counter, each repeating the rung's contacts (the Scratch contact is written
-  by an earlier pyrung rung, so the split re-reads nothing it wrote).  The
-  count input is on in iterations 1, 2 and 4 of 4 (``loop/counter_inside_loop``,
-  F8), the calc runs on those three.  Adopted: the split body reads like the
-  one rung pyrung runs, Result1 = 2 (counter edges) and Result2 = 3 (the calc).
-  A CLICK that refuses the split loop never fires the case.
+- ``loop_body_split`` (probe, S5 #4): an instruction above a box in a For
+  body.  A box with pins ends its rung (C000A: all its pins start from the box's
+  own wire), so the calc and the counter are two body rungs with the same
+  contacts (the Scratch contact is written by an earlier body rung, so the
+  second copy re-reads nothing the calc wrote).  The count input is on in
+  iterations 1, 2 and 4 of 4 (``loop/counter_inside_loop``, F8), the calc runs
+  on those three.  Adopted: the two body rungs read like one rung holding
+  both, Result1 = 2 (counter edges) and Result2 = 3 (the calc).  A CLICK that
+  refuses the loop never fires the case.
 """
 
 from __future__ import annotations
@@ -141,8 +141,9 @@ def _fire(slot):
 
 
 def prove_loop_body_split(slot):
-    # S5 #4.  The count input (the second body rung's Scratch != 3) is on in
-    # iterations 1, 2 and 4 of 4; the calc above the counter shares its rung.
+    # S5 #4.  The count input (the counter's body rung's Scratch != 3) is on in
+    # iterations 1, 2 and 4 of 4; the calc above the counter is a body rung of
+    # its own with the same contacts (a box with pins ends its rung).
     counter = ClickCounter(196)
     with Rung():
         with forloop(4):
@@ -150,6 +151,7 @@ def prove_loop_body_split(slot):
                 math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 math(slot.Result2 + 1, slot.Result2)
+            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 count_up(counter, 100).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(counter.Acc, slot.Result1)

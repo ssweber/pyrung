@@ -173,6 +173,8 @@ class ForLoop:
             source_line=self._source_line,
         )
         self._capture_rung._branch_condition_start = len(parent_conditions)
+        # Its bare instructions are each a body rung of their own (a box too).
+        self._capture_rung._loop_capture = True
         self._capture_ctx = _new_capture_context(self._capture_rung)
         _push_rung_context(self._capture_ctx)
         _state._forloop_stack.append(self)

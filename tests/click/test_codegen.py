@@ -633,8 +633,8 @@ class TestDroppedContactValidation:
             assert par is not None
             assert sorted(_leaf_labels(c) for c in par.children) == [["X001"], ["X002"]]
 
-    def test_equivalent_conditions_merged_across_outputs_are_not_dropped(self):
-        """Factoring equal labels may merge occurrences at different positions."""
+    def test_equal_labels_in_two_cells_stay_two_contacts(self):
+        """Two C001 cells are two contacts (two reads), each kept on its own branch."""
         from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row(
@@ -655,12 +655,15 @@ class TestDroppedContactValidation:
                 validate=True,
             )
 
-        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)", "C001"]
+        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)"]
         assert [instruction.af_token for instruction in analyzed[0].instructions] == [
             "copy(0,DS001,oneshot=1)",
             "reset(C010..C012)",
         ]
-        assert all(instruction.branch_tree is None for instruction in analyzed[0].instructions)
+        assert [_leaf_labels(i.branch_tree) for i in analyzed[0].instructions] == [
+            ["C001"],
+            ["C001"],
+        ]
 
     @pytest.mark.parametrize("source_kind", ["bundle", "directory"])
     def test_subroutine_error_identifies_subroutine_and_one_indexed_rung(

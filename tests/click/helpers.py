@@ -442,8 +442,11 @@ def rows_logic(rows) -> list[tuple]:
             outputs.append(
                 (
                     instr.af_token,
-                    _tree_key(tree),
-                    tuple((p.name, p.arg, _tree_key(p.condition_tree)) for p in instr.pins),
+                    _tree_key(tree, cells=False),
+                    tuple(
+                        (p.name, p.arg, _tree_key(p.condition_tree, cells=False))
+                        for p in instr.pins
+                    ),
                 )
             )
     return outputs

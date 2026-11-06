@@ -152,7 +152,7 @@ class OnDelayInstruction(Instruction):
             if status:
                 ctx.set_tags(status)
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return self.has_reset
 
     def advance_profile(self) -> AdvanceProfile:
