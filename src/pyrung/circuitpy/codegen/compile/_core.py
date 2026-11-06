@@ -85,6 +85,7 @@ from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
 )
+from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.site_memory import edge_memory_key, edge_rows
@@ -781,15 +782,16 @@ def _compile_for_loop_instruction(
         children = _compile_loop_body(instr, ctx)
     finally:
         ctx._for_loop_depth = depth
-    # CLICK reads the count as unsigned 16-bit; a count of 0 runs
-    # FOR_ZERO_COUNT_ITERATIONS iterations (an open hardware question).
+    # CLICK reads the count as unsigned, a Dint whole and the rest as 16-bit
+    # (control.for_count_mask); a count of 0 runs FOR_ZERO_COUNT_ITERATIONS iterations.
     non_finite = "fault.out_of_range" in instr._fault_writes
     if non_finite:
         # A REAL count holding Inf or NaN runs no iteration and sets SC43
         # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
         ctx.mark_helper("_bit_int")
         count_expr = f"_bit_int({count_expr})"
-    iterations_expr = f"int({count_expr}) & 0xFFFF"
+    mask = control.for_count_mask(instr.count)
+    iterations_expr = f"int({count_expr}) & 0x{mask:X}"
     if control.FOR_ZERO_COUNT_ITERATIONS:
         iterations_expr = f"({iterations_expr}) or {int(control.FOR_ZERO_COUNT_ITERATIONS)}"
     iterations_lines = [f"{iterations_var} = {iterations_expr}"]
@@ -801,6 +803,16 @@ def _compile_for_loop_instruction(
             f"    {iterations_var} = 0",
             *_indent_body(_compile_set_out_of_range_fault_body(ctx), 4),
         ]
+    if ctx.proof_metadata and mask > control.FOR_COUNT_MASK_16:
+        # The verifier's kernel stops a 32-bit count past its cap rather than
+        # run it (a negative Dint is about 4.29 billion iterations).  The source
+        # names the loop by index: its file and line stay out of the lock's hash.
+        site = len(ctx.for_cap_sites)
+        ctx.for_cap_sites.append(_for_count_site(instr))
+        iterations_lines += [
+            f"if {iterations_var} > {PROVE_FOR_ITERATION_CAP}:",
+            f"    raise _ForIterationsBeyondCap(*_for_cap_sites[{site}], {iterations_var})",
+        ]
     body = [
         *iterations_lines,
         f"for {index_var} in range({iterations_var}):",
@@ -809,6 +821,22 @@ def _compile_for_loop_instruction(
     ]
     # A false For rung skips its body: only the For's own one-shot re-arms.
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
+
+
+def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...]]:
+    """Where a For is, how its count reads, and the tags it reads (for a refusal)."""
+    count = instr.count
+    if isinstance(count, Tag):
+        return _source_location(instr), count.name, (count.name,)
+    if isinstance(count, IndirectRef):
+        return (
+            _source_location(instr),
+            f"{count.block.name}[{count.pointer.name}]",
+            (count.pointer.name,),
+        )
+    if isinstance(count, IndirectExprRef):
+        return _source_location(instr), f"{count.block.name}[...]", ()
+    return _source_location(instr), str(count), ()
 
 
 def _compile_loop_body(

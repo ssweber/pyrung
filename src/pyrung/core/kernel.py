@@ -32,6 +32,29 @@ def prove_effective_preset_key(done_name: str) -> str:
     return f"{PROVE_EFFECTIVE_PRESET_PREFIX}{done_name}"
 
 
+#: The most iterations the verifier's kernel runs one For for in one scan.  A
+#: 16-bit count runs at most 65535, under it; a Dint count is read whole
+#: (``control.for_count_mask``), so a negative one would run about 4.29 billion
+#: and the search would not return.
+PROVE_FOR_ITERATION_CAP = 1_000_000
+
+
+class ForIterationsBeyondCap(Exception):
+    """A For in the verifier's kernel was about to run past ``PROVE_FOR_ITERATION_CAP``.
+
+    Raised by the kernel ``compile_kernel(proof_metadata=True)`` builds, only
+    for a For whose count is read 32-bit; the verifier answers ``Intractable``.
+    """
+
+    def __init__(self, where: str, count: str, tags: tuple[str, ...], iterations: int) -> None:
+        super().__init__(f"forloop({count}) at {where} would run {iterations} times in one scan")
+        self.where = where
+        self.count = count
+        self.iterations = iterations
+        #: The tags the count reads: the count tag, or an indexed count's pointer.
+        self.tags = tags
+
+
 @dataclass(frozen=True)
 class BlockSpec:
     """Metadata for a block-backed array in the kernel state."""

@@ -16,7 +16,7 @@ from pyrung.circuitpy.codegen._constants import (
     _INT_MAX,
     _INT_MIN,
 )
-from pyrung.core.storage import REAL_MAX
+from pyrung.core.storage import REAL_MAX, WORD_STORE_FLOOR
 
 _HELPER_DEFS: dict[str, list[str]] = {
     "_clamp_int": [
@@ -44,7 +44,10 @@ _HELPER_DEFS: dict[str, list[str]] = {
     ],
     "_float_to_int_bits": [
         "def _float_to_int_bits(f):",
-        '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
+        "    f = float(f)",
+        "    if f != f:",
+        "        return 0xFFFFFFFF",
+        '    return struct.unpack("<I", struct.pack("<f", f))[0]',
         "",
     ],
     "_ascii_char_from_code": [
@@ -89,7 +92,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
     "_format_int_text": [
         "def _format_int_text(value, width, suppress_zero, signed=True):",
         "    if suppress_zero:",
-        "        return str(value)",
+        '        return str(value) if signed else f"{value:X}"',
         "    if not signed:",
         '        return f"{value:0{width}X}"',
         "    if value < 0:",
@@ -229,6 +232,34 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    if type(value) is float and not math.isfinite(value):",
         "        return 0",
         "    return int(value) & 0xFFFF",
+        "",
+    ],
+    # A Copy into a Word from a register: past 65535 it clamps, below 0 it keeps the
+    # low 16 bits of the value stopped at -32768 (storage.py's "word").
+    "_store_word_clamped": [
+        "def _store_word_clamped(value):",
+        "    if type(value) is float and not math.isfinite(value):",
+        "        if value != value:",
+        "            return 0",
+        f"        return 65535 if value > 0 else {WORD_STORE_FLOOR & 0xFFFF}",
+        "    value = int(value)",
+        "    if value > 65535:",
+        "        return 65535",
+        f"    if value < {WORD_STORE_FLOOR}:",
+        f"        return {WORD_STORE_FLOOR & 0xFFFF}",
+        "    return value & 0xFFFF",
+        "",
+    ],
+    # A Copy into a bit takes a number's low bit (storage.py's "bit").
+    "_store_bit": [
+        "def _store_bit(value):",
+        "    if type(value) is bool:",
+        "        return value",
+        "    if type(value) is float and not math.isfinite(value):",
+        "        return False",
+        "    if type(value) is int or type(value) is float:",
+        "        return bool(int(value) & 1)",
+        "    return bool(value)",
         "",
     ],
     "_store_real": [

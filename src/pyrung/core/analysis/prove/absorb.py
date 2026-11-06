@@ -1136,12 +1136,12 @@ def _literal_expr_value(value: Any) -> Any:
 
 
 def _normalized_copy_literal_int_value(source: Any, target: Any) -> int | None:
-    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+    from pyrung.core.instruction.conversions import LITERAL, _store_copy_value_to_tag_type
 
     if isinstance(source, bool) or not isinstance(source, int | float):
         return None
     try:
-        stored = _store_copy_value_to_tag_type(source, target)
+        stored = _store_copy_value_to_tag_type(source, target, LITERAL)
     except (TypeError, ValueError):
         return None
     return stored if isinstance(stored, int) and not isinstance(stored, bool) else None

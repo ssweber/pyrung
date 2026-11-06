@@ -127,17 +127,25 @@ def debounce_model(
     levels: list[bool], per_scan: Fraction, on_preset: int, off_preset: int
 ) -> list[tuple[bool, int, int]]:
     """(coil, on TD, off TD) per scan: the coil follows the input once it has
-    held steady for the side's time, and holds in between."""
-    coil, run_len, prev, out = False, 0, None, []
+    held steady for the side's time, and holds in between.  A side's TD starts
+    from 0 when the input changes to it and is kept while the other side times
+    (hardware, 2026-11-05: the on side's after the input falls).  The input
+    counts as off before scan 1."""
+    coil, run_len, prev, out = False, 0, False, []
+    on_td = off_td = 0
     for level in levels:
         run_len = run_len + 1 if level == prev else 1
         prev = level
         acc = _acc(run_len, per_scan)
-        if level and acc >= on_preset:
-            coil = True
-        elif not level and acc >= off_preset:
-            coil = False
-        out.append((coil, acc if level else 0, 0 if level else acc))
+        if level:
+            on_td = acc
+            if acc >= on_preset:
+                coil = True
+        else:
+            off_td = acc
+            if acc >= off_preset:
+                coil = False
+        out.append((coil, on_td, off_td))
     return out
 
 
@@ -175,18 +183,19 @@ def flasher_model(
     levels: list[bool], per_scan: Fraction, on_preset: int, off_preset: int
 ) -> list[bool]:
     """The coil per scan.  Each time the rung goes true a run starts at scan 1,
-    always in an on phase (hardware, probe O4).  A phase ends on the scan its
-    timer reaches the preset, and that scan already shows the next phase, so
-    on and off phases run ``ka`` and ``kb`` scans, except that scan 1 is always
-    on."""
+    always in an on phase, both TDs from 0 (hardware, probe O4 and 2026-11-05).
+    A phase ends on the scan its timer reaches the preset, and that scan
+    already shows the next phase, so on and off phases run ``ka`` and ``kb``
+    scans, but the first on phase counts scan 1 as a tick, as on_delay does.
+    An on time of 0 never shows (hardware, ``out_more/zero_and_below``)."""
     ka = _ticks_to_reach(on_preset, per_scan)
     kb = _ticks_to_reach(off_preset, per_scan)
     out, n = [], 0
     for level in levels:
         n = n + 1 if level else 0
-        if not level:
+        if not level or on_preset <= 0:
             out.append(False)
-        elif n == 1 or n < ka:
+        elif n < ka:
             out.append(True)
         else:
             out.append((n - ka) % (ka + kb) >= kb)
@@ -197,13 +206,13 @@ def flasher_model(
     levels=any_levels_st,
     dt=dt_st,
     unit=unit_st,
-    on_preset=st.integers(min_value=1, max_value=600),
+    on_preset=st.integers(min_value=0, max_value=600),
     off_preset=st.integers(min_value=1, max_value=600),
 )
 @SETTINGS
 def test_flasher_alternates_and_restarts_with_an_on_phase(levels, dt, unit, on_preset, off_preset):
     if unit == "sec":
-        on_preset, off_preset = on_preset % 6 + 1, off_preset % 6 + 1
+        on_preset, off_preset = on_preset % 7, off_preset % 6 + 1
     logic = _build(
         lambda: flasher(
             Coil,
@@ -225,28 +234,25 @@ def test_flasher_alternates_and_restarts_with_an_on_phase(levels, dt, unit, on_p
 def timed_model(
     levels: list[bool], per_scan: Fraction, preset: int, maintained: bool
 ) -> list[bool]:
-    """A rising edge starts a pulse of exactly the preset (at least one scan)
-    that runs out whatever the rung does.  Not maintained, the coil then stays
-    off until the rung has dropped; maintained, it follows the rung after the
-    pulse.  The timer clears once the rung is false after the pulse."""
-    phase, ticks, out = "idle", 0, []
+    """(coil, TD) per scan.  A rising edge outside a pulse starts one, the TD
+    from 0, that runs out whatever the rung does; the edge's scan is a tick, as
+    on_delay's first scan is, so a preset of a scan or less gives no pulse.
+    Not maintained, the coil is off after the pulse; maintained, it follows
+    the rung.  The TD holds after the pulse, the rung false included
+    (hardware, 2026-11-05).  The rung counts as off before scan 1."""
+    timing, prev, ticks, td, out = False, False, 0, 0, []
     for level in levels:
-        if phase == "spent":
-            if level:
-                out.append(maintained)
-            else:
-                phase = "idle"
-                out.append(False)
-        elif phase == "timing" or level:
-            if phase == "idle":
-                phase, ticks = "timing", 0
+        if level and not prev and not timing:
+            timing, ticks = True, 0
+        prev = level
+        if timing:
             ticks += 1
-            done = _acc(ticks, per_scan) >= preset
-            out.append(ticks == 1 or (level and maintained) or not done)
-            if done:
-                phase = "spent"
+            td = _acc(ticks, per_scan)
+            done = td >= preset
+            out.append((not done or (level and maintained), td))
+            timing = not done
         else:
-            out.append(False)
+            out.append((level and maintained, td))
     return out
 
 
@@ -263,7 +269,7 @@ def test_timed_pulses_for_the_preset(levels, dt, unit, preset, maintained):
         preset %= 8
     logic = _build(lambda: timed(Coil, Timer.clone("OfTm"), preset, unit, maintained=maintained))
     seen = _drive(logic, dt, levels)
-    assert [t["OfCoil"] for t in seen] == timed_model(
+    assert [(t["OfCoil"], t["OfTm_Acc"]) for t in seen] == timed_model(
         levels, _per_scan(dt, unit), preset, maintained
     )
     assert not any(t["OfTm_Done"] for t in seen)

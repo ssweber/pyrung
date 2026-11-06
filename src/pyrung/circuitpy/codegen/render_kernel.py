@@ -27,7 +27,7 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
-from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.kernel import BlockSpec, CompiledKernel, ForIterationsBeyondCap
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -139,6 +139,9 @@ def compile_kernel(
         **ctx.function_objects,
         **ctx.function_constants,
         "_dt_to_ns": dt_to_ns,
+        # A proof_metadata kernel's For past the verifier's cap raises it.
+        "_ForIterationsBeyondCap": ForIterationsBeyondCap,
+        "_for_cap_sites": tuple(ctx.for_cap_sites),
     }
     code = compile(source, "<kernel>", "exec", dont_inherit=True)
     exec(code, namespace)  # noqa: S102
@@ -310,6 +313,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_calc_math_isfinite" in ctx.used_helpers
         or "_math_func" in ctx.used_helpers
         or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
+        or bool(ctx.used_helpers & {"_store_word_clamped", "_store_bit"})
     )
     needs_struct = (
         "_int_to_float_bits" in ctx.used_helpers

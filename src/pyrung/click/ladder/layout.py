@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from pyrung.core.condition import AllCondition, AnyCondition, Condition
+from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.rung import Rung
 
 from .types import _ConditionRow, _OutputSlot
@@ -559,6 +559,8 @@ class _LayoutMixin:
         *,
         path: str,
     ) -> list[_ConditionRow]:
+        # A TXT against a longer literal is one compare on a CLICK, as written.
+        condition = text_window_of(condition)
         if isinstance(condition, AllCondition):
             expanded = rows
             for child in condition.conditions:

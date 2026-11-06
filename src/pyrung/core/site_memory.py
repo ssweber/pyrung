@@ -28,7 +28,8 @@ key, and asking for one raises (there is no ``id()`` fallback).
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and
 its contacts (an edge also its row as source text), so hot reload can carry
 memory to the matching site of the new program, and drop it where no site
-matches unambiguously (:func:`remap_site_memory`).  An edge site with no match
+matches unambiguously (:func:`remap_site_memory`); an instruction's rung
+power last scan also follows an edit of its operands.  An edge site with no match
 in the old program (added or edited) starts from its tag's current value
 (:func:`seed_new_edge_memory`).
 
@@ -168,8 +169,19 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         CountDownInstruction,
         CountUpInstruction,
     )
-    from pyrung.core.instruction.drums import EventDrumInstruction, _DrumBaseInstruction
-    from pyrung.core.instruction.out_variants import FlasherInstruction, ToggleInstruction
+    from pyrung.core.instruction.drums import (
+        PRESET_MEMORY,
+        PRESET_STEP_MEMORY,
+        EventDrumInstruction,
+        _DrumBaseInstruction,
+        latches_presets,
+    )
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
 
     slots: list[tuple[str, Any]] = []
     if isinstance(instr, CountUpInstruction):
@@ -182,8 +194,12 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         slots.append(("_oneshot", False))
     if isinstance(instr, ToggleInstruction):
         slots.append(("_toggle", False))
+    if isinstance(instr, DebounceInstruction):
+        slots.append(("_debounce_rung", False))
     if isinstance(instr, FlasherInstruction):
         slots.append(("_flash_idle", True))
+    if isinstance(instr, TimedInstruction):
+        slots.append(("_timed_rung", False))
     if isinstance(instr, ShiftInstruction):
         slots.append(("_shift_prev_clock", False))
     if isinstance(instr, _DrumBaseInstruction):
@@ -191,6 +207,10 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         slots.append(("_drum_jog_prev", False))
         # Its rung as the last scan left it: a false-to-true writes the outputs.
         slots.append(("_drum_rung_prev", False))
+    if latches_presets(instr):
+        # The step a tag preset was read for, and what it read.
+        slots.append((PRESET_STEP_MEMORY, 0))
+        slots.append((PRESET_MEMORY, 0))
     if isinstance(instr, EventDrumInstruction):
         slots.append(("_drum_event_prev", False))
         slots.append(("_drum_last_step", 0))
@@ -1016,6 +1036,46 @@ def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
     return matched
 
 
+_RUNG_MEMORY = frozenset({"_debounce_rung", "_timed_rung"})
+"""Memory prefixes that hold the instruction's own rung power as of its last scan."""
+
+
+def _match_rung_memory(
+    old: Sequence[Site], new: Sequence[Site], matched: Mapping[str, str]
+) -> dict[str, str]:
+    """Old site key -> new site key for rung memory (:data:`_RUNG_MEMORY`) of sites
+    :func:`_match_sites` left unmatched.
+
+    Rung power depends on the contacts alone, so the cell follows a site whose
+    operands changed (a preset edited) when exactly one old and one new site share
+    its scope, kind, first tag and contacts.  Without it a held rung would read as a
+    rising edge after reload and start a pulse again.
+    """
+
+    def _owns(site: Site) -> bool:
+        return any(name.split(":", 1)[0] in _RUNG_MEMORY for name, _default in site.memory)
+
+    def _key(site: Site) -> Any:
+        scope, _line, kind, _operands = site.fingerprint
+        return (site.site, scope, kind, site.tag, site.contacts)
+
+    used = set(matched.values())
+    olds: dict[Any, list[Site]] = {}
+    for site in old:
+        if site.key not in matched and _owns(site):
+            olds.setdefault(_key(site), []).append(site)
+    news: dict[Any, list[Site]] = {}
+    for site in new:
+        if site.key not in used and _owns(site):
+            news.setdefault(_key(site), []).append(site)
+    out: dict[str, str] = {}
+    for key, old_sites in olds.items():
+        new_sites = news.get(key, [])
+        if len(old_sites) == 1 and len(new_sites) == 1:
+            out[old_sites[0].key] = new_sites[0].key
+    return out
+
+
 _OVERLAY_NAMESPACES = frozenset({PLANT_NAMESPACE, PILOT_NAMESPACE})
 
 
@@ -1036,7 +1096,9 @@ def remap_site_memory(
     :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
     sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
     for the new program.  Edge memory (``_edge:e{N}``) is site memory like any
-    other.  Other memory (timer carries, system memory) is kept as is, except that a
+    other.  A site left unmatched still carries its rung memory to an edited
+    counterpart (:func:`_match_rung_memory`).  Other memory (timer carries, system
+    memory) is kept as is, except that a
     carry is cut to below one unit of its timer in *new*: it is less than a unit by what
     it means, and an edit to the timer's unit must not finish the timer.
     Returns ``(memory, dropped keys)``.
@@ -1050,6 +1112,11 @@ def remap_site_memory(
     if new is not None:
         new_names = {name for site in new.sites for name, _default in site.memory}
     matched = _match_sites(old.sites, new.sites) if old is not None and new is not None else {}
+    rung_matched = (
+        _match_rung_memory(old.sites, new.sites, matched)
+        if old is not None and new is not None
+        else {}
+    )
     out: dict[str, Any] = {}
     dropped: list[str] = []
     for name, value in memory.items():
@@ -1062,6 +1129,8 @@ def remap_site_memory(
             continue
         site_key, prefix = owner
         target = matched.get(site_key)
+        if target is None and prefix in _RUNG_MEMORY:
+            target = rung_matched.get(site_key)
         new_name = f"{prefix}:{target}" if target is not None else None
         if new_name is None or new_name not in new_names:
             dropped.append(name)

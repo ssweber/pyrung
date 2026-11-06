@@ -7,7 +7,9 @@ from pyrung.circuitpy.codegen._constants import (
     _INT_MAX,
 )
 from pyrung.circuitpy.codegen._util import (
+    _copy_store_expr,
     _indent_body,
+    _optional_value_type_name,
     _range_type_name,
     _static_range_length,
     _store_coerce_expr,
@@ -25,6 +27,8 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.conversions import copy_source_kind
+from pyrung.core.instruction.drums import PRESET_MEMORY, PRESET_STEP_MEMORY, latches_presets
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
@@ -53,7 +57,9 @@ def _compile_blockcopy_instruction(
     if instr.convert is not None:
         return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
     stem = ctx.next_name("blockcopy")
-    store_expr = _store_coerce_expr("_raw", _range_type_name(instr.dest), ctx)
+    store_expr = _copy_store_expr(
+        "_raw", _range_type_name(instr.dest), instr.source.block.type, ctx
+    )
     clamp_cond = _copy_clamp_condition(
         "_raw", _range_type_name(instr.dest), _range_type_name(instr.source)
     )
@@ -116,21 +122,19 @@ def _compile_blockcopy_converter_instruction(
     if mode in {"value", "ascii"}:
         ctx.mark_helper("_text_from_source_value")
         ctx.mark_helper("_store_numeric_text_digit")
+        # A character that does not convert leaves its own element and faults.
         enabled_body.extend(
             [
-                "try:",
-                "    _converted = []",
-                f"    for _src_idx in {src_indices}:",
+                f"for _src_idx, _dst_idx in zip({src_indices}, {dst_indices}):",
+                "    try:",
                 f"        _raw_char = _text_from_source_value({_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)})",
                 "        if len(_raw_char) != 1:",
                 '            raise ValueError("BlockCopy text->numeric conversion requires single CHAR values")',
                 f'        _numeric = _store_numeric_text_digit(_raw_char, "{mode}")',
-                f"        _converted.append({_store_coerce_expr('_numeric', dst_type, ctx)})",
-                f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
-                f"        {_range_item_write_expr(dst_symbol, '_dst_idx', '_converted_value')}",
-                *_indent_body(_compile_range_flush(instr.dest, dst_symbol, ctx), 4),
-                "except (IndexError, TypeError, ValueError, OverflowError):",
-                *_indent_body(fault_body, 4),
+                f"        {_range_item_write_expr(dst_symbol, '_dst_idx', _store_coerce_expr('_numeric', dst_type, ctx))}",
+                "    except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 8),
+                *_compile_range_flush(instr.dest, dst_symbol, ctx),
             ]
         )
     else:
@@ -145,17 +149,27 @@ def _compile_fill_instruction(
     indent: int,
 ) -> list[str]:
     stem = ctx.next_name("fill")
-    store_expr = _store_coerce_expr("_fill_value", _range_type_name(instr.dest), ctx)
+    dest_type = _range_type_name(instr.dest)
+    store_expr = _copy_store_expr("_fill_value", dest_type, copy_source_kind(instr.value), ctx)
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     value_expr = _compile_value(instr.value, ctx)
+    source_type = "CHAR" if isinstance(instr.value, str) else _optional_value_type_name(instr.value)
+    clamp_cond = _copy_clamp_condition("_fill_value", dest_type, source_type)
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    clamp_lines = (
+        [f"if {dst_indices} and ({clamp_cond}):", *_indent_body(fault_body, 4)]
+        if clamp_cond is not None and fault_body != ["pass"]
+        else []
+    )
     enabled_body = [
         *dst_setup,
         f"_fill_value = {value_expr}",
         f"for _dst_idx in {dst_indices}:",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
         *_compile_range_flush(instr.dest, dst_symbol, ctx),
+        *clamp_lines,
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -414,6 +428,14 @@ def _compile_drum_instruction(
             f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
             f"_mem[{f'_frac:{instr.accumulator.name}'!r}] = 0",
         ]
+        if latches_presets(instr):
+            # A step change: the step the drum lands on reads its preset afresh.
+            clear_time.extend(
+                [
+                    f"_mem[{f'{PRESET_STEP_MEMORY}:{key_base}'!r}] = 0",
+                    f"_mem[{f'{PRESET_MEMORY}:{key_base}'!r}] = 0",
+                ]
+            )
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
     # The pins, read before the drum writes anything.
@@ -580,7 +602,7 @@ def _drum_end_lines(
         None if preset is None else f"int({_compile_value(preset, ctx)})"
         for preset in instr.presets
     ]
-    tick = _drum_tick_lines(instr, ctx)
+    tick = [*_drum_latch_lines(instr, ctx), *_drum_tick_lines(instr, ctx)]
     if isinstance(instr, TimeDrumInstruction):
         lines = [
             *_compile_step_selector_lines(
@@ -593,7 +615,7 @@ def _drum_end_lines(
         if ctx.proof_metadata:
             preset_key = prove_effective_preset_key(instr.completion_flag.name)
             lines.append(f"_mem[{preset_key!r}] = _limit")
-        lines.append("_end_met = _acc >= _limit")
+        lines.append(f"_end_met = {_TIME_UP}")
         return lines
 
     lines = []
@@ -628,6 +650,28 @@ def _drum_end_lines(
         )
     )
     return lines
+
+
+#: A timed step's end: a preset of 0 or less never ends it.
+_TIME_UP = "(_limit > 0) and (_acc >= _limit)"
+
+
+def _drum_latch_lines(
+    instr: TimeDrumInstruction | TimeEventDrumInstruction, ctx: CodegenContext
+) -> list[str]:
+    """A tag preset is read on the first scan its step times, then held: ``_limit``."""
+    if not latches_presets(instr):
+        return []
+    key_base = ctx.state_key_for(instr)
+    step_key = f"{PRESET_STEP_MEMORY}:{key_base}"
+    value_key = f"{PRESET_MEMORY}:{key_base}"
+    return [
+        f"if _step == int(_mem.get({step_key!r}, 0)):",
+        f"    _limit = int(_mem.get({value_key!r}, 0))",
+        "else:",
+        f"    _mem[{step_key!r}] = _step",
+        f"    _mem[{value_key!r}] = _limit",
+    ]
 
 
 def _drum_tick_lines(
@@ -673,7 +717,7 @@ def _time_event_end_exprs(
     for preset_expr, event in zip(preset_exprs, instr.events, strict=True):
         parts: list[str] = []
         if preset_expr is not None:
-            parts.append("(_acc >= _limit)")
+            parts.append(f"({_TIME_UP})")
         if event is not None:
             if snapshots is not None:
                 parts.append(f"bool({next(snapshots)})")

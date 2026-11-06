@@ -110,11 +110,13 @@ class ToggleInstruction(Instruction):
 class DebounceInstruction(Instruction):
     """Debounce coil: the target follows the rung once it has held steady.
 
-    Each side is an on-delay timer: the on side times while the rung is true,
-    the off side while it is false, and either resets when the rung changes.
-    The target turns on when the on side's accumulator reaches its preset and
-    off when the off side's does; between the two it holds.  Neither Timer's
-    ``Done`` is written.
+    The on side times while the rung is true, the off side while it is false.
+    A side starts from 0 when the rung changes to it, and keeps its
+    accumulator while the other side times (CLICK keeps the on side's TD after
+    the rung falls, hardware round of 2026-11-05).  The rung's previous state
+    is memory.  The target turns on when the on side's accumulator reaches its
+    preset and off when the off side's does; between the two it holds.
+    Neither Timer's ``Done`` is written.
     """
 
     INERT_WHEN_DISABLED = False
@@ -150,32 +152,26 @@ class DebounceInstruction(Instruction):
         self.unit = _parse_time_unit(unit)
         self.enable_condition = to_condition(enable_condition)
 
-    def _side(
-        self,
-        ctx: ScanContext,
-        timing: bool,
-        acc: Tag,
-        preset: Tag | int,
-        tags: dict[str, Any],
-    ) -> bool:
-        """Run one side's on-delay; return whether that side has timed out."""
-        if timing:
-            acc_value, frac = _tick(ctx, acc, self.unit)
-            is_done = acc_value >= resolve_preset_ctx(preset, ctx)
-        else:
-            acc_value, frac, is_done = 0, 0, False
-        ctx.set_memory(f"_frac:{acc.name}", frac)
-        tags[acc.name] = acc_value
-        return is_done
-
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        tags: dict[str, Any] = {}
-        on_ready = self._side(ctx, enabled, self.on_acc, self.on_preset, tags)
-        off_ready = self._side(ctx, not enabled, self.off_acc, self.off_preset, tags)
-        if on_ready:
-            tags[self.target.name] = True
-        elif off_ready:
-            tags[self.target.name] = False
+        rung_key = self.memory_key("_debounce_rung")
+        changed = bool(enabled) != bool(ctx.get_memory(rung_key, False))
+        ctx.set_memory(rung_key, bool(enabled))
+        if enabled:
+            acc, preset, held = self.on_acc, self.on_preset, self.off_acc
+        else:
+            acc, preset, held = self.off_acc, self.off_preset, self.on_acc
+        frac_key = f"_frac:{acc.name}"
+        if changed:
+            # The side the rung changed to starts from 0.
+            ctx.set_tags({acc.name: 0})
+            ctx.set_memory(frac_key, 0)
+        acc_value, frac = _tick(ctx, acc, self.unit)
+        ctx.set_memory(frac_key, frac)
+        held_frac = f"_frac:{held.name}"
+        ctx.set_memory(held_frac, ctx.get_memory(held_frac, 0))
+        tags: dict[str, Any] = {acc.name: acc_value}
+        if acc_value >= resolve_preset_ctx(preset, ctx):
+            tags[self.target.name] = bool(enabled)
         ctx.set_tags(tags)
 
     def advance_profile(self) -> AdvanceProfile | None:
@@ -197,7 +193,11 @@ class FlasherInstruction(Instruction):
     and the off side's has not, the on phase otherwise.  Each phase's
     accumulator holds its final value until that phase starts again, from 0.
     The rung going false turns the target off and freezes both accumulators;
-    going true again always restarts with an on phase, from 0.
+    going true again restarts with an on phase, both accumulators from 0
+    (hardware round of 2026-11-05: the off TD does not run on from where it
+    froze).  The first on phase counts the rung's first scan, as on_delay
+    does, so an on time of a scan or less (0 or below included) does not show
+    then; nor does an on phase of 0 or below that an off phase ends.
     Neither Timer's ``Done`` is written.
     """
 
@@ -250,46 +250,39 @@ class FlasherInstruction(Instruction):
         on_acc = ctx.get_tag(self.on_acc.name, 0)
         off_acc = ctx.get_tag(self.off_acc.name, 0)
         if restarting:
-            # Coming back always starts an on phase from 0; the off side keeps
-            # whatever it froze at until the on phase ends.
-            on_acc = 0
-            ctx.set_tags({self.on_acc.name: 0})
+            # Coming back always starts an on phase, both accumulators from 0.
+            on_acc = off_acc = 0
+            ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0})
             ctx.set_memory(on_frac, 0)
-        off_phase = on_acc >= resolve_preset_ctx(self.on_preset, ctx) and off_acc < (
-            resolve_preset_ctx(self.off_preset, ctx)
-        )
-        # The first scan after the rung goes true (both accumulators still
-        # cleared) shows the target on even when an on time no longer than a
-        # scan is up already.
-        first = restarting or (
-            on_acc == 0
-            and off_acc == 0
-            and ctx.get_memory(on_frac, 0) == 0
-            and ctx.get_memory(off_frac, 0) == 0
-        )
+            ctx.set_memory(off_frac, 0)
+        on_preset = resolve_preset_ctx(self.on_preset, ctx)
+        off_phase = on_acc >= on_preset and off_acc < resolve_preset_ctx(self.off_preset, ctx)
         if not off_phase:
             acc_value, frac = _tick(ctx, self.on_acc, self.unit)
             tags[self.on_acc.name] = acc_value
-            if acc_value >= resolve_preset_ctx(self.on_preset, ctx):
-                off_phase = True
+            if acc_value >= on_preset:
+                lit = False
                 tags[self.off_acc.name] = 0
                 ctx.set_memory(on_frac, 0)
                 ctx.set_memory(off_frac, 0)
             else:
+                lit = True
                 ctx.set_memory(on_frac, frac)
                 ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0))
         else:
             acc_value, frac = _tick(ctx, self.off_acc, self.unit)
             tags[self.off_acc.name] = acc_value
             if acc_value >= resolve_preset_ctx(self.off_preset, ctx):
-                off_phase = False
+                # The on phase starts from 0: on unless its time is up already.
+                lit = on_preset > 0
                 tags[self.on_acc.name] = 0
                 ctx.set_memory(on_frac, 0)
                 ctx.set_memory(off_frac, 0)
             else:
+                lit = False
                 ctx.set_memory(off_frac, frac)
                 ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
-        tags[self.target.name] = first or not off_phase
+        tags[self.target.name] = lit
         ctx.set_tags(tags)
 
     def advance_profile(self) -> AdvanceProfile | None:
@@ -306,9 +299,13 @@ class TimedInstruction(Instruction):
     if the rung is still true; another pulse needs the rung to go false and
     true again.  Maintained, the target is on for at least the preset and then
     follows the rung.  An edge during the on time does not restart it, and the
-    on time runs out whatever the rung does.  The coil has timed out while its
-    accumulator holds at or past the preset, having left 0; the accumulator
-    clears once the rung is false.  The Timer's ``Done`` is not written.
+    on time runs out whatever the rung does.  The on time runs while the
+    target is on and the accumulator is short of the preset; a rising edge
+    outside it starts one from 0, and the accumulator otherwise holds, the
+    rung false included (hardware round of 2026-11-05).  The rung's previous
+    state is memory.  The edge's scan counts toward the time, as on_delay's
+    first scan does, so a preset of a scan or less (0 or below included) gives
+    no pulse.  The Timer's ``Done`` is not written.
     """
 
     INERT_WHEN_DISABLED = False
@@ -341,35 +338,31 @@ class TimedInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.timer_acc.name}"
-        acc = ctx.get_tag(self.timer_acc.name, 0)
-        # Timed out: the accumulator reached the preset.  Having left 0 (or its
-        # remainder having) tells a timed-out coil from an idle one when the
-        # preset is 0.
-        timed_out = acc >= resolve_preset_ctx(self.on_preset, ctx) and (
-            acc != 0 or ctx.get_memory(frac_key, 0) != 0
+        rung_key = self.memory_key("_timed_rung")
+        rose = bool(enabled) and not ctx.get_memory(rung_key, False)
+        ctx.set_memory(rung_key, bool(enabled))
+        preset = resolve_preset_ctx(self.on_preset, ctx)
+        timing = bool(ctx.get_tag(self.target.name, False)) and (
+            ctx.get_tag(self.timer_acc.name, 0) < preset
         )
-        if timed_out:
-            if enabled:
-                # Timed out with the rung still true: wait for it to go false.
-                ctx.set_memory(frac_key, ctx.get_memory(frac_key, 0))
-                ctx.set_tag(self.target.name, self.maintained)
-                return
-        elif enabled or ctx.get_tag(self.target.name, False):
-            # Starting from idle, the target is on this scan even if the on time
-            # is up already: a pulse lasts at least one scan.
-            starting = not ctx.get_tag(self.target.name, False)
+        if rose and not timing:
+            # A new on time, from 0.
+            timing = True
+            ctx.set_tags({self.timer_acc.name: 0})
+            ctx.set_memory(frac_key, 0)
+        if timing:
             acc_value, frac = _tick(ctx, self.timer_acc, self.unit)
-            done = acc_value >= resolve_preset_ctx(self.on_preset, ctx)
             ctx.set_memory(frac_key, frac)
             ctx.set_tags(
                 {
-                    self.target.name: starting or (enabled and self.maintained) or not done,
+                    self.target.name: acc_value < preset or (self.maintained and bool(enabled)),
                     self.timer_acc.name: acc_value,
                 }
             )
             return
-        ctx.set_memory(frac_key, 0)
-        ctx.set_tags({self.target.name: False, self.timer_acc.name: 0})
+        # Timed out, or never started: the accumulator holds.
+        ctx.set_memory(frac_key, ctx.get_memory(frac_key, 0))
+        ctx.set_tag(self.target.name, self.maintained and bool(enabled))
 
     def advance_profile(self) -> AdvanceProfile | None:
         if self.enable_condition is None:

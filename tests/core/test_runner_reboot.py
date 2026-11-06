@@ -1,4 +1,8 @@
-"""Runner reboot and battery-aware retention behavior."""
+"""Runner reboot and battery-aware retention behavior.
+
+With a battery a reboot keeps what STOP -> RUN keeps, the retentive tags; without
+one it keeps nothing.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,9 @@ def _resolved(runner: PLC, tag_name: str):
     return value
 
 
-def test_reboot_with_battery_preserves_all_known_tags():
+def test_reboot_with_battery_keeps_retentive_tags_and_resets_the_rest():
+    # A CLICK power cycle with the battery reads what STOP -> RUN does
+    # (conformance boot_read/what_survives, 2026-11-05): 764, the retentive blocks.
     retentive_tag = Int("RebootRet")
     non_retentive_tag = Bool("RebootNonRet", retentive=False)
 
@@ -22,7 +28,7 @@ def test_reboot_with_battery_preserves_all_known_tags():
     runner.step()
 
     runner.patch({retentive_tag: 123})
-    runner.force(non_retentive_tag, False)
+    runner.force(non_retentive_tag, True)
     runner._state = runner._state.with_memory({"user.custom.memory": 42})
 
     rebooted = runner.reboot()
@@ -32,7 +38,7 @@ def test_reboot_with_battery_preserves_all_known_tags():
     assert runner.current_state.scan_id == 0
     assert runner.current_state.timestamp == 0.0
     assert runner.current_state.tags[retentive_tag.name] == 11
-    assert runner.current_state.tags[non_retentive_tag.name] is True
+    assert runner.current_state.tags[non_retentive_tag.name] is False
     assert "UnknownAdHoc" not in runner.current_state.tags
     assert "user.custom.memory" not in runner.current_state.memory
     assert runner._pending_patches == {}
@@ -94,6 +100,21 @@ def test_reboot_without_battery_uses_per_slot_defaults_regardless_of_retentive()
 
     assert runner.current_state.tags["RebootSlot1"] == 10
     assert runner.current_state.tags["RebootSlot2"] == 20
+
+
+def test_reboot_with_battery_keeps_retentive_slots_and_resets_the_rest():
+    regs = Block("RebootBattSlot", TagType.INT, 1, 2, retentive=False)
+    regs.slot(1, retentive=False, default=10)
+    regs.slot(2, retentive=True, default=20)
+
+    runner = PLC(logic=[])
+    runner.patch({regs[1]: 101, regs[2]: 202})
+    runner.step()
+
+    runner.reboot()
+
+    assert runner.current_state.tags["RebootBattSlot1"] == 10
+    assert runner.current_state.tags["RebootBattSlot2"] == 202
 
 
 def test_reboot_with_battery_preserves_rtc_continuity():

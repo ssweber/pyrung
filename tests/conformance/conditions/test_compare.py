@@ -1,6 +1,6 @@
 """Compares across types, and a TXT against a 2-char literal.
 
-An expectation is pyrung's reading today; a CLICK that reads otherwise prints what it read.
+An expectation is what a CLICK read on 2026-11-05.
 
 ``compare``, the last group of its part:
 
@@ -10,9 +10,10 @@ An expectation is pyrung's reading today; a CLICK that reads otherwise prints wh
   for the constant cut to 4464.  Text order is not asked: CLICK's Compare dialog offers only = and
   not-equal on text.
 - ``char_two_char_literal``: a TXT compared with a 2-char literal.  R1: TXT "A", next "B" == "AB";
-  R2: "A", next "C"; R3: "B"; control R4: "A" == "A" = 1.  pyrung (a char is not two): 0, 0, 0,
-  1.  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1.  A refusal at paste
-  is the answer too, which is why this case comes last.
+  R2: "A", next "C"; R3: "B"; control R4: "A" == "A" = 1.  A char that is not two: 0, 0, 0, 1.
+  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1, CLICK's reading and
+  pyrung's.  A refusal at paste would have been an answer too, which is why this case comes
+  last.
 
 The cases own what ``memory.OWNED`` lists under this group.
 """
@@ -85,11 +86,12 @@ group = Group(
             probe="a Word against an Int; a constant past an Int",
         ),
         case(
-            "A TXT compared with a 2-char literal: TXT A, next B == AB reads 0 (Result1), A, next "
-            "C reads 0 (Result2), B reads 0 (Result3), control A == A reads 1 (Result4)",
+            "A TXT compared with a 2-char literal compares it and the next TXT: TXT A, next B == "
+            "AB reads 1 (Result1), A, next C reads 0 (Result2), B reads 0 (Result3), control A "
+            "== A reads 1 (Result4)",
             ladder=prove_char_two_char_literal,
             init=init_char_two_char_literal,
-            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 1},
+            expect={"Result1": 1, "Result2": 0, "Result3": 0, "Result4": 1},
             probe="CHAR compare with a 2-char literal; a refusal at paste is an answer",
         ),
     ],

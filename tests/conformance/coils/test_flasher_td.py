@@ -2,8 +2,8 @@
 (part ``text_flasher``).
 
 A false rung freezes a flasher's TDs and the restart is a fresh on phase (``out``, on hardware).
-An on phase that times out starts its off phase from 0.  One cut short by a lowered preset has not
-been read with an off TD left mid-phase: pyrung, reading the phase from the TDs, runs on from it.
+An on phase that times out starts its off phase from 0.  This case reads one cut short by a lowered
+preset with an off TD left mid-phase.
 
 ``frozen_off_td_at_lowered_preset``: on from a DS, 100 ms, off 800 ms.  The rung drops at 500 ms,
 about 400 ms into the off phase, and comes back at 600 ms, the DS raised to 5000 in between.  At
@@ -17,7 +17,9 @@ about 400 ms into the off phase, and comes back at 600 ms, the DS raised to 5000
 - Result4, the coil at 1510-1650 ms: 1 on, the off phase ran the 400 ms it had left; 0 off, a whole
   800 ms from 0, which ends at 1800 ms.
 
-pyrung reads 1, 1, 1, 1; a fresh off phase reads 1, 1, 2, 0.  Windows hold for any scan up to 50 ms.
+Running on from the frozen TD reads 1, 1, 1, 1; a fresh off phase reads 1, 1, 2, 0.  A CLICK reads
+2, 1, 2, 0 (hardware round of 2026-11-05, twice): the restart clears the off TD, so the off phase
+runs a whole 800 ms from 0.  Windows hold for any scan up to 50 ms.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -76,14 +78,13 @@ group = Group(
     "flasher_td",
     [
         case(
-            "A flasher restarted with its off TD frozen mid-phase keeps it (Result1 = 1); its on "
+            "A flasher restarted with its off TD frozen mid-phase clears it (Result1 = 2); its on "
             "preset lowered below the on TD ends the on phase (Result2 = 1) and the off phase runs "
-            "on from the frozen TD (Result3 = 1), its time left and no more (Result4 = 1)",
+            "from 0 (Result3 = 2), a whole off time (Result4 = 0)",
             ladder=prove_frozen_off_td_at_lowered_preset,
             init=init_frozen_off_td_at_lowered_preset,
             scans=200,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
-            probe="a lowered on preset's off phase: from a frozen TD or from 0",
+            expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 0},
         ),
     ],
 )
