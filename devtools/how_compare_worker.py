@@ -121,7 +121,16 @@ def save():
     tmp = args.out + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(DOC, fh, indent=0)
-    os.replace(tmp, args.out)
+    # On Windows a reader (an indexer, a virus scan) holding the old file denies the
+    # replace for a moment; the run's last save must not lose its rows to that.
+    for attempt in range(20):
+        try:
+            os.replace(tmp, args.out)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.25)
 
 
 def watchdog():
