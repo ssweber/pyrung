@@ -202,7 +202,7 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
     if isinstance(instr, DebounceInstruction):
         slots.append(("_debounce_rung", False))
     if isinstance(instr, FlasherInstruction):
-        slots.append(("_flash_idle", True))
+        slots.append(("_flash_phase", 0))
     if isinstance(instr, TimedInstruction):
         slots.append(("_timed_rung", False))
     if isinstance(instr, ShiftInstruction):
@@ -1061,7 +1061,7 @@ _RUNG_INPUT_MEMORY = frozenset(
         "_toggle",
         "_debounce_rung",
         "_timed_rung",
-        "_flash_idle",
+        "_flash_phase",  # idle (0) while the rung is false
         "_drum_rung_prev",
         "_cu",  # COUNT_UP_MEMORY
     }
