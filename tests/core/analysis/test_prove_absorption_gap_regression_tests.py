@@ -584,8 +584,8 @@ class TestProgressAcrossCycles:
         _assert_replays_to(logic, always(logic, ~hit), "OscHit")
 
     def test_large_preset_past_the_budget_says_so(self):
-        """A thousand pulses are two thousand scans: past the budget, the
-        Proven carries the depth caveat."""
+        """A thousand pulses are two thousand scans: past the budget, so no
+        answer."""
         pulse = Bool("PumpIn", external=True)
         count = Int("PumpCount")
         hit = Bool("PumpHit")
@@ -595,8 +595,8 @@ class TestProgressAcrossCycles:
             with Rung(count >= 1000):
                 out(hit)
         result = always(logic, ~hit)
-        assert isinstance(result, Proven)
-        assert any("depth_budget=50" in caveat for caveat in result.caveats)
+        assert isinstance(result, Intractable), result
+        assert "depth_budget=50" in result.reason
 
     def test_reachable_states_sees_the_pulsed_crossing(self):
         pulse = Bool("ReachIn", external=True)
@@ -740,8 +740,8 @@ class TestProgressAcrossCycles:
             with Rung(counter.Done):
                 out(hit)
         result = always(logic, ~hit)
-        assert isinstance(result, Proven)
-        assert any("depth_budget=50" in caveat for caveat in result.caveats)
+        assert isinstance(result, Intractable), result
+        assert "depth_budget=50" in result.reason
 
 
 class TestSelfResettingTimerLaps:
@@ -957,7 +957,10 @@ class TestProgressMadeOnAnotherBranch:
         logic, hit = self._shortcut("Behind", lock_first=False)
         _assert_replays_to(logic, always(logic, ~hit), "BehindH")
         logic, hit = self._shortcut("BehindLock", lock_first=True)
-        assert isinstance(always(logic, ~hit), Proven)
+        # N and M count without end, so the search never closes: no scan within the budget.
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable), result
+        assert "depth_budget=50" in result.reason
 
     def test_timer_behind_has_time_left(self):
         """A detour arms the timer later: the pulses then beat it."""

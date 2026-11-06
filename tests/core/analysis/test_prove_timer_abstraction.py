@@ -1318,3 +1318,36 @@ class TestDrumCompletion:
         assert (tags["Enable"], tags["Done"], tags["Step"], tags["Y1"]) == (True, True, 1, False)
         # Off by completion, never with both outputs on.
         assert isinstance(never(logic, Bool("Y1"), Bool("Y2")), Proven)
+
+    def test_an_output_no_rung_reads_stays_in_the_search(self) -> None:
+        """A drum holds its outputs from scan to scan, so the one the property reads is
+        state even with no rung reading it: completed, jumped back to step 1 and jogged
+        to step 2, B is on, and jumping again leaves it on with Step 1."""
+        from pyrung.core import event_drum
+
+        with Program(strict=False) as logic:
+            with Rung(Bool("En", external=True)):
+                event_drum(
+                    outputs=[Bool("A"), Bool("B")],
+                    events=[Bool("E1", external=True), Bool("E2", external=True)],
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("Step"),
+                    completion_flag=Bool("Done"),
+                ).reset(Bool("R", external=True)).jump(Bool("J", external=True), step=1).jog(
+                    Bool("G", external=True)
+                )
+
+        plc = PLC(logic, dt=0.01)
+        for patch in ({"En": True}, *({"G": g} for g in (True, False, True, False))):
+            plc.patch(patch)
+            plc.step()
+        for patch in ({"J": True}, {"J": False}, {"G": True}, {"G": False}, {"J": True}):
+            plc.patch(patch)
+            plc.step()
+        tags = plc.current_state.tags
+        assert (tags["Done"], tags["Step"], tags["B"]) == (True, 1, True)
+
+        result = never(logic, Bool("Done"), Int("Step") == 1, Bool("B"))
+        assert isinstance(result, Counterexample), result
+        tags = _replay_trace(logic, result.trace).current_state.tags
+        assert (tags["Done"], tags["Step"], tags["B"]) == (True, 1, True)

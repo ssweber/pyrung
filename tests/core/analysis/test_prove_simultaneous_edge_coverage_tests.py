@@ -389,12 +389,7 @@ class TestAdversarialAbstractElisionRetainedSummary:
 
 
 class TestAdversarialDepthTruncation:
-    """depth_budget truncation silently returns Proven with no caveat.
-
-    FIX DIRECTION: emit a caveat when any BFS frontier state is discarded
-    due to depth — at minimum ``"BFS reached depth_budget={n}; deeper states
-    were not explored"``.
-    """
+    """A search the depth budget cut short proves nothing: it answers Intractable."""
 
     def test_constant_stride_threshold_counterexample_not_lost_to_depth(self):
         enable = Bool("Enable", external=True)
@@ -411,10 +406,10 @@ class TestAdversarialDepthTruncation:
                 latch(target)
 
         # C counts one per scan: 55 scans to the threshold.  The budget is
-        # a plain BFS depth, so a shorter one says so in a caveat.
+        # a plain BFS depth, so a shorter one cannot tell.
         short = always(logic, ~target, depth_budget=50)
-        assert isinstance(short, Proven)
-        assert any("depth_budget=50" in caveat for caveat in short.caveats)
+        assert isinstance(short, Intractable), short
+        assert "depth_budget=50" in short.reason
 
         result = always(logic, ~target, depth_budget=60)
         assert isinstance(result, Counterexample), (
@@ -428,8 +423,8 @@ class TestAdversarialDepthTruncation:
                 plc.step()
         assert plc.current_state.tags["Target"] is True
 
-    def test_depth_truncation_emits_caveat(self):
-        """When the BFS hits depth_budget, Proven.caveats should warn the user."""
+    def test_depth_truncation_is_intractable(self):
+        """When the BFS hits depth_budget with no scan found, it answers Intractable."""
         enable = Bool("Enable", external=True)
         stage_a = Bool("StageA")
         stage_b = Bool("StageB")
@@ -478,10 +473,9 @@ class TestAdversarialDepthTruncation:
                 edge_compression=False,
             ),
         )[0]
-        assert isinstance(result, Proven)
-        assert any("depth_budget=3" in caveat for caveat in result.caveats), (
-            "always() should emit a caveat when depth_budget truncates exploration"
-        )
+        assert isinstance(result, Intractable), result
+        assert "depth_budget=3" in result.reason
+        assert "depth_budget=" in result.hints[0]
 
     def test_no_depth_caveat_when_exhaustive(self):
         """Fully explored finite state spaces should not report depth truncation."""
