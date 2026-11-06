@@ -547,9 +547,9 @@ def _a_pointer_too() -> Program:
     )
 
 
-# False Provens for the prover sweep: a carried source's other way to the comparison goes
-# through something the carried set does not look at.
-STILL_FALSE_PROVEN = pytest.mark.parametrize(
+# A carried source's other way to the comparison goes through something the carried set
+# does not look at: the source reaches more than its own comparisons with a literal.
+ANOTHER_WAY_THERE = pytest.mark.parametrize(
     ("build", "value"),
     [
         pytest.param(_a_square_squared, 7, id="a-calc-of-a-calc"),
@@ -559,17 +559,12 @@ STILL_FALSE_PROVEN = pytest.mark.parametrize(
 )
 
 
-@STILL_FALSE_PROVEN
-def test_the_scans_the_open_false_provens_miss_do_fire(build, value) -> None:
+@ANOTHER_WAY_THERE
+def test_the_scans_another_way_there_reaches_do_fire(build, value) -> None:
     assert _fires_at(build(), "I", value, _HIT)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="the carried set misses this source's other way to the comparison: a false Proven",
-)
-@STILL_FALSE_PROVEN
+@ANOTHER_WAY_THERE
 def test_a_carried_source_with_another_way_to_the_comparison_is_not_proven(build, value) -> None:
     verdict = never(build(), _HIT, max_states=3000, depth_budget=6)
     assert not isinstance(verdict, Proven)

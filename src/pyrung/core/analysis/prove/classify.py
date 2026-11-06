@@ -1531,6 +1531,7 @@ def _answer_for_inputs(
     *,
     real_gap_points: bool,
     paired: Mapping[str, frozenset[str]],
+    constant_storage: frozenset[str],
 ) -> dict[str, str]:
     """Make each free input's values all the program tells apart, or say it can't.
 
@@ -1543,12 +1544,15 @@ def _answer_for_inputs(
     write's values miss the neighbours of a literal it is compared with), and an input
     with a small declared range takes all of it.  Every other input is returned,
     ``{name: what its value reaches}``: a search that finds no scan answers nothing
-    for it.  Mutates *nondeterministic*.
+    for it.  *constant_storage* keeps its one value: no input, it has nothing to
+    answer for.  Mutates *nondeterministic*.
     """
     names = frozenset(
         name
         for name in nondeterministic
-        if name in graph.tags and graph.tags[name].type != TagType.BOOL
+        if name in graph.tags
+        and graph.tags[name].type != TagType.BOOL
+        and name not in constant_storage
     )
     if not names:
         return {}
@@ -4467,6 +4471,7 @@ def _classify_dimensions_from_graph(
             atom_idx,
             real_gap_points=real_gap_points,
             paired={name: frozenset(found) for name, found in paired.items()},
+            constant_storage=constant_storage,
         )
         if unanswered_out is not None:
             unanswered_out.update(unanswered)
