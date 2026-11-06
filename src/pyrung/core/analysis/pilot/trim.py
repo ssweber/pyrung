@@ -131,7 +131,7 @@ def _drive(
     tip = recording.state.scan_id
     snap = recording._scan_log.snapshot()
     patches = snap.patches_by_scan
-    fork = fork_with_pilot_rungs(recording, (), scan_id=plan.anchor_scan, history_budget=math.inf)
+    fork = fork_with_pilot_rungs(recording, (), scan_id=plan.anchor_scan)
     # A checkpoint records the forces whether or not they changed.  Only a change is a step.
     forces: dict[int, Mapping[str, Any]] = {}
     previous = repr(dict(fork._forces))
@@ -167,7 +167,7 @@ def _drive(
                 active = tuple(rung for rung in rungs if _rung_identity(rung) not in change)
                 keys = tuple(_rung_identity(rung) for rung in active)
                 if keys != kept:
-                    fork = fork_with_pilot_rungs(fork, active, history_budget=math.inf)
+                    fork = fork_with_pilot_rungs(fork, active)
                     kept = keys
             patch = {**patches.get(at + 1, {}), **sets}
             if patch:
