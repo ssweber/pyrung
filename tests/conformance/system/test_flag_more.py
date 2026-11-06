@@ -362,9 +362,9 @@ flag_halves = Group(
             probe="do the bulk Copy tabs settle SC43, with a raise that takes (4b)",
         ),
         case(
-            "A oneshot Copy (bit 1) and Math (bit 2) after SC43: off after it on the scan it fires "
-            "(Result2 = 3), still on the scan it does not fire (Result1 = 3); the raise alone "
-            "leaves SC43 on (Result3 = 1)",
+            "A oneshot Copy (bit 1) and Math (bit 2) after SC43: a bit per op with SC43 off after "
+            "it, on the scan it fires (Result2) and on the scan it does not fire (Result1); the "
+            "raise alone leaves SC43 on (Result3 = 1)",
             ladder=prove_oneshot_settles_sc43,
             init=init_oneshot_settles_sc43,
             expect={"Result1": between(0, 3), "Result2": between(0, 3), "Result3": 1},
@@ -372,8 +372,9 @@ flag_halves = Group(
             probe="does a oneshot that does not fire settle SC43 (4b)",
         ),
         case(
-            "A Copy whose source is SC43, right after a raise, reads it on (Result1 = 1) and "
-            "leaves it off (Result2 = 1); the raise alone leaves SC43 on (Result3 = 1)",
+            "A Copy whose source is SC43, right after a raise: whether it reads SC43 on (Result1 = 1) "
+            "and whether SC43 is off after it (Result2 = 1); the raise alone leaves SC43 on "
+            "(Result3 = 1)",
             ladder=prove_source_sc43,
             init=init_source_sc43,
             expect={"Result1": between(0, 1), "Result2": between(0, 1), "Result3": 1},

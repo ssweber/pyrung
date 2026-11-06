@@ -90,9 +90,11 @@ class CopyInstruction(OneShotMixin, Instruction):
     **Clamping semantics:** Out-of-range values are clamped to the
     destination type's min/max (e.g. copying 40 000 into an INT tag produces
     32 767) and the out-of-range flag (``system.fault.out_of_range``, CLICK's
-    SC43) is set; +/-Inf into an INT or DINT clamps the same way, and NaN stores
-    0 with no flag.  A REAL register clamps into a DINT with no flag.  This
-    differs from `CalcInstruction`, which wraps.  A WORD into an INT keeps its bits (0xFFFF is -1); into a WORD a constant keeps its
+    SC43) is set; +/-Inf into an INT clamps the same way, and NaN stores 0 with
+    no flag.  A REAL into a DINT clamps with no flag (read on a CLICK for a Copy
+    of DF 1.0E+10 into a DD; Inf, Block copy and Fill into a DINT follow it, not
+    yet measured).  This differs from `CalcInstruction`, which wraps.  A WORD
+    into an INT keeps its bits (0xFFFF is -1); into a WORD a constant keeps its
     low 16 bits, and a DINT or REAL clamps past 65535 and below 0 keeps its low
     16 bits, with no flag (see ``copy_store_transform``).  Into a BOOL, a number
     stores its low bit.

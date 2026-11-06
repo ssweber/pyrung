@@ -11,7 +11,7 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-Out-of-range values are **clamped** to the destination type's min/max, which sets `system.fault.out_of_range`, for `copy()`, `blockcopy()`, `fill()` and `pack_text()`; a `Real` clamps into a `Dint` with no flag. This is different from `calc()`, which wraps.
+Out-of-range values are **clamped** to the destination type's min/max, which sets `system.fault.out_of_range`, for `copy()`, `blockcopy()`, `fill()` and `pack_text()`; a `Copy` of a `Real` into a `Dint` clamps with no flag (read on a CLICK; `blockcopy()`, `fill()` and Inf follow it, not yet measured). This is different from `calc()`, which wraps.
 
 `Word` and bit destinations are different, and raise no flag. Into a `Word`, a constant or an `Int` keeps its low 16 bits (-1 is 65535); a `Dint` or `Real` above 65535 stores 65535, and one below 0 wraps down to -32768 (32768); below that pyrung stores 32768, its own choice, not yet read on a CLICK. A `Word` into an `Int` keeps its bits (65535 is -1). A number into a `Bool` takes its low bit, so 2 is off.
 

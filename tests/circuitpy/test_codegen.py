@@ -1783,20 +1783,23 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (first, second, seen), scans=2)
         assert results == {name: (2147483647, -2147483648, False) for name in results}
 
-    def test_fill_clamps_with_no_flag_on_every_backend(self, monkeypatch):
-        """A Fill stops at the limit with no flag: only Single, Block and Pack Copy raise it."""
+    def test_fill_clamps_and_raises_the_flag_on_every_backend(self, monkeypatch):
+        """A Fill stops at the limit and raises SC43, as a single Copy's clamp does."""
         source = Dint("Source", default=40000)
         dest = Block("DstB", TagType.INT, 1, 2)
         first, second = Int("First"), Int("Second")
+        seen = Bool("Seen")
         with Program(strict=False) as prog:
             with Rung():
                 fill(source, dest.select(1, 2))
+            with Rung(system.fault.out_of_range):
+                out(seen)
+            with Rung():
                 copy(dest[1], first)
                 copy(dest[2], second)
 
-        watch = (first, second, system.fault.out_of_range)
-        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
-        assert results == {name: (32767, 32767, False) for name in results}
+        results = _on_every_backend(prog, monkeypatch, (first, second, seen), scans=1)
+        assert results == {name: (32767, 32767, True) for name in results}
 
     @pytest.mark.parametrize("exponential", [False, True])
     @pytest.mark.parametrize("operand,text", [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")])
