@@ -166,20 +166,20 @@ with Program() as logic:
 mapping = TagMap({**base_map}, include_system=False)
 _dump("Case 11: A, Or(~B, C, ~D)", pyrung_to_ladder(logic, mapping))
 
-# ── Case 12: branch with pin rows ──
+# ── Case 12: continued wire with pin rows (a box with pins ends its rung) ──
 ResetCond = Bool("ResetCond")
 
 with Program() as logic:
     with Rung(A, B):
         out(Y1)
-        with branch(Mode):
-            count_up(Counter[1], preset=10).reset(ResetCond)
+    with Rung(A, B, Mode).continued():
+        count_up(Counter[1], preset=10).reset(ResetCond)
 
 mapping = TagMap(
-    {**base_map, Counter[1].done: ct[1], Counter[1].acc: ctd[1], ResetCond: x[8]},
+    {**base_map, Counter[1].Done: ct[1], Counter[1].Acc: ctd[1], ResetCond: x[8]},
     include_system=False,
 )
-_dump("Case 12: A,B out + branch(Mode) count_up.reset", pyrung_to_ladder(logic, mapping))
+_dump("Case 12: A,B out + continued A,B,Mode count_up.reset", pyrung_to_ladder(logic, mapping))
 
 # ── Case 13: asymmetric OR widths ──
 with Program() as logic:

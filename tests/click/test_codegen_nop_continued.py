@@ -155,15 +155,16 @@ def test_bare_nop_between_rungs_exports():
     assert "with rung():\n    pass" in code
 
 
-def test_shape_change_is_not_a_logic_change():
-    """Continued rows that come back as branches pass the check."""
+def test_continued_rows_come_back_as_continued_rungs():
+    """Each wire of a CLICK rung is a rung of its own, row for row."""
     with Program() as logic:
         with Rung(c[1]):
             copy(1, ds[1])
         with Rung(c[1], c[2]).continued():
             copy(2, ds[2])
     code = strip_pyrung_boilerplate(ladder_to_pyrung(pyrung_to_ladder(logic, TagMap())))
-    assert "with branch(C2):" in code
+    assert "with rung(C1, C2).continued():\n    copy(2, DS2)" in code
+    assert "branch(" not in code
 
 
 def test_import_refuses_nop_beside_another_row(tmp_path: Path):

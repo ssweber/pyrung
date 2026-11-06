@@ -56,7 +56,7 @@ with rung(A):
 
 Each rung starts fresh: the next rung sees the state as the previous rung's instructions left it.
 
-A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin together, before it writes anything.
+A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin together, before it writes anything. It ends its rung: no other output or branch shares the rung with it, so what follows it goes in a `.continued()` rung or a rung of its own.
 
 ### Nested branches
 
@@ -84,7 +84,7 @@ with rung(Counter == 10).continued():
     out(X)  # True: Counter was set to 10 above
 ```
 
-`.continued()` exists so CLICK projects round-trip: a CLICK rung with two wires imports as a rung and a continued rung (or as one rung, where both wires start with the same contacts), and exports back as one CLICK rung. The exporter also uses it when it has to split a rung (a box with pins needs a CLICK rung of its own; see [Boxes with pins](../dialects/click.md#boxes-with-pins)).
+`.continued()` exists so CLICK projects round-trip. A CLICK rung with two wires imports as a rung and a continued rung, and exports back as one CLICK rung. `.continued()` is also how a box with pins shares a CLICK rung with other outputs. The box and the outputs each sit on a wire of their own (see [Boxes with pins](../dialects/click.md#boxes-with-pins)).
 
 Constraints:
 

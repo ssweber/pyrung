@@ -196,9 +196,9 @@ def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intrac
         estimated_space=visited,
         tags=names,
         hints=[
-            f"  {name}: the way it reaches {target} can't be worked back from a comparison;"
-            " give an integer choices= or a min=/max= of at most 1000 values, or test it"
-            " with run_for()"
+            f"  {name}: its value reaches {target}, not only comparisons of it with a"
+            " literal; give it choices= or an integer min=/max= of at most 1000 values,"
+            " or test it with run_for()"
             for name, target in sorted(unanswered.items())
         ],
         journal=context.journal,
@@ -988,23 +988,31 @@ def _bfs_explore_gen(
         return
 
     caveats = context.caveats
-    if depth_truncated:
-        caveats = (
-            *caveats,
-            (
-                f"BFS exhausted depth_budget={depth_budget}; deeper states were not explored. "
-                f"The property held for all {len(visited)} explored states but may fail "
-                f"beyond depth_budget={depth_budget}."
-            ),
-        )
-
     journal = context.journal
-    if journal is not None and depth_truncated:
-        journal = replace(
-            journal,
-            notes=(
-                *journal.notes,
-                f"BFS exhausted depth_budget={depth_budget}; deeper states were not explored.",
+    if depth_truncated and undecided is None:
+        # Finding nothing within the budget says nothing about the scans past it.
+        undecided = Intractable(
+            reason=(
+                f"no scan found within depth_budget={depth_budget}, but deeper states"
+                " were not explored"
+            ),
+            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+            estimated_space=len(visited),
+            hints=[
+                f"  every state within {depth_budget} scans of power-on held the property;"
+                " raise depth_budget= to search further"
+            ],
+            journal=(
+                None
+                if journal is None
+                else replace(
+                    journal,
+                    notes=(
+                        *journal.notes,
+                        f"BFS exhausted depth_budget={depth_budget}; deeper states were"
+                        " not explored.",
+                    ),
+                )
             ),
         )
 

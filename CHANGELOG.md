@@ -1,9 +1,9 @@
 # Changelog
 
-<!-- Style guide: one sentence per entry. Describe the user-visible effect, not the
-     implementation. Group related fixes/features into a single entry when they share
-     a theme. Breaking changes and migration steps can be longer — users need the
-     specifics. Detail belongs in commit messages and PR descriptions, not here.
+<!-- Style guide: follow the Writing section of the root AGENTS.md. Describe the
+     user-visible effect, not the implementation. An entry that groups several changes
+     is a one-sentence headline with one sub-bullet per change. Detail belongs in
+     commit messages and PR descriptions, not here.
 
      Review and condense before release — entries accumulate during development and
      should be edited into shape before moving from Unreleased to a version heading. -->
@@ -38,7 +38,8 @@
 
   A branch, continued rung or box pin now sees the new value of a tag written earlier in the same rung (it saw the value from rung entry). `pyrung check` flags these rungs as `RUNG_ORDER_DEPENDENT`.
 
-  CLICK export splits a rung at a box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) into a rung for the box and continued rungs for the outputs below it, instead of refusing it.
+  The exporter no longer puts outputs under one shared contact when an output between them writes that contact's tag. CLICK import brings each wire of a CLICK rung back as a rung of its own, with `.continued()` on every wire after the first. It puts outputs under one `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. So `R,C5,...,reset(C5)` / `,C5,...,out(Y001)` imports as a rung and a continued rung (it became one `with rung(C5)` that read C5 before the reset).
+- A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung, because CLICK won't compile it otherwise (error C000A). Building a program raises `RuntimeError` when another output or branch shares the box's rung, as in `with Rung(X1): out(Y1); on_delay(T1, ...).reset(X2)`. Move what comes before the box into a rung above it, and what follows into `with Rung(...).continued():`.
 - The built-in `Timer` and `Counter` follow CLICK's bank defaults. A timer's `Acc` now resets on STOP->RUN (TD is non-retentive), and a counter's `Done` survives it (CT is retentive). To keep a timer's elapsed time across a restart, use `Timer.clone(..., retentive={"Acc": True})`. `clone(retentive=...)` overrides either field.
 - CLICK import no longer makes up timer and counter nicknames. A T/TD (or CT/CTD) address with no nickname keeps its address as its name (it became `T1_Done`/`TD1_Acc`). A tag named after its own address exports with no nickname, so importing and exporting a project leaves its nickname file unchanged.
 - Timer, counter and Out-coil presets (`on_delay`, `off_delay`, `count_up`, `count_down`, `debounce`, `flasher`, `timed`) must be an int or an `Int`, `Dint` or `Word` tag. Anything else raises `TypeError`. Copy a `Real` into an `Int` first.
@@ -132,10 +133,15 @@
 - The verifier treats timers as black boxes. `always()`, `never()` and `reachable_states()` let an enabled on-delay, a disabled off-delay, a drum step or an Out coil's phase finish on any scan. So a `Proven` holds for any scan time and any preset. Every `Counterexample` is replayed on a `PLC` before it is reported, except one that only needs the clocks, the scan counter or the RTC to change, which carries a caveat instead. What changes:
   - a property that holds only because one timer finishes before another, or before enough pulses arrive, now comes back `Intractable` with `kind="timing"`. Check that timing with a `run_for()` test
   - `settled=True` checks only states where no timer is still timing
-  - `depth_budget` is a plain search depth, and a `Proven` notes in a caveat when the search stopped at it
+  - `depth_budget` is a plain search depth, so a count that needs more scans than that is not reached
   - a tag compared with an accumulator as a threshold (an HMI setpoint, a tag nothing writes) needs `choices=` or `min=`/`max=`
 
   Regenerate lock files with `pyrung lock`.
+- `always()` and `never()` answer `Proven` only when the search covered every value and scan that matters:
+  - an input the search can't try every value of now gives `Intractable`, with the input in `result.tags`. That happens when the input is used for more than contacts and comparisons with a literal, such as an index, a comparison with a computed tag, or a `math()` the search can't work backwards through. Give the input `choices=` or an integer `min=`/`max=` of at most 1000 values, or test it with `run_for()`
+  - a search that `depth_budget` cuts short gives `Intractable` with no tags. Raise `depth_budget=`
+  - a tag the property reads stays in the search unless an `out()` writes it every scan
+  - a `Real` past 2**53 is tried on both sides of each literal it is compared with
 - A block pointer must be an `Int` or `Dint` tag. `DS[Ptr]` with a `Real`, `Word`, `Bool` or `Char` `Ptr` now raises `TypeError` when the program is built. So does an index expression that could be a float (`DS[W + 1]` with a `Word` `W`, `DS[R + 1]`, `DS[I / 2]`), and a `select()` bound that breaks the same rule. Copy a `Real` or `Word` pointer into an `Int` or `Dint` first, and use `//` for division in an index.
 - An expression outside `math()` (a rung condition, a `copy()` source, a `forloop()` count or an index) never stops the scan. An operation in it with a math error gives 0 and sets no fault flag, in `PLC`, `CompiledPLC` and generated CircuitPython. Inside `math()` the flags are still set.
 - A pointer or index outside its block no longer stops the scan with `IndexError`, everywhere:
@@ -335,7 +341,7 @@
 
   When the search can't cover an input, it now answers `Intractable` and names the input. Give the input `choices=` or an integer `min=`/`max=` (1000 values at most), and write a callable property as a condition.
 
-  Not covered yet: a second `math()` on the result of a source read by a `math()` or `copy()`, `unpack_to_bits`, a `pack_words`/`unpack_to_words` destination, an `Int` input compared with a fractional literal, and a calculated table pointer compared with a literal.
+  Not covered yet: a `pack_words`/`unpack_to_words` destination, and an `Int` input compared with a fractional literal.
 - A block slot that only a `select()` or a pointer reaches behaves like any other slot, in `PLC`, `CompiledPLC` and generated CircuitPython:
   - a tag on the slot and a pointer to it no longer split into two registers in `replay_to()`, a seek, `CompiledPLC` or generated CircuitPython (the pointer read the slot's power-on value)
   - it keeps a retentive value through `stop()`/`start()`, and any value through a battery `reboot()` (it read 0)
@@ -407,7 +413,10 @@
   - asks for **Simulate** in ClickNick before `pyrung live` (Stop in ClickNick's main window ends the session)
   - points PLC data loading at the Simulator's **PLC Data...**
   - no longer names a fixed debugger extension version
-- `pyrung_to_ladder(validate=True)` and `ladder_to_pyrung(validate=True)` now compare each output's condition, pins and snapshot with the generated code, and raise on a lost contact. A change of shape, such as continued rows coming back as branches, still passes.
+- `pyrung_to_ladder(validate=True)` and `ladder_to_pyrung(validate=True)` now compare the generated code with the CLICK rows, row by row:
+  - they check each contact of each output's condition, its pins and its wire, and raise when a contact is lost or moved
+  - a lone `branch()` still passes as the rung's own contacts, because it draws the same (`with rung(A): with branch(B): out(Y)` reads back as `with rung(A, B):`)
+  - a pin that branches off the box's input wire still passes. It keeps the shared contacts in its condition and exports again from the rail
 - `math()` with `sqrt` of a negative, `log`/`log10` of 0 or a negative, or `asin`/`acos` outside -1..1 no longer raises out of the scan. The function gives 0 and sets `fault.math_operation_error` (SC46) for the rest of the scan, and the PLC stays in RUN, in `PLC`, `CompiledPLC` and generated CircuitPython.
 - `rise()` and `fall()` on the timed clocks (`sys.clock_10ms` .. `sys.clock_1h`) count one edge per toggle in realtime mode. With 1 ms scans, `clock_100ms` counted about 80 rises a second.
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit (scans under 1 ms at `"Tms"`). Its accumulator stayed at 0 for good.

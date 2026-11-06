@@ -116,7 +116,7 @@ def prove_boxes_by_pointer(slot: Any) -> None:
         (lambda: copy(dd[minus], sink), SC44),  # a pointer of -1: SC44
     ]
     boxes: list[Callable[[], object]] = [
-        lambda: search(dd.select(3, 6) == 99, result=dd[7], found=c[101]),
+        lambda: search(dd.select(3, 6) == 99, result=ds[3914], found=c[101]),
         lambda: shift(c.select(102, 109)).clock(c[110]).reset(slot.Cmd == 0),
         lambda: event_drum(
             outputs=[c[111], c[112]],
@@ -148,8 +148,9 @@ def prove_boxes_by_pointer(slot: Any) -> None:
 
 def init_boxes_by_pointer(slot: Any) -> None:
     reset(c.select(101, 115))
-    fill(0, dd.select(1, 7))
+    fill(0, dd.select(1, 6))
     fill(0, ds.select(3905, 3908))
+    copy(0, ds[3914])
 
 
 def prove_ton_ctu_by_pointer(slot: Any) -> None:

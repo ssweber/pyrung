@@ -355,7 +355,7 @@ class ShiftInstruction(Instruction):
 
         ctx.set_memory(self.memory_key("_shift_prev_clock"), clock_curr)
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return True
 
     def advance_profile(self) -> AdvanceProfile | None:

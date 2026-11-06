@@ -132,6 +132,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "T": range(181, 182),
         "CT": range(147, 148),
         "DD": range(689, 718),
+        "DS": range(4018, 4019),
         "DF": range(430, 434),
         "DH": range(417, 422),
         "TXT": range(501, 503),
@@ -263,7 +264,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(810, 850),
         "DF": range(434, 450),
         "DH": range(422, 470),
-        "DS": (range(4312, 4316), range(4322, 4323)),
+        "DS": range(4312, 4316),
     },
     "real_bits": {
         "DD": range(850, 860),
@@ -363,21 +364,19 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "real_sum": {"DF": (range(70, 101), range(142, 151))},
     "copy_more": {
-        "C": range(1737, 1738),
         "DD": range(59, 61),
         "DF": range(192, 200),
         "DH": range(67, 70),
         "TXT": (range(570, 571), range(571, 751)),
     },
     "block_more": {
-        "C": range(1738, 1741),
         "DS": range(3915, 3920),
         "DF": range(200, 201),
         "TXT": range(751, 754),
     },
     "coil_range": {
         "C": (range(1623, 1631), range(1633, 1634)),
-        "DD": range(77, 78),
+        "DS": range(4322, 4323),
         "DH": range(72, 77),
     },
     "compare": {
@@ -438,7 +437,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "T": range(101, 103),
         "CT": range(1, 3),
         "DD": range(1, 9),
-        "DS": range(3905, 3911),
+        "DS": (range(3905, 3911), range(3914, 3915)),
     },
     "flag_halves": {
         "C": range(141, 174),
@@ -452,8 +451,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "search_more": {
         "C": range(201, 205),
         "DH": range(11, 15),
-        "DD": range(41, 43),
-        "DS": range(3916, 3918),
+        "DS": (range(3916, 3918), range(3931, 3933)),
     },
     "bad_jump": {
         "C": range(301, 322),

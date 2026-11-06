@@ -81,8 +81,13 @@ def make_compound(
     return kind(flat)
 
 
-def trees_equal(a: SPNode | None, b: SPNode | None) -> bool:
-    """Structural equality of two SP trees (labels only, ignoring row/col)."""
+def trees_equal(a: SPNode | None, b: SPNode | None, *, cells: bool = False) -> bool:
+    """Structural equality of two SP trees: by labels, or with *cells* by grid cell.
+
+    By label, two cells with the same label are equal (row/col ignored).  With
+    *cells*, a leaf equals only the same cell (label, row and col): one
+    contact the drawing tees off, not two that read the same tag.
+    """
     if a is None and b is None:
         return True
     if a is None or b is None:
@@ -90,11 +95,15 @@ def trees_equal(a: SPNode | None, b: SPNode | None) -> bool:
     if type(a) is not type(b):
         return False
     if isinstance(a, Leaf) and isinstance(b, Leaf):
+        if cells and (a.row, a.col) != (b.row, b.col):
+            return False
         return a.label == b.label
     if isinstance(a, (Series, Parallel)) and isinstance(b, (Series, Parallel)):
         if len(a.children) != len(b.children):
             return False
-        return all(trees_equal(ac, bc) for ac, bc in zip(a.children, b.children, strict=True))
+        return all(
+            trees_equal(ac, bc, cells=cells) for ac, bc in zip(a.children, b.children, strict=True)
+        )
     return False
 
 
@@ -126,12 +135,13 @@ class FactorResult(NamedTuple):
     """Per-output remainders, parallel to the input list."""
 
 
-def factor_outputs(trees: list[SPNode | None]) -> FactorResult:
+def factor_outputs(trees: list[SPNode | None], *, cells: bool = False) -> FactorResult:
     """One-level shared-prefix factoring of SP trees.
 
     Normalizes each tree to series children, finds the longest common
-    prefix (by structural equality of labels), and returns the shared
-    prefix and per-tree remainders.
+    prefix (by structural equality of labels, or with *cells* of grid cells,
+    see :func:`trees_equal`), and returns the shared prefix and per-tree
+    remainders.
     """
     if not trees:
         return FactorResult(shared=[], branches=[])
@@ -143,14 +153,14 @@ def factor_outputs(trees: list[SPNode | None]) -> FactorResult:
         return FactorResult(shared=[], branches=child_lists)
 
     # All-identical fast path.
-    if len(trees) > 1 and all(trees_equal(trees[0], t) for t in trees[1:]):
+    if len(trees) > 1 and all(trees_equal(trees[0], t, cells=cells) for t in trees[1:]):
         return FactorResult(shared=child_lists[0], branches=[[] for _ in trees])
 
     min_len = min(len(cl) for cl in child_lists)
     shared_count = 0
     for i in range(min_len):
         ref = child_lists[0][i]
-        if all(trees_equal(ref, cl[i]) for cl in child_lists[1:]):
+        if all(trees_equal(ref, cl[i], cells=cells) for cl in child_lists[1:]):
             shared_count += 1
         else:
             break

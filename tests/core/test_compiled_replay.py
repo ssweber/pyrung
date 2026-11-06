@@ -711,6 +711,7 @@ def test_compiled_plc_matches_plc_for_patch_force_and_edge_memory() -> None:
     with Program(strict=False) as program:
         with Rung(enable):
             latch(reset_tag)
+        with Rung(enable).continued():
             on_delay(Timer[1], preset=50).reset(reset_tag)
         with Rung(rise(enable)):
             out(output)
@@ -784,13 +785,14 @@ def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:
 
 
 def test_intra_rung_write_visible_to_timer_reset_in_compiled_kernel() -> None:
-    """The compiled kernel reads a box's pins at box entry, after the rows above."""
+    """The compiled kernel reads a box's pins at box entry, after the wire above."""
     Enable = Bool("Enable")
     ResetBtn = Bool("ResetBtn")
 
     with Program(strict=False) as program:
         with Rung(Enable):
             latch(ResetBtn)
+        with Rung(Enable).continued():
             on_delay(Timer[1], preset=100).reset(ResetBtn)
 
     plc = PLC(program, dt=0.010)

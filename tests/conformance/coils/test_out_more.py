@@ -1,7 +1,6 @@
 """The v4 Out family, past what ``out`` reads.
 
-Every expectation is what a CLICK read (hardware round of 2026-11-05), save one field that also
-takes the scan pyrung read then (``zero_and_below`` Result2).  Clock windows hold for any scan up to 50 ms, as in
+Every expectation is what a CLICK read (hardware round of 2026-11-05).  Clock windows hold for any scan up to 50 ms, as in
 ``out``.
 
 ``out_more``:
@@ -27,8 +26,7 @@ takes the scan pyrung read then (``zero_and_below`` Result2).  Clock windows hol
   holding -5: scans on (ErrorCode), 1 as a preset of 0, 3 (the rung's) where -5 reads as unsigned,
   65531 ms.  A CLICK reads 3, 7, 0, 0, 0: no pulse from a preset of 0 or below, and -5 is signed.
   Its debounce turns off a scan after the rung falls, as pyrung's has since 2026-11-06
-  (``deb_zero/off_side_lag``: the off side always takes a scan more).  Result2 still takes 6 as
-  well, so that the case keeps its confirmed hash until its part is pasted again.
+  (``deb_zero/off_side_lag``: the off side always takes a scan more).
 - ``preset_mid_phase``: a preset in a DS moved mid-phase, read live or at the phase's start.  A
   flasher's on side from 1000 down to 100 ms at 300 ms: at 420-600 ms the coil is off (Result1 =
   0) where it reads live, on (1) where it took the preset at the start.  A debounce's on side
@@ -227,7 +225,7 @@ group = Group(
         ),
         case(
             "Out coils with a preset of 0 and below: a debounce follows its rung (first on, Result1 "
-            "= 3; first off past it, Result2 = 7, 6 by pyrung's count); a flasher (Result3 = 0), a "
+            "= 3; first off past it, Result2 = 7); a flasher (Result3 = 0), a "
             "timed coil (Result4 = 0) and one from a DS of -5 (ErrorCode = 0) give no pulse",
             ladder=prove_zero_and_below,
             init=init_zero_and_below,
@@ -235,7 +233,7 @@ group = Group(
             keep=[td[232], t[233], td[233], t[234], td[234], t[235], td[235], td[236], td[237]],
             expect={
                 "Result1": 3,
-                "Result2": range(6, 8),
+                "Result2": 7,
                 "Result3": 0,
                 "Result4": 0,
                 "ErrorCode": 0,

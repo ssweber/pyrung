@@ -346,10 +346,6 @@ _LEFT_OUT_OF_THE_SEARCH = pytest.mark.parametrize(
     [_unread_output, _unread_immediate_output, _output_through_a_pointer],
     ids=["unread", "unread immediate", "through a pointer"],
 )
-_FALSE_PROVEN = pytest.mark.xfail(
-    strict=True,
-    reason="the search leaves this function's write out, so always() is a false Proven",
-)
 
 
 @_LEFT_OUT_OF_THE_SEARCH
@@ -361,15 +357,7 @@ def test_a_function_left_out_of_the_search_writes_when_stepped(row) -> None:
     assert plc.current_state.tags[name] == written
 
 
-@pytest.mark.parametrize(
-    "row",
-    [
-        pytest.param(_unread_output, marks=_FALSE_PROVEN),
-        pytest.param(_unread_immediate_output, marks=_FALSE_PROVEN),
-        _output_through_a_pointer,
-    ],
-    ids=["unread", "unread immediate", "through a pointer"],
-)
+@_LEFT_OUT_OF_THE_SEARCH
 def test_a_function_left_out_of_the_search_is_not_proven(row) -> None:
     program, prop, *_ = row()
     assert not isinstance(always(program, prop), Proven)

@@ -325,12 +325,6 @@ def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit, o
         assert _witness_fires(program, verdict, hit)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a declared REAL feeding a calc no edge covers gets the whole numbers of its range "
-    "(classify.py, the _declared_domain fallback after _unsupported_reverse_sources), "
-    "so 0.5 is never tried",
-)
 @pytest.mark.parametrize(
     ("dest_type", "build", "compare"),
     [
@@ -341,7 +335,7 @@ def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit, o
 def test_a_declared_real_into_a_calc_with_no_way_back_is_not_proven(
     dest_type, build, compare
 ) -> None:
-    """Both fire at 0.5, inside the declared range, and the verifier says Proven."""
+    """Both fire at 0.5, inside the declared range: the whole numbers of it are not enough."""
     source = Real("S", external=True, min=0.0, max=10.0)
     dest = dest_type("D")
     hit = Bool("Hit")
@@ -600,9 +594,9 @@ def _a_pointer_too() -> Program:
     )
 
 
-# False Provens for the prover sweep: a carried source's other way to the comparison goes
-# through something the carried set does not look at.
-STILL_FALSE_PROVEN = pytest.mark.parametrize(
+# A carried source's other way to the comparison goes through something the carried set
+# does not look at: the source reaches more than its own comparisons with a literal.
+ANOTHER_WAY_THERE = pytest.mark.parametrize(
     ("build", "value"),
     [
         pytest.param(_a_square_squared, 7, id="a-calc-of-a-calc"),
@@ -612,17 +606,12 @@ STILL_FALSE_PROVEN = pytest.mark.parametrize(
 )
 
 
-@STILL_FALSE_PROVEN
-def test_the_scans_the_open_false_provens_miss_do_fire(build, value) -> None:
+@ANOTHER_WAY_THERE
+def test_the_scans_another_way_there_reaches_do_fire(build, value) -> None:
     assert _fires_at(build(), "I", value, _HIT)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="the carried set misses this source's other way to the comparison: a false Proven",
-)
-@STILL_FALSE_PROVEN
+@ANOTHER_WAY_THERE
 def test_a_carried_source_with_another_way_to_the_comparison_is_not_proven(build, value) -> None:
     verdict = never(build(), _HIT, max_states=3000, depth_budget=6)
     assert not isinstance(verdict, Proven)
@@ -1074,3 +1063,50 @@ def test_a_fractional_literal_truncates_before_it_wraps(write, bound, value) -> 
             out(hit)
     assert _fires_at(program, "S", value, hit)
     assert not isinstance(never(program, hit), Proven)
+
+
+def _a_partner_written_once(partner: int, op: str) -> tuple[Program, Bool, Bool, Int, Int]:
+    # S is carried back through D == 7, and compared with P, which holds only *partner*.
+    source = Int("S", external=True)
+    held = Int("P")
+    dest = Int("D")
+    seen = Bool("A")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(partner, held)
+        with Rung():
+            copy(source, dest)
+        with Rung(dest == 7):
+            latch(seen)
+        with Rung(OPS[op](source, held), ~seen):
+            latch(hit)
+    return program, hit, seen, source, held
+
+
+@pytest.mark.parametrize(
+    ("partner", "op", "value"),
+    [pytest.param(4000, ">", 4001, id="above 4000"), pytest.param(-4000, "<", -4001, id="below")],
+)
+def test_a_carried_back_input_gets_the_values_past_its_partner(partner, op, value) -> None:
+    program, hit, _seen, _source, _held = _a_partner_written_once(partner, op)
+    assert _fires_at(program, "S", value, hit)
+    verdict = never(program, hit)
+    assert not isinstance(verdict, Proven), verdict
+    if isinstance(verdict, Counterexample):
+        assert _witness_fires(program, verdict, hit)
+
+
+def test_a_carried_back_input_past_its_partner_in_the_property() -> None:
+    program, hit, seen, source, held = _a_partner_written_once(4000, ">")
+    verdict = never(program, source > held, ~seen)
+    assert not isinstance(verdict, Proven), verdict
+    if isinstance(verdict, Counterexample):
+        plc = PLC(program, dt=0.01)
+        for step in verdict.trace:
+            if step.inputs:
+                plc.patch(dict(step.inputs))
+            for _ in range(max(step.scans, 1)):
+                plc.step()
+        tags = plc.current_state.tags
+        assert tags["S"] > tags["P"] and not tags["A"]

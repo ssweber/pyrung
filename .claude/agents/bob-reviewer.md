@@ -32,7 +32,9 @@ the builder's handoff: judge the code, not the story.
   analysis layers for anything that still models the old behaviour. Probe tricky cases with
   small scripts in a temp dir.
 - Tests: weakened assertions, deleted or reordered cases that hide a failure, pending/xfail
-  markers removed without the fix, expectation edits that contradict ground truth.
+  markers removed without the fix, expectation edits that contradict ground truth, and
+  expected values copied from the code's current output rather than derived from the spec or
+  ground truth (a test that can only ever agree with the code).
 - Reverts of landed work: for each changed hunk, check `git log <base>` for a recent commit
   that wrote the old side (a stale copy of a file overwriting the base). CHANGELOG entries
   that vanish are the usual tell.
@@ -44,12 +46,17 @@ the builder's handoff: judge the code, not the story.
   each new noun. A sentence that breaks a rule is a NON-BLOCKING finding with the rewrite.
 - Do not trust stated rationales in comments or commit messages; a rationale never downgrades
   a finding.
+- Class sweep: when a finding is one instance of a class (an unhandled instruction kind, a
+  path that skips the same check, a dialect that diverges the same way), enumerate the class
+  from its source of truth now and list every member, so one fix round covers it.
 
 Targeted tests under a hard timeout are fine to confirm a finding. No heavy suites and no
 conformance runs against the local soft PLC (the queue uses it); in-process checks are fine.
 Only a few test runs and scripts go at once and the rest wait, and the wait counts against your
 tool's own timeout: use `run_in_background`, or a tool timeout well above the run's limit. Exit
-125 means it never got a turn and nothing ran: run it again.
+125 means it never got a turn and nothing ran: run it again. Run tests on single files or
+test ids, not whole directories (the builder and the fast gate run those). Before you hand back,
+wait for every run you started, or stop it: no test run may outlive your report.
 
 ## Output
 

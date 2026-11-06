@@ -54,7 +54,7 @@ Holding `BinASensor` True does nothing more after the first scan; the next count
 
     This mental model extends to every box instruction in real PLCs — timers, PID loops, message blocks, motion instructions. The `.reset()` chain is pyrung's way of drawing those extra wires.
 
-If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both are built-in types with `.Done` and `.Acc` fields, both chain `.reset()`, and `.reset()` is terminal for the [same reason](timers.md#retentive-on-delay).
+If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both are built-in types with `.Done` and `.Acc` fields, both chain `.reset()`, and `.reset()` ends the rung for the [same reason](timers.md#retentive-on-delay).
 
 Counters can also count in both directions. A `count_up` with a `.down()` chain becomes a bidirectional counter (CTUD) — boxes entering minus boxes leaving gives boxes currently in zone:
 

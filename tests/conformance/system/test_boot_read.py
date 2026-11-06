@@ -424,10 +424,10 @@ def prove_date_and_time_apply(slot):
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(dd[74], rtc.new_year4)
     with Rung(slot.Cmd != 0, slot.Scratch == 5):
-        math((dd[75] + 1) % 24, rtc.new_hour)
+        math((dd[75] + 1) % 24, dd[76])
+        copy(dd[76], rtc.new_hour)
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
-        math((dd[75] + 1) % 24, dd[76])
     with Rung(slot.Cmd != 0, slot.Scratch == 7, rtc.hour == dd[76]):
         copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch == 7):

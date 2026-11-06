@@ -67,6 +67,8 @@ elif isinstance(result, Intractable):
 `Intractable` means the verifier could not decide. `result.kind` says why:
 
 - `"search"` — the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
+  - It also comes back when the search found no violation but couldn't try every value of an input. That happens when the input is used for more than contacts and comparisons with a literal, such as an index, a comparison with a computed tag, or a `math()` the search can't work backwards through. A store of the input into a tag used that way counts too. `result.tags` names the input. Give it `choices` or an integer `min`/`max` of at most 1000 values, or test it with `run_for()`.
+  - It also comes back, with no tags, when `depth_budget` cut the search short. Raise `depth_budget=`.
 - `"timing"` — unconfirmed. The search found a violation, but replaying its trace on a `PLC` (at the verifier's fixed 10 ms `dt`) didn't reach it. The violation needs timing a real timer can't give, such as a 30 ms timer finishing before a 1000 ms one started with it. `result.tags` names the timers. Whether it can happen depends on timer timing, which the verifier does not model (see [How it works](#how-it-works)). Check it with a `run_for()` test.
 - `"timers"` — so many timers run at once that the ways they can finish on one scan pass the verifier's cap. Narrowing `choices`/`min`/`max` does not help; prove a property whose scope reaches fewer of them, or test the timing with `run_for()`.
 - `"property"` — the property's own `rise()`/`fall()`, which the search counts as possibly true on every scan, gave a counterexample that didn't replay on a `PLC`. Latch or one-shot the edge in the program and name that coil in the property instead.
@@ -105,8 +107,6 @@ run_function(my_func, outs={"r": result})
 ```
 
 The search calls the function itself to learn what it writes, so that holds only for a function whose answer follows from its inputs. A closure, a global, a helper, a mutable default, an import, a callable object, or a list, dict or object in `ins=` gets an `Intractable` of kind `"function"`, from `reachable_states()` and `pyrung lock` too.
-
-A function past that isn't always explored. The output of a `run_enabled_function` that no rung reads, and an output through a pointer (`blk[Idx]`), can stay out of the search, so a `Proven` on one of those says nothing about what the function writes. Test it with `run_for()`.
 
 Timers are black boxes. A timer's Done may change on any scan its instruction allows:
 
@@ -418,7 +418,7 @@ pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
-`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `math` count advances one step per scan, so a count past the budget is not reached. A `Proven` cut short by the budget says so in a caveat.
+`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `math` count advances one step per scan, so a count past the budget is not reached. A search the budget cuts short answers `Intractable`.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

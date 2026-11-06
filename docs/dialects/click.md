@@ -486,32 +486,20 @@ A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK 
 
 ### Boxes with pins
 
-A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) needs a CLICK rung of its own, so the exporter splits a rung that shares the box's wire with other outputs. This:
+A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung. CLICK takes all of a box's inputs (its pins) from one branch. If the box's input wire also feeds another output, CLICK draws the rung but won't compile it (error C000A). pyrung refuses that rung when the program is built.
+
+Put the outputs that come before the box in a rung above it. Put the outputs that follow it in a `.continued()` rung, which is another wire of the same CLICK rung:
 
 ```python
 with Rung(Start):
-    latch(Seen)
-    with branch(Auto):
-        count_up(Parts, preset=10).reset(Reset)   # the box ends its branch
-    out(Lamp)                                     # back on the trunk
+    latch(Running)
+with Rung(Start).continued():
+    count_up(Parts, preset=10).reset(Clear)
 ```
 
-exports with `Start` repeated in front of each part:
+A box with no pins, such as a TON, can share the wire.
 
-- `latch(Seen)` on one CLICK rung
-- the counter on the next
-- `out(Lamp)` on a wire of its own below the counter
-
-Because the contacts are repeated, the export refuses a rung where a repeated contact reads a tag an output above it writes:
-
-```python
-with Rung(Seen):
-    reset(Seen)                 # the repeated Seen contact would read False
-    with branch(Auto):
-        count_up(Parts, preset=10).reset(Reset)
-```
-
-Move the output that writes the tag to a rung of its own before the box. A box with no pins, such as a TON, can share the wire.
+On import, each wire of a CLICK rung comes back as a rung of its own, with `.continued()` on every wire after the first. Outputs share a `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. So the generated code reads the way the CLICK rung does. Two contacts with the same label stay two contacts.
 
 ## Loading PLC state
 

@@ -94,7 +94,7 @@ from pyrung.core import (
     unpack_to_bits,
     unpack_to_words,
 )
-from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, df, dh, txt
+from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, df, dh, ds, txt
 from tests.conformance.scans import count_scans, done, scans_for
 
 WINDOW = 20
@@ -130,7 +130,7 @@ def _raise(kind, *, big, tmp, zero=dd[689], pointer=None):
         math(100 / zero, tmp)
 
 
-def _init(*, bits=None, dds=None, dfs=None, dhs=None, txts=None):
+def _init(*, bits=None, dds=None, dfs=None, dhs=None, txts=None, dss=None):
     def init(slot):
         if bits:
             reset(c.select(*bits))
@@ -142,6 +142,8 @@ def _init(*, bits=None, dds=None, dfs=None, dhs=None, txts=None):
             fill(0, dh.select(*dhs))
         if txts:
             fill(NUL, txt.select(*txts))
+        if dss:
+            fill(0, ds.select(*dss))
 
     return init
 
@@ -216,7 +218,7 @@ def prove_boxes_leave_flags(slot):
     big, tmp, zero, pointer = df[432], dd[707], dd[708], slot.Result4
     _stage(slot, lambda: copy(1.0e10, big), lambda: copy(-1, pointer))
     boxes: list[Callable[[], object]] = [
-        lambda: search(dd.select(709, 712) == 99, result=dd[713], found=c[1363]),
+        lambda: search(dd.select(709, 712) == 99, result=ds[4018], found=c[1363]),
         lambda: shift(c.select(1364, 1371)).clock(c[1372]).reset(slot.Cmd == 0),
         lambda: event_drum(
             outputs=[c[1373], c[1374]],
@@ -308,7 +310,7 @@ group = Group(
             "found them (Result1, Result3 = 31); a Copy of DF 1.0E+10 into a DD raises no "
             "SC43, so none is on after a box (Result2 = 0)",
             ladder=prove_boxes_leave_flags,
-            init=_init(bits=(1363, 1377), dds=(707, 713), dfs=(432, 432)),
+            init=_init(bits=(1363, 1377), dds=(707, 712), dfs=(432, 432), dss=(4018, 4018)),
             expect={"Result1": 31, "Result2": 0, "Result3": 31},
             scans=SCANS,
             probe="do search, shift, drum, timer and counter boxes touch a fault flag",
