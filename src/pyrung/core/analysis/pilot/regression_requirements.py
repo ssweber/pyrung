@@ -948,6 +948,7 @@ def _delayed_requirement_from_regression(
         )
         derivation = _walk_program_guard_to_inputs(
             derivation,
+            projection,
             source_checkpoint,
             ctx,
             ((obligation.tag, obligation.value),),

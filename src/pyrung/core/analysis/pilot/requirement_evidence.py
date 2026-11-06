@@ -54,6 +54,7 @@ from pyrung.core.analysis.pilot.requirement_derivation import (
 from pyrung.core.analysis.pilot.requirement_sources import (
     _guard_atoms,
     _residualize_guard_requirement,
+    derive_occurrence_source_requirement,
 )
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
@@ -194,6 +195,7 @@ def _bind_guard_derivation_authority(
 
 def _walk_program_guard_to_inputs(
     derivation: Any,
+    projection: Any,
     checkpoint: _CausalCheckpoint,
     ctx: _PilotContext,
     preserved_values: tuple[tuple[str, Any], ...],
@@ -202,19 +204,15 @@ def _walk_program_guard_to_inputs(
 
     ``Rung(alarm): reset(run)`` displaced Run, so the bound requirement is ``Alarm != True``.
     When every atom is program-written there is nothing in it to set: Alarm already holds at
-    the source and is the program's to write.  The derivation's own same-scan source walk
-    follows it to the write that latched Alarm earlier in that scan (``Rung(run, ~door)``).
-    With *preserved_values* kept (Run stays True), that leaves ``Door == True``, an input the
+    the source and is the program's to write.  The same-scan source walk follows it to the
+    write that latched Alarm earlier in that scan (``Rung(run, ~door)``).  Walked with
+    *preserved_values* protected (Run stays True), that leaves ``Door == True``, an input the
     retry can hold.  Anything else keeps the bound requirement as it is.
     """
 
     requirement = derivation.requirement
-    walk = derivation.source_walk
     if (
         requirement is None
-        or walk is None
-        or walk.status is not RequirementSourceWalkStatus.COMPLETE
-        or not walk.links
         or not isinstance(requirement.condition, GuardRequirementAtom | GuardRequirementExpr)
         or any(
             atom.operand_authority is not OperandAuthority.PROGRAM_WRITTEN
@@ -222,21 +220,41 @@ def _walk_program_guard_to_inputs(
         )
     ):
         return derivation
+    walk = derive_occurrence_source_requirement(
+        requirement.condition,
+        projection,
+        preserved_values=preserved_values,
+    )
+    if walk.status is not RequirementSourceWalkStatus.COMPLETE or not walk.links:
+        return derivation
     residual = _residualize_guard_requirement(walk.condition, preserved_values)
     if residual is None:
         return derivation
-    walked = bind_guard_condition_operand_authorities(
-        residual,
+    authorities = dict(
         steerable=ctx.steerable,
         program_written=frozenset(ctx.pdg.writers_of),
         configured=_checkpoint_configured_inputs(checkpoint),
     )
+    walked = bind_guard_condition_operand_authorities(residual, **authorities)
     if not any(
         all(atom.operand_authority is OperandAuthority.ADJUSTABLE for atom in alternative)
         for alternative in iter_guard_alternatives(walked)
     ):
         return derivation
-    return replace(derivation, requirement=replace(requirement, condition=walked))
+    # The failed receipt carries the proof surface of the atoms it now demands.
+    support = list(derivation.explanation.supporting_occurrences)
+    for atom in _guard_atoms(walked):
+        for occurrence in (*atom.supporting_occurrences, atom.deadline):
+            if occurrence not in support:
+                support.append(occurrence)
+    return replace(
+        derivation,
+        requirement=bind_guard_operand_authorities(
+            replace(requirement, condition=residual), **authorities
+        ),
+        explanation=replace(derivation.explanation, supporting_occurrences=tuple(support)),
+        source_walk=walk,
+    )
 
 
 def _retain_active_requirement(

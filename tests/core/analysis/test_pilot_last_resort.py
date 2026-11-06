@@ -253,7 +253,38 @@ def test_the_input_that_keeps_a_reset_off_is_held_without_the_last_resort(shape:
 
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.last_resort is None
-    assert "Door" in str(plan)
+    assert "latch(Door)" in str(plan) or "Set Door=True" in str(plan)
+    replayed = plan.replay().state.tags
+    assert replayed["Done"] is True
+    assert replayed["Alarm"] is False
+
+
+def test_the_press_that_would_trip_the_alarm_is_let_go_without_the_last_resort() -> None:
+    """Run with Start still held latches Alarm, which resets Run: Start is pressed, then let go.
+
+    On dev before this, how() stopped here: the reset's guard, Alarm, gave nothing to set.
+    """
+    start = Bool("Start", external=True)
+    run, alarm, done = Bool("Run"), Bool("Alarm"), Bool("Done")
+    timer = Timer.clone("Tr")
+    with Program(strict=False) as logic:
+        with Rung(run, start):
+            latch(alarm)
+        with Rung(start, ~alarm):
+            latch(run)
+        with Rung(alarm):
+            reset(run)
+        with Rung(run):
+            on_delay(timer, 500)
+        with Rung(timer.Done):
+            latch(done)
+    plc = PLC(logic, dt=0.01)
+    plc.step()
+
+    plan = plc.how(done, max_scans=400)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
     replayed = plan.replay().state.tags
     assert replayed["Done"] is True
     assert replayed["Alarm"] is False
