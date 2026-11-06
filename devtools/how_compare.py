@@ -40,6 +40,8 @@ What is reported:
       MISSED        stepping reaches by itself and how() said STOPPED or raised (no avoid)
     A flag kind NEW to the tree on a row holds the train.  A kind already on the same base row
     does not hold; it is listed every run under "already on base", with both sides' text.
+  * how many REACHED rows on each side leaned on the last resort (one move run with no reason
+    pointing to it), and every row where that move changed; reported, never held.
 
 Exit 0 when every selected case has a row on both sides, every difference is explained, and the
 tree has no new flag kind; 1 otherwise (including any ABORT or SETUP_ERROR row not named by a
@@ -459,6 +461,19 @@ def main() -> int:
     gone = [c for c in names_ok if kinds[c][0] - kinds[c][1]]
     if gone:
         print(f"FLAGS ON BASE ONLY (gone on the tree): {gone}")
+    # the last resort: a REACHED that leaned on one move no reason pointed to.  Reported, never
+    # held: a tree whose trace leads further shows here as fewer, one that leads less as more.
+    print()
+    lean_b = [c for c in reach_b if b[c].get("last_resort")]
+    lean_n = [c for c in reach_n if n[c].get("last_resort")]
+    print(
+        f"REACHED through the last resort: base {len(lean_b)} of {len(reach_b)}, "
+        f"tree {len(lean_n)} of {len(reach_n)} (reported, does not hold)"
+    )
+    for c in names_ok:
+        vb, vn = b[c].get("last_resort"), n[c].get("last_resort")
+        if vb != vn:
+            print(f"    {c}: {vb or '-'} -> {vn or '-'}")
     budget = [c for c in names_ok if is_budget(b[c]) or is_budget(n[c])]
     if budget:
         print(f"stepping stopped by budget (a MISSED here could not be seen): {len(budget)} rows")
