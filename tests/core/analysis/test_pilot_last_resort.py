@@ -11,10 +11,13 @@ from pyrung import (
     Rung,
     Timer,
     calc,
+    call,
+    forloop,
     latch,
     on_delay,
     out,
     reset,
+    subroutine,
 )
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
@@ -153,6 +156,52 @@ def test_a_coil_above_the_timer_it_reads_is_waited_for_without_the_last_resort()
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.last_resort is None
     assert plan.replay().state.tags["Hit"] is True
+
+
+def _call_in_a_loop() -> tuple[PLC, Bool, Bool]:
+    """A For of Dc (0 at the start) calls the subroutine that latches Y."""
+    count = Int("Dc", external=True, min=0, max=5)
+    btn = Bool("Btn", external=True)
+    y, alarm = Bool("Y"), Bool("Alarm")
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(count):
+                call("work")
+        with subroutine("work"):
+            with Rung(btn):
+                latch(y)
+            with Rung(~btn):
+                out(alarm)
+    plc = PLC(logic, dt=0.01)
+    plc.step()
+    return plc, y, alarm
+
+
+def test_a_call_in_a_loop_is_traced_to_the_loop_count() -> None:
+    """The call runs only when Dc != 0, and the trace asks for it.
+
+    This was a last-resort rescue: the call gate read only the For rung's own
+    contacts, which are none.
+    """
+    plc, y, _alarm = _call_in_a_loop()
+
+    plan = plc.how(y, max_scans=500)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
+    assert "Satisfies: Dc != 0" in str(plan)
+    assert plan.replay().state.tags["Y"] is True
+
+
+def test_a_call_in_a_loop_is_reached_without_what_it_avoids() -> None:
+    """Dc alone would run the subroutine with Btn off and set Alarm: both go in one step."""
+    plc, y, alarm = _call_in_a_loop()
+
+    plan = plc.how(y, avoid=alarm, max_scans=500)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
+    assert plan.replay().state.tags["Alarm"] is False
 
 
 def test_a_plan_the_pilot_had_a_reason_for_has_no_last_resort() -> None:
