@@ -335,8 +335,9 @@ def _all_write_targets(
         targets.append(instr.completion_flag.name)
     elif isinstance(instr, (FunctionCallInstruction, EnabledFunctionCallInstruction)):
         for target in instr._outs.values():
-            if isinstance(target, Tag):
-                targets.append(target.name)
+            targets.extend(
+                _resolve_tag_names(target) or _expand_indirect_tag_names(target, reach)
+            )
     elif isinstance(instr, (BlockCopyInstruction, FillInstruction)):
         targets = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest, reach)
     elif isinstance(
