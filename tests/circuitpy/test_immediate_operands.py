@@ -27,9 +27,9 @@ from pyrung.core import (
     TagType,
     Word,
     blockcopy,
-    calc,
     copy,
     fill,
+    math,
     pack_bits,
     pack_text,
     pack_words,
@@ -288,7 +288,7 @@ def _calc_of_an_immediate(wrap: Callable[[Any], Any] = immediate):
     dest = Dint("Dest")
     with Program(strict=False) as prog:
         with Rung():
-            calc(wrap(src), dest)
+            math(wrap(src), dest)
     return hw, prog, (), (dest,)
 
 
