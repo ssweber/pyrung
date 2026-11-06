@@ -988,23 +988,31 @@ def _bfs_explore_gen(
         return
 
     caveats = context.caveats
-    if depth_truncated:
-        caveats = (
-            *caveats,
-            (
-                f"BFS exhausted depth_budget={depth_budget}; deeper states were not explored. "
-                f"The property held for all {len(visited)} explored states but may fail "
-                f"beyond depth_budget={depth_budget}."
-            ),
-        )
-
     journal = context.journal
-    if journal is not None and depth_truncated:
-        journal = replace(
-            journal,
-            notes=(
-                *journal.notes,
-                f"BFS exhausted depth_budget={depth_budget}; deeper states were not explored.",
+    if depth_truncated and undecided is None:
+        # Finding nothing within the budget says nothing about the scans past it.
+        undecided = Intractable(
+            reason=(
+                f"no scan found within depth_budget={depth_budget}, but deeper states"
+                " were not explored"
+            ),
+            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+            estimated_space=len(visited),
+            hints=[
+                f"  every state within {depth_budget} scans of power-on held the property;"
+                " raise depth_budget= to search further"
+            ],
+            journal=(
+                None
+                if journal is None
+                else replace(
+                    journal,
+                    notes=(
+                        *journal.notes,
+                        f"BFS exhausted depth_budget={depth_budget}; deeper states were"
+                        " not explored.",
+                    ),
+                )
             ),
         )
 
