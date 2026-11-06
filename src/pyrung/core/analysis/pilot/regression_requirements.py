@@ -37,7 +37,10 @@ from pyrung.core.analysis.pilot.requirement_derivation import (
     derive_advance_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
 )
-from pyrung.core.analysis.pilot.requirement_evidence import _bind_guard_derivation_authority
+from pyrung.core.analysis.pilot.requirement_evidence import (
+    _bind_guard_derivation_authority,
+    _walk_program_guard_to_inputs,
+)
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     ExpectationReceipt,
@@ -942,6 +945,12 @@ def _delayed_requirement_from_regression(
             ),
             source_checkpoint,
             ctx,
+        )
+        derivation = _walk_program_guard_to_inputs(
+            derivation,
+            source_checkpoint,
+            ctx,
+            ((obligation.tag, obligation.value),),
         )
     if derivation.requirement is None:
         return None

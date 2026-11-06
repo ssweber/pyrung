@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.intrascan import (
     IntrascanResult,
     derive_recorded_observations,
 )
+from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingCoast,
     LocalProgressKind,
@@ -44,17 +45,25 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.pipeline_graph import target_reachable_values
 from pyrung.core.analysis.pilot.requirement_derivation import (
+    bind_guard_condition_operand_authorities,
     bind_guard_operand_authorities,
     derive_advance_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_write,
+)
+from pyrung.core.analysis.pilot.requirement_sources import (
+    _guard_atoms,
+    _residualize_guard_requirement,
 )
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     EffectReceiptRole,
     ExpectationReceipt,
     FailedEffectReceipt,
+    GuardRequirementAtom,
+    GuardRequirementExpr,
     OperandAuthority,
+    RequirementSourceWalkStatus,
     classify_bound_operand_authority,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
@@ -181,6 +190,53 @@ def _bind_guard_derivation_authority(
         configured=_checkpoint_configured_inputs(checkpoint),
     )
     return replace(derivation, requirement=requirement)
+
+
+def _walk_program_guard_to_inputs(
+    derivation: Any,
+    checkpoint: _CausalCheckpoint,
+    ctx: _PilotContext,
+    preserved_values: tuple[tuple[str, Any], ...],
+) -> Any:
+    """Read a harmful writer's program-written guard back to the inputs that set it.
+
+    ``Rung(alarm): reset(run)`` displaced Run, so the bound requirement is ``Alarm != True``.
+    When every atom is program-written there is nothing in it to set: Alarm already holds at
+    the source and is the program's to write.  The derivation's own same-scan source walk
+    follows it to the write that latched Alarm earlier in that scan (``Rung(run, ~door)``).
+    With *preserved_values* kept (Run stays True), that leaves ``Door == True``, an input the
+    retry can hold.  Anything else keeps the bound requirement as it is.
+    """
+
+    requirement = derivation.requirement
+    walk = derivation.source_walk
+    if (
+        requirement is None
+        or walk is None
+        or walk.status is not RequirementSourceWalkStatus.COMPLETE
+        or not walk.links
+        or not isinstance(requirement.condition, GuardRequirementAtom | GuardRequirementExpr)
+        or any(
+            atom.operand_authority is not OperandAuthority.PROGRAM_WRITTEN
+            for atom in _guard_atoms(requirement.condition)
+        )
+    ):
+        return derivation
+    residual = _residualize_guard_requirement(walk.condition, preserved_values)
+    if residual is None:
+        return derivation
+    walked = bind_guard_condition_operand_authorities(
+        residual,
+        steerable=ctx.steerable,
+        program_written=frozenset(ctx.pdg.writers_of),
+        configured=_checkpoint_configured_inputs(checkpoint),
+    )
+    if not any(
+        all(atom.operand_authority is OperandAuthority.ADJUSTABLE for atom in alternative)
+        for alternative in iter_guard_alternatives(walked)
+    ):
+        return derivation
+    return replace(derivation, requirement=replace(requirement, condition=walked))
 
 
 def _retain_active_requirement(
