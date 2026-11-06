@@ -1132,10 +1132,6 @@ def _reached_past_literal_compares(
     with each other (:func:`_group_domains`), and a tag written only with literals
     whose every value is a split point.
     """
-    pairs = paired or {}
-
-    def answered(left: str, right: str) -> bool:
-        return right in pairs.get(left, ()) and left in pairs.get(right, ())
     from pyrung.core.analysis.simplified import And as ExprAnd
     from pyrung.core.analysis.simplified import ArithAtom, Atom
     from pyrung.core.analysis.simplified import Or as ExprOr
@@ -1159,6 +1155,10 @@ def _reached_past_literal_compares(
     from pyrung.core.validation.walker import _condition_children
 
     reached: dict[str, str] = {}
+    pairs = paired or {}
+
+    def answered(left: str, right: str) -> bool:
+        return right in pairs.get(left, ()) and left in pairs.get(right, ())
 
     def mark(found: Iterable[str], what: str) -> None:
         for name in found:
@@ -1556,9 +1556,7 @@ def _answer_for_inputs(
     )
     if not names:
         return {}
-    reach = _reached_past_literal_compares(
-        program, graph, names, exprs=all_exprs, paired=paired
-    )
+    reach = _reached_past_literal_compares(program, graph, names, exprs=all_exprs, paired=paired)
     unanswered: dict[str, str] = {}
     for name in sorted(names):
         tag = graph.tags[name]
@@ -3770,8 +3768,7 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
-    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]]
-    | None = None,
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,

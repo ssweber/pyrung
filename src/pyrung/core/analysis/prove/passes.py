@@ -286,9 +286,7 @@ class _PassContext:
     # (domains, blockers) fixpoint shared by find_threshold_absorptions and
     # classify_dimensions — computed once per pipeline run (see
     # _get_structural_domain_info).
-    _structural_domain_info: (
-        tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None
-    ) = None
+    _structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
     system_points: SystemPointModel | None = None
@@ -1944,7 +1942,7 @@ def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
 
 def _get_structural_domain_info(
     ctx: _PassContext,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Structural domains + reverse blockers, computed once per pipeline run.
 
     The fixpoint over ``(program, graph, all_exprs)`` dominates context-build

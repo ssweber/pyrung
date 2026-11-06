@@ -346,6 +346,8 @@ _LEFT_OUT_OF_THE_SEARCH = pytest.mark.parametrize(
     [_unread_output, _unread_immediate_output, _output_through_a_pointer],
     ids=["unread", "unread immediate", "through a pointer"],
 )
+
+
 @_LEFT_OUT_OF_THE_SEARCH
 def test_a_function_left_out_of_the_search_writes_when_stepped(row) -> None:
     program, _, patch, name, written = row()
