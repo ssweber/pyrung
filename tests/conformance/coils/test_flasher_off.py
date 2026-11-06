@@ -1,8 +1,7 @@
 """A flasher whose off preset is 0 or below: the ``flasher_off`` group (part ``follow_extra``).
 
-``zero_and_below`` and ``coil_timing/flasher_on_zero`` ask about an on phase of 0.  An off phase
-of 0 or below, from a DS, has no reading, and the fix step ``timed-coils`` (5 in the
-``conform-fix`` arc) left it for one.
+``zero_and_below`` and ``coil_timing/flasher_on_zero`` ask about an on phase of 0.  These two ask
+about an off phase of 0 or below, from a DS.
 
 Each case: a flasher of 5 ms on and its off preset from a DS, its rung on from ``Cmd``, read from
 50 to 150 ms on the case's clock, well after its first on phase.  In that window Result1 is the
@@ -32,14 +31,16 @@ Result4, the control, is the rises of a flasher of 5 ms / 5 ms off a DS, on a ru
 under the same condition: about 10, at least 1, so the DS off preset, the window and the count
 work.
 
-pyrung reads, in-process (10 ms scans), 0, 0, 10, 5 and ErrorCode 28800 (on TD 160, off TD 0) in
-both cases: dark, the on TD running on.  Over the wire the scan counts follow the target's scan.
+Before 2026-11-06 pyrung read, in-process (10 ms scans), 0, 0, 10, 5 and ErrorCode 28800 (on TD
+160, off TD 0) in both cases: dark, the on TD running on.  A CLICK read 0, 0, 59, 10, 0 for 0 and
+0, 0, 60, 10, 0 for -5 (2026-11-06): dark, both TDs at 0, so a preset of 0 or below holds the
+flasher reset (``FlasherInstruction``), and pyrung now does so.  Whether its first on phase shows
+before the reset takes hold has no reading: the window starts well after it.  Over the wire the
+scan counts follow the target's scan, so Result3 and Result4 are ranges; pyrung's in-process
+readings (0, 0, 10, 5, 0) are pinned in ``test_pyrung_holds_the_flasher_reset``.
 
 - ``ds_zero``: the DS holds 0.
 - ``ds_minus_five``: the DS holds -5.
-
-``flasher(..., off_preset=DS)`` has not been pasted (an on preset from a DS has, in
-``flasher_td``); if CLICK's editor refuses it, delete the group's call rung.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -51,7 +52,7 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, flasher, out, reset
 from tests.conformance.memory import ClickTimer, c, ds, td
-from tests.conformance.probe_kit import between, end_at, in_window, ms_clock, once
+from tests.conformance.probe_kit import end_at, in_window, ms_clock, once
 
 ON_MS = 5
 LOW, HIGH, END = 50, 150, 160
@@ -117,23 +118,22 @@ def _init(name: str) -> Any:
 def _case(name: str, ladder: Any, holds: str) -> Any:
     bits = BITS[name]
     return case(
-        f"A flasher of 5 ms on, its off preset a DS holding {holds}, from 50 to 150 ms: scans "
-        "lit (Result1), scans it turns on (Result2), scans (Result3); 0 and 0 dark, Result3 "
-        "and 0 lit; a 5 ms / 5 ms control turns on (Result4 >= 1); the on and off TDs at 160 ms "
-        "(ErrorCode = on * 180 + off)",
+        f"A flasher of 5 ms on, its off preset a DS holding {holds}, is held reset: from 50 to "
+        "150 ms it is never lit (Result1 = 0) and never turns on (Result2 = 0) in Result3 scans, "
+        "while a 5 ms / 5 ms control turns on (Result4 >= 1); both TDs are 0 at 160 ms "
+        "(ErrorCode = on * 180 + off = 0)",
         ladder=ladder,
         init=_init(name),
         ready=lambda slot: (~c[bits.start], ~c[bits.start + 2]),
         expect={
-            "Result1": between(0, 32767),
-            "Result2": between(0, 32767),
-            "Result3": between(1, 32767),
+            "Result1": 0,
+            "Result2": 0,
+            "Result3": range(1, 32768),
             "Result4": range(1, 32768),
-            "ErrorCode": between(-32768, 32767),
+            "ErrorCode": 0,
         },
         scans=20,
         fires_within=1.0,
-        probe=f"a flasher's off preset of {holds}: dark, lit, or each scan (5)",
     )
 
 
@@ -148,3 +148,15 @@ group = Group(
 
 def test_flasher_off():
     assert_all_passed(run(group))
+
+
+def test_pyrung_holds_the_flasher_reset():
+    """What pyrung reads at the in-process 10 ms scan."""
+    for result in run(group):
+        assert result.actual == {
+            "Result1": 0,
+            "Result2": 0,
+            "Result3": 10,
+            "Result4": 5,
+            "ErrorCode": 0,
+        }, result.case.id

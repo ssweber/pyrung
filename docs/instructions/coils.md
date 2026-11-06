@@ -36,7 +36,7 @@ with rung(LevelSwitch):
     debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
 ```
 
-`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms; a shorter blip changes nothing. Each side's `Acc` restarts from 0 when the rung changes to its side, keeps counting past the preset while the rung holds, as `on_delay`'s does, and holds while the other side times. CLICK requires both sides.
+`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms; a shorter blip changes nothing. The on `Acc` restarts from 0 when the rung goes true, keeps counting past the preset while it holds, as `on_delay`'s does, and holds while the rung is false. The off `Acc` is 0 while the rung is true and counts while it is false. The off side takes a scan more than an `off_delay` of its preset: the coil drops on the scan after the off `Acc` reaches it. CLICK requires both sides.
 
 ### `flasher` — blink while the rung is true
 
@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. The phase is read from the two `Acc` values: the off phase runs while the on timer's `Acc` has reached its preset and the off timer's has not. The rung going false turns `Beacon` off and freezes both `Acc` values where they are; when the rung comes back, both restart from 0 with an on phase.
+The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset, which starts the other phase from 0; the other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are; when the rung comes back, both restart from 0 with an on phase. An on or off preset of 0 or below keeps `Beacon` off and both `Acc` values at 0.
 
 ### `timed` — on for a set time
 
