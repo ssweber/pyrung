@@ -23,6 +23,7 @@ from pyrung.core import (
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
+    Proven,
     TraceStep,
     _classify_dimensions,
     always,
@@ -168,6 +169,15 @@ class TestValueDomainExtraction:
     def test_a_mod_of_a_real_reaches_its_fraction(self):
         logic, hi = self._real_mod_program()
         assert isinstance(always(logic, ~hi, max_states=5000), Counterexample)
+
+    def test_a_mod_of_a_real_is_not_proven(self):
+        """R = 2.5 latches Hi, so whatever the search tries, it must not answer Proven."""
+        logic, hi = self._real_mod_program()
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"R": 2.5})
+        plc.step()
+        assert plc.current_state.tags["Hi"] is True
+        assert not isinstance(always(logic, ~hi, max_states=5000), Proven)
 
     def test_integer_comparison_literals(self):
         """Pure equality-only inputs collapse to {literals..., OTHER}."""

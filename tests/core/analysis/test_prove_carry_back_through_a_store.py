@@ -1063,3 +1063,50 @@ def test_a_fractional_literal_truncates_before_it_wraps(write, bound, value) -> 
             out(hit)
     assert _fires_at(program, "S", value, hit)
     assert not isinstance(never(program, hit), Proven)
+
+
+def _a_partner_written_once(partner: int, op: str) -> tuple[Program, Bool, Bool, Int, Int]:
+    # S is carried back through D == 7, and compared with P, which holds only *partner*.
+    source = Int("S", external=True)
+    held = Int("P")
+    dest = Int("D")
+    seen = Bool("A")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(partner, held)
+        with Rung():
+            copy(source, dest)
+        with Rung(dest == 7):
+            latch(seen)
+        with Rung(OPS[op](source, held), ~seen):
+            latch(hit)
+    return program, hit, seen, source, held
+
+
+@pytest.mark.parametrize(
+    ("partner", "op", "value"),
+    [pytest.param(4000, ">", 4001, id="above 4000"), pytest.param(-4000, "<", -4001, id="below")],
+)
+def test_a_carried_back_input_gets_the_values_past_its_partner(partner, op, value) -> None:
+    program, hit, _seen, _source, _held = _a_partner_written_once(partner, op)
+    assert _fires_at(program, "S", value, hit)
+    verdict = never(program, hit)
+    assert not isinstance(verdict, Proven), verdict
+    if isinstance(verdict, Counterexample):
+        assert _witness_fires(program, verdict, hit)
+
+
+def test_a_carried_back_input_past_its_partner_in_the_property() -> None:
+    program, hit, seen, source, held = _a_partner_written_once(4000, ">")
+    verdict = never(program, source > held, ~seen)
+    assert not isinstance(verdict, Proven), verdict
+    if isinstance(verdict, Counterexample):
+        plc = PLC(program, dt=0.01)
+        for step in verdict.trace:
+            if step.inputs:
+                plc.patch(dict(step.inputs))
+            for _ in range(max(step.scans, 1)):
+                plc.step()
+        tags = plc.current_state.tags
+        assert tags["S"] > tags["P"] and not tags["A"]

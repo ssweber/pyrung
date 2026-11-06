@@ -40,6 +40,7 @@ from pyrung.core import (
     pack_words,
     run_function,
     search,
+    unpack_to_bits,
     unpack_to_words,
 )
 from pyrung.core.analysis.prove import (
@@ -847,3 +848,26 @@ def test_expression_index_compared_with_stepped_int() -> None:
         with Rung(table[pointer + 0] == stepped, stepped > 365):
             latch(bad)
     _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.parametrize(
+    ("top", "bits", "value"),
+    [pytest.param(300, (7, 8), 192, id="0..300"), pytest.param(900, (7, 10), 576, id="0..900")],
+)
+def test_a_partner_of_an_input_searched_whole_sees_all_its_values(top, bits, value) -> None:
+    # KX reaches the unpack, so it is searched over all of 0..top; KY, grouped with it
+    # for KX == KY, needs those values too, not the ones the literals alone split.
+    first = Int("KX", external=True, min=0, max=top)
+    second = Int("KY", external=True)
+    flags = Block("KB", TagType.BOOL, 1, 16)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung():
+            unpack_to_bits(first, flags.select(1, 16))
+        with Rung(flags[bits[0]], flags[bits[1]], first == second, first > 10, second < 10000):
+            latch(bad)
+    assert _witness_hits(logic, [({"KX": value, "KY": value}, 2)], "KBad")
+    result = never(logic, bad)
+    assert not isinstance(result, Proven), result
+    if isinstance(result, Counterexample):
+        assert _replay(logic, result.trace).current_state.tags["KBad"] is True
