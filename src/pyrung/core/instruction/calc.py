@@ -402,6 +402,11 @@ class CalcInstruction(OneShotMixin, Instruction):
         *,
         oneshot: bool = False,
     ):
+        if isinstance(dest, (IndirectRef, IndirectExprRef)):
+            raise TypeError(
+                "calc() writes a tag, not a pointer address: "
+                "calc into a tag, then copy() it to the pointer destination"
+            )
         OneShotMixin.__init__(self, oneshot)
         check_float_literals(expression)
         self.source_expression = expression

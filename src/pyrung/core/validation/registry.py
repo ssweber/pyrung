@@ -140,6 +140,13 @@ _SPECS: tuple[RuleSpec, ...] = (
         "Repeated Literal Comparisons",
     ),
     RuleSpec(
+        "CMP_EQ_ON_COMPUTED_REAL",
+        "CMP",
+        "advisory",
+        "cmp",
+        "Equality on a Computed REAL",
+    ),
+    RuleSpec(
         "CMP_TRUE_AT_RESET",
         "CMP",
         "warning",

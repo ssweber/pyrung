@@ -1,6 +1,6 @@
 """Comparison-semantics validators: domains, monotone/reset/order/zero/stepper operands.
 
-Nine rules, one pass over every comparison in every rung condition (main +
+Ten rules, one pass over every comparison in every rung condition (main +
 subroutines + branches, both the ``Compare*`` leaf family and the expression-tree
 ``ExprCompare``):
 
@@ -12,6 +12,13 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   each scan and can jump *over* the compared value between scans, so the equality
   may never latch.  **warning**.  The ``== 0`` / ``!= 0`` floor check is edge-safe and
   exempt.
+
+* ``CMP_EQ_ON_COMPUTED_REAL`` — ``==`` / ``!=`` where a side is a REAL the ladder
+  computes: written by ``calc()`` (directly, or through a ``copy()`` of such a REAL) or
+  an inline computed REAL expression.  Rounding can step over the exact value.
+  A REAL nothing writes (analog input, setpoint), one only ``copy()``-ed from a
+  constant or integer, and ``== 0`` / ``!= 0`` are exempt; ordered compares are
+  never flagged.  **advisory**.
 
 * ``CMP_TRUE_AT_RESET`` — an ordered comparison that is TRUE at the accumulator's
   reset value (``Acc = 0``) and FALSE at the crossing: the exact complement of a
@@ -104,6 +111,7 @@ if TYPE_CHECKING:
     from pyrung.core.validation.severity import Severity
 
 CMP_EQ_ON_MONOTONE = "CMP_EQ_ON_MONOTONE"
+CMP_EQ_ON_COMPUTED_REAL = "CMP_EQ_ON_COMPUTED_REAL"
 CMP_TRUE_AT_RESET = "CMP_TRUE_AT_RESET"
 CMP_STATIC_ON_LEFT = "CMP_STATIC_ON_LEFT"
 CMP_OPERAND_NO_WRITER = "CMP_OPERAND_NO_WRITER"
@@ -475,6 +483,74 @@ def _calc_derived_names(program: Program) -> set[str]:
         if isinstance(instr, CalcInstruction) or non_identity:
             names |= _write_target_names(instr)
     return names
+
+
+def _real_dest(instr: Any) -> Tag | None:
+    dest = getattr(instr, "dest", None)
+    if isinstance(dest, ImmediateRef):
+        dest = dest.value
+    if isinstance(dest, Tag) and dest.type is TagType.REAL:
+        return dest
+    return None
+
+
+def _computed_real_names(program: Program) -> set[str]:
+    """REAL tag names the ladder computes: a float ``calc()`` result, or a ``copy()``
+    of one (to a fixed point).  A REAL only copied from constants or integer tags,
+    or never written, is not in the set."""
+    from pyrung.core.expression import may_be_float
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    names: set[str] = set()
+    copies: list[tuple[str, str]] = []
+    for instr in walk_instructions(program):
+        dest = _real_dest(instr)
+        if dest is None:
+            continue
+        if isinstance(instr, CalcInstruction):
+            if may_be_float(instr.expression):
+                names.add(dest.name)
+        elif isinstance(instr, CopyInstruction):
+            source = instr.source
+            if isinstance(source, ImmediateRef):
+                source = source.value
+            if isinstance(source, Tag) and source.type is TagType.REAL:
+                copies.append((source.name, dest.name))
+            elif isinstance(source, Expression) and may_be_float(source):
+                names.add(dest.name)
+    changed = True
+    while changed:
+        changed = False
+        for src, dst in copies:
+            if src in names and dst not in names:
+                names.add(dst)
+                changed = True
+    return names
+
+
+def _computed_real_operand(op: _Operand, computed_reals: set[str]) -> _Operand | None:
+    from pyrung.core.expression import may_be_float
+
+    if op.kind == "tag":
+        return op if op.name in computed_reals else None
+    if op.kind == "computed" and may_be_float(op.raw):
+        return op
+    return None
+
+
+def _computed_real_eq_display(cmp: _Compare, operand: _Operand) -> FindingDisplay:
+    name = _render(operand)
+    hint = (
+        f"rounding can step over the exact value: compare {name} with a range "
+        f"(>= and <= together) or a tolerance instead of {cmp.op}"
+    )
+    return FindingDisplay(
+        code=CMP_EQ_ON_COMPUTED_REAL,
+        severity="advisory",
+        frames=(_cmp_frame(cmp, f"{name} is a computed REAL"),),
+        hint=hint,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1166,6 +1242,28 @@ def validate_cmp_conditions(
             )
         )
         claimed.add(id(cmp.cond))
+
+    # 1b. Equality against a REAL the ladder computes (advisory).  The comparison
+    #     stays unclaimed: the other rules judge their own operands.
+    computed_reals = _computed_real_names(program)
+    for cmp in compares:
+        if cmp.op not in ("==", "!="):
+            continue
+        for real, other in ((cmp.left, cmp.right), (cmp.right, cmp.left)):
+            operand = _computed_real_operand(real, computed_reals)
+            if operand is None:
+                continue
+            if other.kind == "literal" and other.value == 0:
+                break
+            findings.append(
+                CmpConditionFinding(
+                    CMP_EQ_ON_COMPUTED_REAL,
+                    cmp.loc,
+                    _computed_real_eq_display(cmp, operand),
+                    "advisory",
+                )
+            )
+            break
 
     # 2. A numeric operand has no declared source.  A comparison that mirrors a
     #    zero timer/counter preset belongs to the more specific preset finding.

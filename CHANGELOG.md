@@ -51,6 +51,7 @@
 
 ### Features
 
+- `pyrung check` advises on `==` and `!=` against a REAL the ladder computes with `calc()` (`CMP_EQ_ON_COMPUTED_REAL`): rounding can step over the exact value, so compare with a range or a tolerance. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged.
 - CLICK validation refuses what the CLICK editor refuses: a `forloop()` count outside a constant, `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`), a `randint()` bound that is not an integer constant or an `Int` or `Dint` tag (`CLK_RAND_BOUND_TYPE`) or two equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`), an expression as a `randint()` bound or as an argument of `lsh`, `rsh`, `lro`, `rro`, `<<` or `>>` (`CLK_CALC_ARG_NOT_PLAIN`), and a `SUM` over a bank it cannot read (`CLK_CALC_SUM_BANK_NOT_AVAILABLE`). `pyrung_to_ladder()` takes `allow=` to let named finding codes through.
 - CLICK validation reports a `calc()` constant past 16 bits (`CLK_CALC_WIDE_CONSTANT`), which a CLICK Math cuts whatever the destination (40000 reads -25536); copy the constant into a `DD` tag in a rung above and use the tag.
 - `pyrung check` warns on rungs whose result depends on the order of their instructions (`RUNG_ORDER_DEPENDENT`, on by default): a branch, a `.continued()` rung or a box's `.reset()`/`.jump()`/... leg that reads a tag an instruction above it in the same rung writes, which now reads the new value and used to read the value at rung entry; `pyrung.core.validation.reads_after_write()` is the predicate behind it.
