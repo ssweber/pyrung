@@ -18,6 +18,7 @@ from typing import Any
 from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _AvoidCheckRaised
 from pyrung.core.analysis.pilot.budget import WallClock
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
+from pyrung.core.analysis.pilot.physical import upstream_through_plant
 from pyrung.core.scan_trace import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
@@ -78,7 +79,8 @@ def _inputs_to_try(stopped: Any, setup: Any, tags: Any) -> list[tuple[str, Any]]
     if stopped.target_predicate is not None and not stopped.targets:
         upstream = frozenset(setup.steerable)
     else:
-        upstream = frozenset().union(*(setup.pdg.upstream_slice(tag) for tag, _ in goals))
+        harness = getattr(setup.work, "_harness", None)
+        upstream = upstream_through_plant(setup.pdg, harness, (tag for tag, _ in goals))
     forced = setup.session_overrides
     moves: list[tuple[str, Any]] = []
     for name in sorted(frozenset(setup.steerable) & upstream - forced):
