@@ -11,13 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS
 from pyrung.core.instruction.coils import reset_value_for_type
-from pyrung.core.instruction.conversions import copy_store_transform
-from pyrung.core.memory_block import (
-    BlockRange,
-    IndirectBlockRange,
-    IndirectExprRef,
-    IndirectRef,
-)
+from pyrung.core.instruction.conversions import copy_source_kind, copy_store_transform
+from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 if TYPE_CHECKING:
@@ -39,19 +34,17 @@ def _bool_literal(expr: str) -> bool | None:
 
 
 def _optional_value_type_name(value: Any) -> str | None:
-    if isinstance(value, Tag):
-        return value.type.name
-    if isinstance(value, (IndirectRef, IndirectExprRef)):
-        return value.block.type.name
-    return None
+    """The type of the tag or pointer *value* reads, as :func:`copy_source_kind` takes it
+    (an ``immediate()`` operand is its tag's); ``None`` for anything else."""
+    kind = copy_source_kind(value)
+    return kind.name if isinstance(kind, TagType) else None
 
 
 def _value_type_name(value: Any) -> str:
-    if isinstance(value, Tag):
-        return value.type.name
-    if isinstance(value, (IndirectRef, IndirectExprRef)):
-        return value.block.type.name
-    raise TypeError(f"Unsupported typed value target: {type(value).__name__}")
+    name = _optional_value_type_name(value)
+    if name is None:
+        raise TypeError(f"Unsupported typed value target: {type(value).__name__}")
+    return name
 
 
 def _store_coerce_expr(source_expr: str, dest_type: str, ctx: CodegenContext) -> str:
@@ -85,12 +78,16 @@ def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: Codegen
 
 
 def _range_type_name(range_value: Any) -> str:
+    if isinstance(range_value, ImmediateRef):
+        return _range_type_name(range_value.value)
     if isinstance(range_value, (BlockRange, IndirectBlockRange)):
         return range_value.block.type.name
     raise TypeError(f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}")
 
 
 def _static_range_length(range_value: Any) -> int | None:
+    if isinstance(range_value, ImmediateRef):
+        return _static_range_length(range_value.value)
     if isinstance(range_value, BlockRange):
         return len(range_value)
     return None

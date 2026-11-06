@@ -94,11 +94,13 @@ def _block_name_expr(
 
 
 def _range_item_read_expr(
-    range_value: BlockRange | IndirectBlockRange,
+    range_value: Any,
     symbol: str,
     key_expr: str,
     ctx: CodegenContext,
 ) -> str:
+    if isinstance(range_value, ImmediateRef):
+        range_value = range_value.value
     if isinstance(range_value, BlockRange):
         layout = ctx.static_range_layout(range_value)
         if not layout.uses_backing_storage:
@@ -998,7 +1000,7 @@ def _compile_guarded_instruction(
 
 
 def _compile_assignment_lines(
-    target: Tag | IndirectRef | IndirectExprRef,
+    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef,
     value_expr: str,
     ctx: CodegenContext,
     *,
@@ -1008,7 +1010,11 @@ def _compile_assignment_lines(
     return [f"{' ' * indent}{lvalue} = {value_expr}"]
 
 
-def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
+def _compile_lvalue(
+    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef, ctx: CodegenContext
+) -> str:
+    if isinstance(target, ImmediateRef):
+        target = target.tag
     if isinstance(target, Tag):
         if ctx.blockless and (
             target.name in ctx.tag_block_addresses or target.name in ctx.dict_backed_tag_names
@@ -1051,6 +1057,8 @@ def _compile_range_setup(
     stem: str,
     include_addresses: bool,
 ) -> tuple[list[str], str, str, str]:
+    if isinstance(range_value, ImmediateRef):
+        range_value = range_value.value
     if not isinstance(range_value, (BlockRange, IndirectBlockRange)):
         raise TypeError(
             f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}"
@@ -1127,12 +1135,14 @@ def _compile_range_setup(
 
 
 def _compile_range_flush(
-    range_value: BlockRange | IndirectBlockRange,
+    range_value: Any,
     symbol: str,
     ctx: CodegenContext,
 ) -> list[str]:
     """Flush a specialized static range's value list to its semantic tags."""
 
+    if isinstance(range_value, ImmediateRef):
+        range_value = range_value.value
     if not isinstance(range_value, BlockRange):
         return []
     layout = ctx.static_range_layout(range_value)
@@ -1478,6 +1488,8 @@ def _compile_value(
     *condition* for a rung condition's operand: an indexed element outside its
     block reads as 0, with no fault flag.
     """
+    if isinstance(value, ImmediateRef):
+        value = value.value
     if isinstance(value, Tag):
         return _snapshot_tag_symbol(
             value,
