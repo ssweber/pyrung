@@ -14,6 +14,7 @@ from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_MATH_BIT_OPERAND,
+    CLK_MATH_DEST_BANK,
     CLK_SEARCH_RANGE_BANK,
     CLK_SEARCH_RESULT_NOT_DS,
     CLK_TIMER_PRESET_TOO_LOW,
@@ -51,11 +52,15 @@ def _found(body, code: str, tag_map: TagMap | None = None) -> list:
     return found
 
 
-def _export_refuses(body, code: str, tag_map: TagMap | None = None) -> None:
+def _export_refuses(
+    body, code: str, tag_map: TagMap | None = None, allowed: tuple[str, ...] = ()
+) -> None:
+    """Export refuses *code*, and passes once it is allowed (with *allowed*, the
+    other findings of the form)."""
     prog, tag_map = _program(body), tag_map or TagMap()
     with pytest.raises(LadderExportError, match=code):
-        pyrung_to_ladder(prog, tag_map)
-    assert pyrung_to_ladder(prog, tag_map, allow=(code,)).main_rows
+        pyrung_to_ladder(prog, tag_map, allow=allowed)
+    assert pyrung_to_ladder(prog, tag_map, allow=(code, *allowed)).main_rows
 
 
 # --- A constant into bit memory -----------------------------------------------------
@@ -155,6 +160,44 @@ def test_a_bit_rand_bound_is_the_rand_finding_only():
             math(randint(c[1], 9), ds[100])
 
     assert _found(body, CLK_MATH_BIT_OPERAND) == []
+
+
+# --- The Math Result ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [x[1], y[1], c[1], t[1], ct[1], sc[50], xd[1], yd[1], sd[29], txt[1]],
+    ids=lambda dest: dest.name,
+)
+def test_a_math_result_outside_the_dialogs_banks_is_refused(dest):
+    def body():
+        with Rung(x[2]):
+            math(ds[1] + 1, dest)
+
+    (finding,) = _found(body, CLK_MATH_DEST_BANK)
+    bank = dest.name.rstrip("0123456789")
+    assert f"math() into {bank} at" in finding.message
+    assert "Result in DS, DD, DF, TD or CTD, or DH in a hex Math" in finding.message
+    # X, T, CT, XD and YD are also not writable, and XD or YD makes a mixed-mode Math.
+    report = validate_click_program(_program(body), TagMap(), mode="strict")
+    others = tuple({f.code for f in report.errors} - {CLK_MATH_DEST_BANK})
+    _export_refuses(body, CLK_MATH_DEST_BANK, allowed=others)
+
+
+def test_a_math_result_in_each_bank_the_dialog_takes_passes():
+    def body():
+        with Rung(x[1]):
+            math(ds[1] + 1, ds[2])
+            math(ds[1] + 1, dd[2])
+            math(ds[1] + 1, df[2])
+            math(ds[1] + 1, td[2])
+            math(ds[1] + 1, ctd[2])
+            math(dh[1] + 1, dh[2])
+            # A decimal Math into DH: unread in the dialog, so allowed.
+            math(ds[1] + 1, dh[3])
+
+    assert _found(body, CLK_MATH_DEST_BANK) == []
 
 
 # --- Search banks -------------------------------------------------------------------

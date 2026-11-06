@@ -28,6 +28,7 @@ from .findings import (
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
+    CLK_MATH_DEST_BANK,
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_SEARCH_RANGE_BANK,
@@ -532,6 +533,46 @@ def _evaluate_search_banks(
             )
         )
     return findings
+
+
+# The banks CLICK v4's Math dialog takes as its Result (checked in the editor,
+# 2026-11-06): DS, DD, DF, TD, CTD, and DH in a hex Math.  DH is allowed in a
+# decimal Math too: whether the dialog takes it there is unread.
+_MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "DH")
+
+
+def _evaluate_math_dest_bank(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """CLK_MATH_DEST_BANK: a math() into a bank CLICK's Math Result does not take
+    (a bit, XD, YD, SD, TXT).  An unresolved destination is reported by the
+    write-target check."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    resolution = resolver.resolve_operand_slots(instruction.dest)
+    banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+    bad = [bank for bank in banks if bank not in _MATH_DEST_BANKS]
+    if not bad:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.dest"))
+    return [
+        ClickFinding(
+            code=CLK_MATH_DEST_BANK,
+            severity=_route_severity(CLK_MATH_DEST_BANK, mode),
+            message=(
+                f"math() into {', '.join(bad)} at {location_text}; CLICK's Math takes a "
+                "Result in DS, DD, DF, TD or CTD, or DH in a hex Math."
+            ),
+            location=location_text,
+            suggestion=(
+                "Store the result in a register of one of those banks, and test or copy "
+                "it on from there."
+            ),
+        )
+    ]
 
 
 # The fewest characters ``to_text()`` writes of a tag of each type, and whether that

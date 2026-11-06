@@ -34,6 +34,7 @@ from .findings import (
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_MATH_ARG_NOT_PLAIN,
     CLK_MATH_BIT_OPERAND,
+    CLK_MATH_DEST_BANK,
     CLK_MATH_BIT_RANGE_AGGREGATE,
     CLK_MATH_FLOOR_DIV,
     CLK_MATH_FUNC_MODE_MISMATCH,
@@ -77,6 +78,7 @@ from .hardware import (
     _evaluate_coil_targets,
     _evaluate_copy_compatibility,
     _evaluate_drums,
+    _evaluate_math_dest_bank,
     _evaluate_modbus_banks,
     _evaluate_out_variant_unit,
     _evaluate_pack_text,
@@ -300,6 +302,7 @@ def validate_click_program(
             findings.extend(_evaluate_timer_pairs(instruction, base_location, mode, resolver))
             findings.extend(_evaluate_modbus_banks(instruction, base_location, mode, resolver))
             findings.extend(_evaluate_search_banks(instruction, base_location, mode, resolver))
+            findings.extend(_evaluate_math_dest_bank(instruction, base_location, mode, resolver))
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []
@@ -376,6 +379,7 @@ __all__ = [
     "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
     "CLK_COPY_CONSTANT_INTO_BIT",
     "CLK_MATH_BIT_OPERAND",
+    "CLK_MATH_DEST_BANK",
     "CLK_SEARCH_RANGE_BANK",
     "CLK_SEARCH_RESULT_NOT_DS",
     "CLK_TIMER_PRESET_TOO_LOW",
