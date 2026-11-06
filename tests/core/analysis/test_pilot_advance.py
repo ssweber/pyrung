@@ -195,15 +195,14 @@ class TestSequencerAdvance:
 
     @staticmethod
     def _drum_stuck_on_step_one(kind: str, *, jog: bool) -> tuple[PLC, Int, Bool]:
-        """A drum whose step 1 has preset 0, which never ends it (as a CLICK runs it).
-
-        The time & event drum reads it from a tag left at 0, the case a CLICK
-        meets with a DS preset nothing writes.
+        """A drum whose step 1 reads its preset from a tag left at 0, which never ends it
+        (``drum_limits/preset_from_ds``): a CLICK meets it with a DS preset nothing writes.
+        A constant 0 ends its step at once (``drum_preset/literal_zero``).
         """
         enable = Bool("StuckAuto", external=True)
         step = Int("StuckStep")
         done = Bool("StuckDone")
-        first: Any = 0 if kind == "time" else Int("StuckPreset")
+        first: Any = Int("StuckPreset")
         common: dict[str, Any] = dict(
             outputs=[Bool("StuckOut1"), Bool("StuckOut2")],
             presets=[first, 2],
@@ -233,6 +232,32 @@ class TestSequencerAdvance:
                 path = plc.how(target, max_scans=20000)
                 assert not path.reachable, kind
                 assert "budget" not in path.reason, (kind, path.reason)
+
+    def test_a_constant_zero_preset_step_ends_at_once(self):
+        for kind in ("time", "time_event"):
+            enable = Bool("ZeroAuto", external=True)
+            zstep, zdone = Int("ZeroStep"), Bool("ZeroDone")
+            common: dict[str, Any] = dict(
+                outputs=[Bool("ZeroOut1"), Bool("ZeroOut2")],
+                presets=[0, 2],
+                unit="ms",
+                pattern=[[1, 0], [0, 1]],
+                current_step=zstep,
+                accumulator=Int("ZeroAcc"),
+                completion_flag=zdone,
+            )
+            if kind == "time_event":
+                common["events"] = [None, None]
+            make = time_drum if kind == "time" else time_event_drum
+            with Program(strict=False) as prog:
+                with Rung(enable):
+                    make(**common).reset(Bool("ZeroReset", external=True))
+            zero = PLC(prog, dt=0.010)
+            zero.step()
+            for target, tag, value in ((zstep == 2, zstep.name, 2), (zdone, zdone.name, True)):
+                path = zero.how(target, max_scans=400)
+                assert path.reachable, (kind, path.reason)
+                assert path.replay().state.tags[tag] == value
 
     def test_a_step_its_preset_never_ends_is_jogged_off(self):
         for kind in ("time", "time_event"):

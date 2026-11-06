@@ -2,9 +2,10 @@
 
 ``drum_branch`` read two answers on a CLICK that one rule fits: a jump that fires takes the scan
 even when its target is bad, so a jog on that scan does nothing (``jump_to_bad_step`` Result3)
-and a bad step is not corrected that scan (``jump_on_bad_step`` ErrorCode, 5252).  Neither asks
-whether the drum's own time and event are skipped too, or what the next scan does.  The fix step
-``drum-click`` 6b (``conform-fix`` arc) waits on this.
+and a bad step is not corrected that scan (``jump_on_bad_step`` ErrorCode, 5252).  This group
+asks whether the drum's own time and event are skipped too, and what the next scan does.  The
+CLICK read 1111, 2222, 5252, 1212, 1212 (2026-11-06): the jump takes the whole scan, and the next
+scan runs as if nothing happened, correcting a bad step with the row left as it was.
 
 Snapshots as in ``test_drum_pins``: two digits a drum, the step then ``4 * flag + 2 * B + A``, the
 time drum above the time & event drum; on 3 steps row 1 is 11, row 2 is 22.
@@ -14,14 +15,13 @@ time drum above the time & event drum; on 3 steps row 1 is 11, row 2 is 22.
 - On step 1, a jump to 9 on scan 3, with the time drum's Acc staged past its step's preset and
   the time & event drum's step 1 event (a level) on, on scans 3 and 4.  Result1 is scan 3 and
   Result2 scan 4.  The jump takes the scan: 1111, then 2222 as the time and the event move the
-  drums on scan 4.  The jump takes the scan and clears the time drum's Acc: 1111, then 1122, the
-  event alone moving its drum.  The jump is dropped and the drums run: 2222, 2222.  pyrung reads
+  drums on scan 4 (the CLICK's reading).  The jump takes the scan and clears the time drum's
+  Acc: 1111, then 1122, the event alone moving its drum.  The jump is dropped and the drums run:
   2222, 2222.
 - On step 2 (a jog on scan 2), step 5 staged on scan 4 with a jump to 9 on that scan, as
   ``jump_on_bad_step``'s ErrorCode, which read 5252 (Result3, scan 4).  Result4 is scan 5 and
-  ErrorCode scan 6: corrected to step 1 with the row left as it was, 1212; corrected and the row
-  written, 1111; not corrected, 5252.  pyrung reads 1212, 1212, 1212: it corrects on the jump's
-  own scan.
+  ErrorCode scan 6: corrected to step 1 with the row left as it was, 1212 (the CLICK's reading);
+  corrected and the row written, 1111; not corrected, 5252.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -35,7 +35,6 @@ from pyrung.core import copy, fill, reset
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put, track
 from tests.conformance.drum_shift_search.test_drum_pins import snap, te_box, time_box
 from tests.conformance.memory import c, dd, ds, td
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 #: The case's C bits, its step registers (the last holds the jump's target), TDs and states.
@@ -93,21 +92,20 @@ group = Group(
     "bad_jump",
     [
         case(
-            "A drum jump to step 9 of 3 is dropped and the drums run on: the time up and the event "
-            "on move them that scan, 2222 (Result1), 2222 (Result2); on a bad step 5 the jump's "
-            "scan corrects it with no row written, 1212 (Result3), and so it stays (Result4, "
-            "ErrorCode)",
+            "A drum jump to step 9 of 3 takes the scan: the time up and the event on move the "
+            "drums on the next scan, 1111 (Result1), 2222 (Result2); on a bad step 5 the jump's "
+            "scan leaves it, 5252 (Result3), and the next scan corrects it with no row written, "
+            "1212 (Result4, ErrorCode)",
             ladder=prove_bad_target_takes_the_scan,
             init=init_bad_target_takes_the_scan,
             expect={
-                "Result1": between(1111, 2222),
-                "Result2": between(1111, 2222),
-                "Result3": between(1111, 5252),
-                "Result4": between(1111, 5252),
-                "ErrorCode": between(1111, 5252),
+                "Result1": 1111,
+                "Result2": 2222,
+                "Result3": 5252,
+                "Result4": 1212,
+                "ErrorCode": 1212,
             },
             scans=scans_for(),
-            probe="a jump to a bad step: does it take the scan, does the next scan correct (6b)",
         ),
     ],
 )
