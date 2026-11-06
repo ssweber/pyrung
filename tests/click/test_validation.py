@@ -1573,7 +1573,7 @@ class TestImmediateValidation:
         report = validate_click_program(prog, tag_map, mode="strict")
         found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
         assert len(found) == 1
-        assert "an immediate contact must read an input" in found[0].message
+        assert "an immediate contact must read an input mapped to X" in found[0].message
 
     def test_immediate_contact_in_a_branch_and_a_group_outside_x_is_error(self):
         Start = Bool("Start")
@@ -1603,6 +1603,28 @@ class TestImmediateValidation:
         report = validate_click_program(prog, tag_map, mode="strict")
         found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
         assert [f.location for f in found] == ["main.rung[0].branch[0].condition"]
+
+    def test_immediate_contact_in_a_nested_loop_body_is_reported_once(self):
+        Start = Bool("Start")
+        Sensor = Bool("Sensor")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(Start):
+                with forloop(2):
+                    with Rung():
+                        with forloop(2):
+                            with Rung(immediate(Sensor)):
+                                out(Coil)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Start.map_to(x[1]), Sensor.map_to(c[1]), Coil.map_to(y[1])], include_system=False
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
+        assert len(found) == 1
 
     def test_immediate_contact_on_x_has_no_contact_finding(self):
         Sensor = Bool("Sensor")

@@ -1294,8 +1294,7 @@ def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
 
     assert [issue["message"] for issue in exc_info.value.issues] == [
         "CLK_IMMEDIATE_CONTACT_MUST_BE_X: Immediate contact on Sensor (C1) at "
-        "main.rung[0].condition; an immediate contact must read an input "
-        "(an InputBlock tag, or one mapped to X)."
+        "main.rung[0].condition; an immediate contact must read an input mapped to X."
     ]
 
 

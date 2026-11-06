@@ -248,7 +248,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         return "Map immediate coil targets to Y bank addresses only."
 
     if code == CLK_IMMEDIATE_CONTACT_MUST_BE_X:
-        return "Read an input (an InputBlock tag, or one mapped to X) or use a plain contact."
+        return "Map it to an X input, or use a plain contact."
 
     if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
         return "Map immediate-wrapped coil ranges to contiguous Y addresses (Ynnn..Ymmm)."

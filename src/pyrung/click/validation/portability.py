@@ -339,7 +339,7 @@ def _evaluate_immediate_coil_target(
 def _evaluate_immediate_contacts(
     program: Any, tag_map: TagMap, mode: ValidationMode, resolver: _ResolutionCache
 ) -> list[ClickFinding]:
-    """An immediate NO/NC contact must read an input: CLICK offers it on X addresses only."""
+    """An immediate NO/NC contact must read an input mapped to X: CLICK offers it on X only."""
     from pyrung.core.condition import (
         AllCondition,
         AnyCondition,
@@ -358,7 +358,8 @@ def _evaluate_immediate_contacts(
         ):
             out.append(condition._resolved_tag)
 
-    def walk(rung: Any, location: ProgramLocation) -> None:
+    def walk(rung: Any, location: ProgramLocation, *, loops: bool = True) -> None:
+        # iter_loop_body_rungs yields nested loops' rungs too: walk those without it.
         wrapped: list[Tag] = []
         for condition in rung._conditions[rung._branch_condition_start :]:
             contacts(condition, wrapped)
@@ -373,8 +374,7 @@ def _evaluate_immediate_contacts(
                     severity=_route_severity(CLK_IMMEDIATE_CONTACT_MUST_BE_X, mode),
                     message=(
                         f"Immediate contact on {tag.name} ({_bank_label(slot)}) at "
-                        f"{location_text}; an immediate contact must read an input "
-                        "(an InputBlock tag, or one mapped to X)."
+                        f"{location_text}; an immediate contact must read an input mapped to X."
                     ),
                     location=location_text,
                     suggestion=_build_suggestion(CLK_IMMEDIATE_CONTACT_MUST_BE_X, None, tag_map),
@@ -392,9 +392,11 @@ def _evaluate_immediate_contacts(
                     instruction_type=None,
                     arg_path="condition",
                 ),
+                loops=loops,
             )
-        for body_rung in iter_loop_body_rungs(rung._instructions):
-            walk(body_rung, location)
+        if loops:
+            for body_rung in iter_loop_body_rungs(rung._instructions):
+                walk(body_rung, location, loops=False)
 
     def top(scope: Any, subroutine: str | None, rung_index: int) -> ProgramLocation:
         return ProgramLocation(
