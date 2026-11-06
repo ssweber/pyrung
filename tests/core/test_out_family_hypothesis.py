@@ -127,24 +127,27 @@ def debounce_model(
     levels: list[bool], per_scan: Fraction, on_preset: int, off_preset: int
 ) -> list[tuple[bool, int, int]]:
     """(coil, on TD, off TD) per scan: the coil follows the input once it has
-    held steady for the side's time, and holds in between.  A side's TD starts
-    from 0 when the input changes to it and is kept while the other side times
-    (hardware, 2026-11-05: the on side's after the input falls).  The input
-    counts as off before scan 1."""
+    held steady for the side's time, and holds in between.  The on TD starts
+    from 0 when the input rises and is kept after it falls (hardware,
+    2026-11-05); the off TD is 0 while the input is on and counts from the
+    fall's scan, but the off side compares the TD as the scan before left it,
+    and not on the fall's scan (hardware, 2026-11-06).  The input counts as off
+    before scan 1."""
     coil, run_len, prev, out = False, 0, False, []
     on_td = off_td = 0
     for level in levels:
+        fell = prev and not level
         run_len = run_len + 1 if level == prev else 1
         prev = level
         acc = _acc(run_len, per_scan)
         if level:
-            on_td = acc
+            on_td, off_td = acc, 0
             if acc >= on_preset:
                 coil = True
         else:
-            off_td = acc
-            if acc >= off_preset:
+            if not fell and off_td >= off_preset:
                 coil = False
+            off_td = acc
         out.append((coil, on_td, off_td))
     return out
 
@@ -187,13 +190,14 @@ def flasher_model(
     A phase ends on the scan its timer reaches the preset, and that scan
     already shows the next phase, so on and off phases run ``ka`` and ``kb``
     scans, but the first on phase counts scan 1 as a tick, as on_delay does.
-    An on time of 0 never shows (hardware, ``out_more/zero_and_below``)."""
+    An on or off time of 0 or below holds it dark (hardware,
+    ``out_more/zero_and_below`` and ``flasher_off``)."""
     ka = _ticks_to_reach(on_preset, per_scan)
     kb = _ticks_to_reach(off_preset, per_scan)
     out, n = [], 0
     for level in levels:
         n = n + 1 if level else 0
-        if not level or on_preset <= 0:
+        if not level or on_preset <= 0 or off_preset <= 0:
             out.append(False)
         elif n < ka:
             out.append(True)
@@ -207,12 +211,12 @@ def flasher_model(
     dt=dt_st,
     unit=unit_st,
     on_preset=st.integers(min_value=0, max_value=600),
-    off_preset=st.integers(min_value=1, max_value=600),
+    off_preset=st.integers(min_value=0, max_value=600),
 )
 @SETTINGS
 def test_flasher_alternates_and_restarts_with_an_on_phase(levels, dt, unit, on_preset, off_preset):
     if unit == "sec":
-        on_preset, off_preset = on_preset % 7, off_preset % 6 + 1
+        on_preset, off_preset = on_preset % 7, off_preset % 7
     logic = _build(
         lambda: flasher(
             Coil,
