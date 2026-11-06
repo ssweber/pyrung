@@ -940,6 +940,8 @@ def _copy_rung(rung: Any, memo: dict[int, Any]) -> Any:
     new._execution_plan = [(kind, _copy_item(item, memo)) for kind, item in rung._execution_plan]
     if rung._terminal_instruction is not None:
         new._terminal_instruction = _copy_instruction(rung._terminal_instruction, memo)
+    if rung._pin_box is not None:
+        new._pin_box = _copy_instruction(rung._pin_box, memo)
     new._invalidate_analysis_caches()
     return new
 

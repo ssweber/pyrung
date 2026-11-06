@@ -430,6 +430,30 @@ def test_box_in_forloop_body_is_a_body_rung_of_its_own():
     ]
 
 
+def test_bare_box_then_a_bare_row_in_a_forloop_body_round_trips():
+    """CLICK draws a bare body box and the bare row after it as two body rungs;
+    the import builds and gives back the same rows."""
+
+    def shape() -> None:
+        with Rung(x[1]):
+            with forloop(2):
+                count_up(Counter[1], preset=3).reset(x[4])
+                out(y[1])
+
+    bundle = pyrung_to_ladder(_build(shape), _tag_map())
+    assert [(row[0], row[1], row[-1]) for row in bundle.main_rows[1:-1]] == [
+        ("R", "X001", "for(2)"),
+        ("R", "-", "count_up(CT1,CTD1,preset=3)"),
+        ("", "X004", ".reset()"),
+        ("R", "-", "out(Y001)"),
+        ("R", "-", "next()"),
+    ]
+    code = ladder_to_pyrung(bundle)
+    assert "count_up(CT1, 3).reset(X004)\n            out(Y001)" in code, code
+    ns = exec_with_source(code, {})
+    assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+
 def test_import_gives_each_wire_of_a_box_rung_a_rung_of_its_own():
     """CLICK -> pyrung -> CLICK: a box rung whose wires share their first contact
     comes back as the box's rung and one continued() rung per other wire."""

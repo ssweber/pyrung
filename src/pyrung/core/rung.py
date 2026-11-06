@@ -122,7 +122,10 @@ class Rung:
         self._invalidate_analysis_caches()
         self._execution_items.append(instruction)
         self._execution_plan.append((instruction._executor_kind, instruction))
-        if instruction.is_terminal():
+        # A forloop body's bare box is a body rung of its own, so the next bare
+        # instruction is another body rung: the box ends only its own (a NOP
+        # still ends the flow).
+        if instruction.is_terminal() and not (self._loop_capture and instruction.has_pins()):
             self._terminal_instruction = instruction
         self._tree_outputs += 1
         if instruction.has_pins():

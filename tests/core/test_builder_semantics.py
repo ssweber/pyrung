@@ -244,6 +244,25 @@ def test_box_with_pins_beside_bare_body_rows_in_a_forloop_is_accepted() -> None:
                 count_up(Counter8, preset=5).reset(reset)
 
 
+def test_box_with_pins_before_a_bare_body_row_in_a_forloop_is_accepted() -> None:
+    """The box is a body rung of its own, so the next bare row is another."""
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    lamp = Bool("Lamp")
+    done = Bool("Done")
+
+    with Program() as logic:
+        with Rung(enable):
+            with forloop(2):
+                count_up(Counter8, preset=5).reset(reset)
+                out(lamp)
+                count_up(Counter7, preset=5).reset(reset)
+                out(done)
+    (loop,) = logic.rungs[0]._instructions
+    body = [type(item).__name__ for item in loop.body]
+    assert body == ["CountUpInstruction", "OutInstruction"] * 2
+
+
 def test_box_with_pins_beside_an_output_in_a_forloop_body_rung_is_refused() -> None:
     enable = Bool("Enable")
     mode = Bool("Mode")
