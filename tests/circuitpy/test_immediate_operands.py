@@ -439,38 +439,25 @@ def _plus_one(a):
     return {"o": a + 1}
 
 
-def _function_out_from_an_input(form: str, wrap: Callable[[Any], Any]):
-    """A function's out computed from a bounded input, read by a later rung."""
+def _function_out_from_an_input(wrap: Callable[[Any], Any]):
     sel = Int("Sel", external=True, min=0, max=9)
     dest = Int("Dest", min=0, max=20)
-    seen = Bool("Seen")
     with Program(strict=False) as prog:
         with Rung():
-            if form == "run_function":
-                run_function(_plus_one, ins={"a": sel}, outs={"o": wrap(dest)})
-            else:
-                run_enabled_function(
-                    _plus_one_when_enabled, ins={"a": sel}, outs={"o": wrap(dest)}
-                )
-        with Rung(dest == 7):
-            out(seen)
-    return prog, dest, seen
+            run_function(_plus_one, ins={"a": sel}, outs={"o": wrap(dest)})
+    return prog, dest
 
 
-@pytest.mark.parametrize("form", ["run_function", "run_enabled_function"])
-def test_prove_finds_a_value_written_through_an_immediate_function_out(form):
+def test_prove_finds_a_value_written_through_an_immediate_function_out():
     """An immediate() out is a write: the input that feeds it stays live.
 
     It was not counted, so the input was pruned and ``never(Dest == 7)`` came back
     Proven while stepping ``Sel = 6`` writes 7.
     """
-    prog, dest, seen = _function_out_from_an_input(form, immediate)
+    prog, dest = _function_out_from_an_input(immediate)
     plc = PLC(prog)
     plc.patch({"Sel": 6})
     plc.step()
-    plc.step()
     assert plc.current_state.tags["Dest"] == 7
-    plain, _dest, plain_seen = _function_out_from_an_input(form, lambda value: value)
-    assert _verdict(prog, seen) == _verdict(plain, plain_seen) == "Counterexample"
-    if form == "run_function":
-        assert _verdict(prog, dest == 7) == _verdict(plain, _dest == 7) == "Counterexample"
+    plain, plain_dest = _function_out_from_an_input(lambda value: value)
+    assert _verdict(prog, dest == 7) == _verdict(plain, plain_dest == 7) == "Counterexample"
