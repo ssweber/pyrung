@@ -286,6 +286,21 @@ def _has_skippable_coil_writer(program: Program, tag_name: str, graph: ProgramGr
     return writes_coil and not _is_ote_unconditionally_reachable(tag_name, graph)
 
 
+def _written_every_scan_by_out(program: Program, tag_name: str, graph: ProgramGraph) -> bool:
+    """Whether every writer of *tag_name* is a plain ``out()`` that every scan runs.
+
+    Such a tag ends each scan with what its rungs gave it that scan, so its value
+    is a function of the state the scan started from.  Any other writer may hold
+    it: a latch or a copy when disabled, a drum's row, a function's out, a
+    one-shot, an ``out()`` a scan skips (see :func:`_has_skippable_coil_writer`).
+    """
+    return (
+        _is_ote_only(tag_name, graph)
+        and not _has_out_oneshot_writer(program, tag_name)
+        and not _has_skippable_coil_writer(program, tag_name, graph)
+    )
+
+
 def _collect_all_exprs(
     program: Program,
     graph: ProgramGraph,
@@ -4107,12 +4122,21 @@ def _classify_dimensions_from_graph(
             and not (
                 _tag_is_observable(tag_name, scope=scope, project=project)
                 and (
-                    _has_inert_writer(program, tag_name, graph.indirect_reach)
-                    or _has_out_oneshot_writer(program, tag_name)
-                    or _has_skippable_coil_writer(program, tag_name, graph)
+                    not _written_every_scan_by_out(program, tag_name, graph)
+                    if abstract_timers
+                    else (
+                        _has_inert_writer(program, tag_name, graph.indirect_reach)
+                        or _has_out_oneshot_writer(program, tag_name)
+                        or _has_skippable_coil_writer(program, tag_name, graph)
+                    )
                 )
             )
         ):
+            # Read by nothing: no other tag's value depends on it.  In the search
+            # one the property reads leaves the key only when every scan writes
+            # it afresh; any other writer (a drum, a function, a latch, an out()
+            # some scans skip) can hold it from an earlier scan.  How()'s prior
+            # keeps its own rule.
             combinational.add(tag_name)
             continue
 
