@@ -17,12 +17,12 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 | Expression | Destination | Result |
 |------------|-------------|--------|
 | `DS1 + 1` (DS1=32767) | INT (16-bit signed) | −32768 (wraps) |
-| `50000 * 50000` | DINT (32-bit signed) | −1,794,967,296 (wraps) |
+| `DD1 + 1` (DD1=2147483647) | DINT (32-bit signed) | −2,147,483,648 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
-## Constants into an INT
+## Constants past 16 bits
 
-A CLICK Math whose destination is an INT keeps every whole-number constant in its formula in 16 bits, and pyrung does the same: a constant outside −32768..32767 is read as its low 16 bits, signed. `calc(DD[1] / 65536, DS[1])` divides by 0 (65536 is cut to 0), so it writes 0 and sets `system.fault.division_error`; the same 65536 read from a tag (`calc(DD[1] / DD[2], DS[1])`) divides as written, and a DINT or REAL destination keeps the constant whole. Stage a wide constant in a DINT, or write the result to a DINT, when it must stay wide. The CLICK export writes the formula as you wrote it. Measured on a CLICK for 65536; for a constant between 32768 and 65535, pyrung's signed reading (40000 is −25536) has not been checked on hardware.
+A CLICK Math keeps every whole-number constant in its formula in 16 bits, whatever the destination, and pyrung does the same: a constant outside −32768..32767 is read as its low 16 bits, signed (40000 is −25536), or unsigned in hex mode. `calc(DD[1] / 65536, DD[2])` divides by 0 (65536 is cut to 0), so it writes 0 and sets `system.fault.division_error`; the same 65536 read from a tag (`calc(DD[1] / DD[3], DD[2])`) divides as written. Stage a wide constant in a DINT tag in a rung above and use the tag. CLICK validation reports such a constant (`CLK_CALC_WIDE_CONSTANT`); the CLICK export writes the formula as you wrote it.
 
 ## REAL range and precision
 
@@ -45,12 +45,13 @@ Where Inf or NaN meets an integer:
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, where a CLICK REAL is a 32-bit float: `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
-pyrung checks the range when `calc()` stores its result, not at each step of the formula. Inside one `calc()` a step is a 64-bit float (finite up to about ±1.8E+308, then ±Inf; `**` too) or an exact integer, so `calc(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag, where a CLICK computing in 32 bits would reach Inf at `Big * 10` and store Inf (not yet measured on a CLICK). Split such a formula across two `calc()`s when that intermediate Inf matters. An integer step is exact however large it grows (`2 ** E` with `E` = 1100), until it meets a float: past about 1.8E+308 that step (`* 0.5`, `/`, `sin`) makes the `calc()` store 0 and set `out_of_range`.
+pyrung checks the range when `calc()` stores its result, not at each step of the formula. Inside one `calc()` each step is a 64-bit float, as on a CLICK, finite up to about ±1.8E+308 and then ±Inf, so `calc(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag. A whole number past 2**53 loses its last digits (`D * D - D - 1` with `D` = 2147483647 is 0, not 1), and one past about 1.8E+308 (`2 ** E` with `E` = 1100) is ±Inf.
 
 ## Division
 
 - Division by zero produces result = 0 and sets `system.fault.division_error`. The next `calc()` to run clears it unless it divides by zero too, so read the flag on the next rung; a `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
+- In a `calc()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign: `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero stores 0 with no flag. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
 ## Math errors
 
@@ -62,11 +63,11 @@ A math function given an operand outside its domain — `sqrt` of a negative, `l
 
 A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
 
-A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so pyrung treats it as a math error, as it does `sqrt(-1)`: the `calc()` stores 0 and sets `math_operation_error`. This is pyrung's choice, not yet measured on a CLICK.
+A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so it is a math error, as `sqrt(-1)` is: the `calc()` stores 0 and sets `math_operation_error`. In a `calc()`, zero to the power 0 or to a negative power stores 0 with no flag (no flag for `0 ** 0` is pyrung's choice, not yet read); anywhere else `0 ** 0` is 1.
 
 ## Math outside `calc()`
 
-An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/`, `//` or `%`, where `calc()` sets `division_error`), a math function outside its domain, a negative base to a fractional power, a bitwise or shift operation on Inf or NaN or with a negative count, an integer too large for a float meeting a float (`(2 ** E) * 0.5` with `E` = 1100), and a computed `randint()` bound that evaluates to Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
+An expression evaluated anywhere but `calc()` (a rung condition, a `copy()` source, a `forloop()` count, an index expression such as `DS[I + 1]`) is permissive: an operation that hits a math error gives 0, sets no fault flag and never stops the scan. That covers a division by zero (`/` or `//`, where `calc()` sets `division_error`, or `%`), a math function outside its domain, a negative base to a fractional power, a bitwise or shift operation on Inf or NaN or with a negative count, an integer too large for a float meeting a float (`(2 ** E) * 0.5` with `E` = 1100), and a computed `randint()` bound that evaluates to Inf or NaN. A result that IEEE 754 defines passes through: `Big * 10 > 1.0E+38` is true when the product is +Inf. This is pyrung's own rule; a CLICK has no expressions outside Math, and the CLICK validator flags them. Use `calc()` when the flag matters.
 
 When a value stored as Inf or NaN reaches an instruction's own integer conversion, that instruction's rule applies: a `forloop()` over a `Real` count holding Inf runs no iteration and sets `out_of_range`.
 
@@ -127,7 +128,7 @@ Mode inference applies normally: WORD-only ranges infer hex mode, anything else 
 calc(abs(Error), Magnitude)
 ```
 
-Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding.
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768 has no 16-bit value, so a `calc()` into an `Int` stores 0 and sets `system.fault.out_of_range`, as a CLICK does. pyrung does the same into a wider destination, and for a `Dint` tag holding −2147483648; that is pyrung's choice, not yet read on a CLICK.
 
 ## `randint()`
 
@@ -140,9 +141,9 @@ calc(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 
 `randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
 
-- Equal constants, `randint(7, 7)`, are a math error: the `calc()` stores 0 and sets `system.fault.math_operation_error` (SC46). Tags that hold the same value draw it.
-- A bare `Real` tag as a bound reads 0 with no flag, whatever it holds. Any other bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`, a float literal); one that evaluates to Inf or NaN makes the `calc()` store 0 and set `out_of_range`.
-- Into an `Int`, each constant bound is cut to 16 bits like any constant in the formula ([Constants into an INT](#constants-into-an-int)): `randint(70000, 70002)` draws 4464..4466.
+- Equal bounds, `randint(7, 7)` or two `Int`/`Dint` tags that hold the same value, are a math error: the `randint()` reads 0, the rest of the formula runs (`randint(7, 7) + 5` stores 5), and the `calc()` sets `system.fault.math_operation_error` (SC46).
+- A bare `Real` tag as a bound makes the `randint()` read 0 with no flag, whatever it holds. Any other bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`, a float literal), so `randint(2.5, 2.9)` has equal bounds, 2 and 2, and is a math error (pyrung's choice, not yet read on a CLICK); one that evaluates to Inf or NaN makes the `randint()` read 0 and the `calc()` set `out_of_range`.
+- Into an `Int`, and in hex mode into a `Word`, each constant bound is cut to 16 bits like any constant in the formula ([Constants past 16 bits](#constants-past-16-bits)): `randint(70000, 70002)` draws 4464..4466. Into a `Dint` or `Real` a CLICK keeps a RAND's constant bounds whole, and so does pyrung.
 
 CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses any other bound, a `Real` tag, a float constant, a bit, a `Word` or text (`CLK_RAND_BOUND_TYPE`), equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`), and a bound that is an expression, such as `randint(0, N / 2)` (`CLK_CALC_ARG_NOT_PLAIN`). Use constants or an `Int`/`Dint` tag, computing the bound into a tag in a `calc()` above, and a plain constant for a one-value draw.
 
@@ -157,7 +158,7 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A draw cut into an `Int` is chosen through `expr.cut_tag` instead. Equal constants and a bare `Real` bound read no draw, so patching or forcing their tag changes nothing.
+A draw cut into an `Int` is chosen through `expr.cut_tag` instead. Equal bounds and a bare `Real` bound read no draw, so patching or forcing their tag changes nothing.
 
 The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the site's tag.
 

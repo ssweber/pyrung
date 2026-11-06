@@ -21,15 +21,16 @@ are what a CLICK read on 2026-11-05.
   bounds are 1170h..1172h, 4464..4466 (Result2), and into a Real 70000..70002
   (Result3 = 0..2 over 70000).  RAND ( 70000 , 70000 ) into a Dint is a math
   error, 0 (Result4; 32767 if it draws 70000).  Flags in ErrorCode: SC43 after
-  the Dint (bit 1, off), the Word (bit 2: pyrung's Math wrap rule raises it
-  for the draw's wrap), the Real (bit 4, off), and SC46 and SC43 after the
-  equal bounds (bits 8 and 16): 10.
+  the Dint (bit 1), the Word (bit 2), the Real (bit 4), and SC46 and SC43 after
+  the equal bounds (bits 8 and 16).  Answered on a CLICK (2026-11-05): the Word's
+  draw raises no SC43, only the equal bounds' SC46 (ErrorCode = 8).
 - ``rand_tag_bounds`` (probe): two Dint tags holding 7 and 7 as bounds draw 7
   with no flag (Result1 = 7; 0 if equal tags are an error), randint ( df , df )
   + 5 with DF 3.0 reads 5 (Result2: a Real bound reads 0 and the 5 still
   lands, without a flag), and equal constants zero the whole calc, 0 (Result3)
   with SC46 (Result4 = 4).  RAND ( 7 , 7 ) + 5 reading 5 puts the 0 on the
-  RAND alone.
+  RAND alone.  Answered on a CLICK (2026-11-05): equal tags are a math error, 0
+  with SC46, and RAND ( 7 , 7 ) + 5 is 5 with SC46 (Result4 = 5).
 - ``inf_and_nan_to_text`` (probe): -Inf and NaN copied as text (Copy Option 4c),
   as ``faults/copy_inf_to_text`` does +Inf (``inf``, no flag).  A text register
   seeded ``Z``, then the copy, then each pair of TXT codes packed as 128 *
@@ -363,8 +364,8 @@ group = Group(
             "RAND ( 70000 , 70002 ) is not cut for a Dint, a Word or a Real: a Dint draws "
             "70000..70002 (Result1 = 0..2 over 70000), a Word 4464..4466 (Result2), a Real "
             "70000..70002 (Result3 = 0..2); RAND ( 70000 , 70000 ) into a Dint is a math "
-            "error, 0 (Result4), raising SC46 but not SC43, and the Word's draw wraps "
-            "and raises SC43 (ErrorCode = 10)",
+            "error, 0 (Result4), raising SC46 but not SC43, and the Word's draw raises no "
+            "SC43 (ErrorCode = 8)",
             ladder=prove_rand_other_stores,
             init=_init(1, dds=[(611, 612)], dfs=[(421, 421)], dhs=[(411, 411)]),
             expect={
@@ -372,18 +373,19 @@ group = Group(
                 "Result2": range(4464, 4467),
                 "Result3": range(0, 3),
                 "Result4": 0,
-                "ErrorCode": 10,
+                "ErrorCode": 8,
             },
             scans=SCANS,
             probe="RAND into a Dint, a Word and a Real; equal bounds into a Dint",
         ),
         case(
-            "RAND of two integer tags holding the same value draws that value with no flag "
-            "(Result1 = 7), randint ( df , df ) + 5 gives 5 (Result2) and equal constants "
-            "in a larger calc zero the whole calc, 0 (Result3), with SC46 (Result4 = 4)",
+            "RAND of two integer tags holding the same value is a math error, 0 (Result1) "
+            "with SC46; randint ( df , df ) + 5 gives 5 with no flag (Result2); a math "
+            "error zeroes only the RAND term, RAND ( 7 , 7 ) + 5 is 5 (Result3) with SC46 "
+            "(Result4 = 5)",
             ladder=prove_rand_tag_bounds,
             init=_init(2, dds=[(613, 614)], dfs=[(422, 422)]),
-            expect={"Result1": 7, "Result2": 5, "Result3": 0, "Result4": 4},
+            expect={"Result1": 0, "Result2": 5, "Result3": 5, "Result4": 5},
             scans=SCANS,
             probe="RAND with equal integer tags, a DF bound in a calc, equal constants in a calc",
         ),

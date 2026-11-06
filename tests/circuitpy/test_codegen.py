@@ -2028,13 +2028,14 @@ class TestBoardPeripheralsAndRunStop:
             assert faults == [False, False, False]
 
     @pytest.mark.parametrize(
-        "bounds, low, high",
-        [((2.5, 4.5), 2, 4), ((2.5, 2.5), 2, 2)],
+        "bounds, low, high, equal",
+        [((2.5, 4.5), 2, 4, False), ((2.5, 2.5), 0, 0, True)],
         ids=["different", "equal"],
     )
     def test_float_literal_randint_bounds_draw_on_every_backend(
-        self, monkeypatch, bounds, low, high
+        self, monkeypatch, bounds, low, high, equal
     ):
+        """Each bound is read as an integer: equal ones are a math error, 0 with SC46."""
         from pyrung.core import randint
 
         dest = Int("Dest", default=9)
@@ -2045,7 +2046,7 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
             assert low <= value <= high
-            assert faults == [False, False, False]
+            assert faults == [False, False, equal]
 
     @pytest.mark.parametrize(
         "make, tag_type, held",
@@ -2108,7 +2109,8 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_computed_randint_bound_on_every_backend(self, monkeypatch, operand):
-        """pyrung's choice: 0 with SC43 in a calc, 0 with no flag outside one."""
+        """pyrung's choice: the site is 0, with SC43 in a calc (the rest of the
+        formula runs, as for any randint() math error), with no flag outside one."""
         from pyrung.core import randint
 
         r, setup = self._non_finite_real(operand)
@@ -2129,7 +2131,7 @@ class TestBoardPeripheralsAndRunStop:
             prog, monkeypatch, (dest, copied, *self._FAULTS, after), scans=2
         )
         faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
-        assert results == {name: (0, 0, *faults, True) for name in results}
+        assert results == {name: (5, 0, *faults, True) for name in results}
 
     def test_randint_constants_stay_wide_into_a_dint_on_every_backend(self, monkeypatch):
         from pyrung.core import randint
@@ -2347,8 +2349,16 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (hit, copied, *self._FAULTS), scans=1)
         assert results == {name: (True, 0.0, False, False, False) for name in results}, label
 
+    #: What each _HUGE calc stores into a Real: a calc step is a double, so the
+    #: integer past the double range is Inf (SC43 into a Real), sin(Inf) NaN (no
+    #: flag), atan(Inf) pi / 2.
+    _HUGE_IN_CALC = {
+        "sin_of_pow": (math.nan, False),
+        "atan_of_pow": (math.atan(math.inf), False),
+    }
+
     @pytest.mark.parametrize(("label", "make"), _HUGE, ids=[label for label, _ in _HUGE])
-    def test_an_integer_too_large_for_a_float_in_calc_is_zero_and_sc43_on_every_backend(
+    def test_an_integer_too_large_for_a_float_in_calc_is_a_double_on_every_backend(
         self, monkeypatch, label, make
     ):
         e = Int("E", default=1100)
@@ -2359,7 +2369,138 @@ class TestBoardPeripheralsAndRunStop:
                 calc(make(e, bd), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
-        assert results == {name: (0.0, False, True, False) for name in results}, label
+        value, flagged = self._HUGE_IN_CALC.get(label, (math.inf, True))
+        for stored, *faults in results.values():
+            assert stored == value or (math.isnan(value) and math.isnan(stored)), label
+            assert faults == [False, flagged, False], label
+
+    #: (label, formula of (n, d, z, w, r), destination type, stored, flags as
+    #: (SC40, SC43, SC46)) with n = -7, d = 2147483647, z = 0, w = 0x8001, r = -7.5.
+    #: As a CLICK's Math reads them (hardware, 2026-11-05).
+    _CLICK_MATH = [
+        ("double_steps", lambda n, d, z, w, r: d * d - (d * d - 1), Dint, 0, (0, 0, 0)),
+        ("mod_int", lambda n, d, z, w, r: n % 2, Int, -1, (0, 0, 0)),
+        ("mod_negative_divisor", lambda n, d, z, w, r: 7 % (n + 5), Int, 1, (0, 0, 0)),
+        ("mod_real", lambda n, d, z, w, r: r % 2.0 * 10, Int, -15, (0, 0, 0)),
+        ("mod_word_by_minus_two", lambda n, d, z, w, r: w % -2, Dint, 1, (0, 0, 0)),
+        ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
+        ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
+        ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
+        ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, 0.0, (0, 0, 0)),
+        ("zero_to_literal_zero", lambda n, d, z, w, r: z**0, Int, 0, (0, 0, 0)),
+        (
+            "wide_constant_into_dint",
+            lambda n, d, z, w, r: (d - d + 131072) / 65536,
+            Dint,
+            0,
+            (1, 0, 0),
+        ),
+        ("wide_constant_times", lambda n, d, z, w, r: (n - n + 2) * 40000, Dint, -51072, (0, 0, 0)),
+        ("hex_lsh_drops_the_bit", lambda n, d, z, w, r: lsh(w, 1), Word, 2, (0, 0, 0)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make", "dest_type", "stored", "flags"),
+        _CLICK_MATH,
+        ids=[case[0] for case in _CLICK_MATH],
+    )
+    def test_click_math_rules_on_every_backend(
+        self, monkeypatch, label, make, dest_type, stored, flags
+    ):
+        n, d, z = Int("N", default=-7), Dint("D", default=2147483647), Int("Z")
+        w, r = Word("W", default=0x8001), Real("R", default=-7.5)
+        dest = dest_type("Dest", default=99)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(make(n, d, z, w, r), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    def test_mod_floors_and_zero_to_zero_is_one_outside_calc_on_every_backend(self, monkeypatch):
+        """CLICK's MOD and 0 ^ 0 are calc()'s: anywhere else ``%`` and ``**`` are
+        Python's, so the wrap-around index ``(P - 1) % 10 + 1`` still works."""
+        n, z, p = Int("N", default=-3), Int("Z"), Int("P")
+        odd, zero_power = Bool("Odd"), Bool("ZeroPower")
+        copied, indexed = Int("Copied", default=99), Int("Indexed", default=99)
+        ds = Block("DS", TagType.INT, 1, 10)
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(42, ds[10])
+            with Rung(n % 2 == 1):
+                out(odd)
+            with Rung(z**z == 1):
+                out(zero_power)
+            with Rung():
+                copy(n % 2, copied)
+                copy(ds[(p - 1) % 10 + 1], indexed)
+
+        watch = (odd, zero_power, copied, indexed, *self._FAULTS)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
+        assert results == {name: (True, True, 1, 42, False, False, False) for name in results}
+
+    @pytest.mark.parametrize("default", [300000007, 10**17 + 1])
+    def test_a_real_given_an_int_holds_a_float_on_every_backend(self, monkeypatch, default):
+        """An int default or patch of a Real is stored as a float, so the Real's
+        steps are doubles everywhere and no backend needs to step it as one."""
+        r = Real("R", default=default)
+        dest = Dint("Dest", default=99)
+        assert type(r.default) is float
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(r * r + 1 - r * r, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        assert results == {name: (0, False, False, False) for name in results}
+        for cls in (PLC, CompiledPLC):
+            plc = cls(prog)
+            plc.patch({"R": default + 2})
+            plc.step()
+            assert type(plc.current_state.tags["R"]) is float
+            assert plc.current_state.tags["Dest"] == 0
+
+    def test_a_huge_real_power_outside_calc_is_inf_on_every_backend(self, monkeypatch):
+        """A Real given 10**30 holds 1e30: its tenth power is Inf, not an int too
+        large for a float that a division turns into an OverflowError."""
+        r = Real("R", default=10**30)
+        copied = Real("Copied", default=7.0)
+        hit = Bool("Hit")
+
+        def big():
+            return r * r * r * r * r * r * r * r * r * r / 3
+
+        with Program(strict=False) as prog:
+            with Rung(big() > 0):
+                out(hit)
+            with Rung():
+                copy(big(), copied)
+
+        results = _on_every_backend(prog, monkeypatch, (hit, copied), scans=1)
+        assert results == {name: (True, math.inf) for name in results}
+
+    def test_a_real_calc_step_is_not_stepped_as_a_double(self):
+        r1, r2, r3 = Real("R1"), Real("R2"), Real("R3")
+        with Program() as prog:
+            with Rung():
+                calc(r1 + r2 * r1 - r2, r3)
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_dbl(" not in code
+
+    @pytest.mark.parametrize("dest_type, floor", [(Int, -32768), (Dint, -2147483648)])
+    def test_abs_of_the_bottom_of_a_range_is_zero_and_sc43_on_every_backend(
+        self, monkeypatch, dest_type, floor
+    ):
+        source = dest_type("Source", default=floor)
+        dest = dest_type("Dest", default=99)
+        with Program(strict=False) as prog:
+            with Rung():
+                calc(abs(source), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        assert results == {name: (0, False, True, False) for name in results}
 
     _COMPLEX = [
         ("literal_exponent", lambda n, h: n**0.5),
@@ -3098,7 +3239,8 @@ class TestRandIntCodegen:
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         compile(source_code, "code.py", "exec")
         assert "\nimport random\n" in source_code
-        assert "random.randint(min(int(" in source_code
+        assert "_rand_draw(_calc_flags, " in source_code
+        assert "random.randint(min(lo, hi), max(lo, hi))" in source_code
 
     def test_no_random_import_without_randint(self):
         hw = P1AM()

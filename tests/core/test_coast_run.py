@@ -62,6 +62,8 @@ X, Y, Z, Tmp, Idx = (Int(n) for n in "AdvX AdvY AdvZ AdvTmp AdvIdx".split())
 BX, BY, Hit = (Bool(n) for n in "AdvBX AdvBY AdvHit".split())
 R1 = Real("AdvR1")
 D1 = Dint("AdvD1")
+# A Math cuts a constant past 16 bits, so the wide step is staged in a tag.
+BigStep = Dint("AdvBigStep", default=100000)
 Bank = Block("AdvBank", TagType.INT, 1, 8)
 
 
@@ -178,7 +180,7 @@ def real_ramp():
 @case
 def dint_big_delta():
     with Rung():
-        calc(D1 + 100000, D1)
+        calc(D1 + BigStep, D1)
     with Rung(D1 > 100000000):
         latch(Hit)
 

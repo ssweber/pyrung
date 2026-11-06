@@ -181,6 +181,9 @@ class Tag:
             object.__setattr__(self, "default", store_char(self.default))
         if self.type == TagType.REAL:
             check_real_value(self.default, f"Tag {self.name!r}: default")
+            if isinstance(self.default, int):
+                # A REAL holds a float, as a patch, force or store makes one.
+                object.__setattr__(self, "default", float(self.default))
 
         # Mutual exclusivity checks
         if self.readonly and self.final:

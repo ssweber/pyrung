@@ -1952,10 +1952,11 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
     D0 is absorbed as comparison-only (only appears in the property D0 < 43).
     Rung 0's condition is D0 (truthy), so when D0=0 at default the rung never
     fires in natural traces.  This hides the entry:R0 → D0 dependency behind
-    calc(R0 * 32768, D0), causing R0 to be incorrectly elided.
+    calc(R0 * 32767, D0), causing R0 to be incorrectly elided.
 
     The counterexample: scan 1 sets R0=5.93 (via copy) and D0=2 (via copy),
-    then scan 2 fires calc(5.93 * 32768, D0) = 194318 >= 43.
+    then scan 2 fires calc(5.93 * 32767, D0) = 194312 >= 43.  (32767, not
+    32768: a Math cuts 32768 to -32768.)
     """
     In0 = Bool("In0", external=True)
     In2 = Bool("In2", external=True)
@@ -1964,10 +1965,11 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
 
     with Program(strict=False) as logic:
         with Rung(D0):
-            calc(R0 * 32768, D0)
+            calc(R0 * 32767, D0)
         with Rung(In2):
             copy(5.930127848501925, R0)
         with Rung(In0):
             copy(2, D0)
 
     _assert_soundness(logic, D0 < 43)
+    assert isinstance(always(logic, D0 < 43, max_states=10_000, depth_budget=20), Counterexample)

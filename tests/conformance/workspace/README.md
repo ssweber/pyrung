@@ -2,7 +2,7 @@
 
 <!-- pyrung:guidance --> ClickNick's own guide to this folder is README.pyrung.md, written on every CLICK save. This marker line keeps ClickNick from inserting its pointer here.
 
-The ClickNick workspace for the conformance CLICK project. `.clicknick.toml` links it to the CLICK PLC named `PYRUNG_CONFORMANCE`. The generated `project_to_csv.py` refuses this workspace's RAND probes (`CLK_RAND_BOUND_TYPE`, `CLK_RAND_EQUAL_BOUNDS`); use `make conformance-export` for the CSVs. ClickNick fills in the rest (`src/plc/`, `csv/`, `nicknames.csv`, its scripts and seeds) after every CLICK save; all of that is gitignored. The suite itself is described in [../AGENTS.md](../AGENTS.md).
+The ClickNick workspace for the conformance CLICK project. `.clicknick.toml` links it to the CLICK PLC named `PYRUNG_CONFORMANCE`. The generated `project_to_csv.py` refuses this workspace's RAND and wide-constant probes (`CLK_RAND_BOUND_TYPE`, `CLK_RAND_EQUAL_BOUNDS`, `CLK_CALC_WIDE_CONSTANT`); use `make conformance-export` for the CSVs. ClickNick fills in the rest (`src/plc/`, `csv/`, `nicknames.csv`, its scripts and seeds) after every CLICK save; all of that is gitignored. The suite itself is described in [../AGENTS.md](../AGENTS.md).
 
 ## First load
 

@@ -55,9 +55,9 @@ class TestCalcInstruction:
         assert runner.current_state.tags["fault.division_error"] is True
 
     def test_int_destination_cuts_constants_to_16_bits(self, runner_factory):
-        """A Math into an Int keeps each constant in 16 bits, as a CLICK does:
-        -2147483648 / 65536 divides by 0; the same 65536 read from a Dint does
-        not, and a Dint destination keeps the constant whole."""
+        """A Math keeps each constant in 16 bits whatever the destination, as a
+        CLICK does: -2147483648 / 65536 divides by 0 into an Int and a Dint; the
+        same 65536 read from a Dint does not."""
         Enable = Bool("Enable")
         Num = Dint("Num")
         Den = Dint("Den")
@@ -85,7 +85,7 @@ class TestCalcInstruction:
         assert tags["Flagged"] is True
         assert tags["fault.division_error"] is False
         assert tags["ByTag"] == -32768
-        assert tags["IntoDint"] == -32768
+        assert tags["IntoDint"] == 0
         assert tags["Low"] == 7
 
     def test_real_result(self, runner_factory):
@@ -171,25 +171,58 @@ class TestCutIntConstants:
         assert isinstance(cut.right, LiteralExpr)
 
     def test_returns_the_expression_itself_when_no_constant_changes(self):
+        from pyrung.core.expression import BinaryExpr, CalcBinaryExpr
         from pyrung.core.instruction.calc import CalcInstruction, cut_int_constants
 
         A = Int("A")
         expr = (A + 32767) * -32768
         assert cut_int_constants(expr) is expr
         instr = CalcInstruction(expr, Int("Dest"))
-        assert instr.expression is expr
         assert instr.source_expression is expr
+        # The calc runs the same formula, its steps doubles; the written one is untouched.
+        assert repr(instr.expression) == repr(expr)
+        assert isinstance(instr.expression, CalcBinaryExpr)
+        assert isinstance(instr.expression.left, CalcBinaryExpr)
+        assert type(expr) is BinaryExpr and type(expr.left) is BinaryExpr
 
-    def test_only_an_int_destination_cuts(self):
+    def test_every_destination_cuts(self):
         from pyrung.core.instruction.calc import CalcInstruction
 
         A = Dint("A")
         expr = A / 65536
-        into_int = CalcInstruction(expr, Int("I"))
-        assert into_int.source_expression is expr
-        assert repr(into_int.expression) == "(TagExpr(A) / LiteralExpr(0))"
+        for dest in (Int("I"), Dint("D"), Real("R")):
+            instr = CalcInstruction(expr, dest)
+            assert instr.source_expression is expr
+            assert repr(instr.expression) == "(TagExpr(A) / LiteralExpr(0))"
+
+    def test_only_an_int_destination_cuts_randint_bounds(self):
+        from pyrung.core.expression import randint
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        roll = randint(70000, 70002)
+        assert CalcInstruction(roll, Int("I")).expression is not roll
         for dest in (Dint("D"), Real("R")):
-            assert CalcInstruction(expr, dest).expression is expr
+            assert CalcInstruction(roll, dest).expression is roll
+
+    def test_a_hex_word_draw_reads_its_own_site_where_the_cuts_differ(self):
+        from pyrung.core import Word
+        from pyrung.core.expression import randint
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        whole = randint(1, 6)
+        assert whole.ucut_tag.name == whole.tag.name == whole.cut_tag.name
+        same = randint(70000, 70002)  # 4464..4466 either way
+        assert same.ucut_tag.name == same.cut_tag.name != same.tag.name
+        unsigned_whole = randint(40000, 40002)  # 16 bits unsigned, -25536.. signed
+        assert unsigned_whole.ucut_tag.name == unsigned_whole.tag.name
+        assert unsigned_whole.cut_tag.name != unsigned_whole.tag.name
+        differs = randint(100000, 100002)  # -31072.. signed, 34464.. unsigned
+        assert differs.ucut_tag.name.endswith(".ucut")
+        assert differs.cut_tag.name.endswith(".cut")
+        assert (differs.ucut_tag.min, differs.ucut_tag.max) == (34464, 34466)
+        hex_calc = CalcInstruction(differs | Word("Mask"), Word("W"))
+        assert hex_calc.mode == "hex"
+        assert hex_calc.expression.left.tag.name == differs.ucut_tag.name
 
 
 class TestCalcRangeAggregates:

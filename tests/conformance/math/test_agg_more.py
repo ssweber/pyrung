@@ -26,10 +26,10 @@ MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN
 - ``rand_sites``: pyrung's RAND is one draw per site per scan.  Two sites over 8 scans, 1..30000:
   they differ on some scan (Result1 = equal scans, 0 for independent); a site changes
   from scan to scan (Result2 = changes of 7, above 2).  One formula with two (Result3 = scans
-  they cancel to 0, 0).  A bound written above the Math on its own scan (Result4): 5 is the bound
-  as the scan began, 9 is the bound live.  pyrung's engines differ here until a CLICK settles it:
-  core and the kernel read 5, the generated P1AM code reads 9.  So Result4 is a reading, and the
-  case records what it read until then; Result1..3 still assert.
+  they cancel to 0, 0).  A bound written above the Math on its own scan (Result4) was to tell the
+  bound as the scan began (5) from the bound live (9), but both bounds are DD tags holding one
+  value either way, a math error: the RAND reads 0 (hardware, 2026-11-05).  When a bound is read
+  is still open.
 pyrung refuses ``randint`` in a For body, so a draw per iteration is not asked here.
 
 The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66, C522..C526 and C1586..C1590.
@@ -41,7 +41,7 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, calc, copy, fill, latch, reset, system
 from pyrung.core.expression import randint
 from tests.conformance.memory import c, dd, df, dh, ds
-from tests.conformance.probe_kit import between, class_of, finish, flag_bit, once
+from tests.conformance.probe_kit import class_of, finish, flag_bit, once
 from tests.conformance.scans import count_scans, done, scans_for
 
 SC43 = system.fault.out_of_range
@@ -269,8 +269,8 @@ group = Group(
         case(
             "RAND is one draw per site and per scan: two sites differ on most scans (Result1 = "
             "equal scans), a site changes (Result2, changes of 7), a formula with two does not "
-            "cancel (Result3); a bound written above the Math on its scan: 5 is the bound as the scan "
-            "began, 9 live (Result4)",
+            "cancel (Result3); bounds DD tags holding one value, 5 as the scan began and 9 live, "
+            "are a math error that reads 0 (Result4)",
             ladder=prove_rand_sites,
             init=init_rand_sites,
             scans=scans_for(),
@@ -278,7 +278,7 @@ group = Group(
                 "Result1": range(0, 2),
                 "Result2": range(3, 8),
                 "Result3": range(0, 2),
-                "Result4": between(5, 9),
+                "Result4": 0,
             },
             probe="RAND: sites independent; bounds read when",
         ),

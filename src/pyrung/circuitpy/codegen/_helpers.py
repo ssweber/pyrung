@@ -305,36 +305,74 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return value",
         "",
     ],
-    "_rand_checked": [
-        "def _rand_checked(draw, lo, hi):",
-        "    _bit_int(lo)",
-        "    _bit_int(hi)",
-        "    return draw",
+    # A randint() site whose bounds are read: equal ones (46, SC46) or Inf or NaN
+    # (43, SC43) make the site 0, and in a calc append the flag to *flags*, which
+    # the calc sets after the formula (RandIntExpr.evaluate).  Outside calc
+    # *flags* is None.  The kernel reads the scan's draw; the board draws.
+    "_rand_fail": [
+        "def _rand_fail(flags, code):",
+        "    if flags is not None:",
+        "        flags.append(code)",
+        "    return 0",
         "",
     ],
-    "_rand_or_zero": [
-        "def _rand_or_zero(draw, lo, hi):",
-        "    try:",
-        "        _bit_int(lo)",
-        "        _bit_int(hi)",
-        "    except OverflowError:",
-        "        return 0",
-        "    return draw",
-        "",
-    ],
-    "_rand_permissive": [
-        "def _rand_permissive(lo, hi):",
+    "_rand_term": [
+        "def _rand_term(flags, draw, lo, hi):",
         "    try:",
         "        lo = _bit_int(lo)",
         "        hi = _bit_int(hi)",
         "    except OverflowError:",
-        "        return 0",
+        "        return _rand_fail(flags, 43)",
+        "    if lo == hi:",
+        "        return _rand_fail(flags, 46)",
+        "    return draw",
+        "",
+    ],
+    "_rand_draw": [
+        "def _rand_draw(flags, lo, hi):",
+        "    try:",
+        "        lo = _bit_int(lo)",
+        "        hi = _bit_int(hi)",
+        "    except OverflowError:",
+        "        return _rand_fail(flags, 43)",
+        "    if lo == hi:",
+        "        return _rand_fail(flags, 46)",
         "    return random.randint(min(lo, hi), max(lo, hi))",
         "",
     ],
-    "_rand_equal_bounds": [
-        "def _rand_equal_bounds():",
-        "    raise _MathDomainError()",
+    # 0 ** 0, 0 ** -1 and a MOD by 0: a CLICK's Math gives 0 with no flag
+    # (pyrung.core.expression.QuietMathError).
+    "_QuietMathError": [
+        "class _QuietMathError(ArithmeticError):",
+        "    pass",
+        "",
+    ],
+    "_mod": [
+        "def _mod(a, b):",
+        "    if b == 0:",
+        "        raise _QuietMathError()",
+        "    r = abs(a) % abs(b)",
+        "    return -r if a < 0 else r",
+        "",
+    ],
+    # A calc step past 2 ** 53 as the double a CLICK's Math holds (to_double).
+    "_dbl": [
+        "def _dbl(value):",
+        f"    if type(value) is int and not -{1 << 53} <= value <= {1 << 53}:",
+        "        try:",
+        "            return float(value)",
+        "        except OverflowError:",
+        '            return float("inf") if value > 0 else float("-inf")',
+        "    return value",
+        "",
+    ],
+    # ABS of an Int or Dint tag at the bottom of its range has no value there:
+    # OverflowError, so the calc stores 0 with SC43 (ABS_OF_TYPE).
+    "_abs_int": [
+        "def _abs_int(value, floor):",
+        "    if value == floor:",
+        '        raise OverflowError("ABS of the bottom of the range")',
+        "    return abs(value)",
         "",
     ],
     "_permissive_math": [
@@ -366,6 +404,14 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return result",
         "",
     ],
+    # ** in a calc (core _op_pow_calc): 0 ^ 0 and 0 ^ -1 are 0 with no flag.
+    "_pow_calc": [
+        "def _pow_calc(base, exp):",
+        "    if base == 0 and exp <= 0:",
+        "        raise _QuietMathError()",
+        "    return _pow(base, exp)",
+        "",
+    ],
     "_permissive_op": [
         "def _permissive_op(op, a, b):",
         "    try:",
@@ -383,6 +429,10 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "            return a % b",
         '        if op == "**":',
         "            return _pow(a, b)",
+        '        if op == "mod":',
+        "            return _mod(a, b)",
+        '        if op == "pow0":',
+        "            return _pow_calc(a, b)",
         "        a = _bit_int(a)",
         "        b = _bit_int(b)",
         '        if op == "&":',
@@ -401,7 +451,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "            return (((a & 0xFFFF) << (b % 16)) | ((a & 0xFFFF) >> (16 - (b % 16)))) & 0xFFFF",
         '        if op == "rro":',
         "            return (((a & 0xFFFF) >> (b % 16)) | ((a & 0xFFFF) << (16 - (b % 16)))) & 0xFFFF",
-        "    except (ZeroDivisionError, OverflowError, ValueError):",
+        "    except (ArithmeticError, ValueError):",
         "        return 0",
         "    raise ValueError(op)",
         "",
@@ -444,6 +494,16 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
         needed.add("_format_int_text")
     if "_store_copy_value_to_type" in needed:
         needed.add("_store_real")
+    if "_permissive_op" in needed:
+        needed.update({"_bit_int", "_math_func", "_pow", "_mod", "_pow_calc"})
+    if needed & {"_rand_term", "_rand_draw"}:
+        needed.update({"_bit_int", "_rand_fail"})
+    if "_pow_calc" in needed:
+        needed.add("_pow")
+    if needed & {"_mod", "_pow_calc"}:
+        needed.add("_QuietMathError")
+    if "_pow" in needed:
+        needed.add("_math_func")
     return needed
 
 

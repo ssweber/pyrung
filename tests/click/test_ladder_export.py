@@ -867,18 +867,26 @@ def test_calc_hex_token_uses_inferred_hex_mode():
     )
 
 
-def test_calc_into_int_exports_constants_as_written():
-    # pyrung runs the 65536 as 0 (a CLICK Math into an Int cuts its constants to
-    # 16 bits); the export writes the formula as written and CLICK cuts it itself.
-    _assert_export_main_rows(
+def test_calc_exports_wide_constants_as_written_once_allowed():
+    # pyrung runs the 65536 as 0 (a CLICK Math cuts its constants to 16 bits);
+    # validation refuses it (CLK_CALC_WIDE_CONSTANT), and once allowed the export
+    # writes the formula as written and CLICK cuts it itself.
+    from pyrung.click.ladder import LadderExportError
+
+    logic, mapping = build_program(
         """
         with Program() as p:
             with Rung(X1):
                 calc(DD1 / 65536, DS1)
-        """,
+        """
+    )
+    with pytest.raises(LadderExportError, match="CLK_CALC_WIDE_CONSTANT"):
+        pyrung_to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_CALC_WIDE_CONSTANT",))
+    assert normalize_csv(bundle.main_rows) == _literal_csv_rows(
         """
         R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DD1 / 65536,DS1,mode=decimal)
-        """,
+        """
     )
 
 

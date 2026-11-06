@@ -83,9 +83,9 @@ class TestDraws:
                 calc(randint(lo, hi), result)
         plc = PLC(logic, dt=0.01)
         assert set(_draws(plc, "Result", 100)) == {10, 11, 12}
-        plc.patch({lo: 50, hi: 50})
+        plc.patch({lo: 50, hi: 51})
         plc.step()
-        assert plc.state.tags["Result"] == 50
+        assert plc.state.tags["Result"] in (50, 51)
 
     def test_reversed_bounds_draw_between_them(self):
         result = Int("Result")
@@ -143,7 +143,7 @@ class TestBoundsAsCLICKReadsThem:
         assert state.tags["fault.math_operation_error"] is True
         assert state.tags["fault.out_of_range"] is False
 
-    def test_only_equal_constants_declare_the_math_error(self):
+    def test_bounds_that_can_be_equal_declare_the_math_error(self):
         lo = Int("Lo", default=4)
         with Program(strict=False) as logic:
             with Rung():
@@ -154,17 +154,44 @@ class TestBoundsAsCLICKReadsThem:
         assert ["fault.math_operation_error" in writes for writes in faults] == [
             True,
             False,
-            False,
+            True,
         ]
 
-    def test_equal_tag_bounds_draw_their_value(self):
-        lo = Int("Lo", default=4)
-        die = Int("Die", default=7)
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_equal_tag_bounds_are_a_math_error(self, factory):
+        """Two tags holding one value: 0 with SC46, as equal constants (CLICK, 2026-11-05)."""
+        lo, hi = Dint("Lo", default=7), Dint("Hi", default=7)
+        die = Int("Die", default=9)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, lo), die)
-        state = PLC(logic, dt=0.01).step()
-        assert state.tags["Die"] == 4
+                calc(randint(lo, hi), die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 0
+        assert state.tags["fault.math_operation_error"] is True
+        assert state.tags["fault.out_of_range"] is False
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    @pytest.mark.parametrize("tags", [False, True], ids=["constants", "tags"])
+    def test_a_math_error_zeroes_only_the_randint(self, factory, tags):
+        """randint(7, 7) + 5 is 5 with SC46: the rest of the formula runs."""
+        lo, hi = Dint("Lo", default=7), Dint("Hi", default=7)
+        die = Int("Die", default=9)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc((randint(lo, hi) if tags else randint(7, 7)) + 5, die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 5
+        assert state.tags["fault.math_operation_error"] is True
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_real_tag_bounds_in_a_formula_read_zero_without_a_flag(self, factory):
+        r = Real("R", default=3.0)
+        die = Int("Die", default=9)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(r, r) + 5, die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 5
         assert state.tags["fault.math_operation_error"] is False
 
     @pytest.mark.parametrize(
@@ -208,9 +235,9 @@ class TestBoundsAsCLICKReadsThem:
         die = Dint("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(hi, 70000), die)
+                calc(randint(hi, 70001), die)
         state = PLC(logic, dt=0.01).step()
-        assert state.tags["Die"] == 70000
+        assert state.tags["Die"] in (70000, 70001)
         assert state.tags["fault.math_operation_error"] is False
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
@@ -380,14 +407,15 @@ class TestBoundsAsWritten:
         assert {plc.step().tags["Die"] for _ in range(40)} == {2, 3, 4}
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
-    def test_equal_float_literals_draw_their_value(self, factory):
+    def test_equal_float_literals_are_a_math_error(self, factory):
+        """Each bound is read as an integer: 2 and 2 are equal, 0 with SC46."""
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
                 calc(randint(2.5, 2.5), die)
         state = factory(logic, dt=0.01).step()
-        assert state.tags["Die"] == 2
-        assert state.tags["fault.math_operation_error"] is False
+        assert state.tags["Die"] == 0
+        assert state.tags["fault.math_operation_error"] is True
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_char_bound_draws(self, factory):
@@ -553,8 +581,8 @@ class TestProver:
             pytest.param(lambda n: randint(sqrt(n), 5), True, id="sqrt-low-bound"),
             pytest.param(lambda n: randint(0, n**0.5), True, id="fractional-power-bound"),
             pytest.param(lambda n: randint(7, 7), True, id="equal-constants"),
-            pytest.param(lambda n: randint(0, n), False, id="tag-bound"),
-            pytest.param(lambda n: randint(0, n / 2), False, id="division-bound"),
+            pytest.param(lambda n: randint(0, n), True, id="tag-bound"),
+            pytest.param(lambda n: randint(0, n / 2), True, id="division-bound"),
             pytest.param(lambda n: randint(0, 5), False, id="constants"),
             pytest.param(lambda n: randint(Real("R"), sqrt(n)), False, id="real-tag-reads-0"),
         ],

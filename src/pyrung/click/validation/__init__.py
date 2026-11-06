@@ -25,6 +25,7 @@ from .findings import (
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_CALC_SUM_BANK_NOT_AVAILABLE,
+    CLK_CALC_WIDE_CONSTANT,
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
@@ -91,6 +92,7 @@ from .portability import (
     _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
     _evaluate_text_order_compares,
+    _evaluate_wide_constants,
 )
 from .resolve import _ResolutionCache
 
@@ -236,6 +238,7 @@ def validate_click_program(
         findings.extend(_evaluate_out_variant_unit(instruction, base_location, mode))
         findings.extend(_evaluate_forloop_count(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_rand_bounds(instruction, base_location, mode))
+        findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -344,6 +347,7 @@ __all__ = [
     "CLK_RAND_BOUND_TYPE",
     "CLK_RAND_EQUAL_BOUNDS",
     "CLK_CALC_ARG_NOT_PLAIN",
+    "CLK_CALC_WIDE_CONSTANT",
     "CLK_TEXT_ORDER_COMPARE",
     "ClickFinding",
     "ClickValidationReport",
