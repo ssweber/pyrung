@@ -134,9 +134,16 @@ class Instruction(ABC):
     def memory_key(self, prefix: str) -> str:
         return f"{prefix}:{self.state_key}"
 
+    def has_pins(self) -> bool:
+        """Whether this is a box with pins (``.reset()``, ``.down()``, ``.clock()``, ...).
+
+        A box with pins ends its rung: nothing else shares its wire tree.
+        """
+        return False
+
     def is_terminal(self) -> bool:
         """Whether this instruction must be the last execution item in its flow."""
-        return False
+        return self.has_pins()
 
     def advance_profile(self) -> AdvanceProfile | None:
         """Describe the next cross-scan operation for owned result channels."""

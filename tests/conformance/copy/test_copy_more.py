@@ -5,11 +5,10 @@ so 6197 is "15" (49, 53); a NUL reads 0.
 
 ``copy_more``:
 
-- ``across_types``: a Copy of a constant into a C bit: 2 (Result1), 1 where any nonzero is on, 0
-  where the low bit is taken (CLICK: 0; pyrung reads 1, pending BIT: CLICK's editor
-  refuses the form, so the export takes it only as a paste).  2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
+- ``across_types``: 2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
   refuses a DS or DF into a C and a C into a DS or DF (``CLK_COPY_BANK_INCOMPATIBLE``), so those
-  are not asked.
+  are not asked.  A Copy of a constant into a C bit is refused by CLICK's editor and by the
+  export, so it is not asked either.
 - ``pointer_limits``: ``faults/pointer_past_bank`` reads a DD past its bank.  The others, by
   pointer into a slot staged at 99: DS4501 (Result1), DH501 (Result2, by 1 for 0, 2 for
   kept), DF501 (Result3, 1 for 0.0, 2 for kept), TXT1001 (Result4).  CLICK leaves each
@@ -34,9 +33,8 @@ so 6197 is "15" (49, 53); a NUL reads 0.
   read as 10 * first + third (Result1) and the middle (Result2, 1 for 0, 2 for 99, 3 for 'A' at
   17).  Leaving the whole range on a bad character: 1089, 2.  Stopping at it: 109, 2.  Going
   past it: 12 with 1 or 3; CLICK skips it and leaves its slot, 12 and 2.  Fill: DF 2.7 into a
-  DS range: 2 truncated, 3 rounded (Result3).  Fill of 2 into a C range: on, by any nonzero
-  (Result4 = 1), off by the low bit (CLICK: 0;
-  pyrung reads 1, pending BIT, as for ``across_types``).
+  DS range: 2 truncated, 3 rounded (Result3).  A Fill of a constant into a C range is refused
+  by CLICK's editor and by the export, so it is not asked.
 
 The cases own what ``memory.OWNED`` lists under these groups.
 """
@@ -51,13 +49,12 @@ from pyrung.core import (
     fill,
     math,
     pack_text,
-    reset,
     system,
     to_ascii,
     to_text,
     to_value,
 )
-from tests.conformance.memory import c, dd, df, dh, ds, txt
+from tests.conformance.memory import dd, df, dh, ds, txt
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
 
 SC43 = system.fault.out_of_range
@@ -74,15 +71,8 @@ def _pair(slot, first, second, into):
 
 def prove_across_types(slot):
     with Rung(*once(slot)):
-        copy(2, c[1737])
         copy(2.7, slot.ErrorCode)
-    with Rung(*once(slot), c[1737]):
-        copy(1, slot.Result1)
     finish(slot)
-
-
-def init_across_types(slot):
-    reset(c[1737])
 
 
 def prove_pointer_limits(slot):
@@ -225,19 +215,15 @@ def prove_block_forms(slot):
         math(ds[3915] * 10 + ds[3917], slot.Result1)
         copy(2.7, df[200])
         fill(df[200], ds.select(3918, 3919))
-        fill(2, c.select(1738, 1740))
     class_of(slot, ds[3916], [0, 99, 17], slot.Result2)
     with Rung(*once(slot)):
         copy(ds[3918], slot.Result3)
-    with Rung(*once(slot), c[1739]):
-        copy(1, slot.Result4)
     finish(slot)
 
 
 def init_block_forms(slot):
     fill(0, ds.select(3915, 3919))
     copy(0.0, df[200])
-    fill(False, c.select(1738, 1740))
     fill("\x00", txt.select(751, 753))
 
 
@@ -245,13 +231,10 @@ group = Group(
     "copy_more",
     [
         case(
-            "A Copy across types: a constant 2 into a C bit takes the low bit, off (Result1 = "
-            "0), 2.7 into an Int truncates (ErrorCode = 2)",
+            "A Copy of 2.7 into an Int truncates (ErrorCode = 2)",
             ladder=prove_across_types,
-            init=init_across_types,
-            expect={"Result1": 0, "ErrorCode": 2},
-            probe="what a Copy does across bits and numbers",
-            pending="BIT",
+            expect={"ErrorCode": 2},
+            probe="what a Copy does across numbers",
         ),
         case(
             "A Copy from a pointer past the bank leaves the destination, with no flag: DS4501 "
@@ -306,13 +289,11 @@ block_group = Group(
     [
         case(
             "A block copy to_value skips a bad character and leaves its slot (Result1 = 12, "
-            "Result2 = 2); a Fill of DF 2.7 truncates, 2 (Result3); a Fill of 2 into bits takes "
-            "the low bit, off (Result4 = 0)",
+            "Result2 = 2); a Fill of DF 2.7 truncates, 2 (Result3)",
             ladder=prove_block_forms,
             init=init_block_forms,
-            expect={"Result1": 12, "Result2": 2, "Result3": 2, "Result4": 0},
+            expect={"Result1": 12, "Result2": 2, "Result3": 2},
             probe="a block copy's converter; a Fill across types",
-            pending="BIT",
         ),
     ],
 )

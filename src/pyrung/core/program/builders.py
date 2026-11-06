@@ -885,7 +885,7 @@ def count_up(
         with Rung(PartSensor):
             count_up(Counter[1], preset=100).reset(ResetBtn)
 
-    This is a terminal instruction. Requires .reset() chaining.
+    A box with pins: it ends its rung. Requires .reset() chaining.
 
     Args:
         counter: Counter instance (must have ``done`` and ``acc`` fields).
@@ -925,7 +925,7 @@ def count_down(
         with Rung(Dispense):
             count_down(Counter[1], preset=-25).reset(Reload)
 
-    This is a terminal instruction. Requires .reset() chaining.
+    A box with pins: it ends its rung. Requires .reset() chaining.
 
     Args:
         counter: Counter instance (must have ``done`` and ``acc`` fields).
@@ -953,8 +953,8 @@ def count_down(
 class OnDelayBuilder(_AutoFinalizeBuilderBase):
     """Builder for on_delay instruction with optional .reset() chaining (Click-style).
 
-    Without .reset(): TON behavior (auto-reset on rung false, non-terminal)
-    With .reset(): RTON behavior (manual reset required, terminal)
+    Without .reset(): TON behavior (auto-reset on rung false, shares its rung)
+    With .reset(): RTON behavior (manual reset required, ends its rung)
     """
 
     def __init__(
@@ -1104,7 +1104,7 @@ def on_delay(
             on_delay(Timer[1], preset=5000).reset(ResetBtn) # RTON
 
     Without .reset(), this is TON and remains composable in-rung.
-    With .reset(), this is RTON and becomes terminal in the current flow.
+    With .reset(), this is RTON, a box with pins, and it ends its rung.
 
     Args:
         timer: Timer instance (must have ``done`` and ``acc`` fields).
@@ -1149,7 +1149,7 @@ def off_delay(
             off_delay(Timer[2], preset=10000)
             off_delay(Timer[2], 10, "s")       # 10 seconds
 
-    Off-delay timers are composable in-rung (not terminal).
+    Off-delay timers are composable in-rung (no pins, so they share their rung).
 
     Args:
         timer: Timer instance (must have ``done`` and ``acc`` fields).

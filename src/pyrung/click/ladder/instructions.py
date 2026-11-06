@@ -55,9 +55,7 @@ class _InstructionMixin:
         ) -> str: ...
         def _render_pattern(self, pattern: tuple[tuple[bool, ...], ...]) -> str: ...
         def _render_converter(self, converter: CopyConverter) -> str: ...
-        def _render_pieces(
-            self, rung: Any, *, path: str, continued: bool = True
-        ) -> list[tuple[str, ...]]: ...
+        def _render_source_rung(self, rung: Any, *, path: str) -> list[tuple[str, ...]]: ...
 
     def _render_forloop_instruction(
         self,
@@ -91,13 +89,9 @@ class _InstructionMixin:
         for child_index, child_instruction in enumerate(instruction.body):
             child_path = f"{path}.body[{child_index}]({type(child_instruction).__name__})"
             if is_own_rung(child_instruction):
-                # A conditioned body rung, or a nested loop: a rung of its own
-                # (more than one where a box needs its own; CLICK holds no
-                # continued rung in a loop body).
+                # A conditioned body rung, or a nested loop: a rung of its own.
                 rows.extend(
-                    self._render_pieces(
-                        loop_item_rung(child_instruction), path=child_path, continued=False
-                    )
+                    self._render_source_rung(loop_item_rung(child_instruction), path=child_path)
                 )
                 continue
             child_condition_rows = self._expand_conditions([], path=f"{child_path}.condition")

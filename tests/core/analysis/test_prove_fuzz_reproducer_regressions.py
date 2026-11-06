@@ -672,6 +672,7 @@ def test_nd_timer_preset_live_input_pruning():
                 out(B0)
         with Rung(~In0):
             out(B0)
+        with Rung(~In0).continued():
             on_delay(T0, ExtN0, unit="sec").reset(B0)
 
     projection = ["B0", "T0_Done"]
@@ -1273,16 +1274,20 @@ def test_fuzz_band_tagged_range_sum_dest_not_elided():
     _assert_soundness(logic, Or(~B1, ~B0))
 
 
-def test_fuzz_indirect_block_write_band_sum_reachability():
+@pytest.mark.parametrize(
+    "bounds", [{}, {"min": 0, "max": 3}], ids=["undeclared index", "declared index"]
+)
+def test_fuzz_indirect_block_write_band_sum_reachability(bounds):
     """Indirect DS write feeds a band-tagged range sum on the next scan.
 
     Reproducer: reachability_20260517_192740_000.  copy(66, DS[N1 + 1])
     writes DS1 with default N1=0.  On the following scan, BandTotal becomes
     positive and B0 is set, but reachable_states currently reports only
-    B0=False.
+    B0=False.  An undeclared N1 reaches only an index, which answers for
+    nothing: the search says so.
     """
     B0 = Bool("B0")
-    N1 = Int("N1")
+    N1 = Int("N1", **bounds)
     BandTotal = Int("BandTotal", band={"ZERO": 0, "POSITIVE": ">0"})
     DS = Block("DS", TagType.INT, 1, 4)
 
@@ -1298,6 +1303,10 @@ def test_fuzz_indirect_block_write_band_sum_reachability():
 
     projection = ["B0"]
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    if not bounds:
+        assert isinstance(bfs, Intractable)
+        assert bfs.tags == ["N1"]
+        return
     assert not isinstance(bfs, Intractable)
 
     plc = PLC(logic, dt=0.010)

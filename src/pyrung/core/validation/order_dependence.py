@@ -565,8 +565,12 @@ def _display(
     lead = _READER_TEXT[reader.kind]
     if reader.body is not None:
         lead = lead[0].lower() + lead[1:]
+    above = _ABOVE_TEXT[reader.kind]
+    if reader.kind == _BOX and writer.rung is not reader.rung:
+        # A box with pins ends its rung, so its writer is a wire above it.
+        above = "an instruction on a wire above it in the same CLICK rung"
     problem = (
-        f"{where}{lead} {names} after {_ABOVE_TEXT[reader.kind]} writes {noun}, "
+        f"{where}{lead} {names} after {above} writes {noun}, "
         "so it reads the new value, as on a CLICK."
     )
     lines = _reader_lines(reader, tags, bank_of)

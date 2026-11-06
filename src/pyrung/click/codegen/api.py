@@ -87,9 +87,10 @@ def _verify_emitted_logic(
 ) -> None:
     """Fail when the generated code would change the logic the rows wire.
 
-    Compares every output's AF token, full condition, pins and CLICK rung
-    in the source rows against the ``with rung`` / ``with branch`` blocks the
-    emitter renders.  Shape changes pass; a lost or added contact does not.
+    Compares every output's AF token, full condition (each contact by its
+    cell), pins, CLICK rung and wire in the source rows against the
+    ``with rung`` / ``with branch`` blocks the emitter renders, row for row
+    (see :func:`~pyrung.click.codegen.shaping.emitted_logic_mismatch`).
     """
     scopes = [("Main program", analyzed)]
     scopes.extend((f'Subroutine "{sub.name}"', sub.analyzed) for sub in subroutines)
@@ -212,8 +213,9 @@ def ladder_to_pyrung(
             every source per-slot value (raises :class:`CodegenIdentityError`),
             a rung-analysis check that no source contact is silently dropped
             for lack of wiring into an output, and a logic check that every
-            output in the generated code keeps the condition, pins and
-            CLICK rung the source rows give it (both raise
+            output in the generated code keeps the condition (each contact
+            from its own cell), pins, CLICK rung and wire the source rows give
+            it (both raise
             ``ValueError``). When *False*, a dropped contact only warns and the
             logic check is skipped.
 

@@ -1000,6 +1000,7 @@ class TestInstructionCoverage:
             with Rung():
                 fill(3, ds.select(1, 3))
                 search(ds.select(1, 3) >= 3, result=result, found=found)
+            with Rung():
                 shift(bits.select(1, 3)).clock(clock).reset(reset_cmd)
 
         compiled = compile_kernel(prog, blockless=True)
@@ -1030,15 +1031,16 @@ class TestInstructionCoverage:
 
     def test_helper_legs_bind_at_their_box(self):
         """A box's helper legs bind just before its code, as the box starts:
-        they read live, so they see the writes of the rows above the box; a
+        they read live, so they see the writes of the wires above the box; a
         bare For-body box binds them the same way on each pass."""
         a, b, d, e = Bool("A"), Bool("B"), Bool("D"), Bool("E")
         c1, c2, c3 = Counter.clone("C1"), Counter.clone("C2"), Counter.clone("C3")
         with Program(strict=False) as prog:
             with Rung(a):
                 out(b)
-                with branch(e):
-                    count_up(c1, 3).reset(d)
+            with Rung(a, e).continued():
+                count_up(c1, 3).reset(d)
+            with Rung(a).continued():
                 count_up(c2, 3).reset(b)
             with Rung(a):
                 with forloop(2):

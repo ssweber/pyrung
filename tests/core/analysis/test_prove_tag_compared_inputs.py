@@ -40,6 +40,7 @@ from pyrung.core import (
     pack_words,
     run_function,
     search,
+    unpack_to_bits,
     unpack_to_words,
 )
 from pyrung.core.analysis.prove import (
@@ -810,16 +811,8 @@ def test_input_equal_to_written_external(config, ext_max) -> None:
         _assert_counterexample(logic, bad, config)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "review N3 (base too): an index through calc (math(Ptr + 0, P2); "
-        "copy(Tbl[P2], D); D == 370) keeps Ptr's own partition (1, 2, 49, 50): "
-        "the literal is not carried back through the table and the calc, so "
-        "Ptr = 37 is never tried: false Proven"
-    ),
-)
 def test_index_through_calc_of_element_compared_with_literal() -> None:
+    """``math(Ptr + 0, P2)`` reaches a table index: Ptr takes every value of 1..50."""
     table = Block("KTbl", TagType.INT, 1, 50)
     pointer = Int("KPtr", external=True, min=1, max=50, default=1)
     index, loaded = Int("KP2"), Int("KD")
@@ -855,3 +848,26 @@ def test_expression_index_compared_with_stepped_int() -> None:
         with Rung(table[pointer + 0] == stepped, stepped > 365):
             latch(bad)
     _assert_counterexample(logic, bad, _OptConfig())
+
+
+@pytest.mark.parametrize(
+    ("top", "bits", "value"),
+    [pytest.param(300, (7, 8), 192, id="0..300"), pytest.param(900, (7, 10), 576, id="0..900")],
+)
+def test_a_partner_of_an_input_searched_whole_sees_all_its_values(top, bits, value) -> None:
+    # KX reaches the unpack, so it is searched over all of 0..top; KY, grouped with it
+    # for KX == KY, needs those values too, not the ones the literals alone split.
+    first = Int("KX", external=True, min=0, max=top)
+    second = Int("KY", external=True)
+    flags = Block("KB", TagType.BOOL, 1, 16)
+    bad = Bool("KBad")
+    with Program(strict=False) as logic:
+        with Rung():
+            unpack_to_bits(first, flags.select(1, 16))
+        with Rung(flags[bits[0]], flags[bits[1]], first == second, first > 10, second < 10000):
+            latch(bad)
+    assert _witness_hits(logic, [({"KX": value, "KY": value}, 2)], "KBad")
+    result = never(logic, bad)
+    assert not isinstance(result, Proven), result
+    if isinstance(result, Counterexample):
+        assert _replay(logic, result.trace).current_state.tags["KBad"] is True

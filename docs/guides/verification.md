@@ -66,7 +66,7 @@ elif isinstance(result, Intractable):
 
 `Intractable` means the verifier could not decide. `result.kind` says why:
 
-- `"search"` — the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation. A search that found no scan also answers this when the values it tried on an input may not be all that reach a comparison, as through a multiply, a fractional literal or a wrap further down a chain of stores: `result.tags` names the input, and a `min`/`max` or `choices` on an integer input, or a `run_for()`, settles it.
+- `"search"` — the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation. A search that found no scan also answers this for an input whose value reaches more than contacts on it, its own comparisons with a literal and stores that can be worked back from such comparisons (an index, a comparison with a computed tag, a `math()` with no inverse, a store into a tag that reaches any of those): `result.tags` names the input, and `choices` or an integer `min`/`max` of at most 1000 values, or a `run_for()`, settles it. A search `depth_budget` cut short answers this too, with no tags: raise `depth_budget=`.
 - `"timing"` — unconfirmed. The search found a violation, but replaying its trace on the concrete PLC (at the verifier's fixed `dt`, 10 ms) did not reach it: the violation needs a timer to finish on a scan the PLC's timing does not give, like a 30 ms timer done before a 1000 ms one started with it. `result.tags` names the timers, `result.trace` keeps the search's trace (each step's `timers` lists the ticks it moved) and `result.diverged_at` is the step where the replay left it. Whether it can happen depends on timer timing, which the verifier does not model (see [How it works](#how-it-works)): check it with a `run_for()` test.
 - `"timers"` — so many timers run at once that the ways they can finish on one scan pass the verifier's cap. Narrowing `choices`/`min`/`max` does not help; prove a property whose scope reaches fewer of them, or test the timing with `run_for()`.
 - `"property"` — the property's own `rise()`/`fall()`, which the search counts as possibly true on every scan, gave a counterexample the concrete PLC did not reproduce. Latch or one-shot the edge in the program and name that coil in the property instead.
@@ -109,8 +109,6 @@ run_function(my_func, outs={"r": result})
 ```
 
 The search calls the function itself to learn what it writes, so that holds only for a function whose answer follows from its inputs. A closure, a global, a helper, a mutable default, an import, a callable object, or a list, dict or object in `ins=` gets an `Intractable` of kind `"function"`, from `reachable_states()` and `pyrung lock` too.
-
-A function past that isn't always explored. The output of a `run_enabled_function` that no rung reads, and an output through a pointer (`blk[Idx]`), can stay out of the search, so a `Proven` on one of those says nothing about what the function writes. Test it with `run_for()`.
 
 Timers are black boxes. A timer's Done may change on any scan its instruction allows: an enabled `on_delay` may finish on any scan and then stays done, a disabled `off_delay` may drop on any scan, a running `time_drum` or `time_event_drum` step may end on any scan, and the Out family's `debounce`, `flasher` and `timed` coils time the same way. Enable, reset and preset logic stay exact, and a tag preset is simply read. That covers everything a real timer can do under any scan time and any preset value, so a `Proven` holds whatever the timing. An accumulator the program compares takes the values its comparisons split at; one read as a value (copied, computed with, read by a callable property) may take any value. Counters count rising edges and are tracked exactly: counting is not time.
 
@@ -415,7 +413,7 @@ pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
-`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `math` count advances one step per scan, so a count past the budget is not reached. A `Proven` cut short by the budget says so in a caveat.
+`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `math` count advances one step per scan, so a count past the budget is not reached. A search the budget cuts short answers `Intractable`.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

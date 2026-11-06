@@ -2,14 +2,11 @@
 
 On a CLICK and in pyrung, each output solves only the path from the rail to it:
 the trunk's contacts are read as the rung starts, and a branch reads its own
-contacts when execution reaches it, after the outputs above it ran.  The exporter redraws a rung two
-ways that move a contact to another row:
-
-* it factors label-equal contacts into a shared node (``branch(C, D)`` beside
-  ``branch(C, E)`` becomes ``branch(C)`` holding both), which reads them
-  earlier;
-* it splits a rung at each box with pins (CLICK C000A), and every CLICK rung
-  it makes repeats the path in front of its outputs, which reads it later.
+contacts when execution reaches it, after the outputs above it ran.  The exporter
+factors label-equal contacts into a shared node (``branch(C, D)`` beside
+``branch(C, E)`` becomes ``branch(C)`` holding both), which reads them earlier,
+and an output its group cannot share a node with reads its whole path where it
+stands.
 
 A move is harmless unless a row in between writes a tag the contact reads.
 :class:`ReadOrder` records where the source rung reads each contact and asks
@@ -38,7 +35,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
 
 
-def contact_positions(rung: Rung, *, start: int = 0) -> tuple[list[list[Any]], list[list[int]]]:
+def contact_positions(rung: Rung) -> tuple[list[list[Any]], list[list[int]]]:
     """Each output's contacts in path order, and the position each is read at.
 
     Outputs come in solve order (as ``_collect_instruction_trees`` lists them).
@@ -50,7 +47,7 @@ def contact_positions(rung: Rung, *, start: int = 0) -> tuple[list[list[Any]], l
 
     def walk(row: Rung, inherited: list[Any], at: list[int]) -> None:
         local = row._conditions[row._branch_condition_start :]
-        here = start + len(conditions)
+        here = len(conditions)
         path = [*inherited, *local]
         read = [*at, *([here] * len(local))]
         for item in row._execution_items:
@@ -110,18 +107,14 @@ class ReadOrder:
         hit = hits[0]
         return MovedRead(output=output, contact=condition, tag=hit.tag, writer=lo + hit.writer)
 
-    def check(self, pieces: Sequence[Rung]) -> MovedRead | None:
-        """The first contact *pieces* (the rung as exported, in order) would move across a write."""
-        offset = 0
-        for piece in pieces:
-            _conditions, positions = contact_positions(piece, start=offset)
-            for local, read_at in enumerate(positions):
-                output = offset + local
-                if len(read_at) != len(self.positions[output]):  # pragma: no cover - defensive
-                    raise AssertionError("exported path differs from the source path")
-                for index, at in enumerate(read_at):
-                    moved = self.crossing(output, index, at)
-                    if moved is not None:
-                        return moved
-            offset += len(positions)
+    def check(self, exported: Rung) -> MovedRead | None:
+        """The first contact *exported* (the rung as drawn) would read across a write."""
+        _conditions, positions = contact_positions(exported)
+        for output, read_at in enumerate(positions):
+            if len(read_at) != len(self.positions[output]):  # pragma: no cover - defensive
+                raise AssertionError("exported path differs from the source path")
+            for index, at in enumerate(read_at):
+                moved = self.crossing(output, index, at)
+                if moved is not None:
+                    return moved
         return None

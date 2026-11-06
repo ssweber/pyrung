@@ -1,12 +1,14 @@
-"""The importer reads each contact where the CLICK rung does.
+"""The importer reads each contact where the CLICK rung does, row for row.
 
 CLICK solves a rung row by row: a contact cell is read on the row of the first
 output its wire runs through, and two cells with the same label are two reads.
-Grouping outputs under one ``with rung(...)`` or ``with branch(...)`` reads the
-shared contacts once, at the group's first output, so the importer groups by
-label only where no output in between writes what the contact reads.  The
-exporter's factoring keeps the same rule.  Each case pins the generated shape
-and runs it against a hand-written program with the CLICK rung's meaning.
+The importer groups outputs under one ``with rung(...)`` or ``with branch(...)``
+only where the drawing has one cell teed off to them, and gives each further
+wire of a CLICK rung back as a ``.continued()`` rung, so the generated code
+draws as the rows do and reads each contact where they do.  The exporter's
+label factoring keeps a written contact out of a shared node.  Each case pins
+the generated shape and runs it against a hand-written program with the CLICK
+rung's meaning.
 """
 
 from __future__ import annotations
@@ -19,9 +21,11 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.click._topology import Leaf
-from pyrung.click.codegen.read_order import ReadOrder, _operands, _token_writes
-from pyrung.core import PLC, Program, Rung
+from pyrung.click._topology import Series, make_compound
+from pyrung.click.codegen.analyzer import _analyze_rungs
+from pyrung.click.codegen.parser import _parse_rows
+from pyrung.click.codegen.shaping import emitted_logic_mismatch
+from pyrung.core import PLC, Or, Program, Rung
 from pyrung.core.program import branch, out, reset
 from tests.click.helpers import exec_with_source
 
@@ -96,7 +100,7 @@ CASES: dict[str, tuple[list[list[str]], Callable[[], None], str]] = {
     "trunk_then_written_contact": (
         [_row("R", ["X001", "C5"], "reset(C5)"), _row("", ["X001", "C5", "X002"], "out(Y001)")],
         _trunk_then_written_contact,
-        "with branch(C5, X002):\n            out(Y001)",
+        "with rung(X001, C5, X002).continued():\n        out(Y001)",
     ),
     "teed_cells_write_c5": (
         [_row("R", ["X001", "T:C5"], "reset(C5)"), _row("", ["", "C5", "X002"], "out(Y001)")],
@@ -106,12 +110,12 @@ CASES: dict[str, tuple[list[list[str]], Callable[[], None], str]] = {
     "teed_cells_no_write": (
         [_row("R", ["X001", "T:C5"], "reset(C6)"), _row("", ["", "C5", "X002"], "out(Y001)")],
         _teed_cells_no_write,
-        "with rung(X001, C5):\n        reset(C6)",
+        "with branch(C5, X002):\n            out(Y001)",
     ),
     "rail_rows_no_write": (
         [_row("R", ["C5"], "reset(C6)"), _row("", ["C5"], "out(Y001)")],
         _rail_rows_no_write,
-        "with rung(C5):\n        reset(C6)\n        out(Y001)",
+        "with rung(C5).continued():\n        out(Y001)",
     ),
     "coil_writes_trunk_contact": (
         [_row("R", ["X001", "C5"], "out(C1)"), _row("", ["C1", "X002"], "out(Y001)")],
@@ -194,29 +198,112 @@ def test_round_trip_keeps_outputs_teed_off_one_cell_together():
         assert _readings(ns["logic"], names, seed) == _readings(logic, {}, seed), seed
 
 
-def test_write_sets_name_each_address_one_way():
-    # A reset of a Done bit writes the accumulator too, and the reverse.
-    assert _token_writes("reset(CT1)").writes >= {"CT1", "CTD1"}
-    assert _token_writes("reset(T1)").writes >= {"T1", "TD1"}
-    assert _token_writes("copy(5, CTD2)").writes >= {"CT2", "CTD2"}
-    assert _token_writes("copy(1, TD3)").writes >= {"T3", "TD3"}
-    # Zero-padded and plain spellings are one address.
-    assert _operands("X001") == _operands("X1") == ({"X1"}, set())
-    assert _token_writes("copy(DS001..DS002, DD1)").writes == {"DS1", "DS2", "DD1"}
-    # A word view of a bit bank reaches the whole bank.
-    assert _operands("XD0u==5") == (set(), {"X"})
-    assert _token_writes("copy(DS1, YD0)").indexed_writes == {"Y"}
+def _coils_on_one_contact() -> None:
+    with Rung(x[1]):
+        out(y[1])
+        out(y[2])
 
 
-def test_word_view_write_meets_a_bit_contact():
-    # R,Y001,T -> copy(0, YD0) / ,,- -> out(C1) / ,Y001 -> out(C2)
-    order = ReadOrder(
-        [Leaf("Y001", 0, 1), Leaf("Y001", 0, 1), Leaf("Y001", 2, 1)],
-        ["copy(0, YD0)", "out(C1)", "out(C2)"],
-    )
-    # Y001 on the rail row reads after the YD0 write; on the teed cell, before.
-    assert order.crosses(Leaf("Y001", 2, 1), 0)
-    assert not order.crosses(Leaf("Y001", 0, 1), 0)
+def _unconditional_trunk_branches() -> None:
+    with Rung():
+        with branch(x[1]):
+            out(y[1])
+        with branch(x[2]):
+            out(y[2])
+
+
+def _nested_branches_under_an_or() -> None:
+    with Rung(Or(x[1], x[2]), x[3]):
+        out(y[1])
+        with branch(x[4]):
+            out(y[2])
+            with branch(x[5]):
+                out(y[3])
+        out(y[4])
+
+
+def _three_wires() -> None:
+    with Rung(x[1]):
+        out(y[1])
+    with Rung(x[1], x[2]).continued():
+        out(y[2])
+    with Rung().continued():
+        out(y[3])
+
+
+WRITTEN: dict[str, Callable[[], None]] = {
+    "coils_on_one_contact": _coils_on_one_contact,
+    "unconditional_trunk_branches": _unconditional_trunk_branches,
+    "nested_branches_under_an_or": _nested_branches_under_an_or,
+    "three_wires": _three_wires,
+    "teed_cells_write_c5": _teed_cells_write_c5,
+    "teed_cell_then_rail_row": _teed_cell_then_rail_row,
+    "trunk_then_written_contact": _trunk_then_written_contact,
+    "coil_writes_trunk_contact": _coil_writes_trunk_contact,
+}
+
+
+def _drawing(rungs: list) -> list[tuple]:
+    """Each rung as written: continued or not, its contacts, and its items."""
+
+    def items(rung) -> tuple:
+        return tuple(
+            ("branch", len(item._conditions) - item._branch_condition_start, items(item))
+            if isinstance(item, type(rung))
+            else type(item).__name__
+            for item in rung._execution_items
+        )
+
+    return [(rung._use_prior_snapshot, len(rung._conditions), items(rung)) for rung in rungs]
+
+
+@pytest.mark.parametrize("name", list(WRITTEN))
+def test_round_trip_gives_back_the_code_written(name: str):
+    """pyrung -> CLICK -> pyrung -> CLICK: the same rungs, and the same rows."""
+    with Program() as logic:
+        WRITTEN[name]()
+    bundle = pyrung_to_ladder(logic, TagMap(include_system=False))
+    ns = exec_with_source(ladder_to_pyrung(bundle), {})
+    assert _drawing(ns["logic"].rungs) == _drawing(logic.rungs)
+    assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+
+def _analyzed(rows: list[list[str]]):
+    return _analyze_rungs(_parse_rows([_HEADER, *rows, _row("R", [], "end()")]))
+
+
+def test_logic_check_refuses_two_cells_folded_into_one():
+    rungs = _analyzed(CASES["teed_cells_no_write"][0])
+    assert emitted_logic_mismatch(rungs) is None
+    # Read both outputs' C5 from the first cell, as grouping by label would.
+    (rung,) = rungs
+    first, second = rung.instructions
+    rung.condition_tree = make_compound([rung.condition_tree, first.branch_tree], Series)
+    first.branch_tree = None
+    second.branch_tree = second.branch_tree.children[1]
+    mismatch = emitted_logic_mismatch(rungs)
+    assert mismatch is not None
+    assert "another cell with the same label" in mismatch
+
+
+def test_logic_check_refuses_an_output_moved_to_another_wire():
+    rungs = _analyzed(CASES["rail_rows_no_write"][0])
+    assert emitted_logic_mismatch(rungs) is None
+    first, second = rungs
+    assert second.is_continued
+    second.is_continued = False
+    mismatch = emitted_logic_mismatch(rungs)
+    assert mismatch is not None and "different CLICK rung" in mismatch
+    # Both outputs on the first wire, each with its own cell: another wire.
+    second.is_continued = True
+    (moved,) = second.instructions
+    moved.branch_tree = second.condition_tree
+    first.instructions[0].branch_tree = first.condition_tree
+    first.condition_tree = None
+    first.instructions.append(moved)
+    second.instructions = []
+    mismatch = emitted_logic_mismatch(rungs)
+    assert mismatch is not None and "different wire" in mismatch
 
 
 def test_export_keeps_a_written_contact_out_of_the_shared_prefix():
@@ -235,12 +322,3 @@ def test_export_keeps_a_written_contact_out_of_the_shared_prefix():
     ]
     code = ladder_to_pyrung(bundle)
     assert "with branch(C5, X002):" in code
-
-
-def test_hex_constant_is_not_a_read_of_an_address():
-    from pyrung.click.codegen.read_order import _operands
-
-    names, _ = _operands("DH1==FFC0h")
-    assert names == {"DH1"}
-    names, _ = _operands("DS1==16C2h")
-    assert names == {"DS1"}

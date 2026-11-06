@@ -1126,7 +1126,8 @@ def rung_specs(
     non_terminal = [i for i in instructions if not _is_terminal(i)]
     terminal = [i for i in instructions if _is_terminal(i)]
     if terminal:
-        instructions = non_terminal + [terminal[0]]
+        # A box with pins ends its rung: it stands alone.
+        instructions = [terminal[0]]
     else:
         instructions = non_terminal if non_terminal else instructions
 
