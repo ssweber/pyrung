@@ -239,7 +239,8 @@ def _functions_the_search_cannot_call(program: Program) -> Intractable | None:
     a verdict built on them would be a guess.  It is left uncalled, not explored.
     """
     from pyrung.core.runner import calls_that_depend_on_more_than_their_inputs
-    from pyrung.core.tag import Tag
+
+    from .absorb import _all_write_targets
 
     calls = calls_that_depend_on_more_than_their_inputs(program)
     if not calls:
@@ -251,9 +252,7 @@ def _functions_the_search_cannot_call(program: Program) -> Intractable | None:
         reason=(f"a function whose answer may not follow from its inputs: {', '.join(names)}"),
         dimensions=len(calls),
         estimated_space=0,
-        tags=sorted(
-            {out.name for call, _ in calls for out in call._outs.values() if isinstance(out, Tag)}
-        ),
+        tags=sorted({name for call, _ in calls for name, _itype in _all_write_targets(call)}),
         hints=[
             f"  {getattr(call._fn, '__qualname__', type(call._fn).__name__)}: {why}; "
             "make it a plain def of what ins= hands it, or test it with run_for()"

@@ -4475,7 +4475,6 @@ def _detect_function_escape_hatches(
         EnabledFunctionCallInstruction,
         FunctionCallInstruction,
     )
-    from pyrung.core.tag import Tag
     from pyrung.core.validation._common import _collect_write_sites
 
     fn_targets: set[str] = set()
@@ -4483,11 +4482,7 @@ def _detect_function_escape_hatches(
     def _fn_write_targets(instr: Any) -> list[tuple[str, str]]:
         if not isinstance(instr, (FunctionCallInstruction, EnabledFunctionCallInstruction)):
             return []
-        targets: list[str] = []
-        for target in instr._outs.values():
-            if isinstance(target, Tag):
-                targets.append(target.name)
-        return [(name, type(instr).__name__) for name in targets]
+        return _all_write_targets(instr, graph.indirect_reach)
 
     sites = _collect_write_sites(program, target_extractor=_fn_write_targets)
     for site in sites:

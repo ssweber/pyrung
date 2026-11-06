@@ -469,6 +469,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "real_text": {"DF": range(21, 31), "TXT": range(101, 301)},
     "deb_zero": {"C": range(221, 223), "T": range(111, 115)},
     "coil_timing": {"C": range(241, 247), "T": range(115, 125)},
+    "td_write": {"C": range(261, 264), "T": range(150, 159)},
     # DS4226 is past_write's pointer, on its choices.
     "past_clean": {"C": range(231, 233), "DS": range(4226, 4227)},
     "for_dd_minus": {"C": range(401, 403), "DD": range(81, 83)},

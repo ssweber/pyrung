@@ -24,6 +24,7 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    immediate,
     run_enabled_function,
     run_function,
 )
@@ -311,7 +312,7 @@ def test_a_lock_of_a_function_the_gate_passes_is_written(
     assert lock.exists()
 
 
-def _unread_output() -> tuple[Program, Any, dict[str, Any], str, Any]:
+def _unread_output(wrap: Any = lambda tag: tag) -> tuple[Program, Any, dict[str, Any], str, Any]:
     run, alarm = Bool("Run", external=True), Bool("Alarm")
 
     def passes(enabled, v):
@@ -319,8 +320,12 @@ def _unread_output() -> tuple[Program, Any, dict[str, Any], str, Any]:
 
     with Program(strict=False) as program:
         with Rung():
-            run_enabled_function(passes, ins={"v": run}, outs={"out": alarm})
+            run_enabled_function(passes, ins={"v": run}, outs={"out": wrap(alarm)})
     return program, ~alarm, {"Run": True}, "Alarm", True
+
+
+def _unread_immediate_output() -> tuple[Program, Any, dict[str, Any], str, Any]:
+    return _unread_output(immediate)
 
 
 def _output_through_a_pointer() -> tuple[Program, Any, dict[str, Any], str, Any]:
@@ -337,7 +342,13 @@ def _output_through_a_pointer() -> tuple[Program, Any, dict[str, Any], str, Any]
 
 
 _LEFT_OUT_OF_THE_SEARCH = pytest.mark.parametrize(
-    "row", [_unread_output, _output_through_a_pointer], ids=["unread", "through a pointer"]
+    "row",
+    [_unread_output, _unread_immediate_output, _output_through_a_pointer],
+    ids=["unread", "unread immediate", "through a pointer"],
+)
+_FALSE_PROVEN = pytest.mark.xfail(
+    strict=True,
+    reason="the search leaves this function's write out, so always() is a false Proven",
 )
 
 
@@ -350,11 +361,15 @@ def test_a_function_left_out_of_the_search_writes_when_stepped(row) -> None:
     assert plc.current_state.tags[name] == written
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the search leaves this function's write out, so always() is a false Proven",
+@pytest.mark.parametrize(
+    "row",
+    [
+        pytest.param(_unread_output, marks=_FALSE_PROVEN),
+        pytest.param(_unread_immediate_output, marks=_FALSE_PROVEN),
+        _output_through_a_pointer,
+    ],
+    ids=["unread", "unread immediate", "through a pointer"],
 )
-@_LEFT_OUT_OF_THE_SEARCH
 def test_a_function_left_out_of_the_search_is_not_proven(row) -> None:
     program, prop, *_ = row()
     assert not isinstance(always(program, prop), Proven)

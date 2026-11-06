@@ -25,6 +25,7 @@ from .findings import (
     CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_IMMEDIATE_CONTACT_MUST_BE_X,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
@@ -89,6 +90,7 @@ from .portability import (
     _evaluate_fact,
     _evaluate_forloop_count,
     _evaluate_forloop_structure,
+    _evaluate_immediate_contacts,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
     _evaluate_nested_calls,
@@ -230,6 +232,7 @@ def validate_click_program(
     findings.extend(
         _evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode, resolver)
     )
+    findings.extend(_evaluate_immediate_contacts(program, tag_map, mode, resolver))
     findings.extend(_evaluate_status_bit_usage(program, mode))
     findings.extend(_evaluate_text_order_compares(program, mode))
     findings.extend(_evaluate_text_windows(program, mode, resolver))
@@ -340,6 +343,7 @@ __all__ = [
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
+    "CLK_IMMEDIATE_CONTACT_MUST_BE_X",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
     "CLK_OUT_UNIT_UNSUPPORTED",

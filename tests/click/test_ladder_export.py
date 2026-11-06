@@ -1280,6 +1280,25 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
     ]
 
 
+def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
+    Sensor = Bool("Sensor")
+    Coil = Bool("Coil")
+
+    with Program() as logic:
+        with Rung(immediate(Sensor)):
+            out(Coil)
+
+    mapping = TagMap({Sensor: c[1], Coil: y[1]}, include_system=False)
+
+    with pytest.raises(LadderExportError) as exc_info:
+        pyrung_to_ladder(logic, mapping)
+
+    assert [issue["message"] for issue in exc_info.value.issues] == [
+        "CLK_IMMEDIATE_CONTACT_MUST_BE_X: Immediate contact on Sensor (C1) at "
+        "main.rung[0].condition; an immediate contact must read an input mapped to X."
+    ]
+
+
 def test_immediate_in_copy_fails_with_context_diagnostic():
     Enable = Bool("Enable")
     Source = Bool("Source")

@@ -37,7 +37,7 @@ from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_timing_key
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.memory_block import block_room, element_names_after
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
@@ -535,15 +535,16 @@ def _compile_copy_converter_instruction(
         source_read = [f"_{stem}_source = {source_expr}"]
         source_expr = f"_{stem}_source"
 
+    target = instr.target.tag if isinstance(instr.target, ImmediateRef) else instr.target
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
-        instr.target, ctx, stem
+        target, ctx, stem
     )
     values_var = f"_{stem}_values"
-    target_name = instr.target.name if isinstance(instr.target, Tag) else None
-    fit = block_room(instr.target) if isinstance(instr.target, Tag) else None
+    target_name = target.name if isinstance(target, Tag) else None
+    fit = block_room(target) if isinstance(target, Tag) else None
     following_names = (
-        element_names_after(instr.target, fit)
-        if isinstance(instr.target, Tag) and fit is not None and target_kind == "scalar"
+        element_names_after(target, fit)
+        if isinstance(target, Tag) and fit is not None and target_kind == "scalar"
         else None
     )
     sequential_reloads = (
