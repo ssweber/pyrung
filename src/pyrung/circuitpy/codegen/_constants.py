@@ -53,6 +53,7 @@ _HELPER_ORDER = (
     "_rand_draw",
     "_mod",
     "_dbl",
+    "_addr_int",
     "_abs_int",
     "_pow",
     "_pow_calc",

@@ -316,6 +316,16 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return 0",
         "",
     ],
+    # A calc's pointer address that went through _dbl: +/-Inf or NaN is no
+    # address, -1, below every block (a block starts at 0 or above).
+    "_addr_int": [
+        "def _addr_int(addr):",
+        "    try:",
+        "        return int(addr)",
+        "    except (OverflowError, ValueError):",
+        "        return -1",
+        "",
+    ],
     # A calc's division by a divisor that is not a bare tag: by 0 it is 0, with
     # SC40 (core _op_div).
     "_calc_div": [

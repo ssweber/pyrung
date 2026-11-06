@@ -1552,6 +1552,12 @@ def _compile_value(
         )
         if condition:
             return _compile_condition_element_read(value.block, binding, expr, ctx, block_snapshots)
+        if strict and "_dbl(" in expr:
+            # A calc's integer step past 2 ** 53 is a double (_dbl), so the address
+            # can be +/-Inf or NaN, which _addr_int makes -1: below every block,
+            # the address error and nothing written (core IndirectExprRef.resolve_ctx).
+            ctx.mark_helper("_addr_int")
+            expr = f"_addr_int({expr})"
         return _compile_source_element_read(value.block, binding, expr, ctx, block_snapshots)
     if isinstance(value, Expression):
         return _compile_expression_impl(

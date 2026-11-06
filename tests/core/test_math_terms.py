@@ -19,6 +19,7 @@ from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     CompiledPLC,
     Dint,
@@ -26,6 +27,7 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    TagType,
     copy,
     latch,
     lsh,
@@ -166,6 +168,48 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
     _build, _dest_type, stored, flags = FORMULAS[name]
     assert actual["Dest"] == stored
     assert type(actual["Dest"]) is type(stored)
+    assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags
+
+
+ONE, FAR = Int("One"), Int("Far")
+TABLE = Block("Table", TagType.INT, 1, 10)
+
+#: A pointer whose address is a calc's double past the integer range: Inf
+#: (``lsh(1, 2000)``) or NaN (Inf - Inf), each alone and after a division by 0.
+POINTERS: dict[str, tuple[Callable[[], Any], set[int]]] = {
+    "shift_to_inf": (lambda: TABLE[lsh(ONE, FAR)], set()),
+    "inf_minus_inf": (lambda: TABLE[lsh(ONE, FAR) - lsh(ONE, FAR) + 3], set()),
+    "nan_after_div0": (lambda: TABLE[SEVEN // ZERO + lsh(ONE, FAR) - lsh(ONE, FAR)], {40}),
+}
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("name", list(POINTERS))
+def test_a_pointer_with_no_integer_address_is_an_address_error(
+    name: str, engine: str, monkeypatch
+) -> None:
+    # Inf or NaN is no address: nothing written, the address error, and the
+    # flags of the address's failing operations, as for an address below the
+    # block.
+    build, flags = POINTERS[name]
+    dest, address = Int("Dest"), Bool("SawAddress")
+    seen = {code: Bool(f"Saw{code}") for code in FLAGS}
+    with Program(strict=False) as prog:
+        with Rung():
+            for tag, value in ((ONE, 1), (FAR, 2000), (SEVEN, 7), (ZERO, 0), (dest, 99)):
+                copy(value, tag)
+            copy(5, TABLE[3])
+            math(build(), dest)
+        with Rung(system.fault.address_error):
+            out(address)
+        for code, flag in FLAGS.items():
+            with Rung(flag):
+                out(seen[code])
+    tags: dict[str, Any] = {"Dest": dest, "SawAddress": address}
+    tags.update({tag.name: tag for tag in seen.values()})
+    actual = _first_scan(prog, engine, tags, monkeypatch)
+    assert actual["Dest"] == 99
+    assert actual["SawAddress"] is True
     assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags
 
 
