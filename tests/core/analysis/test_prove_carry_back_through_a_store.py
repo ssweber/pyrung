@@ -278,6 +278,29 @@ def test_a_declared_real_is_not_all_its_whole_numbers() -> None:
     assert not isinstance(never(program, hit), Proven)
 
 
+@pytest.mark.parametrize(
+    ("dest_type", "build", "compare"),
+    [
+        pytest.param(Bool, lambda s, d: math(s - 0.5, d), lambda d: ~d, id="math into a bit"),
+        pytest.param(Int, lambda s, d: math(s * s * 4 - 1, d), lambda d: d == 0, id="square"),
+    ],
+)
+def test_a_declared_real_into_a_calc_with_no_way_back_is_not_proven(
+    dest_type, build, compare
+) -> None:
+    """Both fire at 0.5, inside the declared range: the whole numbers of it are not enough."""
+    source = Real("S", external=True, min=0.0, max=10.0)
+    dest = dest_type("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            build(source, dest)
+        with Rung(compare(dest)):
+            out(hit)
+    assert _fires_at(program, "S", 0.5, hit)
+    assert not isinstance(never(program, hit), Proven)
+
+
 def test_a_multiply_the_inverse_has_no_answer_for_is_not_proven_where_a_scan_fires() -> None:
     """``S * 3`` wraps to 1 at -21845, and the inverse of 1 has no whole answer."""
     source = Int("S", external=True)

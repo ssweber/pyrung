@@ -1105,6 +1105,7 @@ def _reached_past_literal_compares(
     names: frozenset[str],
     *,
     exprs: Iterable[Any] = (),
+    paired: Mapping[str, frozenset[str]] | None = None,
 ) -> dict[str, str]:
     """Of *names*, the tags whose value reaches more than their own ``X op literal``.
 
@@ -1114,8 +1115,15 @@ def _reached_past_literal_compares(
     Anything else its value reaches (an instruction that reads it, an index, a
     comparison with another tag or inside an expression, an indirect access) can tell
     apart values the partition does not try.  *exprs* are the search's lowered
-    expressions (the property's among them).
+    expressions (the property's among them).  *paired* names, for a tag, the tags a
+    direct comparison with it is answered by its partition anyway: inputs compared
+    with each other (:func:`_group_domains`), and a tag written only with literals
+    whose every value is a split point.
     """
+    pairs = paired or {}
+
+    def answered(left: str, right: str) -> bool:
+        return right in pairs.get(left, ()) and left in pairs.get(right, ())
     from pyrung.core.analysis.simplified import And as ExprAnd
     from pyrung.core.analysis.simplified import ArithAtom, Atom
     from pyrung.core.analysis.simplified import Or as ExprOr
@@ -1180,7 +1188,7 @@ def _reached_past_literal_compares(
         elif isinstance(expr, Atom):
             if expr.unsupported is not None:
                 stack.append(expr.unsupported)
-            elif expr.operand_is_tag:
+            elif expr.operand_is_tag and not answered(expr.tag, expr.operand):
                 mark((expr.tag,), f"a comparison with {expr.operand}")
                 mark((expr.operand,), f"a comparison with {expr.tag}")
 
@@ -1195,8 +1203,12 @@ def _reached_past_literal_compares(
             continue
         if isinstance(cond, contacts) and isinstance(plain(cond.tag), Tag):
             continue
-        if isinstance(cond, direct) and isinstance(plain(cond.tag), Tag) and constant(cond.value):
-            continue
+        if isinstance(cond, direct) and isinstance(plain(cond.tag), Tag):
+            other = plain(cond.value)
+            if constant(other) or (
+                isinstance(other, Tag) and answered(plain(cond.tag).name, other.name)
+            ):
+                continue
         children = [child for _child_name, child in _condition_children(cond)]
         found: set[str] = set()
         for child in children:
@@ -1506,12 +1518,15 @@ def _answer_for_inputs(
     atom_index: dict[str, list[Atom]],
     *,
     real_gap_points: bool,
+    paired: Mapping[str, frozenset[str]],
 ) -> dict[str, str]:
     """Make each free input's values all the program tells apart, or say it can't.
 
     An input is answered when (a) it takes every value it can hold
     (:func:`_every_value_domain`), or (b) its value reaches nothing but contacts on it
-    and its own ``X op literal`` comparisons, which its partition splits at exactly.
+    and its own ``X op literal`` comparisons, which its partition splits at exactly,
+    and comparisons with the tags *paired* with it (see
+    :func:`_reached_past_literal_compares`).
     A (b) input gets its partition added to the values it already has (a literal
     write's values miss the neighbours of a literal it is compared with), and an input
     with a small declared range takes all of it.  Every other input is returned,
@@ -1525,7 +1540,9 @@ def _answer_for_inputs(
     )
     if not names:
         return {}
-    reach = _reached_past_literal_compares(program, graph, names, exprs=all_exprs)
+    reach = _reached_past_literal_compares(
+        program, graph, names, exprs=all_exprs, paired=paired
+    )
     unanswered: dict[str, str] = {}
     for name in sorted(names):
         tag = graph.tags[name]
@@ -4417,6 +4434,18 @@ def _classify_dimensions_from_graph(
         if len(members) > 1:
             _group_domains(members, nondeterministic, graph.tags)
     if exhaust_tag_compared_inputs:
+        # A group's members split at each other's points (_group_domains above), and an
+        # exact partner's every value is a split point of the tag it is compared with.
+        paired: dict[str, set[str]] = {}
+        for group in compared_groups:
+            members = group & nondeterministic.keys()
+            if len(members) > 1:
+                for name in members:
+                    paired.setdefault(name, set()).update(members - {name})
+        for name, partners in exact_partners.items():
+            for partner in partners:
+                paired.setdefault(name, set()).add(partner)
+                paired.setdefault(partner, set()).add(name)
         unanswered = _answer_for_inputs(
             program,
             graph,
@@ -4425,6 +4454,7 @@ def _classify_dimensions_from_graph(
             free_system,
             atom_idx,
             real_gap_points=real_gap_points,
+            paired={name: frozenset(found) for name, found in paired.items()},
         )
         if unanswered_out is not None:
             unanswered_out.update(unanswered)
