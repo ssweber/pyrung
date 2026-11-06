@@ -185,7 +185,7 @@ def test_out_of_range_literals_are_refused():
             copy(1e39, r)
         with pytest.raises(ValueError, match="fill"):
             fill(float("inf"), block.select(1, 3))
-        with pytest.raises(ValueError, match="calc"):
+        with pytest.raises(ValueError, match="math"):
             math(r * 1e39, r)
         # An Int destination clamps a large literal as before.
         copy(1e39, Int("I"))

@@ -44,6 +44,7 @@ from pyrung.core import (
 from pyrung.core.program import (
     blockcopy,
     branch,
+    calc,
     call,
     comment,
     copy,
@@ -869,7 +870,7 @@ def test_calc_hex_token_uses_inferred_hex_mode():
 
 def test_calc_exports_wide_constants_as_written_once_allowed():
     # pyrung runs the 65536 as 0 (a CLICK Math cuts its constants to 16 bits);
-    # validation refuses it (CLK_CALC_WIDE_CONSTANT), and once allowed the export
+    # validation refuses it (CLK_MATH_WIDE_CONSTANT), and once allowed the export
     # writes the formula as written and CLICK cuts it itself.
     from pyrung.click.ladder import LadderExportError
 
@@ -880,9 +881,9 @@ def test_calc_exports_wide_constants_as_written_once_allowed():
                 math(DD1 / 65536, DS1)
         """
     )
-    with pytest.raises(LadderExportError, match="CLK_CALC_WIDE_CONSTANT"):
+    with pytest.raises(LadderExportError, match="CLK_MATH_WIDE_CONSTANT"):
         pyrung_to_ladder(logic, mapping)
-    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_CALC_WIDE_CONSTANT",))
+    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_MATH_WIDE_CONSTANT",))
     assert normalize_csv(bundle.main_rows) == _literal_csv_rows(
         """
         R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DD1 / 65536,DS1,mode=decimal)
@@ -1037,7 +1038,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
         {
             "path": "main.rung[0].instruction[0](CalcInstruction).instruction.expression",
             "message": (
-                "CLK_CALC_MODE_MIXED: math() mixes WORD (hex-family) and non-WORD "
+                "CLK_MATH_MODE_MIXED: math() mixes WORD (hex-family) and non-WORD "
                 "(decimal-family) operands at "
                 "main.rung[0].instruction[0](CalcInstruction).instruction.expression."
             ),
@@ -1234,7 +1235,7 @@ def test_precheck_and_issue_payload():
         {
             "path": "main.rung[0].instruction[0](CopyInstruction).instruction.source",
             "message": (
-                "CLK_EXPR_ONLY_IN_CALC: Expression used outside calc instruction at "
+                "CLK_EXPR_ONLY_IN_MATH: Expression used outside a math() instruction at "
                 "main.rung[0].instruction[0](CopyInstruction).instruction.source."
             ),
             "source_file": None,
@@ -1925,8 +1926,8 @@ def test_calc_range_aggregate_composes_with_abs():
 # ---- ExportSummary tests ----
 
 
-def test_summary_includes_calc_rename():
-    """Summary reports calc → math when program uses calc."""
+def test_summary_has_no_rename_for_math():
+    """math() is CLICK's Math by name: the summary reports no rename, nor for calc()."""
     Enable = Bool("Enable")
     A = Int("A")
     B = Int("B")
@@ -1942,13 +1943,18 @@ def test_summary_includes_calc_rename():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     s = bundle.export_summary
-    assert s.renames == (("calc", "math"),)
+    assert s.renames == ()
     assert s.added_end is True
-    assert s.summary() == "Renamed: calc -> math\nAdded:   end() on main"
+    assert s.summary() == "Added:   end() on main"
+
+    with pytest.warns(FutureWarning), Program() as old:
+        with Rung(Enable):
+            calc(A + B, Result)
+    assert pyrung_to_ladder(old, mapping).export_summary.renames == ()
 
 
-def test_summary_omits_calc_rename_when_unused():
-    """Summary does not include calc → math when program has no calc."""
+def test_summary_has_no_renames_without_one():
+    """A program with nothing CLICK names differently reports no rename."""
     Enable = Bool("Enable")
     Light = Bool("Light")
 
@@ -2106,7 +2112,7 @@ def test_summary_str_format():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     assert str(bundle.export_summary) == (
-        "Renamed: calc -> math, forloop -> for\n"
+        "Renamed: forloop -> for\n"
         "Added:   next() closing 1 for-loop, return() on 1 subroutine, end() on main"
     )
 

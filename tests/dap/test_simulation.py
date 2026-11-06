@@ -265,7 +265,7 @@ runner = PLC(prog, dt=0.010)
 
 def test_frames_show_no_change_when_an_equal_value_is_written(tmp_path: Path):
     """``False`` over ``0`` and ``-0.0`` over ``0.0`` replace the value, and are no change."""
-    source = """from pyrung.core import Bool, Int, PLC, Program, Real, Rung, calc, out
+    source = """from pyrung.core import Bool, Int, PLC, Program, Real, Rung, math, out
 
 Coiled = Int("Coiled")
 Gained = Real("Gained")

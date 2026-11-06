@@ -352,7 +352,7 @@ def unpack_to_words(source: Any, word_block: Any, *, oneshot: bool = False) -> N
     )
 
 
-# A standard ``math`` name pyrung has its own of, for an expression.
+# Standard ``math`` names that pyrung exports its own version of, for an expression.
 _PYRUNG_MATH_NAMES = {
     "pi": "PI",
     **{
@@ -403,7 +403,6 @@ class _MathInstruction:
     """
 
     __name__ = "math"
-    __qualname__ = "math"
 
     def __call__(self, expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
         _add_instruction("math", CalcInstruction, expression, dest, oneshot=oneshot)
@@ -411,6 +410,10 @@ class _MathInstruction:
 
     def __repr__(self) -> str:
         return "<pyrung instruction math>"
+
+    def __reduce__(self) -> str:
+        # Pickled by name, as the module-level instance it is.
+        return "math"
 
     if not TYPE_CHECKING:
         # At runtime only: a type checker still reports ``math.isclose`` as
@@ -442,11 +445,11 @@ inferred from the tags read.
 
 
 def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
-    """Deprecated: use :func:`math`, CLICK's name for the Math instruction."""
+    """Deprecated: use ``math()``, CLICK's name for the Math instruction."""
     warnings.warn(
         "calc() is now math(), CLICK's name for the Math instruction; "
         "calc() will be removed in a later release",
-        DeprecationWarning,
+        FutureWarning,
         stacklevel=2,
     )
     _add_instruction("calc", CalcInstruction, expression, dest, oneshot=oneshot)

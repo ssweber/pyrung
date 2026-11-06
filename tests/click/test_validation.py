@@ -8,18 +8,7 @@ from pyrung.click import ClickBlocks, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.validation import (
-    CLK_CALC_ARG_NOT_PLAIN,
-    CLK_CALC_BIT_RANGE_AGGREGATE,
-    CLK_CALC_FLOOR_DIV,
-    CLK_CALC_FUNC_MODE_MISMATCH,
-    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
-    CLK_CALC_MODE_MIXED,
-    CLK_CALC_NESTING_DEPTH,
-    CLK_CALC_RANGE_MIXED_BANKS,
-    CLK_CALC_RANGE_NOT_CONTIGUOUS,
-    CLK_CALC_SUM_BANK_NOT_AVAILABLE,
-    CLK_CALC_WIDE_CONSTANT,
-    CLK_EXPR_ONLY_IN_CALC,
+    CLK_EXPR_ONLY_IN_MATH,
     CLK_FORLOOP_COUNT_BANK,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -28,6 +17,17 @@ from pyrung.click.validation import (
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_MATH_ARG_NOT_PLAIN,
+    CLK_MATH_BIT_RANGE_AGGREGATE,
+    CLK_MATH_FLOOR_DIV,
+    CLK_MATH_FUNC_MODE_MISMATCH,
+    CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
+    CLK_MATH_MODE_MIXED,
+    CLK_MATH_NESTING_DEPTH,
+    CLK_MATH_RANGE_MIXED_BANKS,
+    CLK_MATH_RANGE_NOT_CONTIGUOUS,
+    CLK_MATH_SUM_BANK_NOT_AVAILABLE,
+    CLK_MATH_WIDE_CONSTANT,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
@@ -109,7 +109,7 @@ class TestAllowedCopyWithDSPointer:
                 CLK_PTR_CONTEXT_ONLY_COPY,
                 CLK_PTR_POINTER_MUST_BE_DS,
                 CLK_PTR_EXPR_NOT_ALLOWED,
-                CLK_EXPR_ONLY_IN_CALC,
+                CLK_EXPR_ONLY_IN_MATH,
                 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
                 CLK_PTR_DS_UNVERIFIED,
             }
@@ -255,7 +255,7 @@ class TestExpressionInCondition:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_EXPR_ONLY_IN_CALC for f in report.hints)
+        assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.hints)
 
 
 class TestIntTruthinessInCondition:
@@ -352,7 +352,7 @@ class TestExpressionInCopy:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_EXPR_ONLY_IN_CALC for f in report.hints)
+        assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.hints)
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +376,7 @@ class TestExpressionInMath:
         expr_findings = [
             f
             for f in (*report.errors, *report.warnings, *report.hints)
-            if f.code == CLK_EXPR_ONLY_IN_CALC
+            if f.code == CLK_EXPR_ONLY_IN_MATH
         ]
         assert expr_findings == []
 
@@ -398,7 +398,7 @@ class TestCalcModeMixedValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_MODE_MIXED for f in report.hints)
+        assert any(f.code == CLK_MATH_MODE_MIXED for f in report.hints)
 
     def test_strict_mode_gives_error_for_mixed_family_calc(self):
         a = Tag("A", TagType.INT)
@@ -416,7 +416,7 @@ class TestCalcModeMixedValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_CALC_MODE_MIXED for f in report.errors)
+        assert any(f.code == CLK_MATH_MODE_MIXED for f in report.errors)
 
     def test_decimal_family_calc_has_no_mixed_mode_finding(self):
         a = Tag("A", TagType.INT)
@@ -435,7 +435,7 @@ class TestCalcModeMixedValidation:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
+            f.code == CLK_MATH_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
         )
 
     def test_hex_family_calc_has_no_mixed_mode_finding(self):
@@ -455,7 +455,7 @@ class TestCalcModeMixedValidation:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
+            f.code == CLK_MATH_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
         )
 
 
@@ -476,7 +476,7 @@ class TestFloorDivisionPortability:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_FLOOR_DIV for f in report.hints)
+        assert any(f.code == CLK_MATH_FLOOR_DIV for f in report.hints)
 
     def test_strict_mode_gives_error_for_floor_div_in_calc(self):
         a = Tag("A", TagType.INT)
@@ -494,7 +494,7 @@ class TestFloorDivisionPortability:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_CALC_FLOOR_DIV for f in report.errors)
+        assert any(f.code == CLK_MATH_FLOOR_DIV for f in report.errors)
 
     def test_regular_division_has_no_floor_div_finding(self):
         a = Tag("A", TagType.INT)
@@ -513,7 +513,7 @@ class TestFloorDivisionPortability:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_FLOOR_DIV for f in (*report.errors, *report.warnings, *report.hints)
+            f.code == CLK_MATH_FLOOR_DIV for f in (*report.errors, *report.warnings, *report.hints)
         )
 
 
@@ -534,7 +534,7 @@ class TestCalcFuncModeMismatch:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.hints)
+        assert any(f.code == CLK_MATH_FUNC_MODE_MISMATCH for f in report.hints)
 
     def test_sqrt_in_hex_mode_gives_finding(self):
         """SQRT is decimal-only; using it with WORD tags (hex) is a mismatch."""
@@ -554,7 +554,7 @@ class TestCalcFuncModeMismatch:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.hints)
+        assert any(f.code == CLK_MATH_FUNC_MODE_MISMATCH for f in report.hints)
 
     def test_and_in_hex_mode_no_finding(self):
         """AND in hex mode is valid."""
@@ -574,7 +574,7 @@ class TestCalcFuncModeMismatch:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_FUNC_MODE_MISMATCH
+            f.code == CLK_MATH_FUNC_MODE_MISMATCH
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -595,7 +595,7 @@ class TestCalcFuncModeMismatch:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_FUNC_MODE_MISMATCH
+            f.code == CLK_MATH_FUNC_MODE_MISMATCH
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -615,7 +615,7 @@ class TestCalcFuncModeMismatch:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.errors)
+        assert any(f.code == CLK_MATH_FUNC_MODE_MISMATCH for f in report.errors)
 
 
 class TestCalcNestingDepth:
@@ -659,7 +659,7 @@ class TestCalcNestingDepth:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_NESTING_DEPTH
+            f.code == CLK_MATH_NESTING_DEPTH
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -680,7 +680,7 @@ class TestCalcNestingDepth:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+        assert any(f.code == CLK_MATH_NESTING_DEPTH for f in report.hints)
 
     def test_strict_mode_gives_error(self):
         a = Tag("A", TagType.INT)
@@ -699,7 +699,7 @@ class TestCalcNestingDepth:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.errors)
+        assert any(f.code == CLK_MATH_NESTING_DEPTH for f in report.errors)
 
     def test_function_calls_count_as_paren_level(self):
         """SQRT(…) adds one paren level; deeply nested args can exceed the limit."""
@@ -723,7 +723,7 @@ class TestCalcNestingDepth:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+        assert any(f.code == CLK_MATH_NESTING_DEPTH for f in report.hints)
 
     def test_flat_expression_no_finding(self):
         """Simple a + b has depth 0 — well within limits."""
@@ -743,7 +743,7 @@ class TestCalcNestingDepth:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_NESTING_DEPTH
+            f.code == CLK_MATH_NESTING_DEPTH
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -767,7 +767,7 @@ class TestAbsMode:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert any(
-            f.code == CLK_CALC_FUNC_MODE_MISMATCH and "ABS" in f.message for f in report.hints
+            f.code == CLK_MATH_FUNC_MODE_MISMATCH and "ABS" in f.message for f in report.hints
         )
 
     def test_abs_in_decimal_mode_no_finding(self):
@@ -782,7 +782,7 @@ class TestAbsMode:
         tag_map = TagMap([a.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert not any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in _all_findings(report))
+        assert not any(f.code == CLK_MATH_FUNC_MODE_MISMATCH for f in _all_findings(report))
 
 
 class TestRangeAggregateModes:
@@ -799,7 +799,7 @@ class TestRangeAggregateModes:
         tag_map = TagMap([H.map_to(dh.select(1, 4)), dest.map_to(dh[10])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert not any(f.code.startswith("CLK_CALC") for f in _all_findings(report))
+        assert not any(f.code.startswith("CLK_MATH") for f in _all_findings(report))
 
     def test_aggregate_counts_as_paren_level(self):
         """An aggregate's FUNC ( a : b ) adds one paren level, like SQRT(x)."""
@@ -818,7 +818,7 @@ class TestRangeAggregateModes:
         tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+        assert any(f.code == CLK_MATH_NESTING_DEPTH for f in report.hints)
 
 
 class TestRangeAggregateRules:
@@ -851,7 +851,7 @@ class TestRangeAggregateRules:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_RANGE_NOT_CONTIGUOUS for f in report.hints)
+        assert any(f.code == CLK_MATH_RANGE_NOT_CONTIGUOUS for f in report.hints)
 
     def test_reversed_range_gives_finding(self):
         """OBJ-1014: a range must be ordered Low:High."""
@@ -866,7 +866,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_CALC_RANGE_NOT_CONTIGUOUS for f in report.errors)
+        assert any(f.code == CLK_MATH_RANGE_NOT_CONTIGUOUS for f in report.errors)
 
     def test_mixed_banks_gives_finding(self):
         """OBJ-1015: both ends of the range must be in the same address block."""
@@ -882,8 +882,8 @@ class TestRangeAggregateRules:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         codes = [f.code for f in report.hints]
-        assert CLK_CALC_RANGE_MIXED_BANKS in codes
-        assert CLK_CALC_RANGE_NOT_CONTIGUOUS not in codes
+        assert CLK_MATH_RANGE_MIXED_BANKS in codes
+        assert CLK_MATH_RANGE_NOT_CONTIGUOUS not in codes
 
     def test_median_range_over_1024_bytes_gives_finding(self):
         """OBJ-1013: MDN accepts at most 1024 bytes (512 DS, 256 DD/DF)."""
@@ -897,7 +897,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(dd[1000])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_MEDIAN_RANGE_TOO_LARGE for f in report.hints)
+        assert any(f.code == CLK_MATH_MEDIAN_RANGE_TOO_LARGE for f in report.hints)
 
     def test_median_range_at_1024_bytes_no_finding(self):
         dest = Tag("Dest", TagType.INT)
@@ -911,7 +911,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert not any(f.code == CLK_CALC_MEDIAN_RANGE_TOO_LARGE for f in _all_findings(report))
+        assert not any(f.code == CLK_MATH_MEDIAN_RANGE_TOO_LARGE for f in _all_findings(report))
 
     def test_bool_range_sum_no_finding(self):
         """SUM over bits is legal; CLICK spells it plain SUM."""
@@ -939,7 +939,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_CALC_BIT_RANGE_AGGREGATE for f in report.hints)
+        assert any(f.code == CLK_MATH_BIT_RANGE_AGGREGATE for f in report.hints)
 
     @staticmethod
     def _sum_findings(block, dest_type, dest_address):
@@ -952,7 +952,7 @@ class TestRangeAggregateRules:
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(dest_address)], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        return [f for f in _all_findings(report) if f.code == CLK_CALC_SUM_BANK_NOT_AVAILABLE]
+        return [f for f in _all_findings(report) if f.code == CLK_MATH_SUM_BANK_NOT_AVAILABLE]
 
     @pytest.mark.parametrize("block", [x, y, c, t, sc, ds, dd, df, td, ctd, sd])
     def test_sum_decimal_banks_no_finding(self, block):
@@ -969,7 +969,7 @@ class TestRangeAggregateRules:
         assert "not available in CLICK" in findings[0].message
 
     def test_sum_mixed_families_reports_mode_mixed_only(self):
-        """A hex range into a decimal dest is CLK_CALC_MODE_MIXED, not a SUM bank finding."""
+        """A hex range into a decimal dest is CLK_MATH_MODE_MIXED, not a SUM bank finding."""
         dest = Tag("Dest", TagType.INT)
 
         def logic():
@@ -980,8 +980,8 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
         codes = {f.code for f in _all_findings(report)}
-        assert CLK_CALC_MODE_MIXED in codes
-        assert CLK_CALC_SUM_BANK_NOT_AVAILABLE not in codes
+        assert CLK_MATH_MODE_MIXED in codes
+        assert CLK_MATH_SUM_BANK_NOT_AVAILABLE not in codes
 
 
 class TestTildeExpressionPortability:
@@ -1113,7 +1113,7 @@ class TestExprCompareInCondition:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        expr_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_CALC]
+        expr_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_MATH]
         # Both condition.left (BinaryExpr) and condition.right (LiteralExpr) are expressions
         assert len(expr_findings) >= 2
 
@@ -1217,7 +1217,7 @@ class TestTagMapValidate:
         tag_map = TagMap(include_system=False)
 
         report = tag_map.validate(prog, mode="strict")
-        assert any(f.code == CLK_EXPR_ONLY_IN_CALC for f in report.errors)
+        assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -1392,7 +1392,7 @@ class TestSuggestionContent:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        r4_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_CALC]
+        r4_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_MATH]
         assert r4_findings
         # At least one finding should mention the expression content
         suggestions = [f.suggestion for f in r4_findings if f.suggestion is not None]
@@ -1730,7 +1730,7 @@ class TestCalcPlainArguments:
             ),
             mode="strict",
         )
-        return report, [f for f in report.errors if f.code == CLK_CALC_ARG_NOT_PLAIN]
+        return report, [f for f in report.errors if f.code == CLK_MATH_ARG_NOT_PLAIN]
 
     @pytest.mark.parametrize(
         "build",
@@ -1796,7 +1796,7 @@ class TestCalcWideConstant:
             ),
             mode="strict",
         )
-        return [f for f in report.errors if f.code == CLK_CALC_WIDE_CONSTANT]
+        return [f for f in report.errors if f.code == CLK_MATH_WIDE_CONSTANT]
 
     @pytest.mark.parametrize(
         "build, dest_type",

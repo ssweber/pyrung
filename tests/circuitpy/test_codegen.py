@@ -620,10 +620,10 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        assert "_math_func(pymath.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
+        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
         # Outside calc a domain error gives 0 (permissive), so sqrt goes through
         # _permissive_math; a division by a variable through _permissive_op.
-        assert "_permissive_math(pymath.sqrt, " in compile_expression(sqrt(a), ctx)
+        assert "_permissive_math(math.sqrt, " in compile_expression(sqrt(a), ctx)
         assert "_permissive_op('/', " in compile_expression(a / b, ctx)
         assert " / " in compile_expression(a / b, ctx, strict=True)
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)

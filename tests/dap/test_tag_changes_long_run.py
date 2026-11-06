@@ -53,7 +53,7 @@ runner.run_for(20.0, jit=JIT)
 SEAM_WATCHED = ["Alarm", "Count", "T1_Done", "T2_Done"]
 
 _SEAM_SCRIPT = """
-from pyrung.core import PLC, Bool, Int, Program, Rung, Timer, calc, latch, on_delay, reset, rise
+from pyrung.core import PLC, Bool, Int, Program, Rung, Timer, latch, math, on_delay, reset, rise
 
 Enable = Bool("Enable")
 Alarm = Bool("Alarm")

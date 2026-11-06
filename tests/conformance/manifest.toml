@@ -478,7 +478,7 @@ rand_tag_bounds = 3
 inf_and_nan_to_text = 4
 non_finite_into_word = 5
 real_into_text_and_fill = 6
-rand_bound_forms = 7 # retired: the editor takes only an integer constant or a DS/DD address as a RAND bound; the paste stopped at RAND ( DD615 / 2 , 10 ) (2026-11-05), and a float literal, ABS and DF are refused the same way (CLK_RAND_BOUND_TYPE, CLK_CALC_ARG_NOT_PLAIN)
+rand_bound_forms = 7 # retired: the editor takes only an integer constant or a DS/DD address as a RAND bound; the paste stopped at RAND ( DD615 / 2 , 10 ) (2026-11-05), and a float literal, ABS and DF are refused the same way (CLK_RAND_BOUND_TYPE, CLK_MATH_ARG_NOT_PLAIN)
 
 [groups.drum_jump]
 base = 4439 # Conf_DrumJump: DS4439..DS4498; part drum1, jog, jump and pause on time and time & event drums

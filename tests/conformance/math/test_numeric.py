@@ -105,7 +105,7 @@ could plausibly differ, these cases tell the models apart:
   preset (99, or Result1..3 = 0 for the Real compares); an IEEE Real division
   stores +Inf, -Inf and NaN, none equal to 0, so Result1..3 read 0.
 
-CLICK validation also reports ``CLK_CALC_MODE_MIXED`` for a Math that mixes
+CLICK validation also reports ``CLK_MATH_MODE_MIXED`` for a Math that mixes
 WORD and non-WORD operands; that is a static finding, not a ladder case.
 """
 

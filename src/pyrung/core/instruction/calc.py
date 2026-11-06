@@ -246,7 +246,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         if not form.rand:
             return value
         # A bound keeps its ops: only its constants are cut (CLICK's editor takes
-        # no formula as a bound, CLK_CALC_ARG_NOT_PLAIN).
+        # no formula as a bound, CLK_MATH_ARG_NOT_PLAIN).
         form = replace(form, calc_ops=False)
         lo = _rebuild(value.lo, form)
         hi = _rebuild(value.hi, form)

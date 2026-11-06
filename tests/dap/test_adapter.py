@@ -3822,7 +3822,7 @@ _LOOKALIKE_TAGS = ("N", "__Mine", "__a__b", "__spare__1", "__init__")
 
 def _internal_tags_script() -> str:
     lines = [
-        "from pyrung.core import Int, PLC, Program, Rung, calc",
+        "from pyrung.core import Int, PLC, Program, Rung, math",
         "",
         "with Program(strict=False) as prog:",
     ]

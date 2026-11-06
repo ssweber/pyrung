@@ -44,7 +44,7 @@ LAYOUT_VERSION = 3
 
 #: Findings the export lets through: the suite pastes RAND with DF and equal
 #: bounds, and Math constants past 16 bits, and measures what CLICK does with them.
-PASTE_PROBE_FINDINGS = ("CLK_RAND_BOUND_TYPE", "CLK_RAND_EQUAL_BOUNDS", "CLK_CALC_WIDE_CONSTANT")
+PASTE_PROBE_FINDINGS = ("CLK_RAND_BOUND_TYPE", "CLK_RAND_EQUAL_BOUNDS", "CLK_MATH_WIDE_CONSTANT")
 
 
 @dataclass(frozen=True)

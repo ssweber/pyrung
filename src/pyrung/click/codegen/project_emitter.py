@@ -920,8 +920,9 @@ The program is ladder logic represented as Python. Read it in this order:
 3. `src/plc/main.py` — scan order, main rungs, and subroutine calls
 4. Relevant files in `src/plc/subroutines/` — each machine function's logic
 
-The Python mirrors what the engineer sees in the Click GUI editor. One name
-differs: Set → `latch`.
+The Python mirrors what the engineer sees in the Click GUI editor. A few names
+differ where Python claims CLICK's: Set → `latch`, For → `forloop`,
+Return → `return_early`, Break → `break_loop`, Continue → `continue_loop`.
 
 ### Program shape
 """,

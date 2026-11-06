@@ -18,7 +18,7 @@ from pyrung.click.validation import (
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_EXPR_ONLY_IN_CALC,
+    CLK_EXPR_ONLY_IN_MATH,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
@@ -336,7 +336,7 @@ def test_profile_unavailable_still_reports_stage2_findings(monkeypatch):
     report = validate_click_program(prog, tag_map, mode="warn")
 
     assert CLK_PROFILE_UNAVAILABLE in _codes(report)
-    assert CLK_EXPR_ONLY_IN_CALC in _codes(report)
+    assert CLK_EXPR_ONLY_IN_MATH in _codes(report)
 
 
 def test_program_and_tagmap_validation_facades_match_direct():

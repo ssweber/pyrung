@@ -149,6 +149,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.unpack_to_bits",
             "pyrung.unpack_to_words",
             "pyrung.math",
+            "pyrung.calc",
             "pyrung.call",
             "pyrung.return_early",
             "pyrung.count_up",

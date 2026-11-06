@@ -10,7 +10,7 @@ math(DS[1] * 2, DS[3], oneshot=True)    # One-shot: execute once per rung rising
 math(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 ```
 
-The expression comes first and the destination second, as in every pyrung instruction (`copy(source, dest)`, `blockcopy(source, dest)`). CLICK's Math dialog puts the result first; pyrung keeps one order everywhere.
+The expression comes first and the destination second, as in every pyrung instruction (`copy(source, dest)`, `blockcopy(source, dest)`). CLICK's Math dialog puts the result first.
 
 ## Overflow behavior
 
@@ -24,7 +24,7 @@ The expression comes first and the destination second, as in every pyrung instru
 
 ## Constants past 16 bits
 
-A CLICK Math keeps every whole-number constant in its formula in 16 bits, whatever the destination, and pyrung does the same: a constant outside −32768..32767 is read as its low 16 bits, signed (40000 is −25536), or unsigned in hex mode. `math(DD[1] / 65536, DD[2])` divides by 0 (65536 is cut to 0), so it writes 0 and sets `system.fault.division_error`; the same 65536 read from a tag (`math(DD[1] / DD[3], DD[2])`) divides as written. Stage a wide constant in a DINT tag in a rung above and use the tag. CLICK validation reports such a constant (`CLK_CALC_WIDE_CONSTANT`); the CLICK export writes the formula as you wrote it.
+A CLICK Math keeps every whole-number constant in its formula in 16 bits, whatever the destination, and pyrung does the same: a constant outside −32768..32767 is read as its low 16 bits, signed (40000 is −25536), or unsigned in hex mode. `math(DD[1] / 65536, DD[2])` divides by 0 (65536 is cut to 0), so it writes 0 and sets `system.fault.division_error`; the same 65536 read from a tag (`math(DD[1] / DD[3], DD[2])`) divides as written. Stage a wide constant in a DINT tag in a rung above and use the tag. CLICK validation reports such a constant (`CLK_MATH_WIDE_CONSTANT`); the CLICK export writes the formula as you wrote it.
 
 ## REAL range and precision
 
@@ -82,9 +82,9 @@ When a value stored as Inf or NaN reaches an instruction's own integer conversio
 | WORD-only | `"hex"` (unsigned 16-bit wrap) |
 | Any non-WORD present | `"decimal"` (signed arithmetic) |
 
-For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. CLICK validation reports `CLK_CALC_MODE_MIXED` for mixed-family expressions.
+For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. CLICK validation reports `CLK_MATH_MODE_MIXED` for mixed-family expressions.
 
-CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`, and as either side of `<<` and `>>`. CLICK validation reports `CLK_CALC_ARG_NOT_PLAIN` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`; compute the value into a tag in a `math()` above. The same holds for `randint()` bounds.
+CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`, and as either side of `<<` and `>>`. CLICK validation reports `CLK_MATH_ARG_NOT_PLAIN` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`; compute the value into a tag in a `math()` above. The same holds for `randint()` bounds.
 
 ## Numeric behavior summary
 
@@ -147,7 +147,7 @@ math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 - A bare `Real` tag as a bound makes the `randint()` read 0 with no flag, whatever it holds. Any other bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`, a float literal), so `randint(2.5, 2.9)` has equal bounds, 2 and 2, and is a math error (pyrung's choice, not yet read on a CLICK); one that evaluates to Inf or NaN makes the `randint()` read 0 and the `math()` set `out_of_range`.
 - Into an `Int`, and in hex mode into a `Word`, each constant bound is cut to 16 bits like any constant in the formula ([Constants past 16 bits](#constants-past-16-bits)): `randint(70000, 70002)` draws 4464..4466. Into a `Dint` or `Real` a CLICK keeps a RAND's constant bounds whole, and so does pyrung.
 
-CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses any other bound, a `Real` tag, a float constant, a bit, a `Word` or text (`CLK_RAND_BOUND_TYPE`), equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`), and a bound that is an expression, such as `randint(0, N / 2)` (`CLK_CALC_ARG_NOT_PLAIN`). Use constants or an `Int`/`Dint` tag, computing the bound into a tag in a `math()` above, and a plain constant for a one-value draw.
+CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses any other bound, a `Real` tag, a float constant, a bit, a `Word` or text (`CLK_RAND_BOUND_TYPE`), equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`), and a bound that is an expression, such as `randint(0, N / 2)` (`CLK_MATH_ARG_NOT_PLAIN`). Use constants or an `Int`/`Dint` tag, computing the bound into a tag in a `math()` above, and a plain constant for a one-value draw.
 
 Draws are deterministic, so the simulation stays replayable. Each `randint` call in the program is one site, and its value is a fixed function of the site and the scan number. Two runs of the same program draw the same sequence; replay, `history.at()`, seek and `fork()` see the values the original run saw; and a fork draws what its parent would have. Restarting (STOP -> RUN, `reboot()`) resets the scan number, so the sequence starts over.
 
@@ -182,12 +182,12 @@ pyrung spells these the way Python does (`statistics.median`, `statistics.mean`)
 
 The exporter spaces every paren and separator the way CLICK's formula editor does (`SQRT ( DS1 )`, `LSH ( DH1 , 2 )`, `DS1 * ( DS2 + 1 )`), so an exported CSV matches what a copy-back from CLICK decodes to. The importer also reads the unspaced form (`ABS(DS1)`) for hand-written CSVs.
 
-In pyrung the aggregates work anywhere an expression does (`copy()` sources, rung comparisons). CLICK accepts them only inside Math, and validation says so (`CLK_EXPR_ONLY_IN_CALC`). CLICK validation also checks each range:
+In pyrung the aggregates work anywhere an expression does (`copy()` sources, rung comparisons). CLICK accepts them only inside Math, and validation says so (`CLK_EXPR_ONLY_IN_MATH`). CLICK validation also checks each range:
 
 | Finding | Rule |
 |---------|------|
-| `CLK_CALC_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). |
-| `CLK_CALC_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
-| `CLK_CALC_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
-| `CLK_CALC_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` refuse a bit range (X, Y, C, T, CT, SC); `SUM` accepts one. |
-| `CLK_CALC_SUM_BANK_NOT_AVAILABLE` | `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, or SD in decimal mode, and DH, XD, or YD in hex mode. |
+| `CLK_MATH_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). |
+| `CLK_MATH_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
+| `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
+| `CLK_MATH_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` refuse a bit range (X, Y, C, T, CT, SC); `SUM` accepts one. |
+| `CLK_MATH_SUM_BANK_NOT_AVAILABLE` | `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, or SD in decimal mode, and DH, XD, or YD in hex mode. |

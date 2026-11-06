@@ -32,18 +32,7 @@ from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
-    CLK_CALC_ARG_NOT_PLAIN,
-    CLK_CALC_BIT_RANGE_AGGREGATE,
-    CLK_CALC_FLOOR_DIV,
-    CLK_CALC_FUNC_MODE_MISMATCH,
-    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
-    CLK_CALC_MODE_MIXED,
-    CLK_CALC_NESTING_DEPTH,
-    CLK_CALC_RANGE_MIXED_BANKS,
-    CLK_CALC_RANGE_NOT_CONTIGUOUS,
-    CLK_CALC_SUM_BANK_NOT_AVAILABLE,
-    CLK_CALC_WIDE_CONSTANT,
-    CLK_EXPR_ONLY_IN_CALC,
+    CLK_EXPR_ONLY_IN_MATH,
     CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
     CLK_FORLOOP_NESTING_DEPTH,
@@ -55,6 +44,17 @@ from .findings import (
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_MATH_ARG_NOT_PLAIN,
+    CLK_MATH_BIT_RANGE_AGGREGATE,
+    CLK_MATH_FLOOR_DIV,
+    CLK_MATH_FUNC_MODE_MISMATCH,
+    CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
+    CLK_MATH_MODE_MIXED,
+    CLK_MATH_NESTING_DEPTH,
+    CLK_MATH_RANGE_MIXED_BANKS,
+    CLK_MATH_RANGE_NOT_CONTIGUOUS,
+    CLK_MATH_SUM_BANK_NOT_AVAILABLE,
+    CLK_MATH_WIDE_CONSTANT,
     CLK_NESTED_CALL,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
@@ -171,11 +171,11 @@ def _evaluate_fact(
         if not allowed:
             findings.append(
                 ClickFinding(
-                    code=CLK_EXPR_ONLY_IN_CALC,
-                    severity=_route_severity(CLK_EXPR_ONLY_IN_CALC, mode),
+                    code=CLK_EXPR_ONLY_IN_MATH,
+                    severity=_route_severity(CLK_EXPR_ONLY_IN_MATH, mode),
                     message=f"Expression used outside a math() instruction at {location_str}.",
                     location=location_str,
-                    suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_CALC, fact, tag_map),
+                    suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_MATH, fact, tag_map),
                 )
             )
         expr_dsl = str(fact.metadata.get("expr_dsl", ""))
@@ -593,7 +593,7 @@ def _walk_mode_violations(
 _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 # SUM reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, SD in decimal mode and DH, XD, YD in hex
 # mode.  Only these two banks are out in both.  A bank in the wrong mode needs no check here:
-# TagMap ties a tag's type to its bank, and a mixed math() gets CLK_CALC_MODE_MIXED.
+# TagMap ties a tag's type to its bank, and a mixed math() gets CLK_MATH_MODE_MIXED.
 _NO_SUM_BANKS = frozenset({"CT", "TXT"})
 # Banks whose CLICK address space has slot gaps (X001..X016, X101..X116, ...).
 _SLOTTED_BANKS = frozenset({"X", "Y"})
@@ -654,7 +654,7 @@ def _evaluate_range_aggregates(
         banks = list(dict.fromkeys(slot.memory_type for slot in resolved))
         if len(banks) > 1:
             emit(
-                CLK_CALC_RANGE_MIXED_BANKS,
+                CLK_MATH_RANGE_MIXED_BANKS,
                 f"{click_name} range spans more than one address block ({', '.join(banks)})",
                 f"Map every member of the {click_name} range into one bank, or split the "
                 "math() into one aggregate per bank.",
@@ -664,13 +664,13 @@ def _evaluate_range_aggregates(
         if kind == "sum":
             if bank in _NO_SUM_BANKS:
                 emit(
-                    CLK_CALC_SUM_BANK_NOT_AVAILABLE,
+                    CLK_MATH_SUM_BANK_NOT_AVAILABLE,
                     f"SUM over {bank} is not available in CLICK",
                     "Copy the values into a bank SUM accepts before summing.",
                 )
         elif bank in _BIT_BANKS:
             emit(
-                CLK_CALC_BIT_RANGE_AGGREGATE,
+                CLK_MATH_BIT_RANGE_AGGREGATE,
                 f"{click_name} over bit bank {bank} is not available in CLICK; "
                 "only SUM accepts a bit range",
                 f"Use .sum() to count the True bits, or copy the bits into a register "
@@ -686,7 +686,7 @@ def _evaluate_range_aggregates(
             ordered = all(a + 1 == b for a, b in zip(numbers, numbers[1:], strict=False))
         if not ordered:
             emit(
-                CLK_CALC_RANGE_NOT_CONTIGUOUS,
+                CLK_MATH_RANGE_NOT_CONTIGUOUS,
                 f"{click_name} range does not map to one contiguous low:high run of {bank} "
                 f"addresses (first {bank}{numbers[0]}, last {bank}{numbers[-1]})",
                 "Map the range to consecutive addresses in ascending order, and drop "
@@ -696,7 +696,7 @@ def _evaluate_range_aggregates(
             size = len(numbers) * _BANK_BYTES.get(bank, 2)
             if size > _MDN_MAX_BYTES:
                 emit(
-                    CLK_CALC_MEDIAN_RANGE_TOO_LARGE,
+                    CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
                     f"MDN range is {size} bytes; CLICK allows at most {_MDN_MAX_BYTES} "
                     "(512 DS/DH or 256 DD/DF registers)",
                     "Shrink the median range, or take the median of smaller ranges in "
@@ -990,8 +990,8 @@ def _evaluate_instruction_portability(
             location_text = _format_location(location)
             findings.append(
                 ClickFinding(
-                    code=CLK_CALC_MODE_MIXED,
-                    severity=_route_severity(CLK_CALC_MODE_MIXED, mode),
+                    code=CLK_MATH_MODE_MIXED,
+                    severity=_route_severity(CLK_MATH_MODE_MIXED, mode),
                     message=(
                         "math() mixes WORD (hex-family) and non-WORD (decimal-family) operands "
                         f"at {location_text}."
@@ -1008,8 +1008,8 @@ def _evaluate_instruction_portability(
             location_text = _format_location(location)
             findings.append(
                 ClickFinding(
-                    code=CLK_CALC_FLOOR_DIV,
-                    severity=_route_severity(CLK_CALC_FLOOR_DIV, mode),
+                    code=CLK_MATH_FLOOR_DIV,
+                    severity=_route_severity(CLK_MATH_FLOOR_DIV, mode),
                     message=(
                         f"math() uses floor division (//) which Click does not support "
                         f"at {location_text}."
@@ -1032,8 +1032,8 @@ def _evaluate_instruction_portability(
                 other_mode = "hex" if mode_info.mode == "decimal" else "decimal"
                 findings.append(
                     ClickFinding(
-                        code=CLK_CALC_FUNC_MODE_MISMATCH,
-                        severity=_route_severity(CLK_CALC_FUNC_MODE_MISMATCH, mode),
+                        code=CLK_MATH_FUNC_MODE_MISMATCH,
+                        severity=_route_severity(CLK_MATH_FUNC_MODE_MISMATCH, mode),
                         message=(
                             f"math() in {mode_info.mode} mode uses {names} "
                             f"which {'is' if len(unique) == 1 else 'are'} "
@@ -1054,8 +1054,8 @@ def _evaluate_instruction_portability(
             location_text = _format_location(location)
             findings.append(
                 ClickFinding(
-                    code=CLK_CALC_NESTING_DEPTH,
-                    severity=_route_severity(CLK_CALC_NESTING_DEPTH, mode),
+                    code=CLK_MATH_NESTING_DEPTH,
+                    severity=_route_severity(CLK_MATH_NESTING_DEPTH, mode),
                     message=(
                         f"math() expression has {depth} levels of parenthetical nesting "
                         f"at {location_text}; Click allows at most "
@@ -1268,8 +1268,8 @@ def _evaluate_rand_bounds(
             continue
         findings.append(
             ClickFinding(
-                code=CLK_CALC_ARG_NOT_PLAIN,
-                severity=_route_severity(CLK_CALC_ARG_NOT_PLAIN, mode),
+                code=CLK_MATH_ARG_NOT_PLAIN,
+                severity=_route_severity(CLK_MATH_ARG_NOT_PLAIN, mode),
                 message=(
                     f"{name} at {location_text} has an expression as an argument; CLICK takes "
                     f"only a tag or a constant there (its editor refuses RAND ( DD1 / 2 , 10 ))."
@@ -1368,8 +1368,8 @@ def _evaluate_wide_constants(
     listed = ", ".join(str(value) for value in dict.fromkeys(wide))
     return [
         ClickFinding(
-            code=CLK_CALC_WIDE_CONSTANT,
-            severity=_route_severity(CLK_CALC_WIDE_CONSTANT, mode),
+            code=CLK_MATH_WIDE_CONSTANT,
+            severity=_route_severity(CLK_MATH_WIDE_CONSTANT, mode),
             message=(
                 f"math() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
                 + (
