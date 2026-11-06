@@ -18,16 +18,20 @@ from pyrung import (
     Rung,
     TagType,
     Timer,
+    Word,
     calc,
+    call,
+    copy,
     count_up,
     latch,
     on_delay,
     out,
+    subroutine,
 )
 from pyrung.core import forloop, randint
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.compiled_plc import CompiledPLC
-from pyrung.core.expression import RandIntExpr, format_expr, randint_draw, sqrt
+from pyrung.core.expression import RandIntExpr, format_expr, randint_draw, randint_sites, sqrt
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
 from pyrung.core.tag import Tag
@@ -40,6 +44,61 @@ def _die_program() -> tuple[Program, RandIntExpr, Tag]:
         with Rung():
             calc(draw, die)
     return logic, draw, die
+
+
+def _int_and_word() -> tuple[Program, RandIntExpr, list[str]]:
+    roll = randint(100000, 110000)
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(roll, Int("I"))
+        with Rung():
+            calc(roll, Word("W"))
+    name = roll.tag.name
+    return logic, roll, [name, f"{name}.cut", f"{name}.ucut", "I", "W"]
+
+
+def _tag_read_by_a_rung(
+    *, with_calc: bool, as_condition: bool
+) -> tuple[Program, RandIntExpr, list[str]]:
+    roll = randint(70000, 90000)
+    with Program(strict=False) as logic:
+        if with_calc:
+            with Rung():
+                calc(roll, Int("Die"))
+        if as_condition:
+            with Rung(roll.tag > 80000):
+                copy(1, Int("High"))
+            with Rung(roll.tag <= 80000):
+                copy(0, Int("High"))
+        else:
+            with Rung():
+                copy(roll.tag, Dint("Shown"))
+    name = roll.tag.name
+    return logic, roll, [name, f"{name}.cut", "Die", "Shown", "High"]
+
+
+def _tag_read_in_a_subroutine() -> tuple[Program, RandIntExpr, list[str]]:
+    roll = randint(70000, 90000)
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(roll, Int("Die"))
+        with Rung():
+            call("show")
+        with subroutine("show"):
+            with Rung():
+                copy(roll.tag, Dint("Shown"))
+    name = roll.tag.name
+    return logic, roll, [name, f"{name}.cut", "Die", "Shown"]
+
+
+#: Programs whose draws stepping once took otherwise than the kernel (review of the uncut draw).
+_KERNEL_SITE_PROGRAMS = {
+    "int_and_hex_word": _int_and_word,
+    "calc_and_tag_copy": lambda: _tag_read_by_a_rung(with_calc=True, as_condition=False),
+    "tag_copy_alone": lambda: _tag_read_by_a_rung(with_calc=False, as_condition=False),
+    "tag_in_a_condition": lambda: _tag_read_by_a_rung(with_calc=False, as_condition=True),
+    "tag_in_a_subroutine": _tag_read_in_a_subroutine,
+}
 
 
 def _draws(runner, tag: str, scans: int) -> list[int]:
@@ -383,6 +442,54 @@ class TestBoundsAsCLICKReadsThem:
                     assert held == randint_draw(site, state.scan_id - 1, lo, hi)
                 else:
                     assert held == (roll.tag.default if which == "uncut" else lo)
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_a_signed_and_an_unsigned_cut_of_one_draw_both_draw(self, factory):
+        """An Int's cut and a hex Word's share a site number, and each draws over its own cut."""
+        roll = randint(100000, 110000)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll, Int("I"))
+            with Rung():
+                calc(roll, Word("W"))
+        assert {roll.cut_tag.name, roll.ucut_tag.name} == {
+            f"{roll.tag.name}.cut",
+            f"{roll.tag.name}.ucut",
+        }
+        plc = factory(logic, dt=0.01)
+        for _ in range(20):
+            state = plc.step()
+            scan = state.scan_id - 1
+            assert state.tags["I"] == randint_draw(~roll.site, scan, -31072, -21072)
+            assert state.tags["W"] == randint_draw(~roll.site, scan, 34464, 44464)
+
+    @pytest.mark.parametrize("program", sorted(_KERNEL_SITE_PROGRAMS))
+    def test_stepping_draws_the_sites_the_kernel_draws(self, program):
+        """Stepping draws by name the sites the kernel reaches, so a long run is stepping."""
+        # *roll* is held as a script holds it: a site is known while its draw is alive, and a
+        # rung reading ``roll.tag`` alone does not keep it so.
+        logic, roll, watched = _KERNEL_SITE_PROGRAMS[program]()
+        stepped = PLC(logic, dt=0.01)
+        compiled = CompiledPLC(logic, dt=0.01)
+        drawn = [site.tag.name for site in stepped._randint_site_list()]
+        assert drawn == [site.tag.name for site in compiled._randint_sites]
+        assert roll.tag.name in drawn or program == "int_and_hex_word"
+        sites = randint_sites(watched)
+        defaults = {site.tag.name: site.tag.default for site in sites}
+        for _ in range(50):
+            ours, theirs = stepped.step(), compiled.step()
+            assert ours.scan_id == theirs.scan_id
+            for name in watched:
+                assert ours.tags.get(name, defaults.get(name)) == theirs.tags.get(
+                    name, defaults.get(name)
+                ), name
+        long_run = PLC(logic, dt=0.01)
+        long_run.run_for(30.0)
+        by_step = PLC(logic, dt=0.01)
+        for _ in range(long_run.state.scan_id):
+            by_step.step()
+        assert long_run.state.scan_id == by_step.state.scan_id
+        assert long_run.state.tags == by_step.state.tags
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_patch_or_force_of_a_draw_no_math_runs_moves_nothing(self, factory):

@@ -49,6 +49,8 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import ImmediateRef, Tag
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
 
@@ -352,6 +354,126 @@ def _condition_children(cond: Condition) -> list[tuple[str, Any]]:
         else:
             children.append((key, val))
     return children
+
+
+# ---------------------------------------------------------------------------
+# Operand walk
+# ---------------------------------------------------------------------------
+
+
+def walk_rung_operands(rungs: Iterable[Rung], visit: Callable[[Any], None]) -> None:
+    """Call *visit* on each operand the *rungs* run, in a fixed order, once each.
+
+    The walk the compiled kernel takes its tags from: rung conditions, each
+    instruction's declared fields (an instruction declaring none, its public
+    attributes), branches, an instruction's nested ``instructions`` and a for-loop's
+    body rung conditions.  An operand is a ``Tag``, a pointer (``IndirectRef``,
+    ``IndirectExprRef``), or a range (``BlockRange``, ``IndirectBlockRange``); a
+    pointer's or an indirect range's own operands are visited after it, and a static
+    range is left to *visit*.  A calc's ``source_expression`` is no declared field:
+    what it names runs only where something else runs it.
+    """
+    from pyrung.core.rung import Rung as LogicRung
+
+    seen_values: set[int] = set()
+
+    def walk_rung(rung: Rung) -> None:
+        for cond in rung._conditions:
+            walk_value(cond)
+        for item in rung._execution_items:
+            if isinstance(item, LogicRung):
+                walk_rung(item)
+            else:
+                walk_instruction(item)
+
+    def walk_instruction(instr: Any) -> None:
+        fields = _instruction_fields(instr)
+        if fields is None:
+            for key in sorted(vars(instr)):
+                if key.startswith("_"):
+                    continue
+                walk_value(getattr(instr, key))
+        else:
+            for key in fields:
+                walk_value(getattr(instr, key))
+        if hasattr(instr, "oneshot"):
+            walk_value(instr.oneshot)
+        if hasattr(instr, "_ins"):
+            ins = instr._ins
+            if isinstance(ins, dict):
+                for key in sorted(ins, key=repr):
+                    walk_value(ins[key])
+        if hasattr(instr, "_outs"):
+            outs = instr._outs
+            if isinstance(outs, dict):
+                for key in sorted(outs, key=repr):
+                    walk_value(outs[key])
+        child_instructions = getattr(instr, "instructions", None)
+        if isinstance(child_instructions, list):
+            for child in child_instructions:
+                walk_instruction(child)
+        # forloop body rungs: their contacts live on the rung, not on any
+        # instruction in the flat ``instructions`` view.
+        for body_rung in getattr(instr, "body_rungs", ()):
+            for cond in body_rung._conditions:
+                walk_value(cond)
+
+    def walk_value(value: Any) -> None:
+        value_id = id(value)
+        if value_id in seen_values:
+            return
+        seen_values.add(value_id)
+
+        if isinstance(value, ImmediateRef):
+            walk_value(value.value)
+            return
+
+        if isinstance(value, Tag | BlockRange):
+            visit(value)
+            return
+
+        if isinstance(value, IndirectRef):
+            visit(value)
+            walk_value(value.pointer)
+            return
+
+        if isinstance(value, IndirectExprRef):
+            visit(value)
+            walk_value(value.expr)
+            return
+
+        if isinstance(value, IndirectBlockRange):
+            visit(value)
+            walk_value(value.start_expr)
+            walk_value(value.end_expr)
+            return
+
+        if isinstance(value, CopyConverter):
+            return
+
+        if isinstance(value, Condition):
+            for _, child in _condition_children(value):
+                walk_value(child)
+            return
+
+        if isinstance(value, Expression):
+            for key in sorted(vars(value)):
+                if key.startswith("_"):
+                    continue
+                walk_value(getattr(value, key))
+            return
+
+        if isinstance(value, dict):
+            for key in sorted(value, key=repr):
+                walk_value(value[key])
+            return
+
+        if isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                walk_value(item)
+
+    for rung in rungs:
+        walk_rung(rung)
 
 
 # ---------------------------------------------------------------------------

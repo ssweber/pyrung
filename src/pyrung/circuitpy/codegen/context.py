@@ -30,13 +30,6 @@ from pyrung.circuitpy.codegen._util import (
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
-from pyrung.core.condition import (
-    Condition,
-)
-from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.expression import (
-    Expression,
-)
 from pyrung.core.function_source import embedded_source, is_the_function
 from pyrung.core.memory_block import (
     UNSET,
@@ -49,10 +42,9 @@ from pyrung.core.memory_block import (
     OutputBlock,
 )
 from pyrung.core.program import Program
-from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.system_points import system
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.validation.walker import _condition_children, _instruction_fields
+from pyrung.core.validation.walker import walk_rung_operands
 
 
 @dataclass(frozen=True)
@@ -376,77 +368,15 @@ class CodegenContext:
         self.dict_backed_tag_names.clear()
         self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
-        seen_values: set[int] = set()
 
-        def walk_rung(rung: LogicRung) -> None:
-            for cond in rung._conditions:
-                walk_value(cond)
-            for item in rung._execution_items:
-                if isinstance(item, LogicRung):
-                    walk_rung(item)
-                else:
-                    walk_instruction(item)
-
-        def walk_instruction(instr: Any) -> None:
-            fields = _instruction_fields(instr)
-            if fields is None:
-                for key in sorted(vars(instr)):
-                    if key.startswith("_"):
-                        continue
-                    walk_value(getattr(instr, key))
-            else:
-                for key in fields:
-                    walk_value(getattr(instr, key))
-            if hasattr(instr, "oneshot"):
-                walk_value(instr.oneshot)
-            if hasattr(instr, "_ins"):
-                ins = instr._ins
-                if isinstance(ins, dict):
-                    for key in sorted(ins, key=repr):
-                        walk_value(ins[key])
-            if hasattr(instr, "_outs"):
-                outs = instr._outs
-                if isinstance(outs, dict):
-                    for key in sorted(outs, key=repr):
-                        walk_value(outs[key])
-            child_instructions = getattr(instr, "instructions", None)
-            if isinstance(child_instructions, list):
-                for child in child_instructions:
-                    walk_instruction(child)
-            # forloop body rungs: their contacts live on the rung, not on any
-            # instruction in the flat ``instructions`` view.
-            for body_rung in getattr(instr, "body_rungs", ()):
-                for cond in body_rung._conditions:
-                    walk_value(cond)
-
-        def walk_value(value: Any) -> None:
-            value_id = id(value)
-            if value_id in seen_values:
-                return
-            seen_values.add(value_id)
-
-            if isinstance(value, ImmediateRef):
-                walk_value(value.value)
-                return
-
+        def visit(value: Any) -> None:
             if isinstance(value, Tag):
                 self.referenced_tags.setdefault(value.name, value)
                 self._associate_tag_with_known_block(value)
-                return
-
-            if isinstance(value, IndirectRef):
+            elif isinstance(value, IndirectRef | IndirectExprRef | IndirectBlockRange):
                 self._ensure_block_binding(value.block)
                 self.used_indirect_blocks.add(id(value.block))
-                walk_value(value.pointer)
-                return
-
-            if isinstance(value, IndirectExprRef):
-                self._ensure_block_binding(value.block)
-                self.used_indirect_blocks.add(id(value.block))
-                walk_value(value.expr)
-                return
-
-            if isinstance(value, BlockRange):
+            elif isinstance(value, BlockRange):
                 layout = self.static_range_layout(value)
                 if layout.uses_backing_storage:
                     self._ensure_block_binding(value.block)
@@ -463,44 +393,18 @@ class CodegenContext:
                             self._ensure_block_binding(annotated_block)
                     if layout.uses_backing_storage or not self.blockless:
                         self._associate_tag_with_known_block(tag)
-                return
 
-            if isinstance(value, IndirectBlockRange):
-                self._ensure_block_binding(value.block)
-                self.used_indirect_blocks.add(id(value.block))
-                walk_value(value.start_expr)
-                walk_value(value.end_expr)
-                return
-
-            if isinstance(value, CopyConverter):
-                return
-
-            if isinstance(value, Condition):
-                for _, child in _condition_children(value):
-                    walk_value(child)
-                return
-
-            if isinstance(value, Expression):
-                for key in sorted(vars(value)):
-                    if key.startswith("_"):
-                        continue
-                    walk_value(getattr(value, key))
-                return
-
-            if isinstance(value, dict):
-                for key in sorted(value, key=repr):
-                    walk_value(value[key])
-                return
-
-            if isinstance(value, (list, tuple, set, frozenset)):
-                for item in value:
-                    walk_value(item)
-
-        for rung in self.program.rungs:
-            walk_rung(rung)
-        for sub_name in self.subroutine_names:
-            for rung in self.program.subroutines[sub_name]:
-                walk_rung(rung)
+        walk_rung_operands(
+            [
+                *self.program.rungs,
+                *(
+                    rung
+                    for sub_name in self.subroutine_names
+                    for rung in self.program.subroutines[sub_name]
+                ),
+            ],
+            visit,
+        )
         for fault_tag in (
             system.fault.division_error,
             system.fault.out_of_range,

@@ -999,6 +999,11 @@ def is_randint_tag(name: str) -> bool:
     return name.startswith(RANDINT_TAG_PREFIX)
 
 
+def any_randint_sites() -> bool:
+    """Whether any ``randint`` site is alive: a program holding one keeps it so."""
+    return len(_randint_sites) > 0
+
+
 def randint_sites(tag_names: Iterable[str]) -> tuple[RandIntExpr, ...]:
     """The live ``randint`` sites among *tag_names*, in site order."""
     sites = [_randint_sites.get(name) for name in tag_names if is_randint_tag(name)]

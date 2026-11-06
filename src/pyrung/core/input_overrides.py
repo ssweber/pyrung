@@ -86,60 +86,29 @@ class _RungsWalked(NamedTuple):
     beyond_rungs: tuple[Tag, ...]
 
 
-def _randint_sites_run(roots: Iterable[Any]) -> tuple[RandIntExpr, ...]:
-    """The ``randint`` sites the rungs in *roots* run, in site order.
+def _randint_sites_run(rungs: Iterable[Any]) -> tuple[RandIntExpr, ...]:
+    """The ``randint`` sites the *rungs* run, in site order: the compiled kernel's.
 
-    The walk of ``_iter_tags_and_edge_names``, but not into a calc's
-    ``source_expression``: that is the formula as written, which the export writes.  A
-    calc into an Int runs a cut draw in its place (``RandIntExpr.with_cut_bounds``), so
-    the uncut site it names runs only where some other rung runs it, as a Dint Math that
-    keeps the constants does.  A block's slots hold no draw, and a call's program is
-    taken for its rungs and subroutines.
+    Found by name, from the tags the kernel's own walk reaches (``walk_rung_operands``):
+    a draw's tag inside a formula, or ``expr.tag`` read straight off a rung.  That walk
+    takes a calc's formula as it runs, not its ``source_expression``: a calc into an Int
+    runs a cut draw in its place (``RandIntExpr.with_cut_bounds``), so the uncut site it
+    names runs only where some other rung runs it, as a Dint Math that keeps the
+    constants does.
     """
-    from pyrung.core.expression import RandIntExpr
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.memory_block import Block
-    from pyrung.core.program import Program
+    from pyrung.core.expression import is_randint_tag, randint_sites
+    from pyrung.core.validation.walker import walk_rung_operands
 
-    found: dict[int, RandIntExpr] = {}
-    visited: set[int] = set()
-    queue: list[Any] = list(roots)
-    while queue:
-        current = queue.pop()
-        if current is None or isinstance(
-            current, TagClass | Block | str | bytes | bytearray | int | float | bool
-        ):
-            continue
-        current_id = id(current)
-        if current_id in visited:
-            continue
-        visited.add(current_id)
-        if isinstance(current, RandIntExpr):
-            found[current.site] = current
-        if isinstance(current, Program):
-            queue.extend(current.rungs)
-            queue.extend(current.subroutines.values())
-            continue
-        if isinstance(current, Mapping):
-            queue.extend(current.keys())
-            queue.extend(current.values())
-            continue
-        if isinstance(current, tuple | list | set | frozenset):
-            queue.extend(current)
-            continue
-        if hasattr(current, "__dict__"):
-            fields = vars(current)
-            if isinstance(current, CalcInstruction):
-                fields = {k: v for k, v in fields.items() if k != "source_expression"}
-            queue.extend(fields.values())
-            continue
-        if hasattr(current, "__slots__"):
-            for slot in current.__slots__:
-                if slot in {"__weakref__", "__dict__"}:
-                    continue
-                if hasattr(current, slot):
-                    queue.append(getattr(current, slot))
-    return tuple(found[site] for site in sorted(found))
+    # In the order the walk meets them, as the kernel's tags are: a ``.cut`` and a
+    # ``.ucut`` site share a site number, and draw in that order on both.
+    names: dict[str, None] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, TagClass) and is_randint_tag(value.name):
+            names.setdefault(value.name)
+
+    walk_rung_operands(rungs, visit)
+    return randint_sites(names)
 
 
 def _addresses_reached(use: Any) -> range | tuple[int, ...]:
@@ -370,17 +339,17 @@ class TagsRungsReach:
         site and the scan, so leaving a site out moves no other's values.
         """
         if self._randint_run is None:
-            from pyrung.core.expression import is_randint_tag
+            from pyrung.core.expression import any_randint_sites
 
-            if not any(is_randint_tag(tag.name) for tag in self.walk().named):
-                # No rung names a draw: no second walk.
+            if not any_randint_sites():
+                # No draw is alive anywhere, so none is on these rungs: no walk.
                 self._randint_run = ()
                 return self._randint_run
-            roots: list[Any] = list(self._logic)
+            rungs: list[Any] = list(self._logic)
             if self._program is not None:
-                for subroutine_rungs in self._program.subroutines.values():
-                    roots.extend(subroutine_rungs)
-            self._randint_run = _randint_sites_run(roots)
+                for name in sorted(self._program.subroutines):
+                    rungs.extend(self._program.subroutines[name])
+            self._randint_run = _randint_sites_run(rungs)
         return self._randint_run
 
     def _named(self) -> dict[str, Tag]:
