@@ -263,3 +263,39 @@ case = "agg_more/rand_sites"
 hash = "eeb469b70006"
 on = "2026-11-05"
 read = { Result1 = 0, Result2 = 7, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "td_write/debounce_on_td_write"
+hash = "6932f80626b7"
+on = "2026-11-06"
+read = { Result1 = 102, Result2 = 551, Result3 = 1101 }
+
+[[reading]]
+case = "td_write/flasher_on_td_write"
+hash = "fe5403c1b564"
+on = "2026-11-06"
+read = { Result1 = 104, Result2 = 48, Result3 = 602, ErrorCode = 1 }
+
+[[reading]]
+case = "td_write/flasher_off_td_write"
+hash = "132547c76734"
+on = "2026-11-06"
+read = { Result1 = 354, Result2 = 602, Result3 = 69 }
+
+[[reading]]
+case = "flasher_off/ds_zero"
+hash = "aaa5cd0701fb"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 0, Result3 = 59, Result4 = 10, ErrorCode = 0 }
+
+[[reading]]
+case = "flasher_off/ds_minus_five"
+hash = "657f5a11dd65"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 0, Result3 = 60, Result4 = 10, ErrorCode = 0 }
+
+[[reading]]
+case = "txt_end/by_pointer"
+hash = "9ac86deb6611"
+on = "2026-11-06"
+read = { Result1 = 6318, Result2 = 6832, Result3 = 6192, Result4 = 12, ErrorCode = 90 }
