@@ -177,6 +177,22 @@ def test_each_part_apart_fits_a_click_project(part: str) -> None:
     assert estimate.total <= suite.PART_STEP_BUDGET
 
 
+@pytest.mark.parametrize("part", sorted(p for p in suite.APART_PARTS if p.startswith("follow_")))
+def test_each_follow_part_pastes_under_the_rung_limit(part: str, tmp_path) -> None:
+    out = suite.build(part).export(tmp_path / part)
+    csvs = [out / "main.csv", *sorted((out / "subroutines").glob("*.csv"))]
+    rungs = sum(
+        1
+        for path in csvs
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("R,")
+    )
+    assert rungs < suite.FOLLOW_RUNG_LIMIT, (
+        f"part {part} exports {rungs} rungs, over {suite.FOLLOW_RUNG_LIMIT}: "
+        "CLICK's editor freezes on a larger paste; move a group to another part"
+    )
+
+
 @pytest.mark.parametrize("part", sorted(suite.PARTS))
 def test_each_part_fits_a_click_project(part: str) -> None:
     build = suite.build(part)

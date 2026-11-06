@@ -52,6 +52,7 @@ from tests.conformance.coils import (
     test_flasher_td,
     test_out,
     test_out_more,
+    test_td_write,
 )
 from tests.conformance.conditions import (
     test_compare,
@@ -311,6 +312,7 @@ APART_GROUPS = [
     test_drum_preset.group,
     test_deb_zero.group,
     test_coil_timing.group,
+    test_td_write.group,
     test_word_floor.group,
     test_flasher_off.group,
     test_txt_end.group,
@@ -338,15 +340,19 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow_timing": ApartPart(
         ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
     ),
-    # A fourth, of what the others left: a flasher's off phase of 0 or below, and a Real's
-    # text running past TXT1000.
-    "follow_extra": ApartPart(("flasher_off", "txt_end")),
+    # A fourth, of what the others left: a flasher's off phase of 0 or below, a TD written
+    # into a running debounce and flasher, and a Real's text running past TXT1000.
+    "follow_extra": ApartPart(("flasher_off", "td_write", "txt_end")),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
 #: less a margin for the estimate's error and the instructions it has not
 #: measured.
 PART_STEP_BUDGET = 7500
+
+#: Rungs a ``follow_*`` part may export (``R,`` rows of the CSVs): CLICK's editor freezes on a
+#: larger paste.  ``test_build.py`` holds each part to it.
+FOLLOW_RUNG_LIMIT = 150
 
 
 def groups(part: str | None = None) -> list[Group]:
