@@ -33,12 +33,15 @@ from pyrung.core import (
     pack_bits,
     pack_text,
     pack_words,
+    out,
+    run_enabled_function,
     run_function,
     search,
     unpack_to_bits,
     unpack_to_words,
 )
-from pyrung.core.copy_converters import to_text
+from pyrung.core.analysis.prove import never
+from pyrung.core.copy_converters import to_ascii, to_text, to_value
 from pyrung.core.system_points import system
 from pyrung.core.tag import immediate
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
@@ -153,6 +156,20 @@ def _copy_to_text(wrap: Callable[[Any], Any] = immediate):
     return hw, prog, (), (txt[1], txt[4])
 
 
+def _copy_text_to_value(wrap: Callable[[Any], Any] = immediate):
+    hw, _x, _y = _hardware()
+    txt = Block("Txt", TagType.CHAR, 1, 2)
+    digit = Int("Digit")
+    letter = Int("Letter", default=4)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("7", txt[1])
+            copy("x", txt[2])
+            copy(wrap(txt[1]), digit, convert=to_value)
+            copy(wrap(txt[2]), letter, convert=to_value)
+    return hw, prog, (), (digit, letter, system.fault.out_of_range, system.fault.address_error)
+
+
 def _blockcopy_inputs(wrap: Callable[[Any], Any] = immediate):
     hw, x, _y = _hardware()
     bits = Block("Bits", TagType.BOOL, 1, 4)
@@ -173,6 +190,25 @@ def _blockcopy_registers(wrap: Callable[[Any], Any] = immediate):
     return hw, prog, (), (ds[5], ds[6])
 
 
+def _blockcopy_text_to_numbers(wrap: Callable[[Any], Any] = immediate):
+    hw, _x, _y = _hardware()
+    txt = Block("Txt", TagType.CHAR, 1, 3)
+    ds = Block("DS", TagType.INT, 1, 6)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("4", txt[1])
+            copy("A", txt[2])
+            copy("9", txt[3])
+            blockcopy(wrap(txt.select(1, 3)), wrap(ds.select(1, 3)), convert=to_ascii)
+            blockcopy(wrap(txt.select(1, 3)), wrap(ds.select(4, 6)), convert=to_value)
+    return (
+        hw,
+        prog,
+        (),
+        (*(ds[i] for i in range(1, 7)), system.fault.out_of_range, system.fault.address_error),
+    )
+
+
 def _fill_registers(wrap: Callable[[Any], Any] = immediate):
     hw, _x, _y = _hardware()
     src = Real("Src", default=2.5)
@@ -189,6 +225,17 @@ def _fill_outputs(wrap: Callable[[Any], Any] = immediate):
         with Rung():
             fill(wrap(x[1]), wrap(y.select(1, 3)))
     return hw, prog, (x[1],), tuple(y[i] for i in range(1, 4))
+
+
+def _fill_text(wrap: Callable[[Any], Any] = immediate):
+    hw, _x, _y = _hardware()
+    letter = Block("Letter", TagType.CHAR, 1, 1)
+    txt = Block("Txt", TagType.CHAR, 1, 3)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("Q", letter[1])
+            fill(wrap(letter[1]), wrap(txt.select(1, 3)))
+    return hw, prog, (), tuple(txt[i] for i in range(1, 4))
 
 
 def _pack_bits_inputs(wrap: Callable[[Any], Any] = immediate):
@@ -259,6 +306,34 @@ def _search_for_an_immediate(wrap: Callable[[Any], Any] = immediate):
     return hw, prog, (), (result, found)
 
 
+def _search_text_for_an_immediate(wrap: Callable[[Any], Any] = immediate):
+    hw, _x, _y = _hardware()
+    txt = Block("Txt", TagType.CHAR, 1, 4)
+    wanted = Block("Wanted", TagType.CHAR, 1, 1)
+    result = Dint("Result")
+    found = Bool("Found")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("K", wanted[1])
+            copy("K", txt[3])
+            search(txt.select(1, 4) == wrap(wanted[1]), result=result, found=found)
+    return hw, prog, (), (result, found)
+
+
+def _search_at_least_an_immediate(wrap: Callable[[Any], Any] = immediate):
+    hw, _x, _y = _hardware()
+    ds = Block("DS", TagType.INT, 1, 4)
+    floor = Int("Floor", default=6)
+    result = Dint("Result")
+    found = Bool("Found")
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(3, ds[1])
+            copy(8, ds[2])
+            search(ds.select(1, 4) >= wrap(floor), result=result, found=found)
+    return hw, prog, (), (result, found)
+
+
 def _double(a):
     return {"o": a * 2}
 
@@ -273,23 +348,45 @@ def _run_function_operands(wrap: Callable[[Any], Any] = immediate):
     return hw, prog, (), (dest,)
 
 
+def _plus_one_when_enabled(enabled, a):
+    return {"o": a + 1 if enabled else 0}
+
+
+def _run_enabled_function_operands(wrap: Callable[[Any], Any] = immediate):
+    hw, x, _y = _hardware()
+    src = Int("Src", default=20)
+    dest = Int("Dest")
+    with Program(strict=False) as prog:
+        with Rung(x[1]):
+            run_enabled_function(
+                _plus_one_when_enabled, ins={"a": wrap(src)}, outs={"o": wrap(dest)}
+            )
+    return hw, prog, (x[1],), (dest,)
+
+
 _CASES: dict[str, Case] = {
     "copy Real into Dint": _copy_real_into_dint,
     "copy Int into Int": _copy_int_into_int,
     "copy input into Bool": _copy_input_into_bool,
     "copy into output": _copy_into_output,
     "copy to text": _copy_to_text,
+    "copy text to value": _copy_text_to_value,
     "blockcopy inputs": _blockcopy_inputs,
     "blockcopy registers": _blockcopy_registers,
+    "blockcopy text to numbers": _blockcopy_text_to_numbers,
     "fill registers": _fill_registers,
     "fill outputs": _fill_outputs,
+    "fill text": _fill_text,
     "pack_bits inputs": _pack_bits_inputs,
     "unpack_to_bits outputs": _unpack_to_outputs,
     "pack and unpack words": _pack_and_unpack_words,
     "pack_text digits": _pack_text_digits,
     "calc of an immediate": _calc_of_an_immediate,
     "search for an immediate": _search_for_an_immediate,
+    "search text for an immediate": _search_text_for_an_immediate,
+    "search at least an immediate": _search_at_least_an_immediate,
     "run_function operands": _run_function_operands,
+    "run_enabled_function operands": _run_enabled_function_operands,
 }
 
 
@@ -316,3 +413,64 @@ def test_immediate_operand_reads_as_the_plain_one(case):
     _hw, prog, inputs, watch = _CASES[case]()
     _hw, plain, plain_inputs, plain_watch = _CASES[case](wrap=lambda value: value)
     assert _interpreted(prog, inputs, watch) == _interpreted(plain, plain_inputs, plain_watch)
+
+
+def _verdict(program: Program, prop: Any) -> str:
+    return type(never(program, prop, max_states=20_000)).__name__
+
+
+def _holds(tag: Tag, value: Any) -> Any:
+    """The condition *tag* reads *value*."""
+    if tag.type == TagType.BOOL:
+        return tag if value else ~tag
+    return tag == value
+
+
+@pytest.mark.parametrize("case", list(_CASES), ids=list(_CASES))
+def test_prove_reads_an_immediate_as_the_plain_one(case):
+    """The verifier's verdict on the stepped value is the unwrapped program's."""
+    _hw, prog, inputs, watch = _CASES[case]()
+    _hw, plain, plain_inputs, plain_watch = _CASES[case](wrap=lambda value: value)
+    value = _interpreted(plain, plain_inputs, plain_watch)[0]
+    assert _verdict(prog, _holds(watch[0], value)) == _verdict(plain, _holds(plain_watch[0], value))
+
+
+def _plus_one(a):
+    return {"o": a + 1}
+
+
+def _function_out_from_an_input(form: str, wrap: Callable[[Any], Any]):
+    """A function's out computed from a bounded input, read by a later rung."""
+    sel = Int("Sel", external=True, min=0, max=9)
+    dest = Int("Dest", min=0, max=20)
+    seen = Bool("Seen")
+    with Program(strict=False) as prog:
+        with Rung():
+            if form == "run_function":
+                run_function(_plus_one, ins={"a": sel}, outs={"o": wrap(dest)})
+            else:
+                run_enabled_function(
+                    _plus_one_when_enabled, ins={"a": sel}, outs={"o": wrap(dest)}
+                )
+        with Rung(dest == 7):
+            out(seen)
+    return prog, dest, seen
+
+
+@pytest.mark.parametrize("form", ["run_function", "run_enabled_function"])
+def test_prove_finds_a_value_written_through_an_immediate_function_out(form):
+    """An immediate() out is a write: the input that feeds it stays live.
+
+    It was not counted, so the input was pruned and ``never(Dest == 7)`` came back
+    Proven while stepping ``Sel = 6`` writes 7.
+    """
+    prog, dest, seen = _function_out_from_an_input(form, immediate)
+    plc = PLC(prog)
+    plc.patch({"Sel": 6})
+    plc.step()
+    plc.step()
+    assert plc.current_state.tags["Dest"] == 7
+    plain, _dest, plain_seen = _function_out_from_an_input(form, lambda value: value)
+    assert _verdict(prog, seen) == _verdict(plain, plain_seen) == "Counterexample"
+    if form == "run_function":
+        assert _verdict(prog, dest == 7) == _verdict(plain, _dest == 7) == "Counterexample"
