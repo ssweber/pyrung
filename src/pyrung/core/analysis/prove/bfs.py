@@ -196,9 +196,9 @@ def _no_scan_found_intractable(context: _ExploreContext, visited: int) -> Intrac
         estimated_space=visited,
         tags=names,
         hints=[
-            f"  {name}: the way it reaches {target} can't be worked back from a comparison;"
-            " give an integer choices= or a min=/max= of at most 1000 values, or test it"
-            " with run_for()"
+            f"  {name}: its value reaches {target}, not only comparisons of it with a"
+            " literal; give it choices= or an integer min=/max= of at most 1000 values,"
+            " or test it with run_for()"
             for name, target in sorted(unanswered.items())
         ],
         journal=context.journal,

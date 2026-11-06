@@ -257,7 +257,7 @@ class TestKernelDomainDiscovery:
 
         graph = build_program_graph(logic)
         all_exprs = _collect_all_exprs(logic, graph)
-        domains, _blockers, _unanswered = _collect_structural_domain_info(
+        domains, _blockers = _collect_structural_domain_info(
             logic,
             graph,
             all_exprs,

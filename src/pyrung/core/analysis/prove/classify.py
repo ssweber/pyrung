@@ -1099,6 +1099,114 @@ def _tag_compared_names(
     )
 
 
+def _reached_past_literal_compares(
+    program: Program,
+    graph: ProgramGraph,
+    names: frozenset[str],
+    *,
+    exprs: Iterable[Any] = (),
+) -> dict[str, str]:
+    """Of *names*, the tags whose value reaches more than their own ``X op literal``.
+
+    ``{name: what it reaches}``.  A tag read only by contacts on it and by comparisons
+    of it with a literal or a constant (``In > 5``, ``Mode == 2``, ``C > "A"``) is told
+    apart by the search's partition of it, which splits at exactly those literals.
+    Anything else its value reaches (an instruction that reads it, an index, a
+    comparison with another tag or inside an expression, an indirect access) can tell
+    apart values the partition does not try.  *exprs* are the search's lowered
+    expressions (the property's among them).
+    """
+    from pyrung.core.analysis.simplified import And as ExprAnd
+    from pyrung.core.analysis.simplified import ArithAtom, Atom
+    from pyrung.core.analysis.simplified import Or as ExprOr
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        Condition,
+        FallingEdgeCondition,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+        RisingEdgeCondition,
+    )
+    from pyrung.core.tag import ImmediateRef, Tag
+    from pyrung.core.validation.walker import _condition_children
+
+    reached: dict[str, str] = {}
+
+    def mark(found: Iterable[str], what: str) -> None:
+        for name in found:
+            if name in names:
+                reached.setdefault(name, what)
+
+    def plain(value: Any) -> Any:
+        return value.value if isinstance(value, ImmediateRef) else value
+
+    def constant(value: Any) -> bool:
+        value = plain(value)
+        if isinstance(value, Tag):
+            return value.readonly
+        return isinstance(value, (bool, int, float, str))
+
+    for node in graph.rung_nodes:
+        if node.data_reads & names:
+            written = sorted(graph.node_writes(node))
+            mark(node.data_reads, written[0] if written else "an instruction")
+    mark(graph.index_tags, "an index")
+    mark(graph.pointer_tags, "an index")
+
+    contacts = (
+        BitCondition,
+        NormallyClosedCondition,
+        IntTruthyCondition,
+        RisingEdgeCondition,
+        FallingEdgeCondition,
+    )
+    direct = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
+    stack: list[Any] = list(_iter_program_conditions(program))
+    expr_stack: list[Any] = list(exprs)
+    while expr_stack:
+        expr = expr_stack.pop()
+        if isinstance(expr, (ExprAnd, ExprOr)):
+            expr_stack.extend(expr.terms)
+        elif isinstance(expr, ArithAtom):
+            mark((expr.left, expr.right), "an expression")
+        elif isinstance(expr, Atom):
+            if expr.unsupported is not None:
+                stack.append(expr.unsupported)
+            elif expr.operand_is_tag:
+                mark((expr.tag,), f"a comparison with {expr.operand}")
+                mark((expr.operand,), f"a comparison with {expr.tag}")
+
+    seen: set[int] = set()
+    while stack:
+        cond = stack.pop()
+        if id(cond) in seen or not isinstance(cond, Condition):
+            continue
+        seen.add(id(cond))
+        if isinstance(cond, (AllCondition, AnyCondition)):
+            stack.extend(cond.conditions)
+            continue
+        if isinstance(cond, contacts) and isinstance(plain(cond.tag), Tag):
+            continue
+        if isinstance(cond, direct) and isinstance(plain(cond.tag), Tag) and constant(cond.value):
+            continue
+        children = [child for _child_name, child in _condition_children(cond)]
+        found: set[str] = set()
+        for child in children:
+            found |= _compared_value_names(child, graph)
+        for name in found:
+            others = ", ".join(sorted(found - {name})) or "a computed value"
+            mark((name,), f"a comparison with {others}")
+    return reached
+
+
 def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
@@ -1387,6 +1495,68 @@ def _every_value_domain(tag: Tag) -> tuple[Any, ...] | None:
     if tag.max - tag.min + 1 > _TAG_COMPARED_DOMAIN_CAP:
         return None
     return tuple(range(int(tag.min), int(tag.max) + 1))
+
+
+def _answer_for_inputs(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    nondeterministic: dict[str, tuple[Any, ...]],
+    free_system: frozenset[str],
+    atom_index: dict[str, list[Atom]],
+    *,
+    real_gap_points: bool,
+) -> dict[str, str]:
+    """Make each free input's values all the program tells apart, or say it can't.
+
+    An input is answered when (a) it takes every value it can hold
+    (:func:`_every_value_domain`), or (b) its value reaches nothing but contacts on it
+    and its own ``X op literal`` comparisons, which its partition splits at exactly.
+    A (b) input gets its partition added to the values it already has (a literal
+    write's values miss the neighbours of a literal it is compared with), and an input
+    with a small declared range takes all of it.  Every other input is returned,
+    ``{name: what its value reaches}``: a search that finds no scan answers nothing
+    for it.  Mutates *nondeterministic*.
+    """
+    names = frozenset(
+        name
+        for name in nondeterministic
+        if name in graph.tags and graph.tags[name].type != TagType.BOOL
+    )
+    if not names:
+        return {}
+    reach = _reached_past_literal_compares(program, graph, names, exprs=all_exprs)
+    unanswered: dict[str, str] = {}
+    for name in sorted(names):
+        tag = graph.tags[name]
+        if name in free_system:
+            tag = bounded_system_tag(tag)
+        domain = set(nondeterministic[name])
+        where = reach.get(name)
+        if where is None:
+            if name not in free_system:
+                partition = _extract_value_domain(
+                    name,
+                    tag,
+                    all_exprs,
+                    graph.tags,
+                    None,
+                    None,
+                    graph,
+                    atom_index,
+                    real_gap_points=real_gap_points,
+                )
+                domain |= set(partition or ())
+        else:
+            every = _every_value_domain(tag)
+            if every is None:
+                unanswered[name] = where
+                continue
+            domain |= set(every)
+        widened = tuple(sorted(held_candidates(tag, domain)))
+        if widened:
+            nondeterministic[name] = widened
+    return unanswered
 
 
 _INTEGRAL_TYPE_RANGE: dict[TagType, tuple[int, int]] = {
@@ -2014,13 +2184,12 @@ def _collect_structural_domain_info(
     *,
     model_system_points: bool = False,
     real_gap_points: bool = True,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Discover finite domains and reverse soundness blockers.
 
-    Returns ``(domains, blockers, unanswered)`` where *domains* maps tag names
-    to their inferred finite value tuples, *blockers* lists source tags with
-    unsupported reverse dependencies that could not be safely bounded, and
-    *unanswered* is :func:`_backward_propagate_comparison_boundaries`'s.
+    Returns ``(domains, blockers)`` where *domains* maps tag names to their
+    inferred finite value tuples and *blockers* lists source tags with
+    unsupported reverse dependencies that could not be safely bounded.
 
     *model_system_points* (BFS only) treats scan-, clock- and time-derived
     system tags as free inputs: never constant storage, and seeded with their
@@ -2196,7 +2365,7 @@ def _collect_structural_domain_info(
     if profile:
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
-    blockers, unanswered = _backward_propagate_comparison_boundaries(
+    blockers = _backward_propagate_comparison_boundaries(
         program,
         graph,
         all_exprs,
@@ -2221,10 +2390,9 @@ def _collect_structural_domain_info(
             writer_probes=fixpoint_writer_probes,
             changes=fixpoint_domain_changes,
             blockers=len(blockers),
-            unanswered=len(unanswered),
         )
 
-    return known_domains, blockers, unanswered
+    return known_domains, blockers
 
 
 def _collect_structural_domains(
@@ -2234,7 +2402,7 @@ def _collect_structural_domains(
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Discover finite domains from structural writes via fixed-point propagation."""
-    domains, _blockers, _unanswered = _collect_structural_domain_info(
+    domains, _blockers = _collect_structural_domain_info(
         program, graph, all_exprs, literal_write_domains
     )
     return domains
@@ -2613,7 +2781,7 @@ def _backward_propagate_comparison_boundaries(
     atom_idx: dict[str, list[Atom]],
     *,
     real_gap_points: bool = True,
-) -> tuple[frozenset[str], dict[str, str]]:
+) -> frozenset[str]:
     """Propagate comparison boundary values from write targets back to sources.
 
     Covers ``copy``, ``fill``, ``blockcopy`` (identity), and invertible
@@ -2624,9 +2792,10 @@ def _backward_propagate_comparison_boundaries(
 
     Returns the set of *reverse soundness blockers* — source tags with
     unsupported reverse dependencies whose domains could not be safely
-    bounded by structural or declared fallbacks — and *unanswered*: source
-    tags whose domain holds what the inverse gave but maybe not every value
-    that reaches the target, with the target each was carried back from.
+    bounded by structural or declared fallbacks.  A source whose domain holds
+    what the inverse gave but maybe not every value that reaches the target
+    takes its declared domain when it has one and is no REAL; the search asks
+    every input whether it is answered for anyway (:func:`_answer_for_inputs`).
     """
     from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.instruction.calc import CalcInstruction
@@ -2860,8 +3029,7 @@ def _backward_propagate_comparison_boundaries(
                 continue
             reverse_soundness_blockers.add(source_name)
 
-    unanswered: dict[str, str] = {}
-    for source_name, target_name in store_cannot_invert.items():
+    for source_name in store_cannot_invert:
         source_tag = graph.tags.get(source_name)
         if source_tag is None:
             continue
@@ -2869,10 +3037,8 @@ def _backward_propagate_comparison_boundaries(
         # A declared REAL's domain is the whole numbers of its range: not every value.
         if declared is not None and source_tag.type != TagType.REAL:
             known_domains[source_name] = declared
-        else:
-            unanswered[source_name] = target_name
 
-    return frozenset(reverse_soundness_blockers), unanswered
+    return frozenset(reverse_soundness_blockers)
 
 
 def _extract_value_domain(
@@ -3571,7 +3737,7 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
-    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]]
     | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     exclusions: dict[str, str] | None = None,
@@ -3584,6 +3750,7 @@ def _classify_dimensions_from_graph(
     _skip_absorptions: bool,
     exhaust_tag_compared_inputs: bool = True,
     real_gap_points: bool = True,
+    unanswered_out: dict[str, str] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
 
@@ -3602,7 +3769,7 @@ def _classify_dimensions_from_graph(
     inputs.  Without it, unwritten system tags are left out (the ``how()``
     domain prior).
 
-    *structural_domain_info* is the ``(domains, blockers, unanswered)`` from
+    *structural_domain_info* is the ``(domains, blockers)`` from
     :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
     computed by another pass (only valid when *discovered_domains* is None, since
     that input feeds the fixpoint).
@@ -3624,6 +3791,11 @@ def _classify_dimensions_from_graph(
     most 1 apart (:func:`_extract_value_domain`).  The ``how()`` prior turns
     it off too, keeping its whole-number REAL partition.  It must match the
     flag *structural_domain_info* was collected with.
+
+    *unanswered_out* gets the inputs whose values tried may not be all the
+    program tells apart, with what each one's value reaches (see
+    :func:`_answer_for_inputs`): a search that finds no scan answers nothing
+    for them.  Only with *exhaust_tag_compared_inputs*.
     """
     profile = _classify_profile_enabled()
     timings: list[tuple[str, float]] = []
@@ -3655,13 +3827,13 @@ def _classify_dimensions_from_graph(
         profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
     if structural_domain_info is not None and discovered_domains is None:
         # Reuse the fixpoint another pass already ran — it's the dominant cost.
-        structural_domains, reverse_blockers, _unanswered = structural_domain_info
+        structural_domains, reverse_blockers = structural_domain_info
         if profile:
             profile_last = _classify_profile_mark(
                 timings, "structural_domain_info_reuse", profile_last
             )
     else:
-        structural_domains, reverse_blockers, _unanswered = _collect_structural_domain_info(
+        structural_domains, reverse_blockers = _collect_structural_domain_info(
             program,
             graph,
             all_exprs,
@@ -4244,6 +4416,18 @@ def _classify_dimensions_from_graph(
         members = sorted(name for name in group if name in nondeterministic)
         if len(members) > 1:
             _group_domains(members, nondeterministic, graph.tags)
+    if exhaust_tag_compared_inputs:
+        unanswered = _answer_for_inputs(
+            program,
+            graph,
+            all_exprs,
+            nondeterministic,
+            free_system,
+            atom_idx,
+            real_gap_points=real_gap_points,
+        )
+        if unanswered_out is not None:
+            unanswered_out.update(unanswered)
     if profile:
         profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
