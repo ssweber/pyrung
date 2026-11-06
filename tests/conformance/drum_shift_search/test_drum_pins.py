@@ -77,12 +77,14 @@ Reading at the return   2626          2626           2424
   to 0 (Result2), and to 4 with a jog on its scan (Result3).  Dropped reads 1111, 1111 and,
   the jog acting, 2222.  Standing reads 9191; clamping to the last step 3333.  ErrorCode is
   the time drum's Acc hundreds after the jump to 9: 9 if a dropped jump keeps the time,
-  0 if it clears it.
+  0 if it clears it.  The CLICK read (2026-11-05) 1111 for all three and ErrorCode 9: the jumps
+  are dropped, even with a jog on the scan, and the time is kept.
 - ``jump_on_bad_step``: step 5 staged on the scan of a jump to 2.  The jump lands with its
   row, 2222; the correction wins, 1111 (Result2, next scan Result1).  With a jog as well
   (Result3, Result4): the jump wins, 2222; the jog freezes the scan as it does alone, 5151.
   ErrorCode: step 5 on the scan of a jump to 9 from step 2, the correction writes nothing,
-  1212.
+  1212.  The CLICK read (2026-11-05) 2222 in all four, so the jump wins with a jog as well, and
+  5252 for ErrorCode: step 5 stands.
 - ``correction_with_flag``: a completed drum with step 5 staged: corrects with the flag on,
   1414, or the flag stops it, 5454 (Result2, Result3).  Staged while paused, read paused,
   5454 (Result4), and on the return, 1414 (ErrorCode).
@@ -938,33 +940,33 @@ branch_group = Group(
     "drum_branch",
     [
         case(
-            "A jump to a step the drum does not have from a DS: to 9 leaves 1111 (Result1), to "
-            "0 leaves 1111 (Result2), to 4 with a jog acts on the jog, 2222 (Result3); the "
-            "dropped jump keeps Acc, 9 hundreds (ErrorCode)",
+            "A jump to a step the drum does not have from a DS is dropped: to 9 leaves 1111 "
+            "(Result1), to 0 leaves 1111 (Result2), and to 4 with a jog on its scan leaves 1111 "
+            "(Result3); the dropped jump keeps Acc, 9 hundreds (ErrorCode)",
             ladder=prove_jump_to_bad_step,
             init=restoring(_EXTRA[5]),
             scans=SCANS,
             expect={
-                "Result1": between(1111, 9191),
-                "Result2": between(0, 3333),
-                "Result3": between(1111, 4141),
-                "ErrorCode": between(0, 9),
+                "Result1": 1111,
+                "Result2": 1111,
+                "Result3": 1111,
+                "ErrorCode": 9,
             },
             probe="a jump past the drum's steps: dropped, standing or clamped",
         ),
         case(
-            "A jump on a bad step: step 5 and a jump to 2 land with the row, 2222, or correct, "
-            "1111 (Result2, next scan Result1); with a jog, 2222 or 5151 (Result3, Result4); "
-            "step 5 and a jump to 9 from step 2 correct with no row, 1212 (ErrorCode)",
+            "A jump on a bad step: step 5 and a jump to 2 land with the row, 2222 (Result2, next "
+            "scan Result1); with a jog as well the jump wins, 2222 (Result3, Result4); step 5 "
+            "and a jump to 9 from step 2 leave step 5 standing, 5252 (ErrorCode)",
             ladder=prove_jump_on_bad_step,
             init=restoring(_EXTRA[9], _EXTRA[10]),
             scans=SCANS,
             expect={
-                "Result1": between(1111, 5252),
-                "Result2": between(1111, 5252),
-                "Result3": between(1111, 5252),
-                "Result4": between(1111, 5252),
-                "ErrorCode": between(1111, 9292),
+                "Result1": 2222,
+                "Result2": 2222,
+                "Result3": 2222,
+                "Result4": 2222,
+                "ErrorCode": 5252,
             },
             probe="does a valid jump beat the correction and a jog's freeze",
         ),

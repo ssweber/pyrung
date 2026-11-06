@@ -536,8 +536,11 @@ def _evaluate_search_banks(
 
 
 # The banks CLICK v4's Math dialog takes as its Result (checked in the editor,
-# 2026-11-06): DS, DD, DF, TD, CTD, and DH in a hex Math.  DH is allowed in a
-# decimal Math too: whether the dialog takes it there is unread.
+# 2026-11-06): DS, DD, DF, TD, CTD, and DH in a hex Math.  A decimal Math into
+# DH is refused (the dialog answer of 2026-11-06).  A Word destination makes the
+# Math decimal only when an operand is not a Word, a mixed Math that
+# CLK_MATH_MODE_MIXED flags (``infer_calc_mode`` in calc.py), so DH stays in the
+# table and the mixed Math gets its own finding.
 _MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "DH")
 
 
