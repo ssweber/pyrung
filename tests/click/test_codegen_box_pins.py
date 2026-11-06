@@ -320,7 +320,10 @@ def test_build_refuses_a_box_that_shares_its_rung(name: str):
     with pytest.raises(RuntimeError, match=ENDS_ITS_RUNG) as info:
         _build(REFUSED[name])
     message = str(info.value)
-    assert "`with Rung(...).continued():`" in message
+    if "forloop" in name:
+        assert "a body rung of its own" in message
+    else:
+        assert "`with Rung(...).continued():`" in message
     assert message.isascii()
 
 

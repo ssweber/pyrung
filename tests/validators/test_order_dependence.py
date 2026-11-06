@@ -223,6 +223,7 @@ def test_box_leg_below_a_write_is_flagged():
     assert finding.tags == ("P",)
     assert finding.target_name == "Main:R2"
     assert ".reset(P)" in finding.message
+    assert "after an instruction on a wire above it in the same CLICK rung" in finding.message
 
 
 def test_box_enable_is_the_rung_power_not_a_read():

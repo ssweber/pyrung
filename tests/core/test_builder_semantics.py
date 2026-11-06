@@ -250,13 +250,17 @@ def test_box_with_pins_beside_an_output_in_a_forloop_body_rung_is_refused() -> N
     reset = Bool("Reset")
     lamp = Bool("Lamp")
 
-    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung") as info:
         with Program():
             with Rung(enable):
                 with forloop(2):
                     with Rung(mode):
                         out(lamp)
                         count_up(Counter8, preset=5).reset(reset)
+    # A body rung has no .continued(): the fix is a body rung of its own.
+    message = str(info.value)
+    assert "a body rung of its own" in message
+    assert "continued" not in message
 
 
 def test_ton_allows_following_instruction_and_branch() -> None:

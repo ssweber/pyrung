@@ -66,6 +66,9 @@ class Rung:
         self._pin_box: Instruction | None = None
         # A forloop body's bare instructions are each a body rung of their own.
         self._loop_capture = False
+        # A forloop body rung: no .continued() there, so a box's neighbours
+        # move to body rungs of their own.
+        self._in_loop_body = False
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
@@ -94,7 +97,7 @@ class Rung:
         terminal = self._terminal_instruction
         if terminal is not None:
             if terminal.has_pins() and not self._loop_capture:
-                raise RuntimeError(_box_shares_rung(terminal, instruction))
+                raise RuntimeError(_box_shares_rung(terminal, instruction, self._in_loop_body))
             terminal_name = type(terminal).__name__
             current_name = type(instruction).__name__
             raise RuntimeError(
@@ -103,9 +106,11 @@ class Rung:
             )
         if not self._loop_capture:
             if self._pin_box is not None:
-                raise RuntimeError(_box_shares_rung(self._pin_box, instruction))
+                raise RuntimeError(_box_shares_rung(self._pin_box, instruction, self._in_loop_body))
             if instruction.has_pins() and self._tree_outputs:
-                raise RuntimeError(_box_shares_rung(instruction, self._first_output()))
+                raise RuntimeError(
+                    _box_shares_rung(instruction, self._first_output(), self._in_loop_body)
+                )
         if getattr(instruction, "end_line", None) is None:
             end_line = _capture_call_end_line(
                 getattr(instruction, "source_file", None),
@@ -133,7 +138,7 @@ class Rung:
         if terminal is not None:
             other = branch._first_output()
             if terminal.has_pins() and other is not None:
-                raise RuntimeError(_box_shares_rung(terminal, other))
+                raise RuntimeError(_box_shares_rung(terminal, other, self._in_loop_body))
             terminal_name = type(terminal).__name__
             raise RuntimeError(
                 f"{terminal_name} is terminal in this flow and must be last; "
@@ -141,9 +146,13 @@ class Rung:
             )
         if self._tree_outputs and branch._tree_outputs:
             if self._pin_box is not None:
-                raise RuntimeError(_box_shares_rung(self._pin_box, branch._first_output()))
+                raise RuntimeError(
+                    _box_shares_rung(self._pin_box, branch._first_output(), self._in_loop_body)
+                )
             if branch._pin_box is not None:
-                raise RuntimeError(_box_shares_rung(branch._pin_box, self._first_output()))
+                raise RuntimeError(
+                    _box_shares_rung(branch._pin_box, self._first_output(), self._in_loop_body)
+                )
         self._tree_outputs += branch._tree_outputs
         if branch._pin_box is not None:
             self._pin_box = branch._pin_box
@@ -317,11 +326,21 @@ def _dsl_label(instruction: Instruction | None) -> str:
     return f"{name}() (line {line})" if line is not None else f"{name}()"
 
 
-def _box_shares_rung(box: Instruction, other: Instruction | None) -> str:
-    """Why *box*, a box with pins, cannot share its rung with *other*."""
+def _box_shares_rung(box: Instruction, other: Instruction | None, in_loop_body: bool) -> str:
+    """Why *box*, a box with pins, cannot share its rung with *other*.
+
+    A forloop body rung has no ``.continued()``, so there the fix is a body
+    rung of its own.
+    """
+    where = (
+        "what comes before the box into a body rung above, what follows it into a body "
+        "rung of its own."
+        if in_loop_body
+        else "what comes before the box into a rung above, what follows it into "
+        "`with Rung(...).continued():` or a rung of its own."
+    )
     return (
         f"{_dsl_label(box)} has pins, so it ends its rung: CLICK draws its pins from the "
         f"box's own wire, and no other output or branch shares that rung. Move "
-        f"{_dsl_label(other)} off this rung: what comes before the box into a rung above, "
-        "what follows it into `with Rung(...).continued():` or a rung of its own."
+        f"{_dsl_label(other)} off this rung: {where}"
     )
