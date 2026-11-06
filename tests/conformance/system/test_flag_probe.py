@@ -4,9 +4,12 @@ Part ``system`` (``suite.PARTS``).  The fault-flag model (``bob/flags``)
 chose several things without a reading; each case here asks a CLICK one of them.
 The model, as pyrung has it: SC40 follows the last Math; SC43 and SC44 follow the
 last Copy or Math, and pyrung counts Block copy, Fill, Pack and Unpack as Copy tabs;
-nothing else touches a flag; an instruction that does not run (a rung that is off,
-a oneshot that does not fire) clears nothing.  Expectations are what pyrung reads,
-so a CLICK that reads otherwise is an answer.
+nothing else touches a flag.  Answered on a CLICK (2026-11-05): such an instruction
+clears its flags as it starts, then reads its operands, and a oneshot one that does
+not fire still clears them; a rung that is off clears nothing.  A Copy of DF
+1.0E+10 into a DD raises no SC43, so every SC43 half here raises nothing (the
+``flag_halves`` group, part ``follow_flags``, asks them again with a raise that
+takes).
 
 Every probe stands on its own: it raises the flag itself with something a CLICK has
 already answered (a Copy that clamps raises SC43, a pointer below its bank SC44, a
@@ -24,27 +27,32 @@ or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
 - ``bulk_ops_clear_flags`` (probe): does a Block copy, Fill, Pack (bits, words, text)
   or Unpack (bits, words) that succeeds clear a flag a Copy raised?  Only a single
   Copy and a Math were measured.  Result1 has bits 1..64 for the seven ops, in that
-  order, set when SC43 is off after it; Result2 the same for SC44; pyrung reads 127,
-  127.  Result3 is the control, the raise alone: bit 1 SC43 still on, bit 2 SC44
-  (3).  A bit missing in Result1 or Result2 is an op that leaves that flag as it was.
+  order, set when SC43 is off after it; Result2 the same for SC44.  Result3 is the
+  control, the raise alone: bit 1 SC43 still on, bit 2 SC44 (3).  A bit missing in
+  Result1 or Result2 is an op that leaves that flag as it was.  CLICK read 127, 127,
+  2: the SC43 raise does not take.
 - ``oneshot_that_does_not_fire`` (probe): a Copy or Math under a oneshot, on the
   scan it fires and the next, when it does not.  Five probes (bits 1, 2, 4, 8, 16):
   a Copy with SC43 and SC44 raised, a Math with SC40, SC43 and SC44.  Result2 has
   a bit where the oneshot clears the flag the scan it fires, Result1 where it
-  leaves it the scan it does not fire.  pyrung: 31, 31.  A CLICK whose oneshot
-  box settles the flags every scan reads Result1 = 0.
+  leaves it the scan it does not fire.  31, 31 for a oneshot that leaves them;
+  CLICK read 0, 31: its oneshot box settles the flags every scan its rung is on.
 - ``boxes_leave_flags`` (probe): a Search, a Shift, an event Drum, a timer and a
   counter box between the raise and the read.  Bits 1, 2, 4, 8, 16 in that order,
   set when the flag is still on after the box: Result1 SC40, Result2 SC43,
-  Result3 SC44.  pyrung: 31 each.  A bit missing is a box that clears that flag.
+  Result3 SC44.  pyrung: 31, 0 (the SC43 raise does not take), 31.  A bit missing
+  is a box that clears that flag.  CLICK read 31, 0, 0, which contradicts the
+  confirmed ``system/address_flag_vs_other_instructions`` (raised by pointer 0, not
+  -1); ``flag_boxes`` (part ``follow_flags``) asks again.
 - ``source_flag_is_read_before_the_copy_settles`` (probe): a Copy whose source is
-  the flag.  After the raise, ``copy(SC43, C)``: Result1 = 1 when C saw it on
-  (pyrung), 0 if the Copy settles the flag before it reads its source; Result2 = 1
-  when SC43 is off after the Copy (pyrung).  Result3, Result4 the same for SC44.
+  the flag.  After the raise, ``copy(SC43, C)``: Result1 = 1 when C saw it on,
+  0 if the Copy settles the flag before it reads its source; Result2 = 1 when
+  SC43 is off after the Copy.  Result3, Result4 the same for SC44.  CLICK read
+  0, 1, 0, 1: the Copy settles first (the SC43 half raises nothing).
 - ``source_flag_in_a_math`` (probe): the same for SC40 in a Math, ``DD =
   SC40 + 5`` after a division by zero: the DD reads 6 if the Math sees the flag
   it is about to settle (Result1; 5 if it sees the flag off), and SC40 is off
-  after it (Result2 = 1).
+  after it (Result2 = 1).  CLICK read 5, 1: the Math settles first.
 
 Not probed, pack_text with bad text and a bad destination pointer (which flag): CLICK
 takes a pointer in a Single Copy only (the exporter refuses a Pack text destination
@@ -274,52 +282,54 @@ group = Group(
     [
         case(
             "A Block copy, Fill, Pack (bits, words, text) or Unpack (bits, words) that "
-            "succeeds clears SC43 and SC44 a Copy raised: SC43 is off after each of the "
-            "seven (Result1 = 127), and so is SC44 (Result2 = 127); the raise alone leaves "
-            "both on (Result3 = 3)",
+            "succeeds clears SC44 a Copy raised (Result2 = 127); a Copy of DF 1.0E+10 into "
+            "a DD raises no SC43, so SC43 is off after each of the seven (Result1 = 127) and "
+            "the raise alone leaves only SC44 on (Result3 = 2)",
             ladder=prove_bulk_ops_clear_flags,
             init=_init(
                 bits=(1331, 1362), dds=(689, 699), dfs=(430, 430), dhs=(417, 421), txts=(501, 502)
             ),
-            expect={"Result1": 127, "Result2": 127, "Result3": 3},
+            expect={"Result1": 127, "Result2": 127, "Result3": 2},
             scans=SCANS,
             probe="do the bulk Copy tabs settle SC43 and SC44 as a single Copy does",
         ),
         case(
-            "A Copy or Math under a oneshot that does not fire leaves the flags, and clears "
-            "them the scan it fires: SC43 and SC44 after a Copy, SC40, SC43 and SC44 after "
-            "a Math (Result1 = 31 left, Result2 = 31 cleared)",
+            "A Copy or Math under a oneshot clears its flags every scan its rung is on, the "
+            "scan it fires (Result2 = 31) and the next, when it does not fire (Result1 = 0): "
+            "SC43 and SC44 after a Copy, SC40, SC43 and SC44 after a Math",
             ladder=prove_oneshot_that_does_not_fire,
             init=_init(dds=(700, 706), dfs=(431, 431)),
-            expect={"Result1": 31, "Result2": 31},
+            expect={"Result1": 0, "Result2": 31},
             scans=SCANS,
             probe="a oneshot that does not fire: does it run, and settle a flag",
         ),
         case(
-            "A Search, Shift, event Drum, timer and counter box leave SC40, SC43 and SC44 "
-            "as they found them (Result1, Result2, Result3 = 31)",
+            "A Search, Shift, event Drum, timer and counter box leave SC40 and SC44 as they "
+            "found them (Result1, Result3 = 31); a Copy of DF 1.0E+10 into a DD raises no "
+            "SC43, so none is on after a box (Result2 = 0)",
             ladder=prove_boxes_leave_flags,
             init=_init(bits=(1363, 1377), dds=(707, 713), dfs=(432, 432)),
-            expect={"Result1": 31, "Result2": 31, "Result3": 31},
+            expect={"Result1": 31, "Result2": 0, "Result3": 31},
             scans=SCANS,
             probe="do search, shift, drum, timer and counter boxes touch a fault flag",
         ),
         case(
-            "A Copy whose source is SC43 or SC44 reads the flag as it found it and then "
-            "settles it: the bit holds 1 (Result1, Result3 = 1) and the flag is off after "
-            "(Result2, Result4 = 1)",
+            "A Copy clears SC43 and SC44 as it starts, before it reads its source: "
+            "copy(SC44, C) right after a raise reads 0 (Result3 = 0) and SC44 is off after "
+            "(Result4 = 1); a Copy of DF 1.0E+10 into a DD raises no SC43, so copy(SC43, C) "
+            "reads 0 (Result1 = 0) and SC43 is off (Result2 = 1)",
             ladder=prove_source_flag_is_read_before_the_copy_settles,
             init=_init(bits=(1378, 1379), dds=(714, 714), dfs=(433, 433)),
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1},
+            expect={"Result1": 0, "Result2": 1, "Result3": 0, "Result4": 1},
             scans=SCANS,
             probe="does a Copy read its source flag before or after it settles the flag",
         ),
         case(
-            "A Math whose operand is SC40 reads the flag as it found it: SC40 + 5 after a "
-            "division by zero is 6 (Result1) and SC40 is off after it (Result2 = 1)",
+            "A Math clears SC40 as it starts, before it reads its operands: SC40 + 5 after a "
+            "division by zero is 5 (Result1) and SC40 is off after it (Result2 = 1)",
             ladder=prove_source_flag_in_a_math,
             init=_init(dds=(715, 717)),
-            expect={"Result1": 6, "Result2": 1},
+            expect={"Result1": 5, "Result2": 1},
             scans=SCANS,
             probe="does a Math read its operand flag before or after it settles the flag",
         ),

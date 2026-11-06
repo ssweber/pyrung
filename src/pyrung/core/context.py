@@ -324,7 +324,6 @@ class ScanContext:
         "_replay_io_submits",
         "_replay_io_drains",
         "_is_replay_io",
-        "_raised_faults",
     )
 
     def __init__(
@@ -355,9 +354,6 @@ class ScanContext:
                 for this scan.  ``None`` during live execution.
         """
         self._state = state
-        # Fault flags the instruction now executing has raised (see
-        # ``guard_oneshot_execution``).
-        self._raised_faults: set[str] = set()
         self._state_tags: PMap = state.tags
         self._state_tags_read: Mapping[str, Any] = (
             self._state_tags if state_tags_read is None else state_tags_read

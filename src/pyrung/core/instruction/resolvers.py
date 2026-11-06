@@ -205,7 +205,6 @@ def resolve_coil_targets_ctx(
 
 def _raise_fault(ctx: ScanContext, name: str) -> None:
     ctx._set_tag_internal(name, True)
-    ctx._raised_faults.add(name)
 
 
 def _set_fault_out_of_range(ctx: ScanContext) -> None:

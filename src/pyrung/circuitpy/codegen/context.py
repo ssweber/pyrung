@@ -278,11 +278,6 @@ class CodegenContext:
     used_condition_index_blocks: set[int] = field(default_factory=set)
     used_read_index_blocks: set[int] = field(default_factory=set)
     used_window_addrs_blocks: set[int] = field(default_factory=set)
-    # While a follow instruction's body compiles (``fault_follow_scope``): what
-    # a source reading a followed flag reads, the flag as the instruction found
-    # it, since its first line clears the flag.
-    fault_entry_symbols: dict[str, str] = field(default_factory=dict)
-    fault_entry_reads: set[str] = field(default_factory=set)
     # logical block id -> (bank block id, {logical addr: bank addr}). An aliased
     # block is a named window onto the bank's array, not storage of its own.
     block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)

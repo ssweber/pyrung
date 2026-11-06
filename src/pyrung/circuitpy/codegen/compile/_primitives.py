@@ -64,11 +64,6 @@ def _snapshot_tag_symbol(
     if isinstance(tag, ImmediateRef):
         tag = tag.tag
 
-    entry_symbol = ctx.fault_entry_symbols.get(tag.name)
-    if entry_symbol is not None:
-        ctx.fault_entry_reads.add(tag.name)
-        return entry_symbol
-
     block_info = ctx.tag_block_addresses.get(tag.name)
     if block_info is not None and block_snapshots is not None:
         block_id, addr = block_info
@@ -927,29 +922,13 @@ def _copy_converter_write_lines(
     ]
 
 
-def fault_follow_scope(instr: Any, ctx: CodegenContext) -> None:
-    """Open the scope of *instr*'s followed flags, before its body compiles."""
-    ctx.fault_entry_reads = set()
-    ctx.fault_entry_symbols = {
-        name: f"_fault_in_{name.rpartition('.')[2]}" for name in instr._fault_follows
-    }
-
-
 def _fault_follow_lines(instr: Any, ctx: CodegenContext) -> list[str]:
-    """Clear *instr*'s followed flags as it starts: a raise in its body sets them.
+    """Clear *instr*'s followed flags as it starts, before it reads: a raise in its body sets them.
 
-    The flag's entry value goes in a local first when the body's source reads it.
+    A source naming one of the flags reads it off.  The lines run whenever the
+    instruction is enabled, a one-shot that does not fire too.
     """
-    entry_symbols = ctx.fault_entry_symbols
-    reads = ctx.fault_entry_reads
-    ctx.fault_entry_symbols = {}
-    ctx.fault_entry_reads = set()
-    lines: list[str] = []
-    for name in instr._fault_follows:
-        if name in reads:
-            lines.append(f"{entry_symbols[name]} = {ctx.symbol_if_referenced(name)}")
-    lines.extend(f"{ctx.symbol_if_referenced(name)} = False" for name in instr._fault_follows)
-    return lines
+    return [f"{ctx.symbol_if_referenced(name)} = False" for name in instr._fault_follows]
 
 
 def _compile_guarded_instruction(
@@ -963,7 +942,7 @@ def _compile_guarded_instruction(
 ) -> list[str]:
     sp = " " * indent
     lines: list[str] = []
-    enabled_body = [*_fault_follow_lines(instr, ctx), *enabled_body]
+    settle = _fault_follow_lines(instr, ctx)
     if ctx.used_indirect_blocks:
         enabled_body = [
             "try:",
@@ -981,20 +960,27 @@ def _compile_guarded_instruction(
             if disabled_body:
                 lines.extend(f"{sp}{line}" for line in disabled_body)
             return lines
+        fire = [
+            f"if not bool(_mem.get({key!r}, False)):",
+            *[f"    {line}" for line in enabled_body],
+            f"    _mem[{key!r}] = True",
+        ]
         if enabled_literal is True:
-            lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
-            lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-            lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            lines.extend(f"{sp}{line}" for line in (*settle, *fire))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
         if disabled_body:
             lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
-        lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
-        lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+        if settle:
+            lines.append(f"{sp}else:")
+            lines.extend(f"{' ' * (indent + 4)}{line}" for line in (*settle, *fire))
+        else:
+            lines.append(f"{sp}el{fire[0]}")
+            lines.extend(f"{sp}{line}" for line in fire[1:])
         return lines
 
+    enabled_body = [*settle, *enabled_body]
     if enabled_literal is True:
         lines.extend(f"{sp}{line}" for line in enabled_body)
         return lines
@@ -1264,11 +1250,14 @@ def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | Non
 
     It holds what the store truncates: 32767.5 into an INT stores 32767 without
     clamping.  +/-Inf passes and NaN compares false, as a clamp pins Inf and
-    stores NaN as 0.  Text converts in the store and never clamps here, and a
-    Word into an INT keeps its bits.
+    stores NaN as 0.  Text converts in the store and never clamps here, a Word
+    into an INT keeps its bits, and a REAL register clamps into a DINT with no
+    flag (``_copy_clamps``).
     """
     bounds = {"INT": (-32768, 32767), "DINT": (-2147483648, 2147483647)}.get(dest_type)
     if bounds is None or source_type == "CHAR":
+        return None
+    if dest_type == "DINT" and source_type == "REAL":
         return None
     if dest_type == "INT" and source_type == "WORD":
         return None

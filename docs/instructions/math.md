@@ -38,7 +38,7 @@ An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin
 Where Inf or NaN meets an integer:
 
 - A `calc()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`; NaN stores 0 with no flag.
-- A `copy()` of ±Inf into an `Int` or `Dint` clamps to its limit and sets `out_of_range`; NaN stores 0 with no flag. Into a `Word`, +Inf stores 65535 and −Inf 32768, with no flag.
+- A `copy()` of ±Inf into an `Int` clamps to its limit and sets `out_of_range`, and into a `Dint` clamps with no flag (not yet measured on a CLICK); NaN stores 0 with no flag. Into a `Word`, +Inf stores 65535 and −Inf 32768, with no flag.
 - A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
 - A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
 - `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN is 0xFFFFFFFF, as a CLICK reads it.
@@ -49,7 +49,7 @@ pyrung checks the range when `calc()` stores its result, not at each step of the
 
 ## Division
 
-- Division by zero produces result = 0 and sets `system.fault.division_error`. The next `calc()` to run clears it unless it divides by zero too, so read the flag on the next rung; a `copy()` leaves it.
+- Division by zero produces result = 0 and sets `system.fault.division_error`. The next `calc()` to run clears it as it starts, before it reads, and sets it again only if it divides by zero too, so read the flag on the next rung; a `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 - In a `calc()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign: `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero stores 0 with no flag. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
