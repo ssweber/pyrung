@@ -34,7 +34,12 @@ reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
   ErrorCode = Result1 - Result2: 1 where the debounce's off side takes a scan more than a TOF of
   its preset, as ``zero_and_below`` read at 0, 0 where they agree.  A CLICK read 6, 5, 1: a scan
   more.  pyrung reads 5, 4, 1 at the in-process 10 ms scan (on a CLICK the scans are shorter, so
-  the off comes later), so the scans are ranges and ErrorCode is exact.
+  the off comes later), so the scans are ranges and ErrorCode is exact.  The reset writes none of
+  the three TDs: it wrote 0 to them every reset scan until a CLICK hung in that reset on a repeat
+  run (2026-11-06), since a TOF whose Acc is zeroed while its rung is false keeps its Done on
+  (``timers/tof_times_only_when_false``), so ``ready`` (the TOF's Done off) never held.  None needs
+  it: the rung's rise clears the debounce's on TD and the TOF's, and holds its off TD at 0, so they
+  only ``keep`` running while the case is idle.
 
 pyrung's in-process readings are pinned in ``test_pyrung_reads_the_debounce_lag``.  The cases own
 what ``memory.OWNED_APART`` lists under this group.
@@ -109,11 +114,6 @@ def prove_deb_off_against_tof(slot: Any) -> None:
     done(slot, OFF_WINDOW)
 
 
-def init_deb_off_against_tof(slot: Any) -> None:
-    for n in (122, 123, 124):
-        copy(0, td[n])
-
-
 group = Group(
     "coil_timing",
     [
@@ -143,8 +143,9 @@ group = Group(
             "A debounce's off side goes off a scan after a TOF of its preset: the debounce "
             "(Result1), the TOF (Result2), the debounce's lag (ErrorCode = 1, 0 on one scan)",
             ladder=prove_deb_off_against_tof,
-            init=init_deb_off_against_tof,
             ready=lambda slot: (~c[246], ~t[124]),
+            # No init writes these TDs: the TOF's would hold its Done on (see the docstring).
+            keep=(td[122], td[123], td[124]),
             expect={
                 "Result1": range(5, OFF_WINDOW + 1),
                 "Result2": range(4, OFF_WINDOW + 1),

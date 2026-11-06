@@ -1066,7 +1066,9 @@ _RUNG_INPUT_MEMORY = frozenset(
         "_cu",  # COUNT_UP_MEMORY
     }
 )
-"""Memory prefixes that hold an instruction's rung as it last saw it."""
+"""Memory prefixes that hold an instruction's rung as it last saw it, and a flasher's
+phase, which is idle exactly when its rung was last seen false.  On reload a flasher
+whose preset was edited keeps its phase."""
 
 _LEG_INPUT_MEMORY: Mapping[str, str] = {
     "_cd": "down_condition",  # COUNT_DOWN_MEMORY: an up counter's down leg

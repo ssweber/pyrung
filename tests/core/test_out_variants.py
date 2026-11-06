@@ -1,8 +1,8 @@
 """Tests for the CLICK v4 Out coil variants: toggle, debounce, flasher, timed.
 
 Hardware round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an
-Out coil never sets its Timer's done bit T<n>, its phases come from the TDs
-alone (``tests/conformance/coils/test_out.py``).  Round 2 (2026-10-30) read O4: a
+Out coil never sets its Timer's done bit T<n>
+(``tests/conformance/coils/test_out.py``).  Round 2 (2026-10-30) read O4: a
 flasher with its rung false keeps both TDs frozen, then restarts with an on
 phase.  The round of 2026-11-05 read the TDs after the rung falls: a timed
 coil's and a debounce's on side are kept, a flasher's restart clears its off

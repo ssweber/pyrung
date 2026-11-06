@@ -218,16 +218,19 @@ class FlasherInstruction(Instruction):
     from where it froze, hardware round of 2026-11-05).  Each scan ticks the
     running phase's accumulator; at or past its preset the other phase starts
     and its accumulator is cleared.  The accumulator of the phase not running
-    holds, whatever the ladder wrote there: a TD written past its preset ends
-    its phase on the next scan, and one written while its phase is not
-    running stands until that phase starts again (``td_write``).  The target
+    holds.  A TD the ladder writes past the running phase's preset ends that
+    phase on its next tick (``td_write`` read it for both phases).  One
+    written to the phase not running stands until that phase starts again
+    and clears it: what the model implies, not read on a CLICK.  The target
     is on in the on phase.  The first on phase counts the rung's first scan,
     as on_delay does, so an on time of a scan or less does not show then.
 
     An on or off preset of 0 or below holds the flasher reset: idle, dark,
-    both accumulators 0.  ``flasher_off`` read the off side so (0 and -5),
-    and ``coil_timing/flasher_on_zero`` an on side of 0 dark; whether a first
-    on phase shows before an off preset of 0 takes hold has no reading yet.
+    both accumulators 0, from the first scan that reads it.  A CLICK read
+    that only after the fact: ``flasher_off`` read an off preset of 0 and -5
+    dark with both TDs 0 from 50 ms on, and ``coil_timing/flasher_on_zero``
+    the coil of an on preset of 0 dark.  That no first on phase shows before
+    the reset takes hold is pyrung's choice, not yet read on a CLICK.
     Neither Timer's ``Done`` is written.
     """
 
