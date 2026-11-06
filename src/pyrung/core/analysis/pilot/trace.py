@@ -282,9 +282,26 @@ def _expr_route_key(expr: Any) -> str:
 # so Compass can learn the transition from action observations.
 _SAME_TAG_VALUE_BUDGET = 1
 
-# How deep a trace goes through tags it has not yet met on its path.  Past
-# ``max_depth`` only these continue; see ``_trace_back``.
+# How deep a trace goes along a wire: a tag it has not yet met on its path,
+# written by at most one rung that reads at most one tag.  Past ``max_depth``
+# only these continue; see ``_trace_back``.
 _CHAIN_DEPTH = 60
+
+
+def _is_wire(pdg: ProgramGraph, tag: str) -> bool:
+    """Whether *tag* passes one tag on, as a coil a single contact drives does.
+
+    A wire adds no branch to the trace, so following it far finds the one input
+    at its end and no other leaf.
+    """
+    writers = pdg.writers_of.get(tag, frozenset())
+    if len(writers) > 1:
+        return False
+    for index in writers:
+        node = pdg.rung_nodes[index]
+        if node.subroutine or len(node.condition_reads | node.data_reads) > 1:
+            return False
+    return True
 
 
 def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
@@ -2026,11 +2043,15 @@ def _trace_back(
     # base writer can otherwise invert forever (107 <- 105 <- 103 <- ...), so
     # the ordinary ``(tag, value)`` cycle guard never fires.  Returning an
     # unresolved leaf preserves the honest frontier; recursion exhaustion is
-    # never a valid analysis result.  A chain of distinct tags cannot do that:
-    # the visited keys end it.  It goes on to ``_CHAIN_DEPTH``, which only keeps
-    # the recursion inside Python's own limit.
+    # never a valid analysis result.  A wire of distinct tags cannot do that:
+    # the visited keys end it, and it adds no other leaf on the way.  It goes on
+    # to ``_CHAIN_DEPTH``, which only keeps the recursion inside Python's own
+    # limit.  Anything wider stops here, so deep leaves of a large tree do not
+    # crowd out what is next.
     if _depth >= env.max_depth and (
-        _depth >= _CHAIN_DEPTH or any(seen == tag for seen, _ in _ancestry)
+        _depth >= _CHAIN_DEPTH
+        or any(seen == tag for seen, _ in _ancestry)
+        or not _is_wire(env.pdg, tag)
     ):
         return TraceNode(tag=tag, value=value)
 
