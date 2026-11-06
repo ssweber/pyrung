@@ -63,7 +63,8 @@ As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
 iterations (a scan of a second or more on a CLICK), and a `Dint` count whole
 and signed, so 65536 runs 65536 and -1 runs none. A count of 0 runs none.
 `prove()` answers `Intractable` for a loop whose count can run more than
-1,000,000 iterations in a scan.
+1,000,000 iterations in a scan, and for a count read from an input that has
+neither `choices=` nor a `min=`/`max=` spanning at most 1000 values.
 A `Real` count holding Inf or NaN runs no iteration and sets
 `system.fault.out_of_range` (SC43), pyrung's choice: a CLICK For takes an
 integer count, so this has no hardware answer.
