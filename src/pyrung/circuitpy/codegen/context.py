@@ -30,7 +30,7 @@ from pyrung.circuitpy.codegen._util import (
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
-from pyrung.core.function_source import embedded_source, is_the_function
+from pyrung.core.function_source import _names_in, embedded_source, is_the_function
 from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.memory_block import (
     UNSET,
@@ -262,6 +262,8 @@ class CodegenContext:
     subroutine_names: list[str] = field(default_factory=list)
     function_sources: dict[str, str] = field(default_factory=dict)
     function_globals: dict[str, set[str]] = field(default_factory=dict)
+    # Names an embedded function reads the math module by (``import math as pymath``).
+    math_aliases: set[str] = field(default_factory=set)
     used_helpers: set[str] = field(default_factory=set)
     # Nanoseconds to a unit of each accumulator the compiled timers tick.
     timer_unit_ns: dict[str, int] = field(default_factory=dict)
@@ -775,6 +777,15 @@ class CodegenContext:
                 f"Callable name would shadow a name the generated code uses: {fn!r}. "
                 "Rename the function."
             )
+        for name in sorted(_names_in(fn.__code__)):
+            if name == "math" or getattr(fn, "__globals__", {}).get(name) is not math:
+                continue
+            if name.startswith("_") or hasattr(builtins, name):
+                raise ValueError(
+                    f"Callable reads the math module as {name!r}, a name the generated code "
+                    f"uses: {fn!r}. Import it under another name."
+                )
+            self.math_aliases.add(name)
 
         fn_name = getattr(fn, "__name__", type(fn).__name__)
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))

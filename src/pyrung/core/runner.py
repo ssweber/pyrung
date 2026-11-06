@@ -643,8 +643,8 @@ def _may_be_called_again(fn: Any) -> bool:
         return False
     function_globals = fn.__globals__
     for name in read:
-        if name == "math" and function_globals.get(name) is math:
-            continue  # Nothing in it depends on a past call.
+        if function_globals.get(name) is math:
+            continue  # The math module, under any name: nothing in it depends on a past call.
         if name in function_globals or not _is_self_contained_builtin(name):
             return False
     return True

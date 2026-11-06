@@ -1083,6 +1083,21 @@ class TestInstructionCoverage:
         assert "_fn_gated" in source_code
         assert "run_enabled_function" in source_code
 
+    def test_a_function_reading_the_math_module_by_another_name_runs(self, monkeypatch):
+        """``import math as pymath`` (pyrung's math() hides the module): code.py binds it."""
+        source, dest = Int("Source"), Int("Dest")
+
+        def floors_half(value):
+            return {"result": pymath.floor(value / 2)}
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(7, source)
+                run_function(floors_half, ins={"value": source}, outs={"result": dest})
+
+        results = _on_every_backend(prog, monkeypatch, (dest,), scans=1)
+        assert results == {name: (3,) for name in results}
+
     def test_unknown_instruction_type_raises(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")

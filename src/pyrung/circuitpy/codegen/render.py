@@ -1017,6 +1017,8 @@ def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
         lines.append("")
         return lines
     lines.extend(ctx.function_constant_lines())
+    # A function that imports the math module under another name reads it by that name.
+    lines.extend(f"{alias} = math" for alias in sorted(ctx.math_aliases))
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)
