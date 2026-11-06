@@ -643,6 +643,16 @@ def _counted_names(following_names: list[str]) -> tuple[str, int, int] | None:
     return None if best is None else best[1]
 
 
+def _counted_name_expr(prefix: str, base: int, width: int) -> str:
+    """Kernel source for the name ``f"{prefix}{base + _seq_i:0{width}d}"``.
+
+    The prefix is a user's block name, so it goes in as a literal (``repr``), never
+    into an f-string, where a brace, a backslash or a quote would change it.
+    """
+    number = f'f"{{{base} + _seq_i}}"' if width <= 1 else f'f"{{{base} + _seq_i:0{width}d}}"'
+    return f"{prefix!r} + {number}"
+
+
 def _kernel_following_store_lines(values_var: str, following_names: list[str]) -> list[str]:
     """The kernel's stores of the elements after a static target, by their names.
 
@@ -665,7 +675,7 @@ def _kernel_following_store_lines(values_var: str, following_names: list[str]) -
         for offset, name in enumerate(following_names, start=1)
         if name != f"{prefix}{base + offset:0{width}d}"
     }
-    name_expr = f'f"{prefix}{{{base} + _seq_i:0{width}d}}"'
+    name_expr = _counted_name_expr(prefix, base, width)
     if not renamed:
         return [
             f"    for _seq_i in range(1, {stop}):",
@@ -723,7 +733,7 @@ def _copy_converter_write_lines(
             if kernel:
                 lines += [
                     f"    for _seq_i in range(1, len({values_var})):",
-                    f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
+                    f"        tags[{_counted_name_expr(prefix, base, width)}] = {values_var}[_seq_i]",
                 ]
             for offset, symbol in reloads:
                 lines.append(f"    if len({values_var}) > {offset}:")

@@ -12,7 +12,7 @@ import pytest
 
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.click import ClickBlocks
-from pyrung.core import Bool, Or, Program, Rung, copy, latch, out, to_text
+from pyrung.core import Block, Bool, Or, Program, Rung, TagType, copy, latch, out, to_text
 from pyrung.core.analysis.prove import Proven, always
 from pyrung.core.analysis.prove import kernel as prove_kernel
 
@@ -70,3 +70,17 @@ def test_a_true_claim_over_the_store_still_proves():
         _program("1", latched=True), Or(~y, latch_bit), max_states=20_000, depth_budget=20
     )
     assert isinstance(result, Proven)
+
+
+@pytest.mark.parametrize("name", ["Q{0}", "Q\n", 'Q"x'], ids=["braces", "backslash", "dquote"])
+def test_a_store_into_a_block_of_any_name_is_no_proof(name):
+    """The blockless kernel writes ``Q{0}2`` as named, so Seen is reachable."""
+    blk = Block(name, TagType.CHAR, 1, 10)
+    go, seen = Bool("Go"), Bool("Seen")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            copy("ABC", blk[1])
+        with Rung(blk[2] == "B"):
+            out(seen)
+    result = always(prog, ~seen, max_states=5_000, depth_budget=10)
+    assert not isinstance(result, Proven)

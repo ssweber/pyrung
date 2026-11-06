@@ -369,3 +369,26 @@ def test_digits_into_a_tag_mapped_onto_the_bank_write_what_fits(engine, before, 
     assert [values[tag.name] for tag in watch] == [1, 2]
     assert bool(values[SC43.name]) is False
     assert _past(names, "DS", 4500) == []
+
+
+_ODD_NAMES = ["Q{0}", "Q{", "Q\n", 'Q"x', "Q'x"]
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("name", _ODD_NAMES, ids=["braces", "brace", "backslash", "dquote", "squote"])
+def test_a_text_into_a_block_of_any_name_writes_its_elements(engine, name, monkeypatch):
+    """The kernel names the elements after the target from the block's name, which
+    may hold a brace, a backslash or a quote: each stays as written."""
+    blk = Block(name, TagType.CHAR, 1, 10)
+    watch = [blk[1], blk[2], blk[3]]
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("ABC", blk[1])
+        with Rung(*(tag == "#" for tag in watch)):
+            out(Bool("Seen"))
+
+    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    assert [values[tag.name] for tag in watch] == ["A", "B", "C"]
+    assert bool(values[SC43.name]) is False
+    if engine != "circuitpy":
+        assert {tag.name for tag in watch} <= names
