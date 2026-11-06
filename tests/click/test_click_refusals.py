@@ -6,6 +6,8 @@ next to it (checked the same day) gets none.
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from pyrung import debounce, flasher, timed
@@ -66,20 +68,25 @@ def _export_refuses(
 # --- A constant into bit memory -----------------------------------------------------
 
 
-@pytest.mark.parametrize("value", [2, 1, 0])
+@pytest.mark.parametrize("value", [2, 1, 0, False])
 @pytest.mark.parametrize("bit", [c[1], y[1]], ids=["C", "Y"])
 def test_a_constant_copied_into_a_bit_is_refused(value, bit):
     def body():
         with Rung(x[1]):
             copy(value, bit)
 
-    (finding,) = _found(body, CLK_COPY_CONSTANT_INTO_BIT)
+    # copy(False, bit) also warns when the program is built: use reset().
+    warned = (
+        pytest.warns(UserWarning, match="use reset") if value is False else contextlib.nullcontext()
+    )
+    with warned:
+        (finding,) = _found(body, CLK_COPY_CONSTANT_INTO_BIT)
+        _export_refuses(body, CLK_COPY_CONSTANT_INTO_BIT)
     assert f"copy({value!r}, ...) into {bit.name.rstrip('0123456789')}" in finding.message
     assert "takes no constant into bit memory" in finding.message
-    _export_refuses(body, CLK_COPY_CONSTANT_INTO_BIT)
 
 
-@pytest.mark.parametrize("value", [2, True])
+@pytest.mark.parametrize("value", [2, True, 0, False])
 def test_a_constant_filled_into_bits_is_refused(value):
     def body():
         with Rung(x[1]):

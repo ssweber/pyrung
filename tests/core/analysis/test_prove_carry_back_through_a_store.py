@@ -32,6 +32,7 @@ from pyrung.core import (
     blockcopy,
     copy,
     fill,
+    latch,
     math,
     out,
     unpack_to_bits,
@@ -279,18 +280,27 @@ def test_a_declared_real_is_not_all_its_whole_numbers() -> None:
 
 
 @pytest.mark.parametrize(
-    "into_the_bit",
+    ("into_the_bit", "off_at"),
     [
-        pytest.param(copy, id="copy"),
-        pytest.param(lambda s, d: math(s + 0, d), id="math"),
+        pytest.param(copy, 0, id="copy"),
+        pytest.param(lambda s, d: math(s + 0, d), 0, id="math"),
+        pytest.param(lambda s, d: math(s - 1000, d), 1000, id="math, off at 1000"),
     ],
 )
-def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit) -> None:
-    """A bit is on for every nonzero number, so ``D > 0.5`` past it has no one way back to
-    the source: any nonzero source fires."""
+def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit, off_at) -> None:
+    """A bit is on for every nonzero number, so the source has two classes past it, and
+    ``Hit`` needs both: ``D > 0.5`` latches ``Seen``, then ``D <= 0.5`` needs the source
+    back at its one off value.
+
+    Defence in depth for the ``"bool"`` decline in ``_through_the_store``: with it removed
+    these still pass, as did every variant tried (offsets, slopes 2, 3, -1, 0.5 and 1/100,
+    a Real source, ``fall(Bit)``): a slope-1 inverse of a boundary between 0 and 1, give or
+    take one, lands on the off value, and the other slopes tried were declined elsewhere.
+    """
     source = Int("S", external=True)
     bit = Bool("Bit")
     last = Real("D")
+    seen = Bool("Seen")
     hit = Bool("Hit")
     with Program(strict=False) as program:
         with Rung():
@@ -298,10 +308,16 @@ def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit) -
         with Rung():
             copy(bit, last)
         with Rung(last > 0.5):
+            latch(seen)
+        with Rung(seen, last <= 0.5):
             out(hit)
-    assert _fires_at(program, "S", 1, hit)
-    assert _fires_at(program, "S", -7, hit)
-    assert not _fires_at(program, "S", 0, hit)
+    for engine in ENGINES:
+        plc = engine(program, dt=0.01)
+        plc.patch({"S": off_at + 7})
+        plc.step()
+        plc.patch({"S": off_at})
+        plc.step()
+        assert plc.current_state.tags.get(hit.name)
 
     verdict = never(program, hit)
     assert not isinstance(verdict, Proven)
