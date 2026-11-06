@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import operator
 import os
 import sys
 import time
@@ -1654,9 +1655,18 @@ def _interval_bounds(
     if node.symbol == "/" and b_lo <= 0 <= b_hi:
         return None
 
+    if node.symbol == "%":
+        # Not monotone, so not from the corners.  Below the divisor's size: a
+        # calc's MOD truncates, with the dividend's sign (0 for a MOD by 0);
+        # Python's % (outside calc) floors, with the divisor's.
+        size = max(abs(b_lo), abs(b_hi))
+        if node.op is operator.mod:
+            return (-size if b_lo < 0 else 0, size if b_hi > 0 else 0)
+        return (max(a_lo, -size) if a_lo < 0 else 0, min(a_hi, size) if a_hi > 0 else 0)
+
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
-    except (ZeroDivisionError, OverflowError):
+    except (ArithmeticError, ValueError):
         return None
     return (min(corners), max(corners))
 
@@ -1686,10 +1696,26 @@ def _domain_from_calc_expression(
     if direct is not None:
         return direct
 
-    if isinstance(expression, BinaryExpr) and expression.symbol == "%":
+    if (
+        isinstance(expression, BinaryExpr)
+        and expression.symbol == "%"
+        and _integer_dividend(expression.left)
+    ):
         modulus = _literal_value_from_value(expression.right)
         if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
-            return tuple(range(modulus))
+            # A calc's MOD truncates: a dividend that may be negative reaches
+            # -(modulus - 1), which the destination stores as it does (a Word
+            # holds -1 as 65535).  Python's % floors into 0..modulus - 1.
+            dividend = _interval_bounds(
+                expression.left, graph, all_exprs, known_domains, atom_index
+            )
+            if expression.op is operator.mod or (dividend is not None and dividend[0] >= 0):
+                values: range = range(modulus)
+            else:
+                values = range(1 - modulus, modulus)
+            from pyrung.core.instruction.conversions import _truncate_to_tag_type
+
+            return tuple(sorted({_truncate_to_tag_type(value, target) for value in values}))
 
     bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
     if bounds is None:
@@ -1709,6 +1735,45 @@ def _domain_from_calc_expression(
     if isinstance(lo_t, int) and isinstance(hi_t, int):
         return tuple(range(lo_t, hi_t + 1))
     return None
+
+
+#: Operations that keep whole numbers whole (a calc's step past 2 ** 53 is a
+#: double, but still a whole one).
+_WHOLE_BINARY_SYMBOLS = frozenset({"+", "-", "*", "//", "%", "&", "|", "^", "<<", ">>"})
+_WHOLE_UNARY_SYMBOLS = frozenset({"-", "+", "~", "abs"})
+
+
+def _integer_dividend(value: Any) -> bool:
+    """Whether *value* is a whole number, so its MOD by n is one of n integers.
+
+    Built from integer tags and constants by operations that keep whole numbers
+    whole (``(CurStep + 1) % 6``).  A Real dividend has a fractional remainder
+    (``2.5 % 3`` is 2.5), and so may a ``/``, a ``**`` or a ``mean()``: the
+    interval bounds cover those instead.
+    """
+    from pyrung.core.expression import (
+        INTEGER_TAG_TYPE_NAMES,
+        BinaryExpr,
+        LiteralExpr,
+        TagExpr,
+        UnaryExpr,
+    )
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(value, TagExpr):
+        tag = value.tag.tag if isinstance(value.tag, ImmediateRef) else value.tag
+        return tag.type.name in INTEGER_TAG_TYPE_NAMES
+    if isinstance(value, BinaryExpr):
+        return (
+            value.symbol in _WHOLE_BINARY_SYMBOLS
+            and _integer_dividend(value.left)
+            and _integer_dividend(value.right)
+        )
+    if isinstance(value, UnaryExpr):
+        return value.symbol in _WHOLE_UNARY_SYMBOLS and _integer_dividend(value.operand)
+    if isinstance(value, LiteralExpr):
+        value = value.value
+    return isinstance(value, int)
 
 
 def _domain_from_drum_instruction(

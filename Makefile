@@ -49,7 +49,7 @@ test-conformance:
 
 # Write the conformance CLICK project (main, one subroutine per group, nicknames).
 # PART=coils, copy, math, drum1, drum2, drum3, control, system or boot writes one part: the whole suite is over CLICK's 8000 steps.
-# PART=units, fixed_scan or text_flasher writes a part on memory of its own; fixed_scan runs with fixed scan on, at 100 ms.
+# PART=units, fixed_scan, text_flasher, follow_flags, follow_values, follow_timing or follow_extra writes a part on memory of its own; fixed_scan runs with fixed scan on, at 100 ms.
 conformance-export:
 	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) $(or $(OUT),build/conformance$(if $(PART),-$(PART)))
 

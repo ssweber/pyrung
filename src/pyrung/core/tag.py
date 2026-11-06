@@ -6,6 +6,7 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
@@ -181,6 +182,9 @@ class Tag:
             object.__setattr__(self, "default", store_char(self.default))
         if self.type == TagType.REAL:
             check_real_value(self.default, f"Tag {self.name!r}: default")
+            if isinstance(self.default, int):
+                # A REAL holds a float, as a patch, force or store makes one.
+                object.__setattr__(self, "default", float(self.default))
 
         # Mutual exclusivity checks
         if self.readonly and self.final:
@@ -409,6 +413,10 @@ class Tag:
             block._mapped_tags[addr] = self
             block._slot_names_changed += 1
             block._tag_cache.pop(addr, None)
+            # The slot, for a text compare's window (`text_window_condition`) and a
+            # store of several elements (`_store_block`); weak, so the mapping alone
+            # does not keep the bank alive.
+            object.__setattr__(self, "_pyrung_hw_slot", (weakref.ref(block), addr))
         return MappingEntry(source=self, target=target)
 
     # =========================================================================

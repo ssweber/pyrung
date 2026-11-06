@@ -311,7 +311,7 @@ class _InstructionMixin:
                 )
             return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
-            # The formula as written: CLICK cuts an Int Math's constants itself.
+            # The formula as written: CLICK cuts a Math's constants itself.
             expression = instruction.source_expression
             mode = infer_calc_mode(expression, instruction.dest).mode
             # Hex-mode Math reads every constant as hex (shift counts too).

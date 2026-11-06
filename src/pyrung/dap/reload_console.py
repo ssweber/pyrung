@@ -18,7 +18,7 @@ from typing import Any
 from pyrsistent import pmap
 
 from pyrung.core import PLC
-from pyrung.core.site_memory import remap_site_memory, seed_new_edge_memory
+from pyrung.core.site_memory import remap_site_memory_report, seed_new_edge_memory
 from pyrung.core.state import SystemState
 from pyrung.dap.console import ConsoleResult, register
 
@@ -102,13 +102,19 @@ def _reload_locked(
     # Site memory (one-shots, drum and shift edges, edge contacts) is keyed by
     # site, and site keys are ordinal: carry each site's memory to the site of
     # the new program with the same fingerprint, drop what no longer matches.
-    patched_memory, dropped_memory = remap_site_memory(
+    remap = remap_site_memory_report(
         old_state.memory, old_runner._site_table, new_runner._site_table
     )
-    if dropped_memory:
+    patched_memory = remap.memory
+    if remap.dropped:
         warnings.append(
-            f"  {len(dropped_memory)} site memory value(s) had no matching site "
-            "in the new program, reset: " + ", ".join(sorted(dropped_memory))
+            f"  {len(remap.dropped)} site memory value(s) had no matching site "
+            "in the new program, reset: " + ", ".join(sorted(remap.dropped))
+        )
+    if remap.reread:
+        warnings.append(
+            f"  {len(remap.reread)} drum preset value(s) reset, the edited preset is "
+            "read afresh: " + ", ".join(sorted(remap.reread))
         )
     # An edge contact with no match in the old program (new, or edited) starts
     # from its tag's current value, so a held bit does not rise on the first

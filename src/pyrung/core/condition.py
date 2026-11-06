@@ -533,18 +533,40 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
     ``!=``), and every analysis reads it as that.  The compare as written is kept
     on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
     for any other compare, and where the block ends before the literal does.
+
+    A tag mapped onto a bank slot reads the slots after the one it was mapped
+    to, ``bank[addr + 1]`` on, whichever tags hold them; the mapping is recorded
+    when it is made (``Tag.map_to``, ``Block.map_to``, a TagMap), so how the
+    bank was read before does not matter.  A tag with no mapping reads the next
+    elements of the block that declared it, or, in a ``named_array``, the next
+    slots of its layout (the other fields of the instance first), and a
+    ``Char`` of no block is compared as written.
+
+    A logical compare mapped before the program is built is CLICK-exact, with
+    no finding.  One mapped after the program is built reads the layout, and
+    export refuses it where it differs (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
     """
     from pyrung.core.tag import TagType
 
     if tag.type is not TagType.CHAR or not isinstance(value, str) or len(value) < 2:
         return None
-    block = getattr(tag, "_pyrung_block", None)
-    addr = getattr(tag, "_pyrung_block_addr", None)
+    hw_slot = getattr(tag, "_pyrung_hw_slot", None)
+    # Held weakly: once the bank is gone, nothing maps the tag there.
+    block, addr = (hw_slot[0](), hw_slot[1]) if hw_slot is not None else (None, None)
+    mapped = block is not None
+    if not mapped:
+        block = getattr(tag, "_pyrung_home_block", None)
+        addr = getattr(tag, "_pyrung_home_addr", None)
     if block is None or not isinstance(addr, int):
         return None
     try:
-        tags = [tag, *(block[addr + offset] for offset in range(1, len(value)))]
+        if mapped:
+            tags = [block[addr + offset] for offset in range(len(value))]
+        else:
+            tags = _text_window_tags(block, addr, len(value))
     except (IndexError, KeyError, ValueError):
+        return None
+    if tags is None:
         return None
     cond: Condition
     if equal:
@@ -555,6 +577,24 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
         written = CompareNe(tag, value)
     setattr(cond, "_text_window", written)  # noqa: B010 - not a field of the condition
     return cond
+
+
+def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
+    """The *length* Chars from ``block[addr]`` on, in the order they map to TXT."""
+    runtime = getattr(block, "_pyrung_structure_runtime", None)
+    if getattr(block, "_pyrung_structure_kind", None) != "named_array" or runtime is None:
+        return [block[addr + offset] for offset in range(length)]
+    # Instance-major: each instance takes ``stride`` slots, its fields first in order.
+    fields: tuple[str, ...] = runtime._field_order
+    stride: int = runtime.stride
+    start = (addr - 1) * stride + fields.index(block._pyrung_structure_field)
+    tags: list[Tag] = []
+    for position in range(start, start + length):
+        instance, offset = divmod(position, stride)
+        if instance >= runtime.count or offset >= len(fields):
+            return None  # past the last instance, or a slot no field holds
+        tags.append(runtime._blocks[fields[offset]][instance + 1])
+    return tags
 
 
 def text_window_of(condition: Condition) -> Condition:

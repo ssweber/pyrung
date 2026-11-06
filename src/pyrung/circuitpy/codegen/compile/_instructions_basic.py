@@ -36,6 +36,7 @@ from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_timing_key
 from pyrung.core.kernel import prove_effective_preset_key
+from pyrung.core.memory_block import block_room, element_names_after
 from pyrung.core.tag import Tag
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -539,8 +540,14 @@ def _compile_copy_converter_instruction(
     )
     values_var = f"_{stem}_values"
     target_name = instr.target.name if isinstance(instr.target, Tag) else None
+    fit = block_room(instr.target) if isinstance(instr.target, Tag) else None
+    following_names = (
+        element_names_after(instr.target, fit)
+        if isinstance(instr.target, Tag) and fit is not None and target_kind == "scalar"
+        else None
+    )
     sequential_reloads = (
-        _compute_sequential_reloads(target_name, ctx)
+        _compute_sequential_reloads(target_name, ctx, following_names)
         if target_name and target_kind == "scalar"
         else None
     )
@@ -553,6 +560,8 @@ def _compile_copy_converter_instruction(
         target_name=target_name,
         sequential_reloads=sequential_reloads,
         kernel=ctx.kernel_runtime,
+        fit=fit,
+        following_names=following_names,
     )
 
     enabled_body: list[str] = [*source_read, *setup]

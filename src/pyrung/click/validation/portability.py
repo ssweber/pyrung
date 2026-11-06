@@ -42,6 +42,7 @@ from .findings import (
     CLK_CALC_RANGE_MIXED_BANKS,
     CLK_CALC_RANGE_NOT_CONTIGUOUS,
     CLK_CALC_SUM_BANK_NOT_AVAILABLE,
+    CLK_CALC_WIDE_CONSTANT,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
@@ -63,6 +64,7 @@ from .findings import (
     CLK_RAND_EQUAL_BOUNDS,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TEXT_ORDER_COMPARE,
+    CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
     ValidationMode,
@@ -858,6 +860,124 @@ def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[Cl
     return findings
 
 
+def _text_literal_compares(condition: Any, out: list[tuple[Any, list[Tag]]]) -> None:
+    """Collect each ``==``/``!=`` of a Char with a longer literal, and the Chars pyrung reads.
+
+    A text window (``txt[1] == "AB"``) reads the Chars that follow in its block
+    (``text_window_condition``); any other such compare reads its one Char
+    against the whole literal.
+    """
+    from pyrung.core.condition import CompareEq, CompareNe, Condition, text_window_of
+
+    if isinstance(condition, (list, tuple)):
+        for item in condition:
+            _text_literal_compares(item, out)
+        return
+    if not isinstance(condition, Condition):
+        return
+    written = text_window_of(condition)
+    if written is not condition:
+        out.append((written, [child.tag for child in getattr(condition, "conditions", ())]))
+        return
+    if (
+        isinstance(condition, (CompareEq, CompareNe))
+        and condition.tag.type == TagType.CHAR
+        and isinstance(condition.value, str)
+        and len(condition.value) > 1
+    ):
+        out.append((condition, [condition.tag]))
+        return
+    for attr_name in ("condition", "conditions"):
+        _text_literal_compares(getattr(condition, attr_name, None), out)
+
+
+#: CLICK's last TXT address.
+_TXT_LAST = 1000
+
+
+def _evaluate_text_windows(
+    program: Any, mode: ValidationMode, resolver: _ResolutionCache
+) -> list[ClickFinding]:
+    """A CLICK compares a longer literal over a TXT and the TXTs after it.
+
+    pyrung compares the Chars that follow in the Char's block, so the two agree
+    only where those are mapped to the next TXT addresses, one for each character.
+    """
+    from pyrung.core.validation.render import render_condition
+
+    findings: list[ClickFinding] = []
+
+    def _check(written: Any, tags: list[Tag], location_str: str) -> None:
+        slots = [resolver.resolve_direct_tag(tag) for tag in tags]
+        resolved = [slot for slot in slots if slot is not None and slot.address is not None]
+        if len(resolved) != len(tags):
+            return  # unresolved mappings are reported by the bank checks
+        first = resolved[0]
+        if first.memory_type != "TXT" or first.address is None:
+            return
+        expected = [f"TXT{first.address + offset}" for offset in range(len(written.value))]
+        actual = [_bank_label(slot) for slot in resolved]
+        if actual == expected:
+            return
+        last = first.address + len(written.value) - 1
+        if last > _TXT_LAST:
+            click_reads = (
+                f"a CLICK compares TXT{first.address} and the TXTs after it, "
+                f"which run past TXT{_TXT_LAST}"
+            )
+        else:
+            click_reads = f"a CLICK compares {', '.join(expected)}, one character each"
+        if len(tags) == 1:
+            read = f"compares {tags[0].name} ({actual[0]}) alone with the whole literal"
+        else:
+            pairs = ", ".join(
+                f"{tag.name} ({label})" for tag, label in zip(tags, actual, strict=True)
+            )
+            read = f"compares {pairs}"
+        findings.append(
+            ClickFinding(
+                code=CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
+                severity=_route_severity(CLK_TEXT_WINDOW_NOT_CONTIGUOUS, mode),
+                message=(
+                    f"{render_condition(written)} at {location_str} {read} in pyrung; "
+                    f"{click_reads}."
+                ),
+                location=location_str,
+                suggestion=(
+                    "Compare one character at a time, or map the Chars to consecutive "
+                    "TXT addresses in order (a Char block mapped to a txt.select() range)."
+                ),
+            )
+        )
+
+    # A timer's or counter's enable (and a drum's, an enabled call's) holds the
+    # rung's own conditions again, so each compare is checked once, where first met.
+    seen: set[int] = set()
+
+    def _walk_rung(rung: Any, location_str: str) -> None:
+        compares: list[tuple[Any, list[Tag]]] = []
+        _text_literal_compares(rung._conditions[rung._branch_condition_start :], compares)
+        for instruction in rung._instructions:
+            for field_name in getattr(type(instruction), "_conditions", ()):
+                _text_literal_compares(getattr(instruction, field_name, None), compares)
+        for written, tags in compares:
+            if id(written) in seen:
+                continue
+            seen.add(id(written))
+            _check(written, tags, location_str)
+        for branch in rung._branches:
+            _walk_rung(branch, location_str)
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung, location_str)
+
+    for rung_index, rung in enumerate(program.rungs):
+        _walk_rung(rung, f"main rung {rung_index}")
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+    return findings
+
+
 def _evaluate_instruction_portability(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
@@ -1192,6 +1312,82 @@ def _evaluate_rand_bounds(
                 )
             )
     return findings
+
+
+def _collect_wide_constants(
+    expr: Any, out: list[int], seen: set[int], *, low: int, high: int, rand_cut: bool
+) -> None:
+    """Each integer constant in *expr* outside *low*..*high*; a RAND's bounds only if *rand_cut*."""
+    if isinstance(expr, bool):
+        return
+    if isinstance(expr, int):
+        if not low <= expr <= high:
+            out.append(expr)
+        return
+    if id(expr) in seen or not isinstance(expr, Expression):
+        return
+    seen.add(id(expr))
+    if isinstance(expr, LiteralExpr):
+        _collect_wide_constants(expr.value, out, seen, low=low, high=high, rand_cut=rand_cut)
+        return
+    if isinstance(expr, RandIntExpr) and not rand_cut:
+        bounds = (expr.lo, expr.hi)
+        children = [child for child in vars(expr).values() if all(child is not b for b in bounds)]
+    else:
+        children = list(vars(expr).values())
+    for child in children:
+        # Only subexpressions: a constant is a LiteralExpr (an int attribute, such
+        # as a RAND's site number, is not one).
+        if isinstance(child, Expression):
+            _collect_wide_constants(child, out, seen, low=low, high=high, rand_cut=rand_cut)
+
+
+def _evaluate_wide_constants(
+    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
+) -> list[ClickFinding]:
+    """A Math constant past 16 bits: CLICK cuts it to 16 bits whatever the destination
+    (hardware, 2026-11-05), so ``DD1 * 40000`` multiplies by -25536.  A RAND's constant
+    bounds are cut only into an Int or a Word."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    hex_mode = instruction.mode == "hex"
+    # A hex Math reads a constant as its low 16 bits, unsigned (& 0xFFFF): -1 is 65535.
+    low, high = (0, 65535) if hex_mode else (-32768, 32767)
+    dest = instruction.dest
+    dest_type = (
+        dest.type if isinstance(dest, Tag) else getattr(getattr(dest, "block", None), "type", None)
+    )
+    rand_cut = hex_mode or dest_type == TagType.INT
+    wide: list[int] = []
+    _collect_wide_constants(
+        instruction.source_expression, wide, set(), low=low, high=high, rand_cut=rand_cut
+    )
+    if not wide:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
+    listed = ", ".join(str(value) for value in dict.fromkeys(wide))
+    return [
+        ClickFinding(
+            code=CLK_CALC_WIDE_CONSTANT,
+            severity=_route_severity(CLK_CALC_WIDE_CONSTANT, mode),
+            message=(
+                f"calc() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
+                + (
+                    "hex Math reads each constant as its low 16 bits, unsigned, so 70000 "
+                    "reads 4464 and -1 reads 65535."
+                    if hex_mode
+                    else "Math cuts each constant to 16 bits, whatever the destination, so "
+                    "40000 reads -25536."
+                )
+            ),
+            location=location_text,
+            suggestion=(
+                "Write the constant as its 16-bit value, 0..65535 (0h..FFFFh)."
+                if hex_mode
+                else "Copy the constant into a DD tag in a rung above and use the tag."
+            ),
+        )
+    ]
 
 
 def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFinding]:

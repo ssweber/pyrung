@@ -151,11 +151,16 @@ def _text_from_source_value(value: Any) -> str:
 
 
 def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> dict[str, Any]:
+    """Each character of *text* as a number, into *targets* in turn.
+
+    *targets* may be shorter, where the block ends first: every character is still
+    checked, and the ones past the last target are dropped.
+    """
     updates: dict[str, Any] = {}
-    if len(text) != len(targets):
+    if len(targets) > len(text):
         raise ValueError("source/destination text length mismatch")
 
-    for char, target in zip(text, targets, strict=True):
+    for index, char in enumerate(text):
         if mode == "value":
             if char == "\x00":
                 numeric = 0  # CLICK: Character Value of NUL writes 0, no fault
@@ -169,7 +174,9 @@ def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> d
             numeric = ord(char)
         else:
             raise ValueError(f"Unsupported text->numeric mode: {mode}")
-        updates[target.name] = _store_copy_value_to_tag_type(numeric, target)
+        if index < len(targets):
+            target = targets[index]
+            updates[target.name] = _store_copy_value_to_tag_type(numeric, target)
     return updates
 
 

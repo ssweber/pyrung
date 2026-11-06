@@ -86,6 +86,31 @@ class _RungsWalked(NamedTuple):
     beyond_rungs: tuple[Tag, ...]
 
 
+def _randint_sites_run(rungs: Iterable[Any]) -> tuple[RandIntExpr, ...]:
+    """The ``randint`` sites the *rungs* run, in site order: the compiled kernel's.
+
+    Found by name, from the tags the kernel's own walk reaches (``walk_rung_operands``):
+    a draw's tag inside a formula, or ``expr.tag`` read straight off a rung.  That walk
+    takes a calc's formula as it runs, not its ``source_expression``: a calc into an Int
+    runs a cut draw in its place (``RandIntExpr.with_cut_bounds``), so the uncut site it
+    names runs only where some other rung runs it, as a Dint Math that keeps the
+    constants does.
+    """
+    from pyrung.core.expression import is_randint_tag, randint_sites
+    from pyrung.core.validation.walker import walk_rung_operands
+
+    # In the order the walk meets them, as the kernel's tags are: a ``.cut`` and a
+    # ``.ucut`` site share a site number, and draw in that order on both.
+    names: dict[str, None] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, TagClass) and is_randint_tag(value.name):
+            names.setdefault(value.name)
+
+    walk_rung_operands(rungs, visit)
+    return randint_sites(names)
+
+
 def _addresses_reached(use: Any) -> range | tuple[int, ...]:
     from pyrung.core.memory_block import BlockRange
 
@@ -155,6 +180,7 @@ class TagsRungsReach:
         "_reached",
         "_slots",
         "_slots_as_of",
+        "_randint_run",
     )
 
     def __init__(self, logic: Iterable[Any], program: Any) -> None:
@@ -165,6 +191,7 @@ class TagsRungsReach:
         self._reached: list[tuple[Any, set[int]]] | None = None
         self._slots: dict[str, tuple[Any, int]] = {}
         self._slots_as_of: int = -1
+        self._randint_run: tuple[RandIntExpr, ...] | None = None
 
     def get(self, name: str) -> Tag | None:
         slot = self._slots_by_name().get(name)
@@ -302,6 +329,31 @@ class TagsRungsReach:
             named, edges = _iter_tags_and_edge_names(roots, block_uses=uses, beyond_rungs=beyond)
             self._walked = _RungsWalked(named, edges, uses, tuple(beyond))
         return self._walked
+
+    def randint_sites(self) -> tuple[RandIntExpr, ...]:
+        """The ``randint`` sites the rungs run, in site order: the draws a scan makes.
+
+        A CLICK draws once per RAND a Math runs, so a site only the written formula of a
+        calc names (the uncut one of a cut draw) draws nothing, and its tag holds what was
+        last put there, as the compiled run's does.  Each draw is a pure function of its own
+        site and the scan, so leaving a site out moves no other's values.
+        """
+        if self._randint_run is None:
+            from pyrung.core.expression import any_randint_sites, is_randint_tag
+
+            if not any_randint_sites() or not any(
+                is_randint_tag(tag.name) for tag in self.walk().named
+            ):
+                # No draw is alive anywhere, or these rungs name none (that walk reaches
+                # every tag the operand walk does): no second walk.
+                self._randint_run = ()
+                return self._randint_run
+            rungs: list[Any] = list(self._logic)
+            if self._program is not None:
+                for name in sorted(self._program.subroutines):
+                    rungs.extend(self._program.subroutines[name])
+            self._randint_run = _randint_sites_run(rungs)
+        return self._randint_run
 
     def _named(self) -> dict[str, Tag]:
         if self._named_by_name is None:

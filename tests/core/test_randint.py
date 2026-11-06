@@ -18,16 +18,20 @@ from pyrung import (
     Rung,
     TagType,
     Timer,
+    Word,
     calc,
+    call,
+    copy,
     count_up,
     latch,
     on_delay,
     out,
+    subroutine,
 )
 from pyrung.core import forloop, randint
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.compiled_plc import CompiledPLC
-from pyrung.core.expression import RandIntExpr, format_expr, randint_draw, sqrt
+from pyrung.core.expression import RandIntExpr, format_expr, randint_draw, randint_sites, sqrt
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
 from pyrung.core.tag import Tag
@@ -40,6 +44,61 @@ def _die_program() -> tuple[Program, RandIntExpr, Tag]:
         with Rung():
             calc(draw, die)
     return logic, draw, die
+
+
+def _int_and_word() -> tuple[Program, RandIntExpr, list[str]]:
+    roll = randint(100000, 110000)
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(roll, Int("I"))
+        with Rung():
+            calc(roll, Word("W"))
+    name = roll.tag.name
+    return logic, roll, [name, f"{name}.cut", f"{name}.ucut", "I", "W"]
+
+
+def _tag_read_by_a_rung(
+    *, with_calc: bool, as_condition: bool
+) -> tuple[Program, RandIntExpr, list[str]]:
+    roll = randint(70000, 90000)
+    with Program(strict=False) as logic:
+        if with_calc:
+            with Rung():
+                calc(roll, Int("Die"))
+        if as_condition:
+            with Rung(roll.tag > 80000):
+                copy(1, Int("High"))
+            with Rung(roll.tag <= 80000):
+                copy(0, Int("High"))
+        else:
+            with Rung():
+                copy(roll.tag, Dint("Shown"))
+    name = roll.tag.name
+    return logic, roll, [name, f"{name}.cut", "Die", "Shown", "High"]
+
+
+def _tag_read_in_a_subroutine() -> tuple[Program, RandIntExpr, list[str]]:
+    roll = randint(70000, 90000)
+    with Program(strict=False) as logic:
+        with Rung():
+            calc(roll, Int("Die"))
+        with Rung():
+            call("show")
+        with subroutine("show"):
+            with Rung():
+                copy(roll.tag, Dint("Shown"))
+    name = roll.tag.name
+    return logic, roll, [name, f"{name}.cut", "Die", "Shown"]
+
+
+#: Programs whose draws stepping once took otherwise than the kernel (review of the uncut draw).
+_KERNEL_SITE_PROGRAMS = {
+    "int_and_hex_word": _int_and_word,
+    "calc_and_tag_copy": lambda: _tag_read_by_a_rung(with_calc=True, as_condition=False),
+    "tag_copy_alone": lambda: _tag_read_by_a_rung(with_calc=False, as_condition=False),
+    "tag_in_a_condition": lambda: _tag_read_by_a_rung(with_calc=False, as_condition=True),
+    "tag_in_a_subroutine": _tag_read_in_a_subroutine,
+}
 
 
 def _draws(runner, tag: str, scans: int) -> list[int]:
@@ -83,9 +142,9 @@ class TestDraws:
                 calc(randint(lo, hi), result)
         plc = PLC(logic, dt=0.01)
         assert set(_draws(plc, "Result", 100)) == {10, 11, 12}
-        plc.patch({lo: 50, hi: 50})
+        plc.patch({lo: 50, hi: 51})
         plc.step()
-        assert plc.state.tags["Result"] == 50
+        assert plc.state.tags["Result"] in (50, 51)
 
     def test_reversed_bounds_draw_between_them(self):
         result = Int("Result")
@@ -143,7 +202,7 @@ class TestBoundsAsCLICKReadsThem:
         assert state.tags["fault.math_operation_error"] is True
         assert state.tags["fault.out_of_range"] is False
 
-    def test_only_equal_constants_declare_the_math_error(self):
+    def test_bounds_that_can_be_equal_declare_the_math_error(self):
         lo = Int("Lo", default=4)
         with Program(strict=False) as logic:
             with Rung():
@@ -154,17 +213,44 @@ class TestBoundsAsCLICKReadsThem:
         assert ["fault.math_operation_error" in writes for writes in faults] == [
             True,
             False,
-            False,
+            True,
         ]
 
-    def test_equal_tag_bounds_draw_their_value(self):
-        lo = Int("Lo", default=4)
-        die = Int("Die", default=7)
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_equal_tag_bounds_are_a_math_error(self, factory):
+        """Two tags holding one value: 0 with SC46, as equal constants (CLICK, 2026-11-05)."""
+        lo, hi = Dint("Lo", default=7), Dint("Hi", default=7)
+        die = Int("Die", default=9)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, lo), die)
-        state = PLC(logic, dt=0.01).step()
-        assert state.tags["Die"] == 4
+                calc(randint(lo, hi), die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 0
+        assert state.tags["fault.math_operation_error"] is True
+        assert state.tags["fault.out_of_range"] is False
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    @pytest.mark.parametrize("tags", [False, True], ids=["constants", "tags"])
+    def test_a_math_error_zeroes_only_the_randint(self, factory, tags):
+        """randint(7, 7) + 5 is 5 with SC46: the rest of the formula runs."""
+        lo, hi = Dint("Lo", default=7), Dint("Hi", default=7)
+        die = Int("Die", default=9)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc((randint(lo, hi) if tags else randint(7, 7)) + 5, die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 5
+        assert state.tags["fault.math_operation_error"] is True
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_real_tag_bounds_in_a_formula_read_zero_without_a_flag(self, factory):
+        r = Real("R", default=3.0)
+        die = Int("Die", default=9)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(randint(r, r) + 5, die)
+        state = factory(logic, dt=0.01).step()
+        assert state.tags["Die"] == 5
         assert state.tags["fault.math_operation_error"] is False
 
     @pytest.mark.parametrize(
@@ -208,9 +294,9 @@ class TestBoundsAsCLICKReadsThem:
         die = Dint("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(hi, 70000), die)
+                calc(randint(hi, 70001), die)
         state = PLC(logic, dt=0.01).step()
-        assert state.tags["Die"] == 70000
+        assert state.tags["Die"] in (70000, 70001)
         assert state.tags["fault.math_operation_error"] is False
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
@@ -326,6 +412,114 @@ class TestBoundsAsCLICKReadsThem:
         small = randint(1, 6)
         assert small.cut_tag is small.tag
 
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    @pytest.mark.parametrize(
+        "dests, drawn",
+        [
+            pytest.param((Int,), ("cut",), id="int"),
+            pytest.param((Dint,), ("uncut",), id="dint"),
+            pytest.param((Int, Dint), ("cut", "uncut"), id="both"),
+        ],
+    )
+    def test_only_the_draws_a_math_runs_are_drawn(self, factory, dests, drawn):
+        """One draw per RAND a Math runs, as on a CLICK: each its own site's, as if alone."""
+        roll = randint(70000, 90000)
+        with Program(strict=False) as logic:
+            with Rung():
+                for index, dest in enumerate(dests):
+                    calc(roll, dest(f"Die{index}"))
+        sites = {
+            "uncut": (roll.tag.name, roll.site, 70000, 90000),
+            "cut": (f"{roll.tag.name}.cut", ~roll.site, 4464, 24464),
+        }
+        plc = factory(logic, dt=0.01)
+        for _ in range(20):
+            state = plc.step()
+            for which, (name, site, lo, hi) in sites.items():
+                held = state.tags.get(name, roll.tag.default if which == "uncut" else lo)
+                if which in drawn:
+                    # Drawn as the scan runs, before its id moves on.
+                    assert held == randint_draw(site, state.scan_id - 1, lo, hi)
+                else:
+                    assert held == (roll.tag.default if which == "uncut" else lo)
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_a_signed_and_an_unsigned_cut_of_one_draw_both_draw(self, factory):
+        """An Int's cut and a hex Word's share a site number, and each draws over its own cut."""
+        roll = randint(100000, 110000)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll, Int("I"))
+            with Rung():
+                calc(roll, Word("W"))
+        assert {roll.cut_tag.name, roll.ucut_tag.name} == {
+            f"{roll.tag.name}.cut",
+            f"{roll.tag.name}.ucut",
+        }
+        plc = factory(logic, dt=0.01)
+        for _ in range(20):
+            state = plc.step()
+            scan = state.scan_id - 1
+            assert state.tags["I"] == randint_draw(~roll.site, scan, -31072, -21072)
+            assert state.tags["W"] == randint_draw(~roll.site, scan, 34464, 44464)
+
+    @pytest.mark.parametrize("program", sorted(_KERNEL_SITE_PROGRAMS))
+    def test_stepping_draws_the_sites_the_kernel_draws(self, program):
+        """Stepping draws by name the sites the kernel reaches, so a long run is stepping."""
+        # *roll* is held as a script holds it: a site is known while its draw is alive, and a
+        # rung reading ``roll.tag`` alone does not keep it so.
+        logic, roll, watched = _KERNEL_SITE_PROGRAMS[program]()
+        stepped = PLC(logic, dt=0.01)
+        compiled = CompiledPLC(logic, dt=0.01)
+        drawn = [site.tag.name for site in stepped._randint_site_list()]
+        assert drawn == [site.tag.name for site in compiled._randint_sites]
+        assert roll.tag.name in drawn or program == "int_and_hex_word"
+        sites = randint_sites(watched)
+        defaults = {site.tag.name: site.tag.default for site in sites}
+        for _ in range(50):
+            ours, theirs = stepped.step(), compiled.step()
+            assert ours.scan_id == theirs.scan_id
+            for name in watched:
+                assert ours.tags.get(name, defaults.get(name)) == theirs.tags.get(
+                    name, defaults.get(name)
+                ), name
+        long_run = PLC(logic, dt=0.01)
+        long_run.run_for(30.0)
+        by_step = PLC(logic, dt=0.01)
+        for _ in range(long_run.state.scan_id):
+            by_step.step()
+        assert long_run.state.scan_id == by_step.state.scan_id
+        assert long_run.state.tags == by_step.state.tags
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_a_patch_or_force_of_a_draw_no_math_runs_moves_nothing(self, factory):
+        """The uncut tag of an Int's cut draw holds what is put there, as a tag nothing writes."""
+        roll = randint(70000, 90000)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll, Int("Die"))
+        natural = _draws(factory(logic, dt=0.01), "Die", 9)
+        plc = factory(logic, dt=0.01)
+        dice = []
+        held = []
+        plc.patch({roll.tag: 80000})
+        for _ in range(3):
+            state = plc.step()
+            dice.append(state.tags["Die"])
+            held.append(state.tags[roll.tag.name])
+        plc.force(roll.tag, 85000)
+        for _ in range(3):
+            state = plc.step()
+            dice.append(state.tags["Die"])
+            held.append(state.tags[roll.tag.name])
+        plc.unforce(roll.tag)
+        for _ in range(3):
+            state = plc.step()
+            dice.append(state.tags["Die"])
+            held.append(state.tags[roll.tag.name])
+        assert dice == natural
+        assert held == [80000] * 3 + [85000] * 6
+
 
 class TestBoundsAsWritten:
     """Only a bare ``Real`` tag as a bound reads 0; every other bound still draws."""
@@ -380,14 +574,15 @@ class TestBoundsAsWritten:
         assert {plc.step().tags["Die"] for _ in range(40)} == {2, 3, 4}
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
-    def test_equal_float_literals_draw_their_value(self, factory):
+    def test_equal_float_literals_are_a_math_error(self, factory):
+        """Each bound is read as an integer: 2 and 2 are equal, 0 with SC46."""
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
                 calc(randint(2.5, 2.5), die)
         state = factory(logic, dt=0.01).step()
-        assert state.tags["Die"] == 2
-        assert state.tags["fault.math_operation_error"] is False
+        assert state.tags["Die"] == 0
+        assert state.tags["fault.math_operation_error"] is True
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_char_bound_draws(self, factory):
@@ -553,8 +748,8 @@ class TestProver:
             pytest.param(lambda n: randint(sqrt(n), 5), True, id="sqrt-low-bound"),
             pytest.param(lambda n: randint(0, n**0.5), True, id="fractional-power-bound"),
             pytest.param(lambda n: randint(7, 7), True, id="equal-constants"),
-            pytest.param(lambda n: randint(0, n), False, id="tag-bound"),
-            pytest.param(lambda n: randint(0, n / 2), False, id="division-bound"),
+            pytest.param(lambda n: randint(0, n), True, id="tag-bound"),
+            pytest.param(lambda n: randint(0, n / 2), True, id="division-bound"),
             pytest.param(lambda n: randint(0, 5), False, id="constants"),
             pytest.param(lambda n: randint(Real("R"), sqrt(n)), False, id="real-tag-reads-0"),
         ],

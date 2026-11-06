@@ -299,6 +299,7 @@ class TestValidationReport:
             "RUNG_ORDER_DEPENDENT",
             "RUNG_REDUNDANT_TERM",
             "RUNG_TAUTOLOGY",
+            "CMP_EQ_ON_COMPUTED_REAL",
             "CMP_EQ_ON_MONOTONE",
             "CMP_OPERAND_NO_WRITER",
             "CMP_PRESET_STAYS_ZERO",

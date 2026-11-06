@@ -13,6 +13,7 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    Word,
     calc,
     copy,
     latch,
@@ -87,6 +88,85 @@ class TestValueDomainExtraction:
         assert not isinstance(result, Intractable)
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert nd["Flag"] == (False, True)
+
+    def test_a_mod_of_a_whole_number_formula_lists_its_remainders(self):
+        """(Step + 1) % 6 is a whole number: its remainders are -5..5 (an Int may be
+        negative, and MOD takes the dividend's sign)."""
+        step = Int("Step")
+        with Program(strict=False) as logic:
+            with Rung(step == 3):
+                out(Bool("AtThree"))
+            with Rung():
+                calc((step + 1) % 6, step)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert result[0]["Step"] == tuple(range(-5, 6))
+
+    @pytest.mark.parametrize("low, domain", [(-5, (-2, -1, 0, 1, 2)), (0, (0, 1, 2))])
+    def test_a_mod_takes_the_dividends_sign(self, low, domain):
+        """MOD truncates (a CLICK's Math): -5 MOD 3 is -2, so a dividend that may be
+        negative gives a domain below 0 too."""
+        n = Int("N", external=True, min=low, max=5)
+        d = Int("D")
+        neg = Bool("Neg")
+        with Program(strict=False) as logic:
+            with Rung(d < 0):
+                latch(neg)
+            with Rung():
+                calc(n % 3, d)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful = result[0]
+        assert stateful["D"] == domain
+        expected = Counterexample if low < 0 else prove_module.Proven
+        assert isinstance(always(logic, ~neg, max_states=5000), expected)
+
+    def test_a_mod_into_a_word_stores_a_negative_remainder_wrapped(self):
+        """-2 MOD 3 into a Word (a decimal Math, an Int operand) is stored as 65534."""
+        n = Int("N", external=True, min=-5, max=5)
+        w = Word("W")
+        high = Bool("High")
+        with Program(strict=False) as logic:
+            with Rung(w > 2):
+                latch(high)
+            with Rung():
+                calc(n % 3, w)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert result[0]["W"] == (0, 1, 2, 65534, 65535)
+        assert isinstance(always(logic, ~high, max_states=5000), Counterexample)
+
+    @staticmethod
+    def _real_mod_program():
+        r = Real("R", external=True, min=-5.0, max=5.0)
+        x = Real("X")
+        hi = Bool("Hi")
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(r % 3, x)
+            with Rung(x > 2.2):
+                latch(hi)
+        return logic, hi
+
+    def test_a_mod_of_a_real_is_not_listed_as_whole_remainders(self):
+        """2.5 MOD 3 is 2.5: a Real dividend's remainder is not one of -2..2, so
+        X keeps a value on each side of its compare with 2.2."""
+        logic, _hi = self._real_mod_program()
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert any(value > 2.2 for value in result[0]["X"])
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="a Real input with whole-number min/max is searched at its whole numbers "
+        "(_declared_domain), so R = 2.5 is never tried",
+    )
+    def test_a_mod_of_a_real_reaches_its_fraction(self):
+        logic, hi = self._real_mod_program()
+        assert isinstance(always(logic, ~hi, max_states=5000), Counterexample)
 
     def test_integer_comparison_literals(self):
         """Pure equality-only inputs collapse to {literals..., OTHER}."""

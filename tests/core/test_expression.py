@@ -738,6 +738,25 @@ class TestExpressionEdgeCases:
         finally:
             STRICT_DIVISION.reset(token)
 
+    def test_calc_form_swaps_in_clicks_mod_and_power(self):
+        """calc runs CLICK's MOD (truncated; by 0 a QuietMathError) and 0 ** 0 as
+        an error; the expression itself keeps Python's ``%`` and ``**``."""
+        from pyrung.core.expression import QuietMathError
+        from pyrung.core.instruction.calc import calc_form
+
+        DS = Block("DS", TagType.INT, 1, 9)
+        ctx = ScanContext(SystemState().with_tags({"DS1": -7, "DS2": 2, "DS3": 0}))
+        mod, by_zero, power = DS[1] % DS[2], DS[1] % DS[3], DS[3] ** DS[3]
+        assert (mod.evaluate(ctx), power.evaluate(ctx)) == (1, 1)
+        assert calc_form(mod, "decimal", TagType.INT).evaluate(ctx) == -1
+        token = STRICT_DIVISION.set(True)
+        try:
+            for expr in (by_zero, power):
+                with pytest.raises(QuietMathError):
+                    calc_form(expr, "decimal", TagType.INT).evaluate(ctx)
+        finally:
+            STRICT_DIVISION.reset(token)
+
     def test_expression_with_default_value(self):
         """Expression uses tag's default when not in state."""
         DS = Block("DS", TagType.INT, 1, 9)

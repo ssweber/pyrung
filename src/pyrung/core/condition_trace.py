@@ -25,6 +25,7 @@ from pyrung.core.condition import (
     IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
+    text_window_of,
 )
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.expression import (
@@ -122,7 +123,24 @@ class ConditionTraceEngine:
         self, condition: Any, ctx: ScanContext | ConditionView
     ) -> tuple[bool, list[dict[str, Any]]]:
         """Return condition value with trace details for debugger display."""
+        written = text_window_of(condition)
+        if written is not condition:
+            return self._evaluate_text_window(condition, written, ctx)
         return self._evaluate(condition, ctx)
+
+    def _evaluate_text_window(
+        self, window: Any, written: Any, ctx: ScanContext | ConditionView
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """``Txt[1] == "AB"`` as written: the window's characters against the literal."""
+        text = "".join(
+            str(ctx.get_tag(child.tag.name, child.tag.default)) for child in window.conditions
+        )
+        value = bool(window.evaluate(ctx))
+        return value, [
+            self._detail("left", written.tag.name),
+            self._detail("left_value", text),
+            self._detail("right_value", written.value),
+        ]
 
     @singledispatchmethod
     def _evaluate(
@@ -290,7 +308,7 @@ class ConditionTraceEngine:
 
     def expression(self, condition: Any) -> str:
         """Render a stable, user-facing condition expression."""
-        return self._expression(condition)
+        return self._expression(text_window_of(condition))
 
     @singledispatchmethod
     def _expression(self, condition: Any) -> str:

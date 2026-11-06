@@ -44,7 +44,7 @@ from pyrung.core.executor import (
     execute_observed_rung,
     execute_program,
 )
-from pyrung.core.expression import RandIntExpr, randint_sites
+from pyrung.core.expression import RandIntExpr
 from pyrung.core.history import History
 from pyrung.core.input_overrides import (
     InputOverrideManager,
@@ -1821,7 +1821,6 @@ class PLC:
         self._plant_changes: list[tuple[int, list[Any]]] = []
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
-        self._randint_sites_cache: tuple[int, tuple[RandIntExpr, ...]] | None = None
         if _tag_index is not None:
             # fork() pre-seeds defaults into initial_state, so the
             # membership scan below is skipped along with the AST walk
@@ -4847,13 +4846,8 @@ class PLC:
         return ctx, dt
 
     def _randint_site_list(self) -> tuple[RandIntExpr, ...]:
-        """The program's ``randint`` sites, from its known tags."""
-        count = len(self._known_tags_by_name)
-        cached = self._randint_sites_cache
-        if cached is None or cached[0] != count:
-            cached = (count, randint_sites(self._known_tags_by_name))
-            self._randint_sites_cache = cached
-        return cached[1]
+        """The ``randint`` sites the program's rungs run, as the compiled run draws them."""
+        return self._tags_rungs_reach.randint_sites()
 
     def _evaluate_synthesis(
         self,

@@ -32,6 +32,7 @@ from pyrung.core.site_memory import (
     edge_memory_seeding,
     migrate_legacy_edge_memory,
     remap_site_memory,
+    remap_site_memory_report,
     seed_new_edge_memory,
     site_table_of,
 )
@@ -532,6 +533,253 @@ class TestRemap:
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
         assert remapped == {"_edge:e2": True, "_edge:e3": False}
         assert dropped == ()
+
+
+def _every_memory_kind(*, preset: int = 10, jump_step: int = 1) -> Program:
+    """One of each instruction that keeps memory; *preset* and *jump_step* are read operands."""
+    from pyrung.core import (
+        Block,
+        Dint,
+        TagType,
+        Timer,
+        debounce,
+        event_drum,
+        flasher,
+        shift,
+        time_drum,
+        timed,
+        toggle,
+    )
+
+    A = Bool("A")
+    t = Timer.clone("Mt", count=5)
+    with Program(strict=False) as logic:
+        with Rung(A):
+            count_up(Counter.clone("Up"), preset=preset).down(Bool("Dn")).reset(Bool("R1"))
+        with Rung(A):
+            count_down(Counter.clone("Down"), preset=-preset).reset(Bool("R2"))
+        with Rung(A):
+            out(Bool("Pulse"), oneshot=True)
+        with Rung(A):
+            toggle(Bool("Lamp"))
+        with Rung(A):
+            debounce(Bool("Tank"), on=(t[1], preset), off=(t[2], 20))
+        with Rung(A):
+            flasher(Bool("Beacon"), on=(t[3], preset), off=(t[4], 20))
+        with Rung(A):
+            timed(Bool("Horn"), t[5], preset)
+        with Rung(A):
+            shift(Block("Sh", TagType.BOOL, 1, 4).select(1, 4)).clock(Bool("Clk")).reset(Bool("R3"))
+        with Rung(A):
+            time_drum(
+                outputs=[Bool("Td1")],
+                presets=[Int("TdPre"), preset],
+                pattern=[[1], [0]],
+                current_step=Int("TdStep"),
+                accumulator=Dint("TdAcc"),
+                completion_flag=Bool("TdDone"),
+            ).reset(Bool("R4")).jump(Bool("J4"), step=jump_step).jog(Bool("G4"))
+        with Rung(A):
+            event_drum(
+                outputs=[Bool("Ed1")],
+                events=[Bool("Ev1"), Bool("Ev2")],
+                pattern=[[1], [0]],
+                current_step=Int("EdStep"),
+                completion_flag=Bool("EdDone"),
+            ).reset(Bool("R5")).jump(Bool("J5"), step=jump_step)
+    return logic
+
+
+class TestReloadInputMemory:
+    """Memory of an instruction's inputs as it last saw them follows an edit of what
+    it reads (a preset, a source, a jump step); a leg's memory only while that leg is
+    unchanged; a drum's latched preset only while the latched step's preset is."""
+
+    def test_every_slot_is_classified(self):
+        from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
+        from pyrung.core.instruction.drums import PRESET_MEMORY, PRESET_STEP_MEMORY
+        from pyrung.core.site_memory import _INPUT_MEMORY, _PRESET_LATCH
+
+        table = site_table_of(_every_memory_kind())
+        prefixes = {
+            name.rsplit(":", 1)[0] for site in table.instruction_sites for name, _ in site.memory
+        }
+        assert {COUNT_UP_MEMORY, COUNT_DOWN_MEMORY} <= _INPUT_MEMORY
+        assert _PRESET_LATCH == {PRESET_MEMORY, PRESET_STEP_MEMORY}
+        assert prefixes - _INPUT_MEMORY == _PRESET_LATCH
+        assert _INPUT_MEMORY <= prefixes
+
+    @staticmethod
+    def _all_memory(table, *, latched_step: int) -> dict[str, object]:
+        memory: dict[str, object] = {
+            name: True for site in table.instruction_sites for name, _ in site.memory
+        }
+        memory["_drum_preset_step:i9"] = latched_step
+        memory["_drum_preset:i9"] = 100
+        return memory
+
+    def test_an_edited_read_operand_carries_input_memory_and_the_latch(self):
+        old = site_table_of(_every_memory_kind())
+        new = site_table_of(_every_memory_kind(preset=40, jump_step=2))
+        # Step 1 latched TdPre, which the edit did not touch.
+        memory = self._all_memory(old, latched_step=1)
+        report = remap_site_memory_report(memory, old, new)
+        assert report.dropped == report.reread == ()
+        assert report.memory == memory
+
+    def test_an_edited_preset_of_the_latched_step_is_read_afresh(self):
+        old = site_table_of(_every_memory_kind())
+        new = site_table_of(_every_memory_kind(preset=40))
+        # Step 2's preset is the literal the edit changed.
+        memory = self._all_memory(old, latched_step=2)
+        report = remap_site_memory_report(memory, old, new)
+        assert report.dropped == ()
+        assert sorted(report.reread) == ["_drum_preset:i9", "_drum_preset_step:i9"]
+        assert report.memory == {k: v for k, v in memory.items() if k not in report.reread}
+        # The two-value form counts it as dropped.
+        assert remap_site_memory(memory, old, new)[1] == report.reread
+
+    _COUNTER = (
+        "with Program(strict=False) as logic:\n"
+        "    with Rung(A):\n"
+        "        count_up(ctr, preset={preset}).down(Bool('Dn')).reset(Bool('R1'))\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("edit", "carried"),
+        [
+            (("down(Bool('Dn'))", "down(Bool('Dn2'))"), ["_cu:i1"]),
+            (("reset(Bool('R1'))", "reset(Bool('R1b'))"), ["_cd:i1", "_cu:i1"]),
+            (("count_up(ctr,", "count_up(ctr2,"), []),
+            (("with Rung(A):", "with Rung(A, Bool('B')):"), []),
+        ],
+        ids=["down_leg", "reset_leg", "target", "contacts"],
+    )
+    def test_a_preset_edited_with_a_leg_target_or_contact(self, edit, carried):
+        """The rung's count input needs the target and contacts unchanged; the down
+        leg's memory its own leg too.  The reset leg keeps no memory."""
+        old = self._build(self._COUNTER.format(preset=10))
+        new = self._build(self._COUNTER.format(preset=20).replace(*edit))
+        memory = {"_cu:i1": True, "_cd:i1": True}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
+        assert sorted(remapped) == carried
+        assert sorted(dropped) == sorted(set(memory) - set(carried))
+
+    @pytest.mark.parametrize(
+        "edit",
+        [("down(Bool('Dn'))", "down(Bool('Dn2'))"), ("reset(Bool('R1'))", "reset(Bool('R1b'))")],
+        ids=["down_leg", "reset_leg"],
+    )
+    def test_a_leg_only_edit_matches_the_site_and_carries_everything(self, edit):
+        """A helper leg is no part of a site's identity: an edit to it alone keeps the
+        site, so even the edited leg's memory is carried (the new leg's first scan
+        compares with the old leg's last value)."""
+        old = self._build(self._COUNTER.format(preset=10))
+        new = self._build(self._COUNTER.format(preset=10).replace(*edit))
+        memory = {"_cu:i1": True, "_cd:i1": True}
+        assert remap_site_memory(memory, site_table_of(old), site_table_of(new)) == (memory, ())
+
+    def test_a_down_counters_count_input_is_its_rung(self):
+        A = Bool("A")
+        ctr = Counter.clone("Cd")
+
+        def build(preset: int, reset: str) -> Program:
+            with Program(strict=False) as logic:
+                with Rung(A):
+                    count_down(ctr, preset=preset).reset(Bool(reset))
+            return logic
+
+        memory = {"_cd:i1": True}
+        remapped, dropped = remap_site_memory(
+            memory, site_table_of(build(-5, "R")), site_table_of(build(-9, "R2"))
+        )
+        assert (remapped, dropped) == (memory, ())
+
+    def test_an_event_drums_edited_events_drop_only_the_event_memory(self):
+        from pyrung.core import event_drum
+
+        A = Bool("A")
+
+        def build(second_event: str, jump_step: int) -> Program:
+            with Program(strict=False) as logic:
+                with Rung(A):
+                    event_drum(
+                        outputs=[Bool("Ed1")],
+                        events=[Bool("Ev1"), Bool(second_event)],
+                        pattern=[[1], [0]],
+                        current_step=Int("EdStep"),
+                        completion_flag=Bool("EdDone"),
+                    ).reset(Bool("R5")).jump(Bool("J5"), step=jump_step)
+            return logic
+
+        memory = {
+            "_drum_rung_prev:i1": True,
+            "_drum_jump_prev:i1": True,
+            "_drum_event_prev:i1": True,
+            "_drum_last_step:i1": 1,
+        }
+        remapped, dropped = remap_site_memory(
+            memory, site_table_of(build("Ev2", 1)), site_table_of(build("EvX", 2))
+        )
+        assert remapped == {"_drum_rung_prev:i1": True, "_drum_jump_prev:i1": True}
+        assert sorted(dropped) == ["_drum_event_prev:i1", "_drum_last_step:i1"]
+
+    @staticmethod
+    def _build(source: str) -> Program:
+        namespace = {
+            "Program": Program,
+            "Rung": Rung,
+            "Bool": Bool,
+            "count_up": count_up,
+            "out": out,
+            "A": Bool("A"),
+            "ctr": Counter.clone("Ca"),
+            "ctr2": Counter.clone("Cb"),
+        }
+        exec(compile(source, "input_memory.py", "exec"), namespace)
+        return namespace["logic"]
+
+    def test_a_retargeted_range_is_another_coil(self):
+        from pyrung.core import Block, TagType, copy
+
+        bits = Block("Rb", TagType.BOOL, 1, 8)
+        A = Bool("A")
+        N = Int("N")
+
+        def build(lo: int, value: int) -> Program:
+            with Program(strict=False) as logic:
+                with Rung(A):
+                    out(bits.select(lo, lo + 3), oneshot=True)
+                with Rung(A):
+                    copy(value, N, oneshot=True)
+            return logic
+
+        remapped, dropped = remap_site_memory(
+            {"_oneshot:i1": True, "_oneshot:i2": True},
+            site_table_of(build(1, 5)),
+            site_table_of(build(5, 7)),
+        )
+        # The coil's target moved (no tag tells the ranges apart); the copy's source changed.
+        assert remapped == {"_oneshot:i2": True}
+        assert dropped == ("_oneshot:i1",)
+
+    def test_two_edited_sites_alike_are_dropped(self):
+        A = Bool("A")
+        ctr = Counter.clone("Same")
+
+        def build(preset: int) -> Program:
+            with Program(strict=False) as logic:
+                with Rung(A):
+                    count_up(ctr, preset=preset).reset(Bool("R"))
+                with Rung(A):
+                    count_up(ctr, preset=preset + 1).reset(Bool("R"))
+            return logic
+
+        remapped, dropped = remap_site_memory(
+            {"_cu:i1": True, "_cu:i2": True}, site_table_of(build(10)), site_table_of(build(20))
+        )
+        assert remapped == {}
+        assert sorted(dropped) == ["_cu:i1", "_cu:i2"]
 
 
 _A_HELD_SOURCE = """
