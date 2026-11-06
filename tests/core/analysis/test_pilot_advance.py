@@ -193,6 +193,56 @@ class TestSequencerAdvance:
         assert path.reachable, path.reason
         assert path.replay().state.tags[done.name] is True
 
+    @staticmethod
+    def _drum_stuck_on_step_one(kind: str, *, jog: bool) -> tuple[PLC, Int, Bool]:
+        """A drum whose step 1 has preset 0, which never ends it (as a CLICK runs it).
+
+        The time & event drum reads it from a tag left at 0, the case a CLICK
+        meets with a DS preset nothing writes.
+        """
+        enable = Bool("StuckAuto", external=True)
+        step = Int("StuckStep")
+        done = Bool("StuckDone")
+        first: Any = 0 if kind == "time" else Int("StuckPreset")
+        common: dict[str, Any] = dict(
+            outputs=[Bool("StuckOut1"), Bool("StuckOut2")],
+            presets=[first, 2],
+            unit="ms",
+            pattern=[[1, 0], [0, 1]],
+            current_step=step,
+            accumulator=Int("StuckAcc"),
+            completion_flag=done,
+        )
+        if kind == "time_event":
+            common["events"] = [Bool("StuckEv", external=True), None]
+        make = time_drum if kind == "time" else time_event_drum
+        jog_input = Bool("StuckJog", external=True) if jog else None
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                drum = make(**common).reset(Bool("StuckReset", external=True))
+                if jog_input is not None:
+                    drum.jog(jog_input)
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        return plc, step, done
+
+    def test_a_step_its_preset_never_ends_is_not_waited_for(self):
+        for kind in ("time", "time_event"):
+            plc, step, done = self._drum_stuck_on_step_one(kind, jog=False)
+            for target in (step == 2, done):
+                path = plc.how(target, max_scans=20000)
+                assert not path.reachable, kind
+                assert "budget" not in path.reason, (kind, path.reason)
+
+    def test_a_step_its_preset_never_ends_is_jogged_off(self):
+        for kind in ("time", "time_event"):
+            plc, step, done = self._drum_stuck_on_step_one(kind, jog=True)
+            for target, tag, value in ((step == 2, step.name, 2), (done, done.name, True)):
+                path = plc.how(target, max_scans=400)
+                assert path.reachable, (kind, path.reason)
+                assert path.last_resort is None, kind
+                assert path.replay().state.tags[tag] == value
+
     def test_shift_path_replays_across_clock_boundaries(self):
         data = Bool("ShiftData", external=True)
         clock = Bool("ShiftClock", external=True)
