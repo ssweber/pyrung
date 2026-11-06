@@ -162,7 +162,8 @@ class TestValueDomainExtraction:
     @pytest.mark.xfail(
         strict=True,
         reason="a Real input with whole-number min/max is searched at its whole numbers "
-        "(_declared_domain), so R = 2.5 is never tried",
+        "(_declared_domain), so R = 2.5 is never tried: the search answers Intractable, and "
+        "a Counterexample needs a Real's fractions modelled through %",
     )
     def test_a_mod_of_a_real_reaches_its_fraction(self):
         logic, hi = self._real_mod_program()

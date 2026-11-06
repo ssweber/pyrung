@@ -2380,10 +2380,19 @@ class TestUnboundedIndexReads:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
 
-    def test_unwritten_elements_still_prove(self):
-        """Elements nothing writes keep their power-on 0, whichever one Ptr picks."""
+    @pytest.mark.parametrize(
+        ("bounds", "expected"),
+        [({}, Intractable), ({"min": 0, "max": 5}, Proven)],
+        ids=["undeclared", "declared"],
+    )
+    def test_unwritten_elements_still_prove(self, bounds, expected):
+        """Elements nothing writes keep their power-on 0, whichever one Ptr picks.
+
+        An index is no comparison with a literal: an undeclared Ptr is tried at the
+        values its blocks give it, and that answers for nothing.
+        """
         hit = Bool("Hit")
-        ptr, n = Int("Ptr", external=True), Int("N")
+        ptr, n = Int("Ptr", external=True, **bounds), Int("N")
         ds = Block("DS", TagType.INT, 1, 4)
 
         with Program(strict=False) as logic:
@@ -2392,7 +2401,10 @@ class TestUnboundedIndexReads:
             with Rung(n == 7):
                 latch(hit)
 
-        assert isinstance(always(logic, ~hit), Proven)
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if isinstance(result, Intractable):
+            assert result.tags == ["Ptr"]
 
     @pytest.mark.parametrize(("written", "expected"), [(110, Counterexample), (5, Proven)])
     def test_pointer_bounded_by_its_writers(self, written, expected):

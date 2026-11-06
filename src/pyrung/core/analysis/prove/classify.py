@@ -1118,6 +1118,8 @@ def _reached_past_literal_compares(
     *,
     exprs: Iterable[Any] = (),
     paired: Mapping[str, frozenset[str]] | None = None,
+    hop_only: frozenset[str] = frozenset(),
+    stored: bool = False,
 ) -> dict[str, str]:
     """Of *names*, the tags whose value reaches more than their own ``X op literal``.
 
@@ -1131,6 +1133,12 @@ def _reached_past_literal_compares(
     direct comparison with it is answered by its partition anyway: inputs compared
     with each other (:func:`_group_domains`), and a tag written only with literals
     whose every value is a split point.
+
+    The instructions that read a tag of *hop_only* are all store hops
+    (:func:`_store_hops`), which the caller judges: they are not counted here.
+    *stored* asks of a tag a store hop writes, which answers only for the
+    comparisons the backward pass carries back from it: a direct one with a
+    literal.  A contact on it, or a comparison with a readonly tag, counts too.
     """
     from pyrung.core.analysis.simplified import And as ExprAnd
     from pyrung.core.analysis.simplified import ArithAtom, Atom
@@ -1151,6 +1159,7 @@ def _reached_past_literal_compares(
         NormallyClosedCondition,
         RisingEdgeCondition,
     )
+    from pyrung.core.expression import Expression
     from pyrung.core.tag import ImmediateRef, Tag
     from pyrung.core.validation.walker import _condition_children
 
@@ -1171,13 +1180,13 @@ def _reached_past_literal_compares(
     def constant(value: Any) -> bool:
         value = plain(value)
         if isinstance(value, Tag):
-            return value.readonly
+            return value.readonly and not stored
         return isinstance(value, (bool, int, float, str))
 
     for node in graph.rung_nodes:
         if node.data_reads & names:
             written = sorted(graph.node_writes(node))
-            mark(node.data_reads, written[0] if written else "an instruction")
+            mark(node.data_reads - hop_only, written[0] if written else "an instruction")
     mark(graph.index_tags, "an index")
     mark(graph.pointer_tags, "an index")
 
@@ -1200,9 +1209,14 @@ def _reached_past_literal_compares(
         elif isinstance(expr, Atom):
             if expr.unsupported is not None:
                 stack.append(expr.unsupported)
-            elif expr.operand_is_tag and not answered(expr.tag, expr.operand):
-                mark((expr.tag,), f"a comparison with {expr.operand}")
-                mark((expr.operand,), f"a comparison with {expr.tag}")
+            elif expr.operand_is_tag:
+                if not answered(expr.tag, expr.operand):
+                    mark((expr.tag,), f"a comparison with {expr.operand}")
+                    mark((expr.operand,), f"a comparison with {expr.tag}")
+            elif isinstance(expr.operand, Expression):
+                mark((expr.tag, *_compared_value_names(expr.operand, graph)), "an expression")
+            elif stored and expr.form in {"truthy", "xic", "xio"}:
+                mark((expr.tag,), "a contact")
 
     seen: set[int] = set()
     while stack:
@@ -1214,6 +1228,8 @@ def _reached_past_literal_compares(
             stack.extend(cond.conditions)
             continue
         if isinstance(cond, contacts) and isinstance(plain(cond.tag), Tag):
+            if stored:
+                mark((plain(cond.tag).name,), "a contact")
             continue
         if isinstance(cond, direct) and isinstance(plain(cond.tag), Tag):
             other = plain(cond.value)
@@ -1521,6 +1537,58 @@ def _every_value_domain(tag: Tag) -> tuple[Any, ...] | None:
     return tuple(range(int(tag.min), int(tag.max) + 1))
 
 
+def _store_hops(
+    program: Program, graph: ProgramGraph, carry: _CarryBack
+) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
+    """Each tag's reads by an instruction: the store hops it is the source of, and the rest.
+
+    ``(hops, others)``: *hops* maps a tag to the tags an instruction stores it into
+    through a hop the backward pass has an inverse for (``copy``, ``fill`` and
+    ``blockcopy`` without a convert, a ``calc`` of one tag it can invert:
+    :class:`_CarryBack`'s *covered_pairs*).  *others* holds every tag some other
+    instruction reads, or a hop reads in another place (a second tag in the
+    expression, an index).
+    """
+    from pyrung.core.analysis.pdg import _extract_instruction_event
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import (
+        BlockCopyInstruction,
+        CopyInstruction,
+        FillInstruction,
+    )
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+
+    hops: dict[str, set[str]] = {}
+    others: set[str] = set()
+    for instr in walk_instructions(program):
+        event = _extract_instruction_event(instr, 0, graph.tags)
+        sources: set[str] = set()
+        single: str | None = None
+        if isinstance(instr, CopyInstruction) and instr.convert is None:
+            single = _tag_name_from_value(instr.source)
+        elif isinstance(instr, FillInstruction):
+            single = _tag_name_from_value(instr.value)
+        elif isinstance(instr, BlockCopyInstruction) and instr.convert is None:
+            sources = set(_resolve_tag_names(instr.source))
+        elif isinstance(instr, CalcInstruction):
+            edge = _calc_reverse_edge(instr.expression)
+            if edge is not None:
+                sources = {edge[0]}
+        if single is not None:
+            sources = {single}
+        for name in event.data_reads:
+            targets = (
+                {target for target in event.writes if (name, target) in carry.covered_pairs}
+                if name in sources
+                else set()
+            )
+            if targets:
+                hops.setdefault(name, set()).update(targets)
+            else:
+                others.add(name)
+    return {name: frozenset(found) for name, found in hops.items()}, frozenset(others)
+
+
 def _answer_for_inputs(
     program: Program,
     graph: ProgramGraph,
@@ -1532,6 +1600,7 @@ def _answer_for_inputs(
     real_gap_points: bool,
     paired: Mapping[str, frozenset[str]],
     constant_storage: frozenset[str],
+    carry: _CarryBack,
 ) -> dict[str, str]:
     """Make each free input's values all the program tells apart, or say it can't.
 
@@ -1539,7 +1608,9 @@ def _answer_for_inputs(
     (:func:`_every_value_domain`), or (b) its value reaches nothing but contacts on it
     and its own ``X op literal`` comparisons, which its partition splits at exactly,
     and comparisons with the tags *paired* with it (see
-    :func:`_reached_past_literal_compares`).
+    :func:`_reached_past_literal_compares`), or (c) besides those, it is stored only
+    through hops the backward pass answered for whole (*carry*), into tags that
+    reach nothing but their own comparisons with a literal and such hops.
     A (b) input gets its partition added to the values it already has (a literal
     write's values miss the neighbours of a literal it is compared with), and an input
     with a small declared range takes all of it.  Every other input is returned,
@@ -1556,7 +1627,35 @@ def _answer_for_inputs(
     )
     if not names:
         return {}
-    reach = _reached_past_literal_compares(program, graph, names, exprs=all_exprs, paired=paired)
+    hops, others = _store_hops(program, graph, carry)
+    # A tag whose every read by an instruction is a hop: the hops are judged below.
+    hop_only = frozenset(hops) - others
+    reach = _reached_past_literal_compares(
+        program, graph, names, exprs=all_exprs, paired=paired, hop_only=hop_only
+    )
+    stored_reach = _reached_past_literal_compares(
+        program,
+        graph,
+        frozenset(target for found in hops.values() for target in found),
+        exprs=all_exprs,
+        hop_only=hop_only,
+        stored=True,
+    )
+
+    def through_hops(name: str, seen: frozenset[str]) -> str | None:
+        # What keeps the hops from *name* from answering for it; None when nothing does.
+        if name in carry.incomplete:
+            return min(hops.get(name, ()), default="a store")
+        for target in sorted(hops.get(name, ())):
+            if target in seen:
+                return target
+            if target in stored_reach:
+                return f"{target}, then {stored_reach[target]}"
+            past = through_hops(target, seen | {target})
+            if past is not None:
+                return past
+        return None
+
     unanswered: dict[str, str] = {}
     for name in sorted(names):
         tag = graph.tags[name]
@@ -1564,6 +1663,8 @@ def _answer_for_inputs(
             tag = bounded_system_tag(tag)
         domain = set(nondeterministic[name])
         where = reach.get(name)
+        if where is None and name in hops:
+            where = through_hops(name, frozenset((name,)))
         if where is None:
             if name not in free_system:
                 partition = _extract_value_domain(
@@ -2215,12 +2316,13 @@ def _collect_structural_domain_info(
     *,
     model_system_points: bool = False,
     real_gap_points: bool = True,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack]:
     """Discover finite domains and reverse soundness blockers.
 
-    Returns ``(domains, blockers)`` where *domains* maps tag names to their
-    inferred finite value tuples and *blockers* lists source tags with
-    unsupported reverse dependencies that could not be safely bounded.
+    Returns ``(domains, blockers, carry)`` where *domains* maps tag names to
+    their inferred finite value tuples, *blockers* lists source tags with
+    unsupported reverse dependencies that could not be safely bounded, and
+    *carry* is what the backward pass carried back (:class:`_CarryBack`).
 
     *model_system_points* (BFS only) treats scan-, clock- and time-derived
     system tags as free inputs: never constant storage, and seeded with their
@@ -2396,7 +2498,7 @@ def _collect_structural_domain_info(
     if profile:
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
-    blockers = _backward_propagate_comparison_boundaries(
+    blockers, carry = _backward_propagate_comparison_boundaries(
         program,
         graph,
         all_exprs,
@@ -2423,7 +2525,7 @@ def _collect_structural_domain_info(
             blockers=len(blockers),
         )
 
-    return known_domains, blockers
+    return known_domains, blockers, carry
 
 
 def _collect_structural_domains(
@@ -2433,7 +2535,7 @@ def _collect_structural_domains(
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Discover finite domains from structural writes via fixed-point propagation."""
-    domains, _blockers = _collect_structural_domain_info(
+    domains, _blockers, _carry = _collect_structural_domain_info(
         program, graph, all_exprs, literal_write_domains
     )
     return domains
@@ -2726,6 +2828,17 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
+class _CarryBack(NamedTuple):
+    """What :func:`_backward_propagate_comparison_boundaries` carried back, and how well.
+
+    *covered_pairs*: the ``(source, target)`` store hops it has an inverse for.
+    *incomplete*: the sources it gave no complete answer, and whatever feeds them.
+    """
+
+    covered_pairs: frozenset[tuple[str, str]] = frozenset()
+    incomplete: frozenset[str] = frozenset()
+
+
 class _Hop(NamedTuple):
     values: tuple[Any, ...]  # What the source has to try, before the ones next door.
     complete: bool  # Those are all the places a comparison on the target can change.
@@ -2812,7 +2925,7 @@ def _backward_propagate_comparison_boundaries(
     atom_idx: dict[str, list[Atom]],
     *,
     real_gap_points: bool = True,
-) -> frozenset[str]:
+) -> tuple[frozenset[str], _CarryBack]:
     """Propagate comparison boundary values from write targets back to sources.
 
     Covers ``copy``, ``fill``, ``blockcopy`` (identity), and invertible
@@ -2823,10 +2936,11 @@ def _backward_propagate_comparison_boundaries(
 
     Returns the set of *reverse soundness blockers* — source tags with
     unsupported reverse dependencies whose domains could not be safely
-    bounded by structural or declared fallbacks.  A source whose domain holds
-    what the inverse gave but maybe not every value that reaches the target
-    takes its declared domain when it has one and is no REAL; the search asks
-    every input whether it is answered for anyway (:func:`_answer_for_inputs`).
+    bounded by structural or declared fallbacks — and the :class:`_CarryBack`
+    the search judges a carried source by (:func:`_answer_for_inputs`).  A
+    source whose domain holds what the inverse gave but maybe not every value
+    that reaches the target takes its declared domain when it has one and is
+    no REAL.
     """
     from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.instruction.calc import CalcInstruction
@@ -3069,7 +3183,9 @@ def _backward_propagate_comparison_boundaries(
         if declared is not None and source_tag.type != TagType.REAL:
             known_domains[source_name] = declared
 
-    return frozenset(reverse_soundness_blockers)
+    return frozenset(reverse_soundness_blockers), _CarryBack(
+        frozenset(covered_pairs), frozenset(store_cannot_invert)
+    )
 
 
 def _extract_value_domain(
@@ -3768,7 +3884,8 @@ def _classify_dimensions_from_graph(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
-    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack]
+    | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
@@ -3799,7 +3916,7 @@ def _classify_dimensions_from_graph(
     inputs.  Without it, unwritten system tags are left out (the ``how()``
     domain prior).
 
-    *structural_domain_info* is the ``(domains, blockers)`` from
+    *structural_domain_info* is the ``(domains, blockers, carry)`` from
     :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
     computed by another pass (only valid when *discovered_domains* is None, since
     that input feeds the fixpoint).
@@ -3857,13 +3974,13 @@ def _classify_dimensions_from_graph(
         profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
     if structural_domain_info is not None and discovered_domains is None:
         # Reuse the fixpoint another pass already ran — it's the dominant cost.
-        structural_domains, reverse_blockers = structural_domain_info
+        structural_domains, reverse_blockers, carry_back = structural_domain_info
         if profile:
             profile_last = _classify_profile_mark(
                 timings, "structural_domain_info_reuse", profile_last
             )
     else:
-        structural_domains, reverse_blockers = _collect_structural_domain_info(
+        structural_domains, reverse_blockers, carry_back = _collect_structural_domain_info(
             program,
             graph,
             all_exprs,
@@ -4469,6 +4586,7 @@ def _classify_dimensions_from_graph(
             real_gap_points=real_gap_points,
             paired={name: frozenset(found) for name, found in paired.items()},
             constant_storage=constant_storage,
+            carry=carry_back,
         )
         if unanswered_out is not None:
             unanswered_out.update(unanswered)
