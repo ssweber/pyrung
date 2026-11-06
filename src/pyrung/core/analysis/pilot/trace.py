@@ -319,9 +319,16 @@ def _loop_call_gates(program: Any) -> dict[tuple[str | None, int, tuple[int, ...
     from pyrung.core.validation._common import _iter_program_calls
 
     sites: dict[tuple[str | None, int, tuple[int, ...], str], list[Any]] = {}
-    for _scope, caller, rung_index, branch_path, _rung, callee, extra, _exact in (
-        _iter_program_calls(program)
-    ):
+    for (
+        _scope,
+        caller,
+        rung_index,
+        branch_path,
+        _rung,
+        callee,
+        extra,
+        _exact,
+    ) in _iter_program_calls(program):
         sites.setdefault((caller, rung_index, branch_path, callee), []).append(extra)
     gates: dict[tuple[str | None, int, tuple[int, ...], str], Any] = {}
     for key, extras in sites.items():
