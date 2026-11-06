@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, calc, latch, on_delay, out, reset
+from pyrung import (
+    PLC,
+    Bool,
+    Int,
+    Physical,
+    Program,
+    Rung,
+    Timer,
+    calc,
+    latch,
+    on_delay,
+    out,
+    reset,
+)
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
 
@@ -139,3 +152,26 @@ def test_nothing_is_tried_for_a_goal_no_input_can_reach() -> None:
     plan = plc.how(lamp, max_scans=500)
 
     assert plan.last_resort is None
+
+
+def test_an_input_that_reaches_the_goal_through_the_plant_is_in_its_cone() -> None:
+    """Go drives En, the plant drives Fb from it, and Fb starts the chain to the goal."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.physical import install_harness, upstream_through_plant
+
+    go, enable = Bool("Go", external=True), Bool("En")
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
+    hit = Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(go):
+            out(enable)
+        with Rung(feedback):
+            out(hit)
+    plc = PLC(logic, dt=0.01)
+    work = plc.fork()
+    install_harness(work)
+    pdg = build_program_graph(logic)
+
+    assert "Go" not in pdg.upstream_slice("Hit", follow_calls=True)
+    assert {"Fb", "En", "Go"} <= upstream_through_plant(pdg, work._harness, ("Hit",))
+    assert "Go" not in upstream_through_plant(pdg, None, ("Hit",))

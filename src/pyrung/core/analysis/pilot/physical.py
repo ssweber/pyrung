@@ -2,10 +2,38 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
+
+
+def upstream_through_plant(pdg: Any, harness: Any, tags: Iterable[str]) -> frozenset[str]:
+    """Every tag that can reach *tags*: through the program, and through the plant.
+
+    The program graph's upstream slice stops at a harness feedback, which no rung
+    writes. Its enable drives it, so the cone goes on from the enable.
+    """
+    enables: dict[str, set[str]] = {}
+    if harness is not None:
+        for coupling in harness.couplings():
+            enables.setdefault(coupling.fb_name, set()).add(coupling.en_name)
+    cone: set[str] = set()
+    pending = list(tags)
+    seen: set[str] = set()
+    while pending:
+        tag = pending.pop()
+        if tag in seen:
+            continue
+        seen.add(tag)
+        upstream = pdg.upstream_slice(tag, follow_calls=True)
+        cone |= upstream
+        for name in (*upstream, tag):
+            for enable in enables.get(name, ()):
+                cone.add(enable)
+                pending.append(enable)
+    return frozenset(cone)
 
 
 def install_harness(plc: PLC, unlink: list[str] | None = None) -> frozenset[str]:
