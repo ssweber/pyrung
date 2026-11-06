@@ -4,11 +4,10 @@ SC40 (``fault.division_error``) follows the last Math: any Math that runs sets o
 clears it.  SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
 follow the last Copy or Math.  Nothing else touches them.  An instruction clears
 the flags it follows as it starts, before it reads its operands, and a one-shot
-that does not fire still clears them; one on a rung that is off clears nothing.  A
-pointer below its block is SC44 with the
-destination left alone; past it, there is no flag, a read gets the type's zero
-and a write is dropped.  A dynamic window out of its block is SC44 on either side,
-with nothing written.  ``tests/conformance/system/test_system.py`` and
+that does not fire still clears them; one on a rung that is off clears nothing.
+A pointer below its block is SC44 with the destination left alone; past it,
+there is no flag, a read gets the type's zero and a write is dropped.  A dynamic
+window out of its block is SC44 on either side, with nothing written.  ``tests/conformance/system/test_system.py`` and
 ``tests/conformance/system/test_faults.py`` hold what a CLICK read.
 """
 

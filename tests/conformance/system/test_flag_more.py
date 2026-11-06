@@ -38,18 +38,18 @@ a pass answers nothing and a run on a CLICK records what it read; a control is e
   127 is what SC44 read (``bulk_ops_clear_flags``).  Result2 = 1 is the control.
 - ``oneshot_settles_sc43``: a oneshot Copy (bit 1) and a oneshot Math (bit 2), on the scan it
   fires (Result2, set when SC43 is off after it) and the next, when it does not fire (Result1,
-  set when SC43 is still on).  pyrung 3, 3; SC44 and SC40 read 0 for Result1
-  (``oneshot_that_does_not_fire``), a oneshot that does not fire still settles them.  Result3 =
-  1 is the control.
+  set when SC43 is still on).  SC44 and SC40 read 0 for Result1 (``oneshot_that_does_not_fire``),
+  a oneshot that does not fire still settles them, and pyrung settles SC43 the same: 0, 3.
+  Result3 = 1 is the control.
 - ``source_sc43``: ``copy(SC43, C)`` right after the raise.  Result1 = 1 when the C bit saw SC43
-  on (pyrung), 0 when the Copy settles the flag before it reads (SC44 read 0,
-  ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the
+  on, 0 when the Copy settles the flag before it reads (SC44 read 0,
+  ``source_flag_is_read_before_the_copy_settles``, and pyrung reads 0 for SC43 too).  Result2 = 1 when SC43 is off after the
   Copy.  Result3 = 1 is the control.
 - ``df_into_dd``: what a Copy of DF 1.0E+10 into a DD (preset 99) writes, the store that raised
   no SC43.  Result1: 1 for 2147483647 (a clamp), 2 for 1410065408 (the low 32 bits), 3 for 99
   (left as it was), 4 for 0, 5 for -2147483648, 0 for any other.  Result2 is the DD / 100000, so
   any other reading still shows its size (21474 or 21475 for the clamp, 14100 or 14101 for the
-  low bits).  Result3 has SC43 after it (bit 1; the round read none); pyrung reads 1, 21474, 1.
+  low bits).  Result3 has SC43 after it (bit 1; the round read none); pyrung reads 1, 21474, 0.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """
