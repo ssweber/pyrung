@@ -31,7 +31,13 @@ module.
   same scan with nothing avoided. The kept run is the plan's fork, so text and
   replay stay one recording. The per-scan holds come from the fork's epochs (each
   compiled hold carries the PilotRungs it was built from), not from `hold_log`,
-  which keeps reverted installs too.
+  which keeps reverted installs too. Each wait of a try arms the avoid checks
+  where it starts and judges every member where it ends, so a member true at
+  the anchor is watched again once the plan has left it. An avoid check raising
+  on a try's state ends that try only: the state is not the returned plan's. A
+  release (a hold of False) is tried as a Set before a drop, so a momentary
+  command stays let go of. A one-rung install's lever notes move to its Set; a
+  noted install of several rungs is not trimmed.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
   unreachability, over every write to the tags involved and not one traced route
   (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`. Two writes it

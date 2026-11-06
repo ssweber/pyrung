@@ -132,3 +132,56 @@ def test_a_reset_nothing_needed_goes_and_the_waits_either_side_of_it_are_one():
     replayed = plan.replay()
     assert replayed.state.scan_id == plan.fork.state.scan_id
     assert replayed.state.tags["TrDone"] is True
+
+
+def _command_detour_plans(monkeypatch, avoid_extra=None):
+    from tests.core.analysis.test_pilot import _auto_complete_command_program
+
+    plans = []
+    for trimmed in (False, True):
+        logic, tags = _auto_complete_command_program()
+        plc = PLC(logic, dt=0.010)
+        avoid = tags["C_Complete"] if avoid_extra is None else (tags["C_Complete"], avoid_extra)
+        if not trimmed:
+            monkeypatch.setattr(api._trim, "trim_holds", lambda plan, *_args: plan)
+        plans.append(plc.how(tags["State"] == tags["Completed"], avoid=avoid, max_scans=300))
+        monkeypatch.undo()
+    return plans
+
+
+def _trajectory(plan, name):
+    return [
+        plan.fork.history.at(scan).tags.get(name) for scan in range(plan.fork.state.scan_id + 1)
+    ]
+
+
+def test_a_release_is_a_set_of_false_so_the_command_it_lets_go_of_is_not_issued_again(
+    monkeypatch,
+):
+    before, plan = _command_detour_plans(monkeypatch)
+
+    assert "reset(AutoCmd_C_Start)" in str(before)
+    text = str(plan)
+    assert "reset(AutoCmd_C_Start)" not in text
+    assert "Set AutoCmd_C_Start=False before the next scan." in text
+    assert plan.total_scans == before.total_scans
+    for name in ("AutoCmd_C_Start", "AutoCmd_Cmd", "AutoCmd_CmdReq", "AutoCmd_State"):
+        assert _trajectory(plan, name) == _trajectory(before, name), name
+
+
+def test_a_check_true_where_the_plan_starts_is_watched_again_once_the_plan_has_left_it(
+    monkeypatch,
+):
+    """Avoided before the first scan, and on Completed with Start still held."""
+
+    def start_held_at_completed(state):
+        if state.get("sys.scan_time_max_ms") is None:
+            return True
+        return bool(state.get("AutoCmd_C_Start")) and state.get("AutoCmd_State") == 17
+
+    before, plan = _command_detour_plans(monkeypatch, start_held_at_completed)
+
+    assert before.reachable and plan.reachable
+    assert plan.total_scans == before.total_scans
+    for reached in (plan.fork, plan.replay()):
+        assert not start_held_at_completed(dict(reached.state.tags))

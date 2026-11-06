@@ -5,7 +5,15 @@ a wait.  Often nothing would have moved it: a plain Set holds as well, or the pr
 itself.  The trace can't always tell, but running the plan can.  So, once a plan has reached,
 each piece of temporary logic is tried in the order it went in: the plan is run again from its
 anchor without it, and then with a Set of its value in its place.  The simpler plan is kept
-only if it still reaches the goal on the same scan, with nothing to avoid on the way.
+only if it still reaches the goal on the same scan, with nothing to avoid on the way: each wait
+watches the avoid checks as the drive's own seeks do, and every check is judged again where each
+wait ends.  A check that raises on a try's state ends that try, not how(): that state is not the
+plan's, and the plan the drive found stands.
+
+A release (logic holding an input False) is tried as a Set first, so a command the plan lets go
+of stays let go of.  A note on the relation an install satisfies goes with its Set: the relation
+is the requirement, the value an example.  An install of several rungs with notes stays, since
+its notes don't say which is whose.
 
 The kept plan is that new run, so what it says and what it replays are one recording.
 """
@@ -18,11 +26,17 @@ from dataclasses import replace
 from typing import Any
 
 from pyrung.core.analysis.graph import Plan, PlanStep
-from pyrung.core.analysis.pilot.avoid import _AvoidCheckRaised
-from pyrung.core.analysis.pilot.budget import WallClock
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _AvoidCheckRaised
+from pyrung.core.analysis.pilot.budget import (
+    SearchOutOfMemory,
+    SearchOutOfTime,
+    WallClock,
+    search_limits,
+)
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTrigger
 from pyrung.core.analysis.pilot.overlay import PILOT_RUNGS_BUILT_FROM, fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.world_key import _rung_identity
+from pyrung.core.coast_run import memo_of
 
 # Each try runs the whole plan again.  A plan's own scans mostly run in the guarded loop, so a
 # try costs a small part of the search that found it; this keeps a slow one from costing more.
@@ -76,21 +90,27 @@ def _installed(timeline: list[tuple[int, tuple[Any, ...]]]) -> list[Any]:
     return rungs
 
 
-def _armed(fork: Any, avoid: Any) -> tuple[Any, ...]:
-    """The avoid checks a drive's waits watch, armed where the plan starts as a seek arms them."""
-    if avoid is None:
-        return ()
-    session = CoastSession(fork)
-    session.arm_avoid(avoid)
-    return session._avoid_triggers
+def _left(clock: WallClock | None) -> float:
+    """Seconds a try has left; no clock (the wall clock turned off) is no bound."""
+    return math.inf if clock is None else clock.left()
 
 
-def _ran_clear(fork: Any, scans: int, armed: tuple[Any, ...]) -> bool:
-    """Run *scans* scans, as a seek does; False if a state to avoid came up on the way."""
+def _ran_clear(fork: Any, scans: int, avoid: Any, limits: Callable[[], None]) -> bool:
+    """Run *scans* scans, as a seek does; False if a state to avoid came up on the way.
+
+    The avoid checks are armed where the wait starts, as a seek arms them, and every one is
+    judged again where it ends.  The try's own clock bounds the wait.
+    """
     session = CoastSession(fork)
-    session._avoid_triggers = armed
-    receipt = session.seek((_NEVER,), budget=scans)
-    return not receipt.avoided
+    if avoid is not None:
+        session.arm_avoid(avoid)
+    memo = memo_of(fork)
+    memo.check_limits = limits
+    try:
+        receipt = session.seek((_NEVER,), budget=scans)
+    finally:
+        memo.check_limits = None
+    return not receipt.avoided and not _avoid_scan_names(avoid, dict(fork.state.tags))
 
 
 def _drive(
@@ -99,7 +119,7 @@ def _drive(
     change: _Change,
     goal: Callable[[Any], bool],
     avoid: Any,
-    left: Callable[[], float],
+    clock: WallClock | None,
 ) -> Any | None:
     """The plan run again from its anchor, with *change* made, or None if that doesn't reach."""
     recording = plan.fork
@@ -122,21 +142,22 @@ def _drive(
     # at it.  So each is a mark at the scan before.
     starts = {first - 1: rungs for first, rungs in timeline}
     marks = sorted(set(starts) | {scan - 1 for scan in patches} | {scan - 1 for scan in forces})
-    armed: tuple[Any, ...] | None = None
-    ran: tuple[tuple[Any, ...], ...] = ()
+    limits = search_limits(clock)
+    # A Set goes in where its logic first did, once, as the plan's text has it.
+    set_already: set[tuple[Any, ...]] = set()
     kept: tuple[tuple[Any, ...], ...] = ()
     try:
         while fork.state.scan_id < tip:
-            if left() <= 0:
+            if _left(clock) <= 0:
                 return None
             at = fork.state.scan_id
             sets: dict[str, Any] = {}
             if at in starts:
                 rungs = starts[at]
-                before = set(ran)
-                ran = tuple(_rung_identity(rung) for rung in rungs)
-                for rung, key in zip(rungs, ran, strict=True):
-                    if key not in before and change.get(key) == "set":
+                for rung in rungs:
+                    key = _rung_identity(rung)
+                    if change.get(key) == "set" and key not in set_already:
+                        set_already.add(key)
                         sets[rung.dest] = rung.value
                 active = tuple(rung for rung in rungs if _rung_identity(rung) not in change)
                 keys = tuple(_rung_identity(rung) for rung in active)
@@ -150,11 +171,9 @@ def _drive(
                 fork._forces.clear()
                 fork._forces.update(forces[at + 1])
             until = min([mark for mark in marks if at < mark < tip] or [tip])
-            if armed is None:
-                armed = _armed(fork, avoid)
-            if not _ran_clear(fork, until - at, armed) or fork.state.scan_id != until:
+            if not _ran_clear(fork, until - at, avoid, limits) or fork.state.scan_id != until:
                 return None
-    except _AvoidCheckRaised:
+    except (_AvoidCheckRaised, SearchOutOfTime, SearchOutOfMemory):
         return None
     if not goal(dict(fork.state.tags)):
         return None
@@ -175,6 +194,8 @@ def _names_left(
 def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, ...]:
     """The journal with the dropped logic gone and each Set where its logic went in."""
     steps: list[PlanStep] = []
+    # Where in *steps* a step taken out of the plan left two waits next to each other.
+    joins: set[int] = set()
     for step in journal:
         if not step.rungs:
             steps.append(step)
@@ -196,6 +217,8 @@ def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, 
                         scans=0,
                         inputs=sets,
                         label=", ".join(dict.fromkeys(tag for tag, _value in sets)),
+                        # Only a step of one rung is trimmed with notes on: they are its own.
+                        notes=step.notes,
                     )
                 )
             if kept:
@@ -208,6 +231,8 @@ def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, 
                         rungs=kept,
                     )
                 )
+            elif not sets:
+                joins.add(len(steps))
             continue
         if step.kind == "revoke":
             if kept:
@@ -220,6 +245,8 @@ def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, 
                         rungs=kept,
                     )
                 )
+            else:
+                joins.add(len(steps))
             continue
         steps.append(
             replace(
@@ -229,7 +256,7 @@ def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, 
                 pulsing_holds=_names_left(step.pulsing_holds, gone, kept),
             )
         )
-    return _joined_waits(steps)
+    return _joined_waits(steps, joins)
 
 
 def _bare_wait(step: PlanStep) -> bool:
@@ -242,12 +269,18 @@ def _bare_wait(step: PlanStep) -> bool:
     )
 
 
-def _joined_waits(steps: list[PlanStep]) -> tuple[PlanStep, ...]:
+def _joined_waits(steps: list[PlanStep], joins: set[int]) -> tuple[PlanStep, ...]:
     """Two waits left next to each other, once the logic installed between them is gone, as one."""
     joined: list[PlanStep] = []
-    for step in steps:
+    for index, step in enumerate(steps):
         last = joined[-1] if joined else None
-        if last is not None and _bare_wait(last) and _bare_wait(step) and not last.transition:
+        if (
+            index in joins
+            and last is not None
+            and _bare_wait(last)
+            and _bare_wait(step)
+            and not last.transition
+        ):
             joined[-1] = replace(
                 step,
                 scan=last.scan,
@@ -282,23 +315,30 @@ def trim_holds(
     installed = _installed(timeline or [])
     if timeline is None or not installed:
         return plan
-    own = WallClock.starting_now(_WALL_S)
-
-    def left() -> float:
-        mine = _WALL_S if own is None else own.left()
-        return mine if clock is None else min(mine, clock.left())
+    own = WallClock.starting_now(_WALL_S if clock is None else min(_WALL_S, clock.left()))
+    # A note says what relation the logic satisfies.  An install of one rung hands its notes to
+    # the Set in its place; one of several can't say which note is whose, so its logic stays.
+    noted = {
+        _rung_identity(rung)
+        for step in plan.journal
+        if step.kind == "force" and step.notes and len(step.rungs) > 1
+        for rung in step.rungs
+    }
 
     change: dict[tuple[Any, ...], str] = {}
     fork = None
     for rung in installed:
         key = _rung_identity(rung)
-        for what in ("drop", "set"):
+        if key in noted:
+            continue
+        # A release is a Set of False first: dropping it leaves a command where it was pressed.
+        for what in ("set", "drop") if rung.value is False else ("drop", "set"):
             if what == "set" and rung.dest not in settable:
                 continue
-            if left() <= 0:
+            if _left(own) <= 0:
                 break
             trial = {**change, key: what}
-            tried = _drive(plan, timeline, trial, goal, avoid, left)
+            tried = _drive(plan, timeline, trial, goal, avoid, own)
             if tried is not None:
                 change, fork = trial, tried
                 break

@@ -1048,6 +1048,8 @@ def test_a_rate_check_raising_only_on_the_hold_laid_over_the_state_keeps_the_rou
     # A Set in its place runs the same, with the check never raising on the way.
     without = _scanned(prog, 1).how(target, max_scans=2000)
     assert (without.total_scans, _holds(without)) == (100, 0)
+    # The relation the logic satisfied goes with the Set: 4 is an example.
+    assert "Set Speed=4 before the next scan.\n   Satisfies: Speed > 3" in str(without)
     plan = _scanned(prog, 1).how(target, avoid=rate, max_scans=2000)
     _same_plan(plan, without)
 
