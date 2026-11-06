@@ -34,6 +34,7 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    Word,
     call,
     copy,
     forloop,
@@ -234,3 +235,44 @@ def _counting_program(count: Callable[[], object]) -> tuple[Program, Dint]:
             with Rung():
                 math(x + 1, x)
     return logic, x
+
+
+def _direct_counting_program(
+    count: object, before: Callable[[], None] | None = None
+) -> tuple[Program, Dint]:
+    x = Dint("X")
+    with Program(strict=False) as logic:
+        if before is not None:
+            before()
+        with Rung():
+            copy(0, x)
+        with Rung():
+            with forloop(count):
+                math(x + 1, x)
+    return logic, x
+
+
+@pytest.mark.parametrize("kind", [Int, Dint, Word], ids=["int", "dint", "word"])
+def test_an_unwritten_internal_count_is_not_held_at_its_default(kind: type) -> None:
+    # An unwritten tag nothing compared was constant storage, held at 0: never(X == 2)
+    # came back Proven.  It is free, as an unwritten tag a copy reads is.
+    logic, x = _direct_counting_program(kind("N"))
+    _assert_unbounded(never(logic, x == 2))
+    logic, x = _direct_counting_program(kind("N", min=0, max=5))
+    result = never(logic, x == 2)
+    assert isinstance(result, Counterexample), result
+
+
+def test_a_count_copied_from_an_unwritten_internal_tag_is_not_held_either() -> None:
+    m = Int("M")
+    n = Int("N")
+
+    def write_n() -> None:
+        with Rung():
+            copy(m, n)
+
+    logic, x = _direct_counting_program(n, write_n)
+    result = never(logic, x == 2)
+    assert isinstance(result, Intractable), result
+    assert result.reason == "unbounded domain on M"
+    assert any("read as a forloop count, through N" in hint for hint in result.hints), result.hints

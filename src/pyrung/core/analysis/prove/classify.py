@@ -522,7 +522,8 @@ def _comparison_influencing_tags(
 
     Every tag an index reads counts as well: ``copy(DS[Ptr], N)`` makes ``N``
     depend on ``Ptr``, and the copy edge above sees no tag source there.  The
-    block slots behind the index stay constant storage.
+    block slots behind the index stay constant storage.  A forloop count reads
+    its value as a comparison does, so it counts too (an indexed one: its index).
     """
     influential: set[str] = {name for name in graph.tags if atom_idx.get(name)}
     influential.update(graph.index_tags)
@@ -531,11 +532,13 @@ def _comparison_influencing_tags(
         return frozenset(influential)
 
     from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.instruction.data_transfer import (
         BlockCopyInstruction,
         CopyInstruction,
         FillInstruction,
     )
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
     target_to_sources: dict[str, set[str]] = {}
@@ -580,6 +583,15 @@ def _comparison_influencing_tags(
             if edge is not None:
                 source_name, _ = edge
                 target_to_sources.setdefault(target_name, set()).add(source_name)
+        elif isinstance(instr, ForLoopInstruction):
+            # How many times the body runs is the count's value, as if compared
+            # (``_tag_compared_names``).  An indexed count's slots stay constant
+            # storage, as above; its index does not.
+            count_index: set[str] = set()
+            count_names = _compared_value_names(instr.count, graph, count_index)
+            if not isinstance(instr.count, (IndirectRef, IndirectExprRef)):
+                influential.update(count_names)
+            influential.update(count_index)
 
     changed = True
     while changed:
