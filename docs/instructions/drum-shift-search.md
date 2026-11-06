@@ -131,6 +131,7 @@ The first argument is a comparison expression built from a `.select()` range —
 - On success: `result = matched_address` (1-based), `found = True`
 - On miss: `result = -1`, `found = False`
 - `result` must be INT or DINT; `found` must be BOOL
+- For CLICK, `result` must be a `DS` and the range in `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT`; the export refuses anything else
 
 ### Continuous search (resume from last position)
 
