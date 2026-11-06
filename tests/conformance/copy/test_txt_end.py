@@ -45,12 +45,12 @@ STAGE_SCAN, PROBE_SCAN, CONTROL_SCAN = 1, 2, 3
 START = 995
 BLANK = "\x00"
 #: The DF, the pointer, a code, the Int a clamp goes into, the pointer of 0; DD 40000 and a sink.
-REAL, POINTER, CODE, CLAMPED, ZERO = df[41], ds[4401], ds[4402], ds[4403], ds[4404]
+REAL, POINTER, CODE, CLAMPED, ZERO = df[41], ds[3941], ds[3942], ds[3943], ds[3944]
 BIG, SINK = dd[95], dd[96]
 # A write or read through a pointer touches every tag of its block as far as the build's
 # disjointness check can tell, unless the pointer's choices bound it.
-ds.slot(4401, choices={0: "unset", START: "TXT995"})
-ds.slot(4404, choices={0: "no address"})
+ds.slot(3941, choices={0: "unset", START: "TXT995"})
+ds.slot(3944, choices={0: "no address"})
 
 
 def _flag(slot: Any, scan: int, flag: Any, bit: int) -> None:
@@ -99,7 +99,7 @@ def prove_by_pointer(slot: Any) -> None:
 def init_txt_end(slot: Any) -> None:
     fill(BLANK, txt.select(START - 1, 1000))
     copy(0.0, REAL)
-    fill(0, ds.select(4401, 4404))
+    fill(0, ds.select(3941, 3944))
     fill(0, dd.select(95, 96))
 
 
