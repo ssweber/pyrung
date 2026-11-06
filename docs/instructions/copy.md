@@ -11,7 +11,7 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-Out-of-range values are **clamped** to the destination type's min/max, which sets `system.fault.out_of_range`, for `copy()`, `blockcopy()`, `fill()` and `pack_text()`. This is different from `calc()`, which wraps.
+Out-of-range values are **clamped** to the destination type's min/max, which sets `system.fault.out_of_range`, for `copy()`, `blockcopy()`, `fill()` and `pack_text()`; a `Copy` of a `Real` into a `Dint` clamps with no flag (read on a CLICK; `blockcopy()`, `fill()` and Inf follow it, not yet measured). This is different from `calc()`, which wraps.
 
 `Word` and bit destinations are different, and raise no flag. Into a `Word`, a constant or an `Int` keeps its low 16 bits (-1 is 65535); a `Dint` or `Real` above 65535 stores 65535, and one below 0 wraps down to -32768 (32768); below that pyrung stores 32768, its own choice, not yet read on a CLICK. A `Word` into an `Int` keeps its bits (65535 is -1). A number into a `Bool` takes its low bit, so 2 is off.
 
@@ -19,7 +19,7 @@ A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag, and an index expression (`
 
 A pointer or index expression whose address falls below the block (or in a gap of a sparse block) sets `system.fault.address_error` and leaves the destination alone, for a source or a destination; `calc()` with such a source does the same. Past the block's last address there is no flag: a read gives the type's zero value and a write is dropped, and a text or its digits that run past it are cut there. A `copy()` from past the end of a CLICK `DS`, `DH`, `DF` or `TXT` leaves its destination as it was. A `select()` whose bounds are tags or expressions (`DS.select(Start, End)`) is different: a bound outside the block, past it too, sets `address_error` and the instruction writes nothing, and a gap of a sparse block inside the window is skipped. In a rung condition an element outside the block reads as 0 with no flag ([Comparisons](conditions.md#comparisons)).
 
-`out_of_range` and `address_error` follow the last `calc()` or copy instruction (`copy()`, `blockcopy()`, `fill()`, `pack_*()`, `unpack_*()`): one that runs without the fault clears the flag, so read it on the next rung. A false rung, a oneshot that does not fire, a coil, a timer or a counter leaves both as they are.
+`out_of_range` and `address_error` follow the last `calc()` or copy instruction (`copy()`, `blockcopy()`, `fill()`, `pack_*()`, `unpack_*()`): each clears both as it starts, before it reads its source, and sets the one it raises, so read a flag on the next rung (`copy(system.fault.out_of_range, Bit)` reads it off). A oneshot clears them on the scans it does not fire too. A false rung, a coil, a timer or a counter leaves both as they are.
 
 ## `blockcopy` — copy a range
 

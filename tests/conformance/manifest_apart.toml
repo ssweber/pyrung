@@ -155,3 +155,10 @@ slots = 3
 [groups.flasher_off.cases]
 ds_zero = 1
 ds_minus_five = 2
+
+[groups.txt_end]
+base = 1091 # Conf_TxtEnd: DS1091..DS1110
+slots = 1
+
+[groups.txt_end.cases]
+by_pointer = 1

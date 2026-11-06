@@ -38,18 +38,18 @@ a pass answers nothing and a run on a CLICK records what it read; a control is e
   127 is what SC44 read (``bulk_ops_clear_flags``).  Result2 = 1 is the control.
 - ``oneshot_settles_sc43``: a oneshot Copy (bit 1) and a oneshot Math (bit 2), on the scan it
   fires (Result2, set when SC43 is off after it) and the next, when it does not fire (Result1,
-  set when SC43 is still on).  pyrung 3, 3; SC44 and SC40 read 0 for Result1
-  (``oneshot_that_does_not_fire``), a oneshot that does not fire still settles them.  Result3 =
-  1 is the control.
+  set when SC43 is still on).  SC44 and SC40 read 0 for Result1 (``oneshot_that_does_not_fire``),
+  a oneshot that does not fire still settles them, and pyrung settles SC43 the same: 0, 3.
+  Result3 = 1 is the control.
 - ``source_sc43``: ``copy(SC43, C)`` right after the raise.  Result1 = 1 when the C bit saw SC43
-  on (pyrung), 0 when the Copy settles the flag before it reads (SC44 read 0,
-  ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the
+  on, 0 when the Copy settles the flag before it reads (SC44 read 0,
+  ``source_flag_is_read_before_the_copy_settles``, and pyrung reads 0 for SC43 too).  Result2 = 1 when SC43 is off after the
   Copy.  Result3 = 1 is the control.
 - ``df_into_dd``: what a Copy of DF 1.0E+10 into a DD (preset 99) writes, the store that raised
   no SC43.  Result1: 1 for 2147483647 (a clamp), 2 for 1410065408 (the low 32 bits), 3 for 99
   (left as it was), 4 for 0, 5 for -2147483648, 0 for any other.  Result2 is the DD / 100000, so
   any other reading still shows its size (21474 or 21475 for the clamp, 14100 or 14101 for the
-  low bits).  Result3 has SC43 after it (bit 1; the round read none); pyrung reads 1, 21474, 1.
+  low bits).  Result3 has SC43 after it (bit 1; the round read none); pyrung reads 1, 21474, 0.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """
@@ -362,9 +362,9 @@ flag_halves = Group(
             probe="do the bulk Copy tabs settle SC43, with a raise that takes (4b)",
         ),
         case(
-            "A oneshot Copy (bit 1) and Math (bit 2) after SC43: off after it on the scan it fires "
-            "(Result2 = 3), still on the scan it does not fire (Result1 = 3); the raise alone "
-            "leaves SC43 on (Result3 = 1)",
+            "A oneshot Copy (bit 1) and Math (bit 2) after SC43: a bit per op with SC43 off after "
+            "it on the scan it fires (Result2), and a bit per op with SC43 still on on the scan "
+            "it does not fire (Result1); the raise alone leaves SC43 on (Result3 = 1)",
             ladder=prove_oneshot_settles_sc43,
             init=init_oneshot_settles_sc43,
             expect={"Result1": between(0, 3), "Result2": between(0, 3), "Result3": 1},
@@ -372,8 +372,9 @@ flag_halves = Group(
             probe="does a oneshot that does not fire settle SC43 (4b)",
         ),
         case(
-            "A Copy whose source is SC43, right after a raise, reads it on (Result1 = 1) and "
-            "leaves it off (Result2 = 1); the raise alone leaves SC43 on (Result3 = 1)",
+            "A Copy whose source is SC43, right after a raise: whether it reads SC43 on (Result1 = 1) "
+            "and whether SC43 is off after it (Result2 = 1); the raise alone leaves SC43 on "
+            "(Result3 = 1)",
             ladder=prove_source_sc43,
             init=init_source_sc43,
             expect={"Result1": between(0, 1), "Result2": between(0, 1), "Result3": 1},

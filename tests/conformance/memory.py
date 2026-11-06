@@ -474,6 +474,13 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "for_dd_minus": {"C": range(401, 403), "DD": range(81, 83)},
     "word_floor": {"DD": range(91, 94), "DF": range(31, 33), "DH": range(21, 24)},
     "flasher_off": {"C": range(251, 259), "T": range(131, 141), "DS": range(4405, 4409)},
+    # DS3941..3944: the pointer, a code, a clamp's Int, the pointer of 0.
+    "txt_end": {
+        "DS": range(3941, 3945),
+        "DD": range(95, 97),
+        "DF": range(41, 42),
+        "TXT": range(994, 1001),
+    },
 }
 
 

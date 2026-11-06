@@ -33,9 +33,11 @@ def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fra
 def guard_oneshot_execution(func: F) -> F:
     """Skip execute calls when one-shot state says not to run.
 
-    An instruction that does run settles the flags in its ``_fault_follows``:
-    set if it raised them, clear if not.  It reads them as it found them, so a
-    source naming one of those flags sees the value before this instruction.
+    An enabled instruction settles the flags in its ``_fault_follows`` as it
+    starts, before it reads anything: it clears them, and a raise in its body
+    sets them again.  A source naming one of those flags reads it off.  A
+    one-shot that does not fire still settles them (CLICK,
+    ``flag_probe/oneshot_that_does_not_fire``); a disabled one leaves them.
     """
 
     @wraps(func)
@@ -44,21 +46,15 @@ def guard_oneshot_execution(func: F) -> F:
             if getattr(self, "_oneshot", False):
                 ctx.set_memory(self.memory_key("_oneshot"), False)
             return None
+        for name in self._fault_follows:
+            if ctx._get_tag_internal(name, False):
+                ctx._set_tag_internal(name, False)
         if getattr(self, "_oneshot", False):
             key = self.memory_key("_oneshot")
             if ctx.get_memory(key, False):
                 return None
             ctx.set_memory(key, True)
-        follows = self._fault_follows
-        if not follows:
-            return func(self, ctx, enabled, *args, **kwargs)
-        raised = ctx._raised_faults
-        raised.clear()
-        result = func(self, ctx, enabled, *args, **kwargs)
-        for name in follows:
-            if name not in raised and ctx._get_tag_internal(name, False):
-                ctx._set_tag_internal(name, False)
-        return result
+        return func(self, ctx, enabled, *args, **kwargs)
 
     return cast(F, wrapper)
 
