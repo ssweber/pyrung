@@ -24,6 +24,7 @@ writer-local build state.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from itertools import product
@@ -302,6 +303,39 @@ def _is_wire(pdg: ProgramGraph, tag: str) -> bool:
         if node.subroutine or len(node.condition_reads | node.data_reads) > 1:
             return False
     return True
+
+
+@functools.lru_cache(maxsize=16)
+def _loop_call_gates(program: Any) -> dict[tuple[str | None, int, tuple[int, ...], str], Any]:
+    """What a call inside a forloop needs beyond its rung's contacts, per call site.
+
+    Keyed ``(caller subroutine, rung index, branch path, callee)``, as a rung node
+    names its place.  The caller map's extra conditions: each enclosing loop's
+    ``count != 0``, and the body-rung contacts no iteration changes.  They hold on
+    every scan that runs the call, decided or not, so the trace may ask for them.
+    A rung that also calls the callee outside a loop needs none of them.
+    """
+    from pyrung.core.analysis.simplified import _conditions_list_to_expr, simplify
+    from pyrung.core.validation._common import _iter_program_calls
+
+    sites: dict[tuple[str | None, int, tuple[int, ...], str], list[Any]] = {}
+    for (
+        _scope,
+        caller,
+        rung_index,
+        branch_path,
+        _rung,
+        callee,
+        extra,
+        _exact,
+    ) in _iter_program_calls(program):
+        sites.setdefault((caller, rung_index, branch_path, callee), []).append(extra)
+    gates: dict[tuple[str | None, int, tuple[int, ...], str], Any] = {}
+    for key, extras in sites.items():
+        if all(extras):
+            terms = tuple(_conditions_list_to_expr(list(extra)) for extra in extras)
+            gates[key] = simplify(terms[0] if len(terms) == 1 else Or(terms))
+    return gates
 
 
 def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
@@ -2289,12 +2323,18 @@ def _trace_back(
                     if call_ro is None:
                         continue
                     call_sp = call_ro.sp_tree()
-                    if call_sp is None:
+                    loop_gate = _loop_call_gates(env.program).get(
+                        (cn.subroutine, cn.rung_index, cn.branch_path, rung_node.subroutine)
+                    )
+                    if call_sp is None and loop_gate is None:
                         call_gates.append(_CallGateTrace(caller_index=ci, nodes=()))
                         continue
+                    gate = _sp_to_expr(call_sp) if call_sp is not None else None
+                    if loop_gate is not None:
+                        gate = loop_gate if gate is None else And((gate, loop_gate))
                     children = _trace_expression(
                         env,
-                        _sp_to_expr(call_sp),
+                        gate,
                         tag,
                         provenance=(_scope_ref(ci, cn),),
                         _visited=set(attempt_visited),
