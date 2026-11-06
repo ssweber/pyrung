@@ -46,7 +46,9 @@ Targeted tests under a hard timeout are fine to confirm a finding. No heavy suit
 conformance runs against the local soft PLC (the queue uses it); in-process checks are fine.
 Only a few test runs and scripts go at once and the rest wait, and the wait counts against your
 tool's own timeout: use `run_in_background`, or a tool timeout well above the run's limit. Exit
-125 means it never got a turn and nothing ran: run it again.
+125 means it never got a turn and nothing ran: run it again. Run tests on single files or
+test ids, not whole directories (the builder and the fast gate run those). Before you hand back,
+wait for every run you started, or stop it: no test run may outlive your report.
 
 ## Output
 
