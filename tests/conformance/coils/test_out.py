@@ -16,8 +16,7 @@ TD: a CLICK keeps each after the rung falls (``out_more``).
 The cases are the probes O1-O6 of ``scratchpad/click-v4/RESEARCH.md``.  Hardware
 round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an Out coil
 never sets its Timer's done bit T<n>, so a contact on that T<n> is always off
-(pyrung matches).  Round 2
-(2026-10-30) read O4:
+(pyrung matches).  Round 2 (2026-10-30) read O4:
 
 - ``flasher_restarts_with_on_phase``: 300 ms phases, the rung false
   from 450 to 550 ms, 150 ms into the off phase.  Round 1 read "not both TDs

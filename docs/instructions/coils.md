@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset, which starts the other phase from 0; the other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are; when the rung comes back, both restart from 0 with an on phase. An on or off preset of 0 or below keeps `Beacon` off and both `Acc` values at 0 (that no first on phase shows before it does is pyrung's choice, not yet measured on a CLICK).
+The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset, which starts the other phase from 0; the other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are; when the rung comes back, both restart from 0 with an on phase. CLICK's editor refuses a constant preset of 0 or below; a DS preset of 0 or below keeps `Beacon` off and both `Acc` values at 0 (measured for the off preset; for the on preset only the coil was read dark, and that no first on phase shows before the reset is pyrung's choice, not yet measured on a CLICK).
 
 ### `timed` — on for a set time
 
@@ -57,7 +57,7 @@ with rung(CallButton):
 
 A rung edge starts the on time, and the on time runs out whatever the rung does; an edge during it does not restart it. Not maintained, the next pulse needs the rung to go false and true again. The coil has timed out while its `Acc` holds at or past the preset, and the `Acc` keeps its value after the rung falls; the next edge starts it from 0. The timed-out state is read from `Acc >= preset` each scan, so lowering a register preset below a running `Acc` reads as timed out on the next scan.
 
-An on preset of 0 or below gives no pulse at all. The first phase counts the rung's first scan, as `on_delay` does, so a `timed` or first `flasher` on time of a scan or less never shows (pyrung's rule; not yet measured on a CLICK). None of the variants writes a Timer's `Done`, `EN` or `TT` (a CLICK Out coil never turns `T<n>` on, so a contact on that `Done` is always off), and none takes `immediate(...)` except `toggle`. A timer used by a variant belongs to it: `on_delay` on the same timer is a conflicting-output finding, as CLICK reports it.
+An on preset of 0 or below gives no pulse at all (a `flasher`'s from a DS: the editor refuses a constant one). The first phase counts the rung's first scan, as `on_delay` does, so a `timed` or first `flasher` on time of a scan or less never shows (pyrung's rule; not yet measured on a CLICK). None of the variants writes a Timer's `Done`, `EN` or `TT` (a CLICK Out coil never turns `T<n>` on, so a contact on that `Done` is always off), and none takes `immediate(...)` except `toggle`. A timer used by a variant belongs to it: `on_delay` on the same timer is a conflicting-output finding, as CLICK reports it.
 
 ## `latch` — set and hold (SET)
 

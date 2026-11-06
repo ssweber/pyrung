@@ -1067,7 +1067,8 @@ _RUNG_INPUT_MEMORY = frozenset(
     }
 )
 """Memory prefixes that hold an instruction's rung as it last saw it, and a flasher's
-phase, which is idle exactly when its rung was last seen false.  On reload a flasher
+phase, which is idle whenever its rung was last seen false, and while a preset of 0 or
+below holds it reset.  On reload a flasher
 whose preset was edited keeps its phase."""
 
 _LEG_INPUT_MEMORY: Mapping[str, str] = {
