@@ -101,7 +101,8 @@ class CopyInstruction(OneShotMixin, Instruction):
     flag and skips the copy. A pointer past its bank raises no flag: a
     destination there drops the write, and a source there reads as 0, or, past a
     bank marked ``_past_end_keeps`` (CLICK's DS, DH, DF and TXT), leaves the
-    destination as it was.
+    destination as it was.  A text or its digits written over several elements
+    writes the ones the destination's block holds and drops the rest, with no flag.
 
     **Fault flags:** Each copy that runs sets or clears the out-of-range and
     address-error flags by its own result.
@@ -187,15 +188,14 @@ class CopyInstruction(OneShotMixin, Instruction):
         if resolved_target is None:
             return
 
-        # String literal fan-out: "00026" → sequential CHAR tags
+        # String literal fan-out: "00026" → sequential CHAR tags, as many as the block holds
         from pyrung.core.tag import TagType
 
         if isinstance(value, str) and len(value) > 1 and resolved_target.type == TagType.CHAR:
             try:
-                targets = _sequential_tags(resolved_target, len(value))
-                updates = {
-                    t.name: _as_single_ascii_char(ch) for t, ch in zip(targets, value, strict=True)
-                }
+                chars = [_as_single_ascii_char(ch) for ch in value]
+                targets = _sequential_tags(resolved_target, len(chars))
+                updates = {t.name: ch for t, ch in zip(targets, chars, strict=False)}
             except (TypeError, ValueError):
                 _set_fault_out_of_range(ctx)
                 return
@@ -296,11 +296,9 @@ class CopyInstruction(OneShotMixin, Instruction):
                 exponential=converter.exponential,
             )
             rendered += _termination_char(converter.termination_code)
-            targets = _sequential_tags(resolved_target, len(rendered))
-            updates = {
-                target.name: _as_single_ascii_char(char)
-                for target, char in zip(targets, rendered, strict=True)
-            }
+            chars = [_as_single_ascii_char(char) for char in rendered]
+            targets = _sequential_tags(resolved_target, len(chars))
+            updates = {target.name: char for target, char in zip(targets, chars, strict=False)}
         except (TypeError, ValueError, OverflowError):
             _set_fault_out_of_range(ctx)
             return

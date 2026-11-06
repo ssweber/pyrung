@@ -736,12 +736,28 @@ def _parse_sequential_tag_name(name: str) -> tuple[str, int, int] | None:
 def _compute_sequential_reloads(
     target_name: str,
     ctx: CodegenContext,
+    following_names: list[str] | None = None,
 ) -> list[tuple[int, str]] | None:
+    """The referenced scalars a store of several elements from *target_name* writes.
+
+    *following_names* are the elements after the target in its block
+    (``element_names_after``); a tag in no block counts on by name.
+    """
+    if following_names is not None:
+        reloads = [
+            (offset, ctx.symbol_for_tag(ctx.referenced_tags[name]))
+            for offset, name in enumerate(following_names, start=1)
+            if name in ctx.referenced_tags
+            and name != target_name
+            and name not in ctx.tag_block_addresses
+            and name not in ctx.dict_backed_tag_names
+        ]
+        return reloads or None
     seq = _parse_sequential_tag_name(target_name)
     if seq is None:
         return None
     prefix, base, width = seq
-    reloads: list[tuple[int, str]] = []
+    reloads = []
     for tag_name in list(ctx.referenced_tags):
         if (
             tag_name == target_name
@@ -768,6 +784,75 @@ def _compute_sequential_reloads(
     return sorted(reloads) if reloads else None
 
 
+def _counted_names(following_names: list[str]) -> tuple[str, int, int] | None:
+    """The ``prefix``, base and width most of *following_names* count on from.
+
+    Offset 1 is ``f"{prefix}{base + 1:0{width}d}"``.  Tried from the first, middle
+    and last name, as one of them may be a named slot or a mapped tag.
+    """
+    best: tuple[int, tuple[str, int, int]] | None = None
+    for offset in sorted({1, (len(following_names) + 1) // 2, len(following_names)}):
+        seq = _parse_sequential_tag_name(following_names[offset - 1])
+        if seq is None:
+            continue
+        prefix, number, digits = seq
+        suffix = following_names[offset - 1][len(prefix) :]
+        width = digits if suffix.startswith("0") and digits > 1 else 1
+        counted = (prefix, number - offset, width)
+        misses = sum(
+            name != f"{prefix}{counted[1] + i:0{width}d}"
+            for i, name in enumerate(following_names, start=1)
+        )
+        if best is None or misses < best[0]:
+            best = (misses, counted)
+    return None if best is None else best[1]
+
+
+def _counted_name_expr(prefix: str, base: int, width: int) -> str:
+    """Kernel source for the name ``f"{prefix}{base + _seq_i:0{width}d}"``.
+
+    The prefix is a user's block name, so it goes in as a literal (``repr``), never
+    into an f-string, where a brace, a backslash or a quote would change it.
+    """
+    number = f'f"{{{base} + _seq_i}}"' if width <= 1 else f'f"{{{base} + _seq_i:0{width}d}}"'
+    return f"{prefix!r} + {number}"
+
+
+def _kernel_following_store_lines(values_var: str, following_names: list[str]) -> list[str]:
+    """The kernel's stores of the elements after a static target, by their names.
+
+    Most of them count on by address; the rest (a named slot, a tag mapped onto
+    the address) are listed.
+    """
+    if not following_names:
+        return []
+    stop = f"min(len({values_var}), {len(following_names) + 1})"
+    counted = _counted_names(following_names)
+    if counted is None:
+        return [
+            f"    _seq_names = {tuple(following_names)!r}",
+            f"    for _seq_i in range(1, {stop}):",
+            f"        tags[_seq_names[_seq_i - 1]] = {values_var}[_seq_i]",
+        ]
+    prefix, base, width = counted
+    renamed = {
+        offset: name
+        for offset, name in enumerate(following_names, start=1)
+        if name != f"{prefix}{base + offset:0{width}d}"
+    }
+    name_expr = _counted_name_expr(prefix, base, width)
+    if not renamed:
+        return [
+            f"    for _seq_i in range(1, {stop}):",
+            f"        tags[{name_expr}] = {values_var}[_seq_i]",
+        ]
+    return [
+        f"    _seq_names = {renamed!r}",
+        f"    for _seq_i in range(1, {stop}):",
+        f"        tags[_seq_names.get(_seq_i) or {name_expr}] = {values_var}[_seq_i]",
+    ]
+
+
 def _copy_converter_write_lines(
     *,
     values_var: str,
@@ -778,26 +863,46 @@ def _copy_converter_write_lines(
     target_name: str | None = None,
     sequential_reloads: list[tuple[int, str]] | None = None,
     kernel: bool = False,
+    fit: int | None = None,
+    following_names: list[str] | None = None,
 ) -> list[str]:
+    """Write *values_var*'s elements from the target on, as many as its block holds.
+
+    *fit* is how many elements a static target's block holds from it
+    (``block_room``), ``None`` for a tag in no block, and *following_names* the
+    elements after a scalar one (``element_names_after``); an indexed target's
+    block array ends where its block does.  The rest are dropped, with no flag.
+    """
     if target_kind == "scalar":
-        seq = _parse_sequential_tag_name(target_name) if target_name else None
-        if seq is not None:
-            prefix, base, width = seq
-            lines = [
-                f"if len({values_var}) >= 1:",
-                f"    {target_symbol} = {values_var}[0]",
-            ]
+        first = [
+            f"if len({values_var}) >= 1:",
+            f"    {target_symbol} = {values_var}[0]",
+        ]
+        reloads = sequential_reloads or []
+        if following_names is not None:
+            # A target in a block: the elements after it are the block's own.
+            lines = list(first)
             if kernel:
                 # The kernel keeps every tag in ``tags``; generated board code has
                 # no such dict and stores only the registers it references (below).
-                lines += [
-                    f"    for _seq_i in range(1, len({values_var})):",
-                    f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
-                ]
-            if sequential_reloads:
-                for offset, symbol in sequential_reloads:
+                lines += _kernel_following_store_lines(values_var, following_names)
+            for offset, symbol in reloads:
+                if offset <= len(following_names):
                     lines.append(f"    if len({values_var}) > {offset}:")
                     lines.append(f"        {symbol} = {values_var}[{offset}]")
+            return lines
+        seq = _parse_sequential_tag_name(target_name) if target_name else None
+        if seq is not None:
+            prefix, base, width = seq
+            lines = list(first)
+            if kernel:
+                lines += [
+                    f"    for _seq_i in range(1, len({values_var})):",
+                    f"        tags[{_counted_name_expr(prefix, base, width)}] = {values_var}[_seq_i]",
+                ]
+            for offset, symbol in reloads:
+                lines.append(f"    if len({values_var}) > {offset}:")
+                lines.append(f"        {symbol} = {values_var}[{offset}]")
             return lines
         return [
             f"if len({values_var}) > 1:",
@@ -806,31 +911,19 @@ def _copy_converter_write_lines(
             f"    {target_symbol} = {values_var}[0]",
         ]
 
-    if target_kind == "blockless_dynamic":
-        if target_start_var is None:
-            raise RuntimeError("blockless dynamic target is missing start index")
-        return [
-            f"_copy_count = len({values_var})",
-            "if _copy_count == 0:",
-            "    pass",
-            f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
-            *_indent_body(fault_body, 4),
-            "else:",
-            f"    for _copy_offset, _copy_value in enumerate({values_var}):",
-            f"        tags[{target_symbol}[{target_start_var} + _copy_offset]] = _copy_value",
-        ]
-
     if target_start_var is None:
-        raise RuntimeError("copy modifier block target is missing start index")
+        raise RuntimeError(f"copy modifier {target_kind} target is missing start index")
+    count = f"min(len({values_var}), len({target_symbol}) - {target_start_var})"
+    if fit is not None:
+        count = f"min(len({values_var}), {fit}, len({target_symbol}) - {target_start_var})"
+    store = (
+        f"tags[{target_symbol}[{target_start_var} + _copy_offset]]"
+        if target_kind == "blockless_dynamic"
+        else f"{target_symbol}[{target_start_var} + _copy_offset]"
+    )
     return [
-        f"_copy_count = len({values_var})",
-        "if _copy_count == 0:",
-        "    pass",
-        f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
-        *_indent_body(fault_body, 4),
-        "else:",
-        f"    for _copy_offset, _copy_value in enumerate({values_var}):",
-        f"        {target_symbol}[{target_start_var} + _copy_offset] = _copy_value",
+        f"for _copy_offset in range({count}):",
+        f"    {store} = {values_var}[_copy_offset]",
     ]
 
 
