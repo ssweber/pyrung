@@ -141,6 +141,15 @@ off_td_held = 1
 flasher_on_zero = 2
 deb_off_against_tof = 3
 
+[groups.td_write]
+base = 1111 # Conf_TdWrite: DS1111..DS1160
+slots = 4
+
+[groups.td_write.cases]
+debounce_on_td_write = 1
+flasher_on_td_write = 2
+flasher_off_td_write = 3
+
 [groups.word_floor]
 base = 1021 # Conf_WordFloor: DS1021..DS1050
 slots = 2

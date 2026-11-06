@@ -52,6 +52,7 @@ from tests.conformance.coils import (
     test_flasher_td,
     test_out,
     test_out_more,
+    test_td_write,
 )
 from tests.conformance.conditions import (
     test_compare,
@@ -311,6 +312,7 @@ APART_GROUPS = [
     test_drum_preset.group,
     test_deb_zero.group,
     test_coil_timing.group,
+    test_td_write.group,
     test_word_floor.group,
     test_flasher_off.group,
     test_txt_end.group,
@@ -334,9 +336,10 @@ APART_PARTS: dict[str, ApartPart] = {
         ("math_terms", "search_more", "real_text", "past_clean", "for_dd_minus")
     ),
     # and timing: a drum's jump to a bad step and when it reads a step's preset, a debounce's
-    # off side and a flasher's on phase of 0; and, for room, a Word store below -32768.
+    # off side and a flasher's on phase of 0, a TD written into a running
+    # coil; and, for room, a Word store below -32768.
     "follow_timing": ApartPart(
-        ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
+        ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "td_write", "word_floor")
     ),
     # A fourth, of what the others left: a flasher's off phase of 0 or below, and a Real's
     # text running past TXT1000.
