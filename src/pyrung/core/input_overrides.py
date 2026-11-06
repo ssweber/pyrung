@@ -339,10 +339,13 @@ class TagsRungsReach:
         site and the scan, so leaving a site out moves no other's values.
         """
         if self._randint_run is None:
-            from pyrung.core.expression import any_randint_sites
+            from pyrung.core.expression import any_randint_sites, is_randint_tag
 
-            if not any_randint_sites():
-                # No draw is alive anywhere, so none is on these rungs: no walk.
+            if not any_randint_sites() or not any(
+                is_randint_tag(tag.name) for tag in self.walk().named
+            ):
+                # No draw is alive anywhere, or these rungs name none (that walk reaches
+                # every tag the operand walk does): no second walk.
                 self._randint_run = ()
                 return self._randint_run
             rungs: list[Any] = list(self._logic)
