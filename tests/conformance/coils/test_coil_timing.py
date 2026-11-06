@@ -11,16 +11,16 @@ reading, beside ``deb_zero``'s.
   before 150 ms, and at 200 ms Result2 is 1 where the TD still holds that value, 2 where it went
   back to 0.  The readings:
 
-  - 1, 2, about 100: the rung's rise clears the off TD, and the fall times from 0 (pyrung on dev
-    42dd614 reads 1, 2, 100).
+  - 1, 2, about 100: the rung's rise clears the off TD, and the fall times from 0 (pyrung before timed-coils
+    read 1, 2, 100).
   - 1, 1, about 100: the off TD is held while the rung is true (as CLICK showed for the on side),
-    and a fall starts it from 0.
+    and a fall starts it from 0 (pyrung on dev reads 1, 1, 100, since timed-coils).
   - 0, 1, 500 or more: it is held while the rung is true and a fall resumes it, so it is past its
     preset at once and the coil drops at 50 ms.
 - ``flasher_on_zero``: a flasher of 0 on / 1 ms off, its rung on throughout: scans its coil is on
   of 14 (Result1), 0 where an on phase of 0 stays dark after each off phase.  The control
-  (Result2) is a flasher of 1 ms / 1 ms, on for some of them.  pyrung on dev reads 7, 8: a scan
-  lit after each off phase.
+  (Result2) is a flasher of 1 ms / 1 ms, on for some of them.  pyrung on dev reads 0, 7: the
+  on phase of 0 stays dark (timed-coils; it read 7, 8 before).
 - ``deb_off_against_tof``: a debounce of 0 / 5 ms and a TOF of 5 ms on one rung, on scans 2 and 3.
   The scan each goes off first (Result1 the debounce, Result2 the TOF, up to 40, 0 for never) and
   ErrorCode = Result1 - Result2: 1 where the debounce's off side takes a scan more than a TOF of
@@ -113,8 +113,9 @@ group = Group(
             "100 ms of a 500 ms off (Result1 = 1, 0 if it resumes)",
             ladder=prove_off_td_held,
             ready=lambda slot: ~c[242],
-            # Timed out in the reset: what the case starts from, on every repeat.
-            keep=(td[116],),
+            # The off TD is timed out in the reset: what the case starts from, on every repeat.
+            # The on TD is kept after the rung falls, as for any debounce; the next rise starts it from 0.
+            keep=(td[115], td[116]),
             expect={
                 "Result1": between(0, 1),
                 "Result2": between(0, 2),
