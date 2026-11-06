@@ -82,7 +82,7 @@ def _dwell() -> tuple[PLC, object]:
     return PLC(logic, dt=0.01), state == 7
 
 
-def test_logic_a_set_cannot_stand_in_for_stays_and_the_rest_goes(monkeypatch):
+def test_logic_a_set_cannot_stand_in_for_stays(monkeypatch):
     plc, goal = _dwell()
     before = _untrimmed(monkeypatch, plc, goal)
     plc, goal = _dwell()
@@ -90,18 +90,49 @@ def test_logic_a_set_cannot_stand_in_for_stays_and_the_rest_goes(monkeypatch):
     plan = plc.how(goal)
 
     assert before.reachable and plan.reachable
-    assert plan.total_scans == before.total_scans
-    assert "latch(HoldStableOn_Done)" in str(before)
+    assert str(plan) == str(before)
     text = str(plan)
-    assert "latch(HoldStableOn_Done)" not in text
-    assert "latch(HoldStableOff_Done)" not in text
     # On for three scans and then off for three is what the sensor's logic does; one Set
-    # can't, so it stays.
-    assert "latch(HoldSensor)" in text
-    assert "reset(HoldSensor)" in text
+    # can't.  A timer's Done bit is no input to Set, and the drive patched it where its logic
+    # went in: without the logic, the text would leave out a patch the replay makes.
+    for logic in (
+        "latch(HoldSensor)",
+        "reset(HoldSensor)",
+        "latch(HoldStableOn_Done)",
+        "latch(HoldStableOff_Done)",
+    ):
+        assert logic in text
     replayed = plan.replay()
     assert replayed.state.scan_id == plan.fork.state.scan_id
     assert replayed.state.tags["HoldState"] == 7
+
+
+def _recorded_patches(plan):
+    snap = plan.fork._scan_log.snapshot()
+    return {
+        (tag, value)
+        for scan, patch in snap.patches_by_scan.items()
+        if scan > plan.anchor_scan
+        for tag, value in patch.items()
+    }
+
+
+def test_logic_over_an_input_patched_where_it_went_in_is_that_set_in_the_text():
+    """Door is patched open where the logic holding it open goes in: without the logic, a Set."""
+    from tests.core.analysis.test_pilot_last_resort import _door_guards_the_run
+
+    plc, done = _door_guards_the_run("inline")
+
+    plan = plc.how(done, max_scans=400)
+
+    text = str(plan)
+    assert "temporary logic" not in text.lower()
+    assert "Set Door=True before the next scan." in text
+    for tag, value in _recorded_patches(plan):
+        assert f"Set {tag}={value}" in text, (tag, value)
+    replayed = plan.replay().state.tags
+    assert replayed["Done"] is True
+    assert replayed["Alarm"] is False
 
 
 def test_a_reset_nothing_needed_goes_and_the_waits_either_side_of_it_are_one():

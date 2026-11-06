@@ -15,6 +15,11 @@ of stays let go of.  A note on the relation an install satisfies goes with its S
 is the requirement, the value an example.  An install of several rungs with notes stays, since
 its notes don't say which is whose.
 
+The text leaves out a patch of an input logic holds.  So logic over an input the recording
+patches to its value where the logic goes in is only ever that Set, and logic over an input it
+patches on another scan the logic is in stays: without it, the replay would make a patch the
+text doesn't name.
+
 The kept plan is that new run, so what it says and what it replays are one recording.
 """
 
@@ -301,6 +306,36 @@ def _hold_log(hold_log: tuple[Any, ...], change: _Change) -> tuple[Any, ...]:
     return tuple(entries)
 
 
+def _patches_under(
+    plan: Plan, timeline: list[tuple[int, tuple[Any, ...]]], rung: Any
+) -> tuple[bool, bool]:
+    """Whether the recording patches *rung*'s input where it goes in, and while it is in.
+
+    The plan's text leaves out a patch of an input logic holds, so taking the logic out leaves
+    a patch the text doesn't name: one where it went in, to its own value, is its Set.
+    """
+    key = _rung_identity(rung)
+    patches = plan.fork._scan_log.snapshot().patches_by_scan
+    tip = plan.fork.state.scan_id
+    ends = [first for first, _rungs in timeline[1:]] + [tip + 1]
+    installs: list[int] = []
+    scans: list[range] = []
+    for (first, rungs), end in zip(timeline, ends, strict=True):
+        if any(_rung_identity(other) == key for other in rungs):
+            if not scans or scans[-1].stop != first:
+                installs.append(first)
+            scans.append(range(first, end))
+    at_install = elsewhere = False
+    for scan, patch in patches.items():
+        if rung.dest not in patch or not any(scan in active for active in scans):
+            continue
+        if scan == installs[0] and patch[rung.dest] == rung.value:
+            at_install = True
+        else:
+            elsewhere = True
+    return at_install, elsewhere
+
+
 def trim_holds(
     plan: Plan,
     goal: Callable[[Any], bool] | None,
@@ -331,8 +366,13 @@ def trim_holds(
         key = _rung_identity(rung)
         if key in noted:
             continue
+        at_install, elsewhere = _patches_under(plan, timeline, rung)
+        if elsewhere:
+            continue
         # A release is a Set of False first: dropping it leaves a command where it was pressed.
-        for what in ("set", "drop") if rung.value is False else ("drop", "set"):
+        tries = ("set", "drop") if rung.value is False else ("drop", "set")
+        # Patched to its value where it went in, its logic dropped is that Set.
+        for what in ("set",) if at_install else tries:
             if what == "set" and rung.dest not in settable:
                 continue
             if _left(own) <= 0:

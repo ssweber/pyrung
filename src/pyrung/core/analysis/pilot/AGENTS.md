@@ -37,7 +37,10 @@ module.
   on a try's state ends that try only: the state is not the returned plan's. A
   release (a hold of False) is tried as a Set before a drop, so a momentary
   command stays let go of. A one-rung install's lever notes move to its Set; a
-  noted install of several rungs is not trimmed.
+  noted install of several rungs is not trimmed. The text hides a patch of a
+  held input (`_controlled_at`), so a hold whose input the recording patches to
+  its value where it goes in is only ever that Set, and one whose input is
+  patched on another scan it is in stays.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
   unreachability, over every write to the tags involved and not one traced route
   (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`. Two writes it
