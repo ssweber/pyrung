@@ -213,6 +213,28 @@ def test_a_pointer_with_no_integer_address_is_an_address_error(
     assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags
 
 
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_raw_mod_by_zero_in_a_pointer_is_its_term_with_sc40(engine: str, monkeypatch) -> None:
+    # A pointer keeps Python's % (calc_form leaves it): by 0 a division error,
+    # 0 for the term, so Table[0 + 3] is read.
+    dest = Int("Dest")
+    seen = {code: Bool(f"Saw{code}") for code in FLAGS}
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(7, SEVEN)
+            copy(0, ZERO)
+            copy(5, TABLE[3])
+            math(TABLE[SEVEN % ZERO + 3], dest)
+        for code, flag in FLAGS.items():
+            with Rung(flag):
+                out(seen[code])
+    tags: dict[str, Any] = {"Dest": dest}
+    tags.update({tag.name: tag for tag in seen.values()})
+    actual = _first_scan(prog, engine, tags, monkeypatch)
+    assert actual["Dest"] == 5
+    assert {code for code in FLAGS if actual[f"Saw{code}"]} == {40}
+
+
 def _prove_program(threshold: int) -> tuple[Program, Bool]:
     numerator = Int("PN", external=True, min=0, max=7, default=0)
     divisor = Int("PZ", external=True, min=0, max=1, default=0)

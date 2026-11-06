@@ -242,8 +242,6 @@ class _ValueSets:
             probe = _Probe(dict(zip(ordered, combo, strict=True)))
             try:
                 out.add(resolve_tag_or_value_ctx(expr, probe))  # ty: ignore[invalid-argument-type]
-            except ZeroDivisionError:
-                out.add(0)
             except Exception:  # noqa: BLE001 - anything unexpected is unbounded
                 return None
         return frozenset(out)

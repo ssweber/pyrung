@@ -724,12 +724,13 @@ class TestExpressionEdgeCases:
         assert expr.evaluate(ctx) == 0
         assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
 
-    @pytest.mark.parametrize("symbol", ["/", "//"])
+    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
     def test_division_by_zero_inside_calc_is_its_term_with_sc40(self, symbol):
         """Inside calc (CALC_FAULTS) a division by zero is 0 too, and notes SC40;
-        the rest of the formula runs."""
+        the rest of the formula runs.  A raw ``%`` (one calc_form leaves, as in a
+        pointer or a randint() bound) by 0 is such a division."""
         DS = Block("DS", TagType.INT, 1, 9)
-        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2]}[symbol] + 5
+        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol] + 5
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
         faults: list[str] = []

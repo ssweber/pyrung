@@ -648,9 +648,10 @@ def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
     """``int(compiled)`` for a bitwise or shift operand.
 
     An operand that may be NaN goes through ``_bit_int``, which raises
-    ``OverflowError`` for NaN as ``int()`` does for Inf, so the calc stores 0
-    with the out-of-range flag (as the core's ``bit_operand``), instead of
-    the ``ValueError`` of ``int(nan)`` stopping the scan.
+    ``OverflowError`` for NaN as ``int()`` does for Inf (the core's
+    ``bit_operand``), not the ``ValueError`` of ``int(nan)``.  An operation whose
+    operand may be Inf or NaN is guarded by ``_permissive_op`` or ``_rand_*``,
+    which make it 0, with the out-of-range flag in a calc.
     """
     if _may_be_float(expr):
         ctx.mark_helper("_bit_int")

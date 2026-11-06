@@ -110,12 +110,12 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
 
 def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
-    """True when *value* (a calc expression) can raise
-    :class:`~pyrung.core.expression.MathDomainError`: a math function with a
-    domain (``sqrt``, ``log``, ...), a ``**`` whose exponent may be fractional
-    (``(-8.0) ** 0.5`` has no real value), either of those in a ``randint``
-    bound, or a ``randint`` whose bounds can be equal (equal constants, or
-    any tag bound)."""
+    """True when a calc of *value* can set SC46 (``fault.math_operation_error``),
+    a :class:`~pyrung.core.expression.MathDomainError` of one of its operations:
+    a math function with a domain (``sqrt``, ``log``, ...), a ``**`` whose
+    exponent may be fractional (``(-8.0) ** 0.5`` has no real value), either of
+    those in a ``randint`` bound, or a ``randint`` whose bounds can be equal
+    (equal constants, or any tag bound)."""
     if seen is None:
         seen = set()
     if id(value) in seen:
@@ -124,7 +124,7 @@ def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
     if isinstance(value, RandIntExpr):
         # A bare Real tag as a bound leaves both bounds unread.  Equal bounds are
         # the error themselves, and tag bounds may hold one value.  A computed
-        # bound is read in the calc too, where sqrt(N) can raise.
+        # bound is read in the calc too, where sqrt(N) can fail.
         if value.real_bounds:
             return False
         return (

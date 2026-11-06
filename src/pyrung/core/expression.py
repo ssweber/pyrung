@@ -132,10 +132,10 @@ def _op_mod(a: Numeric, b: Numeric) -> Numeric:
 def _op_pow(a: Numeric, b: Numeric) -> Numeric:
     """``a ** b``; a float result past the float range is +/-Inf (IEEE 754).
 
-    Python raises ``OverflowError`` where ``*`` would give Inf, so a ``calc``
-    of ``Big ** 2`` would store 0, not the Inf a ``Big * Big`` stores.  The
-    sign is the IEEE one: negative only for a negative base and an odd
-    integer exponent.
+    Python raises ``OverflowError`` where ``*`` would give Inf; here
+    ``Big ** 2`` is Inf, as ``Big * Big`` is, not a math error.  The sign is
+    the IEEE one: negative only for a negative base and an odd integer
+    exponent.
     """
     try:
         result = a**b

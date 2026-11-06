@@ -130,7 +130,7 @@ Mode inference applies normally: WORD-only ranges infer hex mode, anything else 
 math(abs(Error), Magnitude)
 ```
 
-Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768 has no 16-bit value, so a `math()` into an `Int` stores 0 and sets `system.fault.out_of_range`, as a CLICK does. pyrung does the same into a wider destination, and for a `Dint` tag holding −2147483648; that is pyrung's choice, not yet read on a CLICK.
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768, or of a `Dint` tag holding −2147483648, has no value of its type, so in a `math()` it is 0 and sets `system.fault.out_of_range`, as a CLICK does. pyrung does the same into a wider destination; that is pyrung's choice, not yet read on a CLICK.
 
 ## `randint()`
 
