@@ -16,6 +16,7 @@ from .findings import (
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_EXPR_ONLY_IN_MATH,
@@ -32,6 +33,7 @@ from .findings import (
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_MATH_ARG_NOT_PLAIN,
+    CLK_MATH_BIT_OPERAND,
     CLK_MATH_BIT_RANGE_AGGREGATE,
     CLK_MATH_FLOOR_DIV,
     CLK_MATH_FUNC_MODE_MISMATCH,
@@ -53,6 +55,8 @@ from .findings import (
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_RAND_BOUND_TYPE,
     CLK_RAND_EQUAL_BOUNDS,
+    CLK_SEARCH_RANGE_BANK,
+    CLK_SEARCH_RESULT_NOT_DS,
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_STEP_LIMIT,
     CLK_TEXT_ORDER_COMPARE,
@@ -62,6 +66,7 @@ from .findings import (
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
+    CLK_TIMER_PRESET_TOO_LOW,
     ClickFinding,
     ClickValidationReport,
     FindingSeverity,
@@ -76,8 +81,10 @@ from .hardware import (
     _evaluate_out_variant_unit,
     _evaluate_pack_text,
     _evaluate_role_assignments,
+    _evaluate_search_banks,
     _evaluate_text_past_bank,
     _evaluate_timer_pairs,
+    _evaluate_timer_preset_floor,
     _evaluate_timer_preset_overflow,
     _evaluate_write_targets,
 )
@@ -93,6 +100,7 @@ from .portability import (
     _evaluate_immediate_contacts,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
+    _evaluate_math_bit_operands,
     _evaluate_nested_calls,
     _evaluate_rand_bounds,
     _evaluate_range_aggregates,
@@ -244,9 +252,11 @@ def validate_click_program(
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
         findings.extend(_evaluate_range_aggregates(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
+        findings.extend(_evaluate_timer_preset_floor(instruction, base_location, mode))
         findings.extend(_evaluate_out_variant_unit(instruction, base_location, mode))
         findings.extend(_evaluate_forloop_count(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_rand_bounds(instruction, base_location, mode))
+        findings.extend(_evaluate_math_bit_operands(instruction, base_location, mode))
         findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
         findings.extend(_evaluate_text_past_bank(instruction, base_location, mode, resolver))
 
@@ -289,6 +299,7 @@ def validate_click_program(
             )
             findings.extend(_evaluate_timer_pairs(instruction, base_location, mode, resolver))
             findings.extend(_evaluate_modbus_banks(instruction, base_location, mode, resolver))
+            findings.extend(_evaluate_search_banks(instruction, base_location, mode, resolver))
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []
@@ -363,6 +374,11 @@ __all__ = [
     "CLK_TEXT_PAST_BANK",
     "CLK_TEXT_PAST_BLOCK",
     "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
+    "CLK_COPY_CONSTANT_INTO_BIT",
+    "CLK_MATH_BIT_OPERAND",
+    "CLK_SEARCH_RANGE_BANK",
+    "CLK_SEARCH_RESULT_NOT_DS",
+    "CLK_TIMER_PRESET_TOO_LOW",
     "ClickFinding",
     "ClickValidationReport",
 ]

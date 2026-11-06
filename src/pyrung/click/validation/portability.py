@@ -46,6 +46,7 @@ from .findings import (
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_MATH_ARG_NOT_PLAIN,
+    CLK_MATH_BIT_OPERAND,
     CLK_MATH_BIT_RANGE_AGGREGATE,
     CLK_MATH_FLOOR_DIV,
     CLK_MATH_FUNC_MODE_MISMATCH,
@@ -785,6 +786,60 @@ def _evaluate_range_aggregates(
                     "separate math() steps.",
                 )
     return findings
+
+
+def _collect_bit_operands(expr: Any, out: list[Tag], seen: set[int]) -> None:
+    """Each Bool tag *expr* reads as an operand, outside a range aggregate (whose
+    rules, SUM over bits included, are :func:`_evaluate_range_aggregates`') and a
+    RAND (a bit bound is ``CLK_RAND_BOUND_TYPE``)."""
+    if isinstance(expr, ImmediateRef):
+        expr = expr.value
+    if isinstance(expr, Tag):
+        if expr.type is TagType.BOOL:
+            out.append(expr)
+        return
+    if id(expr) in seen or not isinstance(expr, Expression):
+        return
+    seen.add(id(expr))
+    if isinstance(expr, TagExpr):
+        _collect_bit_operands(expr.tag, out, seen)
+        return
+    if isinstance(expr, (SumExpr, RangeAggregateExpr, RandIntExpr)):
+        return
+    for child in vars(expr).values():
+        _collect_bit_operands(child, out, seen)
+
+
+def _evaluate_math_bit_operands(
+    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
+) -> list[ClickFinding]:
+    """CLK_MATH_BIT_OPERAND: CLICK's Math editor refuses a bit in its formula, except
+    in a SUM over a bit range (checked in the v4 editor, 2026-11-06)."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    bits: list[Tag] = []
+    _collect_bit_operands(instruction.source_expression, bits, set())
+    if not bits:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
+    names = list(dict.fromkeys(tag.name for tag in bits))
+    what = "the bit" if len(names) == 1 else "the bits"
+    return [
+        ClickFinding(
+            code=CLK_MATH_BIT_OPERAND,
+            severity=_route_severity(CLK_MATH_BIT_OPERAND, mode),
+            message=(
+                f"math() at {location_text} reads {what} {', '.join(names)}; CLICK's Math "
+                "takes no bit in its formula, except in a SUM over a bit range."
+            ),
+            location=location_text,
+            suggestion=(
+                "Set a DS tag from the bit's contacts in a rung above (copy(1, Tag) under "
+                "the bit, copy(0, Tag) under ~bit) and use the tag, or count bits with "
+                ".sum() over a range."
+            ),
+        )
+    ]
 
 
 def _is_status_bit_tag(tag: Any) -> bool:
