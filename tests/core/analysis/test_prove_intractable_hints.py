@@ -28,6 +28,7 @@ from pyrung.core.analysis.prove import (
     TraceStep,
     _classify_dimensions,
     always,
+    never,
     reachable_states,
 )
 
@@ -92,6 +93,38 @@ class TestIntractableTags:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "Result" in result.tags
+
+    @pytest.mark.parametrize("bounded", [False, True])
+    def test_a_function_out_through_a_pointer_is_a_write(self, bounded):
+        """Each slot a pointer out can reach is written: the input feeding it stays live.
+
+        The out was dropped, so ``never(Regs1 == 7)`` came back Proven while
+        stepping ``Sel = 6`` writes 7.
+        """
+        sel = Int("Sel", external=True, min=0, max=9)
+        ptr = Int("Ptr", default=1, min=1, max=2)
+        regs = Block("Regs", TagType.INT, 1, 2)
+        if bounded:
+            regs.slot(1, min=0, max=20)
+            regs.slot(2, min=0, max=20)
+
+        def plus_one(a):
+            return {"o": a + 1}
+
+        with Program(strict=False) as logic:
+            with Rung():
+                run_function(plus_one, ins={"a": sel}, outs={"o": regs[ptr]})
+
+        plc = PLC(logic)
+        plc.patch({"Sel": 6})
+        plc.step()
+        assert plc.current_state.tags["Regs1"] == 7
+        result = never(logic, regs[1] == 7, max_states=20_000)
+        if bounded:
+            assert isinstance(result, Counterexample)
+        else:
+            assert isinstance(result, Intractable)
+            assert {"Regs1", "Regs2"} <= set(result.tags)
 
 
 class TestIntractableHints:
