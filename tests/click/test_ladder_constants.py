@@ -13,7 +13,7 @@ at NUL.
 
 from __future__ import annotations
 
-import math
+import math as pymath
 
 import pytest
 
@@ -23,7 +23,7 @@ from pyrung.click.ladder.translator import click_real_literal
 from pyrung.click.ladder.types import LadderBundle, LadderExportError
 from pyrung.core import Program, Rung
 from pyrung.core.expression import lsh
-from pyrung.core.program import calc, copy, fill, out, search
+from pyrung.core.program import copy, fill, math, out, search
 from tests.click.helpers import exec_with_source, round_trip_logic, strip_pyrung_boilerplate
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -56,11 +56,11 @@ def _bundle(*rows: tuple[str, str]) -> LadderBundle:
 def test_hex_contexts_export_hex_constants():
     with Program() as logic:
         with Rung():
-            calc(dh[221] + 255, dh[222])
+            math(dh[221] + 255, dh[222])
         with Rung():
-            calc(dh[1] & 0x00FF, dh[2])
+            math(dh[1] & 0x00FF, dh[2])
         with Rung():
-            calc(lsh(dh[1], 4), dh[3])
+            math(lsh(dh[1], 4), dh[3])
         with Rung():
             copy(10, dh[4])
         with Rung():
@@ -93,7 +93,7 @@ def test_decimal_contexts_stay_decimal():
         with Rung(ds[1] == 10):
             copy(10, ds[2])
         with Rung():
-            calc(ds[1] + 10, ds[3])
+            math(ds[1] + 10, ds[3])
     assert _tokens(logic) == [
         "DS1==10",
         "copy(10,DS2)",
@@ -113,7 +113,7 @@ def test_hex_compare_outside_word_range_rejected():
 def test_hex_constants_round_trip_with_pyrung_meaning():
     with Program() as logic:
         with Rung():
-            calc(dh[221] + 10, dh[222])
+            math(dh[221] + 10, dh[222])
         with Rung(dh[1] == 0xC100):
             copy(0xDD01, dh[2])
         with Rung():
@@ -121,7 +121,7 @@ def test_hex_constants_round_trip_with_pyrung_meaning():
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
     body = strip_pyrung_boilerplate(code)
-    assert "calc(DH221 + 0xA, DH222)" in body
+    assert "math(DH221 + 0xA, DH222)" in body
     assert "copy(0xFFFF, DH3)" in body
 
 
@@ -140,14 +140,14 @@ def test_unpadded_hex_that_looks_like_an_address_round_trips(value: int):
     with Program() as logic:
         with Rung(dh[1] == value):
             copy(value, dh[2])
-            calc(dh[1] + value, dh[3])
+            math(dh[1] + value, dh[3])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
 
 
 @pytest.mark.parametrize(
     ("mode", "expected"),
-    [("hex", "calc(DH1 + 0x255, DH2)"), ("decimal", "calc(DH1 + 255, DH2)")],
+    [("hex", "math(DH1 + 0x255, DH2)"), ("decimal", "math(DH1 + 255, DH2)")],
 )
 def test_importer_reads_bare_digits_in_hex_math_as_hex(mode: str, expected: str):
     """CLICK reads ``DH1 + 255`` in hex-mode Math as 255h; only there."""
@@ -183,7 +183,7 @@ def test_click_real_literal(value: float, expected: str):
     assert click_real_literal(value) == expected
 
 
-@pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan, 1e39, -3.5e38])
+@pytest.mark.parametrize("value", [pymath.inf, -pymath.inf, pymath.nan, 1e39, -3.5e38])
 def test_click_real_literal_rejects_unrepresentable(value: float):
     assert click_real_literal(value) is None
 
@@ -195,7 +195,7 @@ def test_real_constants_export_click_style():
         with Rung():
             copy(3e38, df[2])
         with Rung(df[1] > 1e-10):
-            calc(df[1] * 2.5e20, df[3])
+            math(df[1] * 2.5e20, df[3])
     assert _tokens(logic) == [
         "copy(3.14,DF1)",
         "copy(3.0E+38,DF2)",
@@ -204,7 +204,7 @@ def test_real_constants_export_click_style():
     ]
 
 
-@pytest.mark.parametrize("value", [math.inf, math.nan, 1e39])
+@pytest.mark.parametrize("value", [pymath.inf, pymath.nan, 1e39])
 def test_unrepresentable_real_rejected(value: float):
     # The DSL refuses a REAL literal past CLICK's range; the exporter's
     # spelling has no form for one either, as a backstop.
@@ -221,21 +221,21 @@ def test_negative_operands_export_click_style():
     inside a formula is written ``( 0 - DS2 )``."""
     with Program() as logic:
         with Rung():
-            calc(ds[1] + -5, ds[2])
+            math(ds[1] + -5, ds[2])
         with Rung():
-            calc(df[1] * -2.5, df[2])
+            math(df[1] * -2.5, df[2])
         with Rung():
-            calc(ds[1] * -ds[2], ds[3])
+            math(ds[1] * -ds[2], ds[3])
         with Rung():
-            calc(-5 + ds[1], ds[4])
+            math(-5 + ds[1], ds[4])
         with Rung():
-            calc(-ds[1], ds[5])
+            math(-ds[1], ds[5])
         with Rung():
-            calc(-ds[1] * ds[2], ds[6])
+            math(-ds[1] * ds[2], ds[6])
         with Rung():
-            calc(ds[1] - -(ds[2] + 1), ds[7])
+            math(ds[1] - -(ds[2] + 1), ds[7])
         with Rung():
-            calc(dh[1] + -dh[2], dh[3])
+            math(dh[1] + -dh[2], dh[3])
     assert _tokens(logic) == [
         "math(DS1 + ( -5 ),DS2,mode=decimal)",
         "math(DF1 * ( -2.5 ),DF2,mode=decimal)",
@@ -251,17 +251,17 @@ def test_negative_operands_export_click_style():
 def test_negative_operands_round_trip():
     with Program() as logic:
         with Rung():
-            calc(ds[1] + -5, ds[2])
+            math(ds[1] + -5, ds[2])
         with Rung():
-            calc(df[1] * -2.5, df[2])
+            math(df[1] * -2.5, df[2])
         with Rung():
-            calc(ds[1] * -ds[2], ds[3])
+            math(ds[1] * -ds[2], ds[3])
         with Rung():
-            calc(-ds[1], ds[5])
+            math(-ds[1], ds[5])
         with Rung():
-            calc(-ds[1] * ds[2], ds[6])
+            math(-ds[1] * ds[2], ds[6])
         with Rung():
-            calc(ds[1] - -(ds[2] + 1), ds[7])
+            math(ds[1] - -(ds[2] + 1), ds[7])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
 
@@ -271,7 +271,7 @@ def test_real_exponent_round_trips():
         with Rung():
             copy(3e38, df[1])
         with Rung(df[1] > 1e-10):
-            calc(df[1] * 2.5e20, df[3])
+            math(df[1] * 2.5e20, df[3])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
     assert "copy(3.0E+38, DF1)" in strip_pyrung_boilerplate(code)

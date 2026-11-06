@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, latch, reset, system
+from pyrung.core import Rung, copy, latch, math, reset, system
 from tests.conformance.copy.test_past_bank_write import ADDRESS, POINTER
 from tests.conformance.memory import c, dd
 from tests.conformance.probe_kit import between
@@ -68,9 +68,9 @@ def prove_clear_then_write(slot: Any) -> None:
     _write(slot, 8, 0)
     _read(slot, 9, slot.Result3)
     with Rung(slot.Scratch == 9, raised43):
-        calc(slot.Result4 + 1, slot.Result4)
+        math(slot.Result4 + 1, slot.Result4)
     with Rung(slot.Scratch == 9, raised44):
-        calc(slot.Result4 + 2, slot.Result4)
+        math(slot.Result4 + 2, slot.Result4)
     done(slot, WINDOW)
 
 

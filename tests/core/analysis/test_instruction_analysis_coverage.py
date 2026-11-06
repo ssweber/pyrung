@@ -23,7 +23,6 @@ from pyrung.core import (
     Word,
     blockcopy,
     break_loop,
-    calc,
     call,
     continue_loop,
     copy,
@@ -35,6 +34,7 @@ from pyrung.core import (
     flasher,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -315,7 +315,7 @@ def _calc_case() -> Program:
     a = Int("CalcA")
     b = Int("CalcB")
     result = Int("CalcResult")
-    return _program_with_one_rung(lambda: calc(a + b, result), Bool("CalcEnable"))
+    return _program_with_one_rung(lambda: math(a + b, result), Bool("CalcEnable"))
 
 
 def _search_case() -> Program:
@@ -1078,7 +1078,7 @@ def test_reverse_edges_cover_supported_and_conservative_copy_family_shapes() -> 
     with Program(strict=False) as logic:
         with Rung():
             copy(a, b)
-            calc(a + 5, c)
+            math(a + 5, c)
             fill(fill_src, block_a.select(1, 2))
             blockcopy(block_a.select(1, 2), block_b.select(1, 2))
             copy(chars[1], converted, convert=to_value)
@@ -1110,7 +1110,7 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
             reset(other_flag)
             copy(source, dest)
             fill(7, block.select(1, 2))
-            calc(dest + 1, dest)
+            math(dest + 1, dest)
 
     from pyrung.core.crossing import Affine, Literal, StoreTransform
 
@@ -1341,7 +1341,7 @@ def _division_fault_reader_case(*, read_fault: bool) -> Program:
     hit = Bool("FaultHit")
     with Program(strict=False) as logic:
         with Rung():
-            calc(100 / divisor, quotient)
+            math(100 / divisor, quotient)
         if read_fault:
             with Rung(system.fault.division_error):
                 out(hit)

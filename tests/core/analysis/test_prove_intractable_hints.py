@@ -351,7 +351,7 @@ class TestPostElisionInfeasibility:
         """Self-accumulating Word with no min/max/choices, conditionally
         written, copied into an observer — Intractable because the tag
         carries cross-scan state with no inferrable domain."""
-        from pyrung.core import Word, calc
+        from pyrung.core import Word, math
 
         trigger = Bool("Trigger", external=True)
         mid = Word("Mid")
@@ -359,7 +359,7 @@ class TestPostElisionInfeasibility:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(mid + 1, mid)
+                math(mid + 1, mid)
             with Rung():
                 copy(mid, obs)
 
@@ -372,7 +372,7 @@ class TestPostElisionInfeasibility:
     def test_unbounded_word_not_in_cone_is_fine(self):
         """Self-accumulating Word with no domain that is NOT in the
         observer cone should not cause Intractable."""
-        from pyrung.core import Word, calc
+        from pyrung.core import Word, math
 
         trigger = Bool("Trigger", external=True)
         mid = Word("Mid")
@@ -381,7 +381,7 @@ class TestPostElisionInfeasibility:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(mid + 1, mid)
+                math(mid + 1, mid)
             with Rung(flag):
                 out(obs)
 

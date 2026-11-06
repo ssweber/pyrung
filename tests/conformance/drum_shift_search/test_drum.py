@@ -151,10 +151,10 @@ from pyrung.core import (
     And,
     Or,
     Rung,
-    calc,
     copy,
     event_drum,
     latch,
+    math,
     out,
     reset,
     time_drum,
@@ -189,7 +189,7 @@ def last_on(slot: Any, bit: Any, into: Any, count: Any = None) -> None:
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, bit):
         copy(slot.Scratch, into)
         if count is not None:
-            calc(count + 1, count)
+            math(count + 1, count)
 
 
 def prove_te_acc_counts_while_waiting(slot):
@@ -404,7 +404,7 @@ def prove_completion_turns_outputs_off(slot):
             completion_flag=c[805],
         ).reset(slot.Cmd == 0).jump(c[806], step=slot.Result4).jog(c[807])
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, c[802]):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     first_on_from(slot, c[801], 3, slot.Result3)
     first_on_from(slot, c[802], 7, slot.ErrorCode)
     done(slot)

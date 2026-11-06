@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, debounce, flasher, off_delay, out
+from pyrung.core import Or, Rung, copy, debounce, flasher, math, off_delay, out
 from tests.conformance.memory import ClickTimer, c, t, td
 from tests.conformance.probe_kit import between, end_at, in_window, ms_clock, once
 from tests.conformance.scans import count_scans, done, scans_for
@@ -72,7 +72,7 @@ def prove_flasher_on_zero(slot: Any) -> None:
         flasher(control, on=(ClickTimer(120), 1), off=(ClickTimer(121), 1))
     for bit, field in ((dark, slot.Result1), (control, slot.Result2)):
         with Rung(slot.Cmd != 0, slot.Scratch <= FLASH_WINDOW, bit):
-            calc(field + 1, field)
+            math(field + 1, field)
     done(slot, FLASH_WINDOW)
 
 
@@ -95,7 +95,7 @@ def prove_deb_off_against_tof(slot: Any) -> None:
         with Rung(slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= OFF_WINDOW, ~bit, field == 0):
             copy(slot.Scratch, field)
     with Rung(slot.Cmd != 0, slot.Scratch == OFF_WINDOW + 1, slot.Fired == 0):
-        calc(slot.Result1 - slot.Result2, slot.ErrorCode)
+        math(slot.Result1 - slot.Result2, slot.ErrorCode)
     done(slot, OFF_WINDOW)
 
 

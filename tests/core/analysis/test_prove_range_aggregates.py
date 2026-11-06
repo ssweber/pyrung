@@ -1,10 +1,10 @@
-"""Prover coverage for range aggregates (sum / max / min / median / mean) inside calc()."""
+"""Prover coverage for range aggregates (sum / max / min / median / mean) inside math()."""
 
 from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, And, Block, Bool, Int, Program, Rung, TagType, calc, copy, out
+from pyrung.core import PLC, And, Block, Bool, Int, Program, Rung, TagType, copy, math, out
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, TraceStep, always
 from pyrung.core.analysis.prove.classify import _expr_reads_tag
 from pyrung.core.expression import sqrt
@@ -36,7 +36,7 @@ def _program(kind: str):
             copy(ext_b, ds[2])
             copy(ext_c, ds[3])
         with Rung():
-            calc(getattr(ds.select(1, 3), kind)(), result)
+            math(getattr(ds.select(1, 3), kind)(), result)
         with Rung(result == _TARGETS[kind]):
             out(hit)
     return logic, result, hit

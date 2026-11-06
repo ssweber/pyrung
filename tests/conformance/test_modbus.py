@@ -36,7 +36,7 @@ from pyrung.conformance import (
     wait_for_scan_counter_wrap,
 )
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
-from pyrung.core import Rung, calc, copy, on_delay
+from pyrung.core import Rung, copy, math, on_delay
 from tests.conformance import suite
 from tests.conformance.memory import ClickTimer
 from tests.conformance.probe_kit import reading_lines, record_run
@@ -397,7 +397,7 @@ def test_in_process_only_case_is_reported_skipped() -> None:
 
 def _prove_counts_runs(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(ds[4000] + 1, ds[4000])
+        math(ds[4000] + 1, ds[4000])
         copy(ds[4000], slot.Result1)
         copy(1, slot.Fired)
 

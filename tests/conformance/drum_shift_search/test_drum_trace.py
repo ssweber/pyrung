@@ -53,7 +53,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import And, Or, Rung, calc, copy, event_drum, out, reset
+from pyrung.core import And, Or, Rung, copy, event_drum, math, out, reset
 from tests.conformance.memory import c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
@@ -63,13 +63,13 @@ SCANS = scans_for()
 def record_states(slot: Any, a: Any, b: Any, flag: Any, scans: Sequence[int]) -> None:
     """ErrorCode = the state as SFBA through the window; Result2.. = it on *scans*."""
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
-        calc(slot.Result1 * 1000, slot.ErrorCode)
+        math(slot.Result1 * 1000, slot.ErrorCode)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, flag):
-        calc(slot.ErrorCode + 100, slot.ErrorCode)
+        math(slot.ErrorCode + 100, slot.ErrorCode)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, b):
-        calc(slot.ErrorCode + 10, slot.ErrorCode)
+        math(slot.ErrorCode + 10, slot.ErrorCode)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, a):
-        calc(slot.ErrorCode + 1, slot.ErrorCode)
+        math(slot.ErrorCode + 1, slot.ErrorCode)
     for scan, into in zip(scans, (slot.Result2, slot.Result3, slot.Result4), strict=True):
         with Rung(slot.Cmd != 0, slot.Scratch == scan):
             copy(slot.ErrorCode, into)

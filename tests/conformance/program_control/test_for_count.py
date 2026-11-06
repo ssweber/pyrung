@@ -18,7 +18,7 @@ this, and the case holds what pyrung does with such a count.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, forloop
+from pyrung.core import Rung, copy, fill, forloop, math
 from tests.conformance.memory import dd, df
 
 
@@ -27,21 +27,21 @@ def prove_non_finite_count(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(3.0, finite)
         copy(3.0e38, inf)
-        calc(inf * 10, inf)
-        calc(inf - inf, nan)
+        math(inf * 10, inf)
+        math(inf - inf, nan)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(finite):
-            calc(dd[601] + 1, dd[601])
+            math(dd[601] + 1, dd[601])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(inf):
-            calc(dd[602] + 1, dd[602])
+            math(dd[602] + 1, dd[602])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(nan):
-            calc(dd[603] + 1, dd[603])
+            math(dd[603] + 1, dd[603])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(dd[601], slot.Result1)
         copy(dd[602], slot.Result2)
-        calc(dd[602] / 4, slot.Result3)
+        math(dd[602] / 4, slot.Result3)
         copy(dd[603], slot.Result4)
         copy(1, slot.Fired)
 

@@ -36,12 +36,12 @@ from pyrung.core import (
     Timer,
     Word,
     blockcopy,
-    calc,
     copy,
     count_up,
     fill,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     pack_bits,
@@ -154,16 +154,16 @@ _Ctr = Counter.clone("FlagCtr")
 
 
 _FAULTS: dict[str, tuple[Any, Callable[[], object]]] = {
-    "SC40": (SC40, lambda: calc(100 / _Zero, _Sink)),
-    "SC43_math": (SC43, lambda: calc(_Big + 0, _Sink)),
+    "SC40": (SC40, lambda: math(100 / _Zero, _Sink)),
+    "SC43_math": (SC43, lambda: math(_Big + 0, _Sink)),
     "SC43_copy": (SC43, lambda: copy(_Big, _Sink)),
     "SC44_copy": (SC44, lambda: copy(_Tbl[_Zero], _Sink)),
 }
 
 #: One Math of each kind, and every Copy tab, none of which faults here.
 _MATH: dict[str, Callable[[], object]] = {
-    "math": lambda: calc(_Other + 1, _Other),
-    "math_hex": lambda: calc(_Hex & 3, _HexOut),
+    "math": lambda: math(_Other + 1, _Other),
+    "math_hex": lambda: math(_Hex & 3, _HexOut),
 }
 _COPY: dict[str, Callable[[], object]] = {
     "copy": lambda: copy(1, _Other),
@@ -240,13 +240,13 @@ def test_a_rung_that_does_not_run_clears_nothing(engine, fault_name, monkeypatch
             fault()
         with Rung(never):
             copy(1, _Other)
-            calc(_Other + 1, _Other)
+            math(_Other + 1, _Other)
     assert _run(prog, engine, (flag,), monkeypatch) == (True,)
 
 
 _ONESHOTS: dict[str, Callable[[], object]] = {
     "copy": lambda: copy(1, _Other, oneshot=True),
-    "calc": lambda: calc(_Other + 1, _Other, oneshot=True),
+    "calc": lambda: math(_Other + 1, _Other, oneshot=True),
 }
 
 
@@ -288,11 +288,11 @@ def test_each_flag_follows_on_its_own(engine, monkeypatch) -> None:
     at_div, at_range = Bool("AtDiv"), Bool("AtRange")
     with Program(strict=False) as prog:
         with Rung():
-            calc(100 / _Zero, _Sink)  # SC40 only
+            math(100 / _Zero, _Sink)  # SC40 only
         with Rung(SC40, ~SC43):
             out(at_div)
         with Rung():
-            calc(_Big + 0, _Sink)  # SC43 only
+            math(_Big + 0, _Sink)  # SC43 only
         with Rung(~SC40, SC43):
             out(at_range)
     assert _run(prog, engine, (at_div, at_range), monkeypatch) == (True, True)
@@ -335,8 +335,8 @@ def test_a_calc_clears_the_flag_before_it_reads_it(engine, monkeypatch) -> None:
     number = Int("Number")
     with Program(strict=False) as prog:
         with Rung():
-            calc(100 / _Zero, _Sink)
-            calc(SC40 + 5, number)
+            math(100 / _Zero, _Sink)
+            math(SC40 + 5, number)
     assert _run(prog, engine, (number, SC40), monkeypatch) == (5, False)
 
 
@@ -383,7 +383,7 @@ def test_a_read_past_the_block_through_an_expression(engine, monkeypatch) -> Non
     with Program(strict=False) as prog:
         with Rung():
             copy(_Tbl[past + 1], for_copy)
-            calc(_Tbl[inside + 100], for_calc)
+            math(_Tbl[inside + 100], for_calc)
     assert _run(prog, engine, (for_copy, for_calc, SC44), monkeypatch) == (0, 0, False)
 
 
@@ -392,7 +392,7 @@ def test_a_read_past_the_block_through_an_expression(engine, monkeypatch) -> Non
     "op",
     [
         lambda elem, dest: copy(elem, dest),
-        lambda elem, dest: calc(elem, dest),
+        lambda elem, dest: math(elem, dest),
     ],
     ids=["copy", "calc"],
 )
@@ -548,9 +548,9 @@ def test_a_flag_nothing_reads_settles_the_same(runner, steps, up) -> None:
     actions: dict[str, Callable[[], object]] = {
         "copy_clamps": lambda: copy(Dint("Big", default=99_999), Int("Small")),
         "bad_pointer": lambda: copy(_Tbl[Int("Below", default=0)], Int("Plain")),
-        "divide": lambda: calc(Int("One", default=1) / Int("Zero"), Int("Plain")),
+        "divide": lambda: math(Int("One", default=1) / Int("Zero"), Int("Plain")),
         "plain_copy": lambda: copy(1, Int("Plain")),
-        "plain_calc": lambda: calc(Int("One", default=1) + 1, Int("Plain")),
+        "plain_calc": lambda: math(Int("One", default=1) + 1, Int("Plain")),
         "coil": lambda: out(_Coil),
     }
     with Program(strict=False) as prog:
@@ -1022,7 +1022,7 @@ def _count_program(count: Any) -> Program:
             _src_stage()
         with Rung():
             with forloop(count):
-                calc(_SrcBody + 1, _SrcBody)
+                math(_SrcBody + 1, _SrcBody)
     return prog
 
 
@@ -1160,8 +1160,8 @@ _FLAG_READS: dict[str, tuple[Callable[[Any], object], Any]] = {
     "copy_expression": (lambda flag: copy(flag * 1, _FlagInt), _FlagInt),
     "copy_oneshot": (lambda flag: copy(flag, _FlagInt, oneshot=True), _FlagInt),
     "copy_in_a_for": (_in_a_for(lambda flag: copy(flag, _FlagInt)), _FlagInt),
-    "calc": (lambda flag: calc(flag * 1, _FlagInt), _FlagInt),
-    "calc_in_a_for": (_in_a_for(lambda flag: calc(flag * 1, _FlagInt)), _FlagInt),
+    "calc": (lambda flag: math(flag * 1, _FlagInt), _FlagInt),
+    "calc_in_a_for": (_in_a_for(lambda flag: math(flag * 1, _FlagInt)), _FlagInt),
     "fill_bools": (lambda flag: fill(flag, _FlagBools.select(1, 2)), _FlagBools[2]),
     "fill_ints": (lambda flag: fill(flag, _FlagInts.select(1, 2)), _FlagInts[2]),
     "fill_a_dynamic_window": (

@@ -16,10 +16,10 @@ from pyrung.core import (
     Rung,
     TagType,
     TimeMode,
-    calc,
     copy,
     fall,
     latch,
+    math,
     out,
     rise,
     system,
@@ -122,9 +122,9 @@ def test_clock_rise_fall_edge_detect_not_level():
     falls = Int("Falls")
     with Program() as program:
         with Rung(rise(system.sys.clock_1s)):
-            calc(rises + 1, rises)
+            math(rises + 1, rises)
         with Rung(fall(system.sys.clock_1s)):
-            calc(falls + 1, falls)
+            math(falls + 1, falls)
 
     runner = PLC(program, dt=0.010)
     runner.step()
@@ -273,9 +273,9 @@ def test_scan_clock_toggle_derived_edge_alternates(runner_factory):
 
     with Program() as program:
         with Rung(rise(system.sys.scan_clock_toggle)):
-            calc(rise_count + 1, rise_count)
+            math(rise_count + 1, rise_count)
         with Rung(fall(system.sys.scan_clock_toggle)):
-            calc(fall_count + 1, fall_count)
+            math(fall_count + 1, fall_count)
 
     runner = runner_factory(program)
 
@@ -474,7 +474,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_
 
     with Program() as program:
         with Rung(Enable):
-            calc(A / B, Result, oneshot=True)
+            math(A / B, Result, oneshot=True)
 
     runner = runner_factory(program)
     runner.patch({"Enable": True, "A": 100, "B": 0})
@@ -494,7 +494,7 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
 
     with Program() as program:
         with Rung(Enable):
-            calc(A + B, Result, oneshot=True)
+            math(A + B, Result, oneshot=True)
 
     runner = runner_factory(program)
     runner.patch({"Enable": True, "A": 30000, "B": 30000})

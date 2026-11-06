@@ -18,13 +18,13 @@ from pyrung.core import (
     TagType,
     Timer,
     branch,
-    calc,
     call,
     copy,
     count_down,
     count_up,
     fall,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -96,7 +96,7 @@ class TestThresholdProgressAbsorptionGaps:
 
         with Program(strict=False) as logic:
             with Rung(in0):
-                calc(d0 + 1, d0)
+                math(d0 + 1, d0)
             with Rung(in0):
                 copy(d0, d0)
             with Rung(in0):
@@ -112,13 +112,13 @@ class TestOneShotProgressAbsorptionGaps:
     """Oneshot calc/copy accumulators must not be classified as constant-stride progress sources."""
 
     def test_oneshot_calc_accumulator_not_absorbed(self):
-        """Oneshot calc(Step+1, Step) only fires on rising edges — not constant-stride."""
+        """Oneshot math(Step+1, Step) only fires on rising edges — not constant-stride."""
         Trigger = Bool("Trigger", external=True)
         Step = Int("Step")
         Done = Bool("Done")
         with Program(strict=False) as logic:
             with Rung(Trigger):
-                calc(Step + 1, Step, oneshot=True)
+                math(Step + 1, Step, oneshot=True)
             with Rung(Step == 3):
                 latch(Done)
 
@@ -509,7 +509,7 @@ class TestProgressAcrossCycles:
         hit = Bool("ChgHit")
         with Program(strict=False) as logic:
             with Rung(source != last):
-                calc(count + 1, count)
+                math(count + 1, count)
                 copy(source, last)
             with Rung(count >= 3):
                 out(hit)
@@ -525,7 +525,7 @@ class TestProgressAcrossCycles:
             with Rung():
                 copy(source, current)
             with Rung(current != last):
-                calc(count + 1, count)
+                math(count + 1, count)
                 copy(current, last)
             with Rung(count >= 3):
                 out(hit)
@@ -540,7 +540,7 @@ class TestProgressAcrossCycles:
             with Rung():
                 copy(system.rtc.minute, current)
             with Rung(current != last):
-                calc(count + 1, count)
+                math(count + 1, count)
                 copy(current, last)
             with Rung(count >= 3):
                 out(hit)
@@ -552,7 +552,7 @@ class TestProgressAcrossCycles:
         hit = Bool("RiseHit")
         with Program(strict=False) as logic:
             with Rung(rise(pulse)):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3):
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "RiseHit")
@@ -591,7 +591,7 @@ class TestProgressAcrossCycles:
         hit = Bool("PumpHit")
         with Program(strict=False) as logic:
             with Rung(rise(pulse)):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 1000):
                 out(hit)
         result = always(logic, ~hit)
@@ -604,7 +604,7 @@ class TestProgressAcrossCycles:
         hit = Bool("ReachHit")
         with Program(strict=False) as logic:
             with Rung(rise(pulse)):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 5):
                 out(hit)
         states = reachable_states(logic, project=["ReachHit"])
@@ -618,7 +618,7 @@ class TestProgressAcrossCycles:
         hit = Bool("ResetHit")
         with Program(strict=False) as logic:
             with Rung(rise(pulse)):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(~pulse):
                 copy(0, count)
             with Rung(count >= 2):
@@ -650,7 +650,7 @@ class TestProgressAcrossCycles:
         with Program(strict=False) as logic:
             with Rung(rise(pulse)):
                 copy(0, count)
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 2):
                 out(hit)
         assert isinstance(always(logic, ~hit), Proven)
@@ -664,7 +664,7 @@ class TestProgressAcrossCycles:
             with Rung(~toggle):
                 out(toggle)
             with Rung(enable, toggle):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3):
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "TogCntHit")
@@ -681,7 +681,7 @@ class TestProgressAcrossCycles:
             with Rung():
                 copy(source, current)
             with Rung(current != last):
-                calc(count + 1, count)
+                math(count + 1, count)
                 copy(current, last)
             with Rung(count >= 3):
                 out(hit)
@@ -700,7 +700,7 @@ class TestProgressAcrossCycles:
                 if ctu:
                     count_up(counter, preset=5).reset(hit)
                 else:
-                    calc(count + 1, count)
+                    math(count + 1, count)
             with Rung(arm):
                 latch(armed)
             with Rung(armed):
@@ -761,7 +761,7 @@ class TestSelfResettingTimerLaps:
         with Program(strict=False) as logic:
             timer = self._generator("Lap")
             with Rung(timer.Done):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3):
                 out(hit)
         result = always(logic, ~hit)
@@ -786,7 +786,7 @@ class TestSelfResettingTimerLaps:
         with Program(strict=False) as logic:
             timer = self._generator("LapRise")
             with Rung(rise(timer.Done)):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3):
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "LapRiseHit")
@@ -798,7 +798,7 @@ class TestSelfResettingTimerLaps:
         with Program(strict=False) as logic:
             timer = self._generator("LapGate", 30, enable=enable)
             with Rung(timer.Done):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3):
                 out(hit)
         _assert_replays_to(logic, always(logic, ~hit), "LapGateHit")
@@ -833,7 +833,7 @@ class TestSelfResettingTimerLaps:
         with Program(strict=False) as logic:
             timer = self._generator("LapReset", 30)
             with Rung(timer.Done):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 2):
                 copy(0, count)
             with Rung(count >= 3):
@@ -848,7 +848,7 @@ class TestSelfResettingTimerLaps:
             with Rung(~timer.Done, ~stop):
                 on_delay(timer, preset=30)
             with Rung(timer.Done):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 2):
                 latch(stop)
             with Rung(count >= 3):
@@ -912,7 +912,7 @@ class TestProgressMadeOnAnotherBranch:
             with Rung(armed):
                 on_delay(timer, preset=1000)
             with Rung(rise(pulse), armed):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3, ~timer.Done):
                 out(hit)
         result = always(logic, ~hit)
@@ -936,12 +936,12 @@ class TestProgressMadeOnAnotherBranch:
                 reset(pre)
             with Rung(b, ~armed, ~pre):
                 latch(armed)
-                calc(n + 1, n)
+                math(n + 1, n)
             with Rung(a, ~armed, ~pre):
                 latch(pre)
             with Rung(armed, rise(x)):
-                calc(n + 1, n)
-                calc(m + 1, m)
+                math(n + 1, n)
+                math(m + 1, m)
             if not lock_first:
                 with Rung(m >= 3, ~lock):
                     out(hit)
@@ -972,7 +972,7 @@ class TestProgressMadeOnAnotherBranch:
         hit = Bool("LateH")
         with Program(strict=False) as logic:
             with Rung(rise(pulse), armed):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(a, ~armed, ~parked):
                 latch(armed)
             with Rung(armed):
@@ -1002,7 +1002,7 @@ class TestProgressMadeOnAnotherBranch:
             with Rung(armed):
                 on_delay(timer, preset=60)
             with Rung(rise(pulse), armed):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 3):
                 latch(counted)
             with Rung(timer.Done):
@@ -1037,11 +1037,11 @@ class TestProgressMadeOnAnotherBranch:
                 reset(pre)
             with Rung(b, ~armed, ~pre):
                 latch(armed)
-                calc(n + 1, n)
+                math(n + 1, n)
             with Rung(a, ~armed, ~pre):
                 latch(pre)
             with Rung(armed, rise(x)):
-                calc(n + 1, n)
+                math(n + 1, n)
             for i in range(steps - 1, -1, -1):
                 with Rung(rise(x), stages[i - 1] if i else armed, ~stages[i]):
                     latch(stages[i])
@@ -1110,7 +1110,7 @@ class TestCounterRacingATimerBehindAGuard:
                     copy(0, n)
             with subroutine(tag + "Run"):
                 with Rung(rise(y)):
-                    calc(n + 1, n)
+                    math(n + 1, n)
                 with Rung(n >= 2, ~timer.Done):
                     latch(hit)
                 with Rung(n >= 2):
@@ -1192,7 +1192,7 @@ class TestAccumulatorReadOutsideTheProgram:
         hit = Bool(tag + "Hit")
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count >= 100):
                 out(hit)
         return logic, count

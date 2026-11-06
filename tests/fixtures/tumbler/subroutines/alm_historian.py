@@ -3,9 +3,9 @@
 from pyrung import (
     Or,
     blockcopy,
-    calc,
     comment,
     copy,
+    math,
     pack_bits,
     reset,
     return_early,
@@ -65,34 +65,34 @@ def alm_historian():
 
     comment("When called, copy in the ID of the Alarm to AlarmHistory_Id2Copy")
     with rung():  # R4
-        calc((AlmHistorian_Id2Record * 10) + 2991, AlmHistorian__id_idx)
+        math((AlmHistorian_Id2Record * 10) + 2991, AlmHistorian__id_idx)
 
     with rung():  # R5
-        calc(AlmHistorian__id_idx + 1, AlmHistorian__subid_idx)
+        math(AlmHistorian__id_idx + 1, AlmHistorian__subid_idx)
 
     with rung():  # R6
-        calc(AlmHistorian__id_idx + 2, AlmHistorian__stepid_idx)
+        math(AlmHistorian__id_idx + 2, AlmHistorian__stepid_idx)
 
     with rung():  # R7
-        calc(AlmHistorian__id_idx + 3, AlmHistorian__val_idx)
+        math(AlmHistorian__id_idx + 3, AlmHistorian__val_idx)
 
     with rung():  # R8
-        calc(AlmHistorian__id_idx + 4, AlmHistorian__cat_idx)
+        math(AlmHistorian__id_idx + 4, AlmHistorian__cat_idx)
 
     with rung():  # R9
-        calc(AlmHistorian__id_idx + 5, AlmHistorian__MMDD_idx)
+        math(AlmHistorian__id_idx + 5, AlmHistorian__MMDD_idx)
 
     with rung():  # R10
-        calc(AlmHistorian__id_idx + 6, AlmHistorian__hhmm_idx)
+        math(AlmHistorian__id_idx + 6, AlmHistorian__hhmm_idx)
 
     with rung():  # R11
-        calc(AlmHistorian__id_idx + 7, AlmHistorian__ss_idx)
+        math(AlmHistorian__id_idx + 7, AlmHistorian__ss_idx)
 
     with rung():  # R12
-        calc(AlmHistorian__id_idx + 8, AlmHistorian__ack_idx)
+        math(AlmHistorian__id_idx + 8, AlmHistorian__ack_idx)
 
     with rung():  # R13
-        calc(AlmHistorian_Id2Record + 200, AlmHistorian__status_idx)
+        math(AlmHistorian_Id2Record + 200, AlmHistorian__status_idx)
 
     comment("Adding MMDD hhmm ss to alarm")
     with rung():  # R14

@@ -44,7 +44,6 @@ from pyrung.core import (
 from pyrung.core.program import (
     blockcopy,
     branch,
-    calc,
     call,
     comment,
     copy,
@@ -52,6 +51,7 @@ from pyrung.core.program import (
     event_drum,
     fill,
     forloop,
+    math,
     off_delay,
     on_delay,
     out,
@@ -821,7 +821,7 @@ def test_tokens_include_explicit_defaults_and_oneshot():
         with Rung(Enable):
             copy(5, Dest1)
         with Rung(Enable):
-            calc(Dest1 + 1, Dest2)
+            math(Dest1 + 1, Dest2)
         with Rung(Enable):
             search(Data.select(1, 2) == 1, result=Result, found=Found)
         with Rung(Enable):
@@ -859,7 +859,7 @@ def test_calc_hex_token_uses_inferred_hex_mode():
         """
         with Program() as p:
             with Rung(X1):
-                calc(DH1 | DH2, DH3)
+                math(DH1 | DH2, DH3)
         """,
         """
         R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DH1 OR DH2,DH3,mode=hex)
@@ -877,7 +877,7 @@ def test_calc_exports_wide_constants_as_written_once_allowed():
         """
         with Program() as p:
             with Rung(X1):
-                calc(DD1 / 65536, DS1)
+                math(DD1 / 65536, DS1)
         """
     )
     with pytest.raises(LadderExportError, match="CLK_CALC_WIDE_CONSTANT"):
@@ -905,28 +905,28 @@ def test_calc_token_uses_click_native_operators():
     with Program() as logic:
         # Decimal-mode operators
         with Rung(Enable):
-            calc(A**2, Result)  # Power → ^
+            math(A**2, Result)  # Power → ^
         with Rung(Enable):
-            calc(A % B, Result)  # Modulo → MOD
+            math(A % B, Result)  # Modulo → MOD
         with Rung(Enable):
-            calc(A + B, Result)  # Addition with spaces
+            math(A + B, Result)  # Addition with spaces
         with Rung(Enable):
-            calc(sqrt(A), Result)  # MathFuncExpr → uppercase Click name
+            math(sqrt(A), Result)  # MathFuncExpr → uppercase Click name
         # Hex-mode operators (WORD tags)
         with Rung(Enable):
-            calc(H1[1] << 3, HDest[1])  # Left shift operator → LSH
+            math(H1[1] << 3, HDest[1])  # Left shift operator → LSH
         with Rung(Enable):
-            calc(H1[1] >> 1, HDest[1])  # Right shift operator → RSH
+            math(H1[1] >> 1, HDest[1])  # Right shift operator → RSH
         with Rung(Enable):
-            calc(lsh(H1[1], 4), HDest[1])  # ShiftFuncExpr
+            math(lsh(H1[1], 4), HDest[1])  # ShiftFuncExpr
         with Rung(Enable):
-            calc(rsh(H1[1], 2), HDest[1])  # ShiftFuncExpr
+            math(rsh(H1[1], 2), HDest[1])  # ShiftFuncExpr
         with Rung(Enable):
-            calc(H1[1] & H2[1], HDest[1])  # AND
+            math(H1[1] & H2[1], HDest[1])  # AND
         with Rung(Enable):
-            calc(H1[1] | H2[1], HDest[1])  # OR
+            math(H1[1] | H2[1], HDest[1])  # OR
         with Rung(Enable):
-            calc(H1[1] ^ H2[1], HDest[1])  # XOR
+            math(H1[1] ^ H2[1], HDest[1])  # XOR
 
     mapping = TagMap(
         {
@@ -997,7 +997,7 @@ def test_calc_math_func_names_use_click_convention():
     for func, click_name in func_and_click_name:
         with Program() as logic:
             with Rung(Enable):
-                calc(func(A), Result)
+                math(func(A), Result)
 
         mapping = TagMap(
             {Enable: x[1], A: df[1], Result: df[2]},
@@ -1018,7 +1018,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A + H[1], Dest)
+            math(A + H[1], Dest)
 
     mapping = TagMap(
         {
@@ -1037,7 +1037,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
         {
             "path": "main.rung[0].instruction[0](CalcInstruction).instruction.expression",
             "message": (
-                "CLK_CALC_MODE_MIXED: calc() mixes WORD (hex-family) and non-WORD "
+                "CLK_CALC_MODE_MIXED: math() mixes WORD (hex-family) and non-WORD "
                 "(decimal-family) operands at "
                 "main.rung[0].instruction[0](CalcInstruction).instruction.expression."
             ),
@@ -1700,7 +1700,7 @@ def test_calc_sum_expr_renders_colon_range():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DH.select(1, 5).sum(), Dest[1])
+            math(DH.select(1, 5).sum(), Dest[1])
 
     mapping = TagMap(
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
@@ -1719,7 +1719,7 @@ def test_calc_sum_expr_hex_mode():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DH.select(1, 3).sum(), Dest[1])
+            math(DH.select(1, 3).sum(), Dest[1])
 
     mapping = TagMap(
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
@@ -1738,7 +1738,7 @@ def test_calc_sum_expr_decimal_mode():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DS.select(1, 5).sum(), Result)
+            math(DS.select(1, 5).sum(), Result)
 
     mapping = TagMap(
         {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
@@ -1761,7 +1761,7 @@ def test_calc_range_aggregate_renders_click_name(method, click_name):
 
     with Program() as logic:
         with Rung(Enable):
-            calc(getattr(DS.select(1, 5), method)(), Result)
+            math(getattr(DS.select(1, 5), method)(), Result)
 
     mapping = TagMap(
         {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
@@ -1780,7 +1780,7 @@ def test_calc_range_aggregate_hex_mode():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DH.select(1, 3).max(), Dest[1])
+            math(DH.select(1, 3).max(), Dest[1])
 
     mapping = TagMap(
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
@@ -1799,7 +1799,7 @@ def test_calc_bool_range_sum_renders_plain_sum():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(Flags.select(1, 8).sum(), Count)
+            math(Flags.select(1, 8).sum(), Count)
 
     mapping = TagMap(
         {Enable: x[1], Count: ds[100], **{Flags[i]: c[i] for i in range(1, 9)}},
@@ -1818,8 +1818,8 @@ def test_calc_abs_renders_uppercase():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(abs(Delta), Result)
-            calc(abs(Delta - 5) * 2, Result)
+            math(abs(Delta), Result)
+            math(abs(Delta - 5) * 2, Result)
 
     mapping = TagMap({Enable: x[1], Delta: ds[50], Result: ds[100]}, include_system=False)
     bundle = pyrung_to_ladder(logic, mapping)
@@ -1840,8 +1840,8 @@ def test_calc_randint_renders_rand():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(randint(1, 100), Result)
-            calc(randint(Lo, Hi) * 2, Result)
+            math(randint(1, 100), Result)
+            math(randint(Lo, Hi) * 2, Result)
 
     mapping = TagMap({Enable: x[1], Lo: ds[1], Hi: ds[2], Result: ds[100]}, include_system=False)
     bundle = pyrung_to_ladder(logic, mapping)
@@ -1866,7 +1866,7 @@ def test_calc_randint_of_words_is_hex():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(randint(Lo, Hi), Result)
+            math(randint(Lo, Hi), Result)
 
     mapping = TagMap(
         {Enable: x[1], Lo: dh[105], Hi: dh[106], Result: dh[205]}, include_system=False
@@ -1885,8 +1885,8 @@ def test_calc_grouping_parens_render_spaced():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A * (B + 1), Result)
-            calc(-(A + 2), Result)
+            math(A * (B + 1), Result)
+            math(-(A + 2), Result)
 
     mapping = TagMap({Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]}, include_system=False)
     bundle = pyrung_to_ladder(logic, mapping)
@@ -1906,7 +1906,7 @@ def test_calc_range_aggregate_composes_with_abs():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DS.select(1, 5).max() + abs(Delta), Result)
+            math(DS.select(1, 5).max() + abs(Delta), Result)
 
     mapping = TagMap(
         {
@@ -1934,7 +1934,7 @@ def test_summary_includes_calc_rename():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A + B, Result)
+            math(A + B, Result)
 
     mapping = TagMap(
         {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
@@ -2090,7 +2090,7 @@ def test_summary_str_format():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A + B, Result)
+            math(A + B, Result)
         with Rung(Enable):
             with forloop(3):
                 out(Coil)

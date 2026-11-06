@@ -16,8 +16,8 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
+    math,
     out,
 )
 from pyrung.core.analysis.prove import (
@@ -277,7 +277,7 @@ class TestPointerDomainInference:
 
         with Program(strict=False) as logic:
             with Rung(step):
-                calc(idx + 1, idx)
+                math(idx + 1, idx)
             with Rung():
                 copy(blk[idx], dest)
 

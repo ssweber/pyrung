@@ -342,7 +342,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "copy": "copy",
         "blockcopy": "blockcopy",
         "fill": "fill",
-        "math": "calc",
+        "math": "math",
         "on_delay": "on_delay",
         "off_delay": "off_delay",
         "count_up": "count_up",
@@ -1334,7 +1334,6 @@ def _render_af_token(
     # Map CSV token names → Python DSL names
     _CSV_TO_DSL = {
         "return": "return_early",
-        "math": "calc",
         "break": "break_loop",
         "continue": "continue_loop",
     }

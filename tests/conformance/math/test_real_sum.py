@@ -40,7 +40,7 @@ The cases own DF70..DF100 and DF142..DF150.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill
+from pyrung.core import Rung, copy, fill, math
 from tests.conformance.memory import df
 from tests.conformance.probe_kit import between, finish, once
 
@@ -54,8 +54,8 @@ def _orderings(slot, first, big, fields):
             copy(values[0], df[address])
             copy(values[1], df[address + 1])
             copy(values[2], df[address + 2])
-            calc(df.select(address, address + 2).sum(), df[address + 3])
-            calc(df[address + 3], field)
+            math(df.select(address, address + 2).sum(), df[address + 3])
+            math(df[address + 3], field)
         address += 4
 
 
@@ -82,8 +82,8 @@ def prove_sum_absorbs(slot):
         copy(16777216.0, df[94])
         copy(1.0, df[95])
         copy(1.0, df[96])
-        calc(df.select(94, 96).sum(), df[97])
-        calc(df[97] - 16777216.0, slot.Result1)
+        math(df.select(94, 96).sum(), df[97])
+        math(df[97] - 16777216.0, slot.Result1)
     finish(slot)
 
 
@@ -95,8 +95,8 @@ def prove_math_keeps_the_one(slot):
     with Rung(*once(slot)):
         copy(1.0e8, df[142])
         copy(1.0e30, df[143])
-        calc(df[142] + 1.0 - df[142], slot.Result1)
-        calc(df[143] + 1.0 - df[143], slot.Result2)
+        math(df[142] + 1.0 - df[142], slot.Result1)
+        math(df[143] + 1.0 - df[143], slot.Result2)
     finish(slot)
 
 

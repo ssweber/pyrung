@@ -51,7 +51,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, latch, out, reset
+from pyrung.core import Rung, copy, latch, math, out, reset
 from tests.conformance.drum_rig import (
     Pair,
     Resources,
@@ -218,9 +218,9 @@ def prove_acc_through_jog_completion(slot):
     put(slot, 2, 900, a.time.acc)
     prev = a.time.state
     with Rung(slot.Scratch == 3):
-        calc(a.time.acc / 100, slot.Result2)
+        math(a.time.acc / 100, slot.Result2)
     with Rung(slot.Scratch >= 4, slot.Scratch <= 8, a.time.acc > prev):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     with Rung():
         copy(a.time.acc, prev)
 
@@ -232,7 +232,7 @@ def prove_acc_through_jog_completion(slot):
 
     b = r.pair(1, jog=True, above=b_above)
     with Rung(slot.Scratch == 3):
-        calc(b.time.acc - 900, slot.Result4)
+        math(b.time.acc - 900, slot.Result4)
     with Rung(slot.Scratch == 4):
         copy(b.time.acc, slot.ErrorCode)
     done(slot)

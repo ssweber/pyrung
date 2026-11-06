@@ -11,8 +11,8 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
+    math,
     pack_text,
     search,
 )
@@ -126,7 +126,7 @@ def test_integer_mdn_truncates_toward_zero(runner_factory, values, expected):
     Out = Int("Out")
     with Program() as logic:
         with Rung(Enable):
-            calc(DS.select(1, len(values)).median(), Out)
+            math(DS.select(1, len(values)).median(), Out)
     runner = runner_factory(logic)
     runner.patch({"Enable": True, **{f"DS{i}": v for i, v in enumerate(values, start=1)}})
     runner.step()

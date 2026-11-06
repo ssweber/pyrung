@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.conformance import Case, CaseResult, record_confirmations
-from pyrung.core import Rung, calc, copy, latch, on_delay, out
+from pyrung.core import Rung, copy, latch, math, on_delay, out
 from tests.conformance.memory import ClickTimer, td
 
 
@@ -48,7 +48,7 @@ def class_of(slot: Any, value: Any, readings: Sequence[Any], into: Any) -> None:
 def flag_bit(slot: Any, flag: Any, into: Any, bit: int = 1) -> None:
     """Add *bit* to ``into`` when *flag* is on: the rung right after the op it asks about."""
     with Rung(*once(slot), flag):
-        calc(into + bit, into)
+        math(into + bit, into)
 
 
 #: Every range :func:`between` gave, each told from an asserted range by identity.
@@ -150,10 +150,10 @@ class GuardedProbes:
         with Rung(now):
             op()
         with Rung(now, flag):
-            calc(field + bit, field)
+            math(field + bit, field)
         for other, other_bit in also:
             with Rung(now, other):
-                calc(field + other_bit, field)
+                math(field + other_bit, field)
 
 
 def ms_clock(slot: Any, n: int, preset: int = 5000) -> Any:

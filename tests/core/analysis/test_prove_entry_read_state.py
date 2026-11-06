@@ -29,11 +29,11 @@ from pyrung.core import (
     Program,
     Rung,
     branch,
-    calc,
     call,
     copy,
     fall,
     forloop,
+    math,
     out,
     return_early,
     rise,
@@ -282,7 +282,7 @@ def _calc_dest_above_writer():
         with Rung(D == 1):
             out(Y3)
         with Rung():
-            calc(E * 1, D)
+            math(E * 1, D)
         with Rung(Y1):
             copy(1, E)
         with Rung(~Y1):

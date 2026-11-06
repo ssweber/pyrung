@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Real, Rung, calc, copy
+from pyrung.core import Bool, Int, Program, Real, Rung, copy, math
 from pyrung.core.validation.report import validate
 
 CODE = "CMP_EQ_ON_COMPUTED_REAL"
@@ -26,7 +26,7 @@ def test_calc_written_real_eq_is_flagged():
 
     def build(en, out):
         with Rung(en):
-            calc(raw * 0.1, scaled)
+            math(raw * 0.1, scaled)
         with Rung(scaled == 2.5):
             copy(1, out)
 
@@ -43,7 +43,7 @@ def test_ne_and_reversed_operands_flagged():
 
     def build(en, out):
         with Rung(en):
-            calc(raw * 0.1, scaled)
+            math(raw * 0.1, scaled)
         with Rung(scaled != 2.5):
             copy(1, out)
         with Rung(Real("Target", external=True) == scaled):
@@ -59,7 +59,7 @@ def test_copy_of_calc_real_flagged():
 
     def build(en, out):
         with Rung(en):
-            calc(raw / 3, scaled)
+            math(raw / 3, scaled)
             copy(scaled, held)
         with Rung(held == 2.5):
             copy(1, out)
@@ -109,7 +109,7 @@ def test_compare_with_zero_exempt():
 
     def build(en, out):
         with Rung(en):
-            calc(raw * 0.1, scaled)
+            math(raw * 0.1, scaled)
         with Rung(scaled == 0):
             copy(1, out)
         with Rung(scaled != 0):
@@ -124,7 +124,7 @@ def test_ordered_compares_exempt():
 
     def build(en, out):
         with Rung(en):
-            calc(raw * 0.1, scaled)
+            math(raw * 0.1, scaled)
         with Rung(scaled >= 2.5, scaled < 9.0):
             copy(1, out)
 
@@ -137,7 +137,7 @@ def test_integer_calc_into_real_exempt():
 
     def build(en, out):
         with Rung(en):
-            calc(a + 1, total)
+            math(a + 1, total)
         with Rung(total == 5):
             copy(1, out)
 
@@ -150,7 +150,7 @@ def test_integer_tag_eq_exempt():
 
     def build(en, out):
         with Rung(en):
-            calc(a + 1, n)
+            math(a + 1, n)
         with Rung(n == 5):
             copy(1, out)
 
@@ -177,7 +177,7 @@ def test_zero_on_left_exempt():
     # Python reflects `0 == tag` to `tag == 0`, so build the compare both ways.
     def build_zero(en, out):
         with Rung(en):
-            calc(raw * 0.1, scaled)
+            math(raw * 0.1, scaled)
         with Rung(0 == scaled):
             copy(1, out)
         with Rung(0.0 != scaled):
@@ -214,4 +214,4 @@ def test_calc_into_pointer_destination_raises_type_error():
         with pytest.raises(TypeError, match="not a pointer address"):
             with Program(strict=False):
                 with Rung(Bool("En", external=True)):
-                    calc(raw * 0.5, dest)
+                    math(raw * 0.5, dest)

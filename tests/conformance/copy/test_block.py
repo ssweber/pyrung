@@ -56,10 +56,10 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
     blockcopy,
-    calc,
     copy,
     fill,
     latch,
+    math,
     pack_bits,
     pack_words,
     reset,
@@ -238,7 +238,7 @@ def prove_pack_bits_real(slot):
     with Rung(*_go(slot)):
         copy(ds[4051], slot.Result1)
         copy(ds[4052], slot.Result2)
-        calc(df[201] * 10, slot.Result3)
+        math(df[201] * 10, slot.Result3)
     _fire(slot)
 
 
@@ -291,10 +291,10 @@ def prove_pack_words(slot):
         pack_words(ds.select(4075, 4076), dd[223])
         pack_words(ds.select(4077, 4078), df[202])
     with Rung(*_go(slot)):
-        calc(dd[222] - 131072, slot.Result1)
-        calc(dd[221] - 131072, slot.Result2)
-        calc(dd[223] + 65537, slot.Result3)
-        calc(df[202] * 100, slot.Result4)
+        math(dd[222] - 131072, slot.Result1)
+        math(dd[221] - 131072, slot.Result2)
+        math(dd[223] + 65537, slot.Result3)
+        math(df[202] * 100, slot.Result4)
     _fire(slot)
 
 

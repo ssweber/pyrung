@@ -22,10 +22,10 @@ from pyrung import (
     Rung,
     TagType,
     Timer,
-    calc,
     call,
     copy,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -348,8 +348,8 @@ def test_crossing_dnf_verifies_atomic_branch_then_uses_sibling(monkeypatch):
     Target = Bool("CrossingTarget")
     with Program(strict=False) as logic:
         with rung():
-            calc(C + D, Result)
-            calc(A + B, Other)
+            math(C + D, Result)
+            math(A + B, Other)
         with rung(Result > 1):
             out(Target)
 
@@ -386,7 +386,7 @@ def test_actual_calc_singleton_proposal_uses_scalar_verified_pulse():
     Target = Bool("SingletonTarget")
     with Program(strict=False) as logic:
         with rung():
-            calc(A + B, Result)
+            math(A + B, Result)
         with rung(Result > 1):
             out(Target)
 
@@ -1352,11 +1352,11 @@ def _step_sequencer_program():
         with Rung(CurStep == 3):
             out(Output)
         with Rung():
-            calc(CurStep % 2, ValIsOdd)
+            math(CurStep % 2, ValIsOdd)
         with Rung(ValIsOdd != 1):
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
         with Rung(Trans == 1):
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
             copy(0, Trans)
 
     return prog, Output
@@ -1406,11 +1406,11 @@ def _deep_call_program():
         with rung(CurStep == 3, Confirm):
             out(Output)
         with rung():
-            calc(CurStep % 2, ValIsOdd)
+            math(CurStep % 2, ValIsOdd)
         with rung(ValIsOdd != 1):
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
         with rung(Trans == 1):
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
             copy(0, Trans)
 
     with Program() as prog:
@@ -1785,7 +1785,7 @@ def test_detect_opaque_pipeline():
     @subroutine("ApplyState")
     def apply_state():
         with rung():
-            calc(CmdReg + 10, Pointer)
+            math(CmdReg + 10, Pointer)
         with rung():
             copy(ds[Pointer], Scratch)
         with rung(Scratch != 0):
@@ -1819,7 +1819,7 @@ def test_detect_opaque_pipeline():
 
 
 def test_single_calc_source_multi_tag_constant_base():
-    """_single_calc_source hops through calc(CmdReg + Base, Pointer) when Base is constant."""
+    """_single_calc_source hops through math(CmdReg + Base, Pointer) when Base is constant."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.static_expressions import (
@@ -1835,7 +1835,7 @@ def test_single_calc_source_multi_tag_constant_base():
     @subroutine("ApplyMode")
     def apply_mode():
         with rung():
-            calc(CmdReg + Base, Pointer)
+            math(CmdReg + Base, Pointer)
 
     with Program() as prog:
         with rung(Bool("Go", external=True)):
@@ -1846,14 +1846,14 @@ def test_single_calc_source_multi_tag_constant_base():
     pdg = build_program_graph(prog)
     result = _single_calc_source("Pointer", pdg, prog)
     assert result is not None, (
-        "_single_calc_source should hop through calc(CmdReg + Base) when Base has no writers"
+        "_single_calc_source should hop through math(CmdReg + Base) when Base has no writers"
     )
     expr, src_tag = result
     assert src_tag == "CmdReg", f"Should identify CmdReg as the mutable source, got {src_tag}"
 
 
 def test_single_calc_source_rejects_two_mutable_tags():
-    """_single_calc_source rejects calc(A + B, Pointer) when both A and B are mutable."""
+    """_single_calc_source rejects math(A + B, Pointer) when both A and B are mutable."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.static_expressions import (
         single_calc_source as _single_calc_source,
@@ -1868,7 +1868,7 @@ def test_single_calc_source_rejects_two_mutable_tags():
             copy(1, A)
             copy(5, B)
         with rung():
-            calc(A + B, Pointer)
+            math(A + B, Pointer)
 
     pdg = build_program_graph(prog)
     result = _single_calc_source("Pointer", pdg, prog)
@@ -1897,7 +1897,7 @@ def test_invert_indirect_multi_tag_pointer():
     @subroutine("ApplyMode")
     def apply_mode():
         with rung():
-            calc(CmdReg + Base, Pointer)
+            math(CmdReg + Base, Pointer)
         with rung():
             copy(ds[Pointer], Scratch)
 
@@ -1923,7 +1923,7 @@ def test_invert_indirect_multi_tag_pointer():
 
     result = invert_indirect_copy(ro, "Scratch", 3, snapshot, pdg, prog)
     assert result is not None, (
-        "_invert_indirect should invert through calc(CmdReg + Base) to find CmdReg values"
+        "_invert_indirect should invert through math(CmdReg + Base) to find CmdReg values"
     )
     idx_tag, vals = result
     assert idx_tag == "CmdReg", f"Should resolve to CmdReg, got {idx_tag}"
@@ -1946,7 +1946,7 @@ def test_route_table_model_hops_constant_base_calc_without_live_snapshot():
     @subroutine("ApplyMode")
     def apply_mode():
         with rung():
-            calc(CmdReg + Base, Pointer)
+            math(CmdReg + Base, Pointer)
         with rung():
             copy(ds[Pointer], Scratch)
 
@@ -1993,7 +1993,7 @@ def test_expand_routes_punts_on_aggregate_writer():
 
     with Program() as prog:
         with rung(Bool("Go", external=True)):
-            calc(ds.select(1, 5).sum(), Total)
+            math(ds.select(1, 5).sum(), Total)
 
     pdg = build_program_graph(prog)
     routes = expand_routes("Total", pdg, prog, frozenset({"Go"}), frozenset())
@@ -2032,7 +2032,7 @@ def test_learned_action_probe_with_trace_context():
     @subroutine("ApplyMode")
     def apply_mode():
         with rung():
-            calc(CmdReg + Base, Pointer)
+            math(CmdReg + Base, Pointer)
         with rung():
             copy(ds[Pointer], Scratch)
         with rung(Scratch != 0):
@@ -2087,7 +2087,7 @@ def test_compass_learns_opaque_state_machine_actions():
     @subroutine("ApplyState")
     def apply_state():
         with rung():
-            calc(CmdReg + 10, Pointer)
+            math(CmdReg + 10, Pointer)
         with rung():
             copy(ds[Pointer], Scratch)
         with rung(Scratch != 0):
@@ -2217,7 +2217,7 @@ def test_expand_routes_indirect_jump_table_pipeline():
         with rung(StateRequested != 0):
             out(StateEnabled)
         with rung(StateEnabled):
-            calc(StateRequested + 100, JumpIdx)
+            math(StateRequested + 100, JumpIdx)
             copy(JumpTable[JumpIdx], StateCurrent)
             copy(0, StateRequested)
         with rung(StateCurrent == 6):
@@ -2279,7 +2279,7 @@ def test_skiff_scan_suppresses_non_participants():
         with rung(StateRequested != 0):
             out(StateEnabled)
         with rung(StateEnabled):
-            calc(StateRequested + 100, JumpIdx)
+            math(StateRequested + 100, JumpIdx)
             copy(JumpTable[JumpIdx], StateCurrent)
             copy(0, StateRequested)
 

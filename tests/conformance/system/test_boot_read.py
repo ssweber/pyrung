@@ -74,7 +74,6 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
-    calc,
     call,
     copy,
     count_up,
@@ -83,6 +82,7 @@ from pyrung.core import (
     flasher,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     shift,
@@ -121,7 +121,7 @@ def _noted(mask, *pairs):
         copy(0, mask)
     for condition, bit in pairs:
         with Rung(FIRST, *condition):
-            calc(mask + bit, mask)
+            math(mask + bit, mask)
 
 
 #: A sentinel, in each bank a CLICK has one.
@@ -221,7 +221,7 @@ def prove_first_scan_edges(slot):
     with Rung(FIRST):
         copy(system.sys.scan_counter, dd[72])
     with Rung(FIRST):
-        calc(dd[73] + 1, dd[73])
+        math(dd[73] + 1, dd[73])
     count_scans(slot, 10)
     # Scratch holds at 11; Fired comes up on this scan, so this reads once.  The count
     # starts over, so the next run counts the boot between them and no other.
@@ -312,7 +312,7 @@ def prove_count_forms(slot):
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(123), 1000)
     with Rung(slot.Cmd != 0, slot.Scratch <= 3, t[123]):
-        calc(slot.Scratch + 1, slot.Scratch)
+        math(slot.Scratch + 1, slot.Scratch)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(65537, dd[61])
         copy(65536, dd[62])
@@ -320,16 +320,16 @@ def prove_count_forms(slot):
         copy(3, ctd[212])
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(dd[61]):
-            calc(dd[63] + 1, dd[63])
+            math(dd[63] + 1, dd[63])
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(dd[62]):
-            calc(dd[64] + 1, dd[64])
+            math(dd[64] + 1, dd[64])
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(td[125]):
-            calc(slot.Result3 + 1, slot.Result3)
+            math(slot.Result3 + 1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(ctd[212]):
-            calc(slot.Result4 + 1, slot.Result4)
+            math(slot.Result4 + 1, slot.Result4)
     for value, readings, into in (
         (dd[63], (1, 65537), slot.Result1),
         (dd[64], (0, 65536), slot.Result2),
@@ -374,14 +374,14 @@ def prove_math_flags_over_a_scan(slot):
         copy(1, slot.Result2)
     count_scans(slot, _WAIT + 4)
     with Rung(slot.Cmd != 0, slot.Scratch == _WAIT):
-        calc(1 / slot.Result3, slot.Result4)
+        math(1 / slot.Result3, slot.Result4)
     with Rung(slot.Cmd != 0, slot.Scratch == _WAIT, SC40):
         copy(10, slot.ErrorCode)
     with Rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2):
         copy(-1.0, df[204])
-        calc(sqrt(df[204]), df[204])
+        math(sqrt(df[204]), df[204])
     with Rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2, SC46):
-        calc(slot.ErrorCode + 1, slot.ErrorCode)
+        math(slot.ErrorCode + 1, slot.ErrorCode)
     done(slot, _WAIT + 4)
 
 
@@ -421,10 +421,10 @@ def prove_date_and_time_apply(slot):
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(dd[74], rtc.new_year4)
     with Rung(slot.Cmd != 0, slot.Scratch == 5):
-        calc((dd[75] + 1) % 24, rtc.new_hour)
+        math((dd[75] + 1) % 24, rtc.new_hour)
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
-        calc((dd[75] + 1) % 24, dd[76])
+        math((dd[75] + 1) % 24, dd[76])
     with Rung(slot.Cmd != 0, slot.Scratch == 7, rtc.hour == dd[76]):
         copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch == 7):
@@ -457,9 +457,9 @@ def prove_date_and_time_apply(slot):
     ):
         out(rtc.apply_time)
     with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_date_error):
-        calc(slot.Result3 + 10, slot.Result3)
+        math(slot.Result3 + 10, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_time_error):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     # Two scans after the bad apply, as a good one is read, and a scan before the set-back,
     # so a CLICK that applies at once cannot show the restored clock here.
     with Rung(

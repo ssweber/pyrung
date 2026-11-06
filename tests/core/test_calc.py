@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, calc, out, system
+from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, math, out, system
 
 
 class TestCalcInstruction:
@@ -16,7 +16,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + B, Result)
+                math(A + B, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 100, "B": 200})
@@ -31,7 +31,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + 1, Result)
+                math(A + 1, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 32767})
@@ -46,7 +46,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A / B, Result)
+                math(A / B, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 100, "B": 0})
@@ -69,13 +69,13 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Num / 65536, ByConstant)
+                math(Num / 65536, ByConstant)
             with Rung(system.fault.division_error):
                 out(Flagged)
             with Rung(Enable):
-                calc(Num / Den, ByTag)
-                calc(Num / 65536, IntoDint)
-                calc(Den * 0 + 65543, Low)
+                math(Num / Den, ByTag)
+                math(Num / 65536, IntoDint)
+                math(Den * 0 + 65543, Low)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "Num": -2147483648, "Den": 65536, "ByConstant": 99})
@@ -96,7 +96,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A * B, Result)
+                math(A * B, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 2.5, "B": 4.0})
@@ -112,7 +112,7 @@ class TestCalcInstruction:
         with Program() as logic:
             with Rung(Enable):
                 # 3.0E+38 ** 10 overflows a float: +Inf, as 3.0E+38 * 3.0E+38 is.
-                calc(Source**10, Result)
+                math(Source**10, Result)
 
         runner = runner_cls(logic)
         runner.patch({"Enable": True, "Source": 3.0e38, "Result": 123.0})
@@ -130,7 +130,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc((A + B) * C, Result)
+                math((A + B) * C, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 10, "B": 20, "C": 3})
@@ -144,7 +144,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + 1, Result)
+                math(A + 1, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": False, "A": 10, "Result": 0})
@@ -235,7 +235,7 @@ class TestCalcRangeAggregates:
         DS = Block("DS", TagType.INT, 1, 6)
         with Program() as logic:
             with Rung(Enable):
-                calc(expression_for(DS), dest)
+                math(expression_for(DS), dest)
         runner = runner_factory(logic)
         runner.patch({"Enable": True, **{f"DS{i}": v for i, v in enumerate(values, start=1)}})
         runner.step()
@@ -292,7 +292,7 @@ class TestCalcRangeAggregates:
         Out = Word("Out")
         with Program() as logic:
             with Rung(Enable):
-                calc(DH.select(1, 3).max(), Out)
+                math(DH.select(1, 3).max(), Out)
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "DH1": 0x0001, "DH2": 0xFFFF, "DH3": 0x8000})
         runner.step()
@@ -306,8 +306,8 @@ class TestCalcRangeAggregates:
         Count = Int("Count")
         with Program() as logic:
             with Rung(Enable):
-                calc(C.select(1, 5).sum(), Count)
-                calc(C.select(1, 1).sum(), Int("One"))
+                math(C.select(1, 5).sum(), Count)
+                math(C.select(1, 1).sum(), Int("One"))
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "C1": True, "C3": True, "C4": True})
         runner.step()

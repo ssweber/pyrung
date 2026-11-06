@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import Bool, Dint, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
+from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, count_up, math, on_delay, out
 from pyrung.core import Counter
 from pyrung.core.analysis.pilot.coast import (
     AVOID,
@@ -113,7 +113,7 @@ def _counter_program():
     Count = Dint("Count")
     with Program() as prog:
         with Rung():
-            calc(Count + 1, Count)
+            math(Count + 1, Count)
         with Rung(Enable):
             out(Bool("Enabled"))
         with Rung(Count >= 1000):
@@ -127,7 +127,7 @@ def _ramp_program():
     Temp = Int("Temp")
     with Program() as prog:
         with Rung(Enable):
-            calc(Temp + 1, Temp)
+            math(Temp + 1, Temp)
     return prog
 
 
@@ -235,7 +235,7 @@ def _runaway_channel_program():
     Chan = Int("Chan")
     with Program() as prog:
         with Rung(Enable):
-            calc(Chan + 1, Chan)
+            math(Chan + 1, Chan)
     return prog
 
 
@@ -521,7 +521,7 @@ class TestCrossingExactness:
         assert plc.state.tags["Count"] == n
 
     def test_self_feeding_calc_lands_on_stepped_scan(self):
-        """``calc(f(X), X)`` moves every scan with no accumulator behind it.
+        """``math(f(X), X)`` moves every scan with no accumulator behind it.
         The coast must not treat ``X`` as frozen and skip its sequence."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
@@ -531,7 +531,7 @@ class TestCrossingExactness:
             with Rung(Enable):
                 on_delay(Tmr, 1000, "ms")
             with Rung():
-                calc((X * 3) % 7, X)
+                math((X * 3) % 7, X)
             with Rung(Tmr.Done, X == 5):
                 out(Hit)
 
@@ -1332,7 +1332,7 @@ class TestSettleLandingFolds:
             with Rung():
                 copy(5, Chan)
             with Rung():
-                calc(Count + 1, Count)
+                math(Count + 1, Count)
             with Rung(Enable, ~Reset):
                 out(Bool("SettleAdvanceEnabled"))
             with Rung(Count >= 1000):

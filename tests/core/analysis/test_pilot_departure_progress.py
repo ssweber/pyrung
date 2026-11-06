@@ -11,8 +11,8 @@ from pyrung import (
     Int,
     Program,
     Timer,
-    calc,
     copy,
+    math,
     on_delay,
     rise,
     rung,
@@ -53,7 +53,7 @@ def _knock_three_times_program():
 
     with Program() as logic:
         with rung(channel == at_door, rise(knock)):
-            calc(count + 1, count)
+            math(count + 1, count)
             copy(away, channel)
 
         with rung(channel == away):

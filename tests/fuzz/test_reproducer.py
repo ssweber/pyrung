@@ -48,5 +48,5 @@ def test_instruction_code_preserves_calc_tag_tag():
                 args={"source1": left, "source2": right, "op": "bitxor", "dest": dest},
             )
         )
-        == "calc(Left ^ Right, Dest)"
+        == "math(Left ^ Right, Dest)"
     )

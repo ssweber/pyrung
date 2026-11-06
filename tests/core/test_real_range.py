@@ -9,7 +9,7 @@ past the range is refused; a patch or force may be +/-Inf or NaN.  The
 
 from __future__ import annotations
 
-import math
+import math as pymath
 
 import pytest
 
@@ -24,12 +24,12 @@ from pyrung.core import (
     Rung,
     TagType,
     Word,
-    calc,
     copy,
     fill,
     forloop,
     lro,
     lsh,
+    math,
     out,
     randint,
     rro,
@@ -43,7 +43,7 @@ from pyrung.core.storage import REAL_MAX, StoreTransform, store_value
 SC43 = system.fault.out_of_range
 SC40 = system.fault.division_error
 SC46 = system.fault.math_operation_error
-INF = math.inf
+INF = pymath.inf
 
 
 def test_real_max_is_clicks_documented_limit():
@@ -68,7 +68,7 @@ def test_real_store_past_the_range_is_inf(value, stored):
 
 
 def test_real_store_keeps_nan():
-    assert math.isnan(store_value(math.nan, StoreTransform("real")))
+    assert pymath.isnan(store_value(pymath.nan, StoreTransform("real")))
 
 
 @pytest.mark.parametrize("sign", [1, -1])
@@ -77,7 +77,7 @@ def test_calc_overflow_stores_inf_and_sets_sc43(runner_factory, sign):
     dest = Real("Dest")
     with Program() as program:
         with Rung():
-            calc(big * 10, dest)
+            math(big * 10, dest)
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
@@ -90,7 +90,7 @@ def test_calc_int_past_float_range_is_inf(runner_factory):
     dest = Real("Dest")
     with Program() as program:
         with Rung():
-            calc(d * d * d * d * d * d * d * d * d * d, dest)  # about 2**310
+            math(d * d * d * d * d * d * d * d * d * d, dest)  # about 2**310
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
@@ -103,7 +103,7 @@ def test_calc_in_range_keeps_64_bit_precision(runner_factory):
     dest = Real("Dest")
     with Program() as program:
         with Rung():
-            calc(big + 1, dest)
+            math(big + 1, dest)
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
@@ -117,7 +117,7 @@ def test_division_by_zero_is_still_zero_and_sc40(runner_factory):
     dest = Real("Dest", default=5.5)
     with Program() as program:
         with Rung():
-            calc(one / zero, dest)
+            math(one / zero, dest)
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
@@ -186,16 +186,16 @@ def test_out_of_range_literals_are_refused():
         with pytest.raises(ValueError, match="fill"):
             fill(float("inf"), block.select(1, 3))
         with pytest.raises(ValueError, match="calc"):
-            calc(r * 1e39, r)
+            math(r * 1e39, r)
         # An Int destination clamps a large literal as before.
         copy(1e39, Int("I"))
 
 
 def _same(stored, value):
-    return stored == value or (math.isnan(value) and math.isnan(stored))
+    return stored == value or (pymath.isnan(value) and pymath.isnan(stored))
 
 
-@pytest.mark.parametrize("value", [INF, -INF, math.nan])
+@pytest.mark.parametrize("value", [INF, -INF, pymath.nan])
 def test_patch_and_force_accept_inf_and_nan(runner_factory, value):
     r = Real("R")
     dest = Real("Dest")
@@ -220,20 +220,20 @@ def test_an_inf_operand_follows_ieee(runner_factory):
     flagged = Bool("Flagged")
     with Program() as program:
         with Rung():
-            calc(big * 10, inf)
-            calc(inf / 2, half)
+            math(big * 10, inf)
+            math(inf / 2, half)
         with Rung(SC43):
             out(flagged)
         with Rung():
-            calc(inf - inf, nan)
-            calc(sin(inf), sine)
+            math(inf - inf, nan)
+            math(sin(inf), sine)
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
     assert tags["Inf"] == INF
     assert tags["Half"] == INF
-    assert math.isnan(tags["NaN"])
-    assert math.isnan(tags["Sine"])
+    assert pymath.isnan(tags["NaN"])
+    assert pymath.isnan(tags["Sine"])
     assert tags["Flagged"] is True
     assert tags[SC43.name] is False
     assert tags[SC40.name] is False
@@ -249,7 +249,7 @@ def test_a_power_past_the_range_is_inf(runner_factory, base, exponent, stored):
     dest = Real("Dest")
     with Program() as program:
         with Rung():
-            calc(b**exponent, dest)
+            math(b**exponent, dest)
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
@@ -273,13 +273,13 @@ def test_a_power_past_the_range_is_inf(runner_factory, base, exponent, stored):
         lambda r: rro(1, r),
     ],
 )
-@pytest.mark.parametrize("value", [math.nan, INF, -INF])
+@pytest.mark.parametrize("value", [pymath.nan, INF, -INF])
 def test_a_non_finite_bitwise_operand_is_zero_and_sc43(runner_factory, make, value):
     r = Real("R")
     dest = Int("Dest", default=7)
     with Program() as program:
         with Rung():
-            calc(make(r), dest)
+            math(make(r), dest)
     plc = runner_factory(program)
     plc.patch({r: value})
     plc.step()
@@ -289,7 +289,7 @@ def test_a_non_finite_bitwise_operand_is_zero_and_sc43(runner_factory, make, val
     assert tags[SC40.name] is False
 
 
-@pytest.mark.parametrize("value", [3.0, math.nan, INF, -INF])
+@pytest.mark.parametrize("value", [3.0, pymath.nan, INF, -INF])
 @pytest.mark.parametrize("which", ["lo", "hi"])
 def test_a_real_randint_bound_reads_zero_with_no_flag(runner_factory, value, which):
     """As a CLICK reads RAND of a DF: 0, with no flag, whatever the DF holds."""
@@ -299,7 +299,7 @@ def test_a_real_randint_bound_reads_zero_with_no_flag(runner_factory, value, whi
     expr = randint(r, 9) if which == "lo" else randint(0, r)
     with Program() as program:
         with Rung():
-            calc(expr + 5, dest)
+            math(expr + 5, dest)
             copy(1, after)
     plc = runner_factory(program)
     plc.patch({r: value})
@@ -312,7 +312,7 @@ def test_a_real_randint_bound_reads_zero_with_no_flag(runner_factory, value, whi
             assert tags[flag.name] is False
 
 
-@pytest.mark.parametrize("value", [math.nan, INF, -INF])
+@pytest.mark.parametrize("value", [pymath.nan, INF, -INF])
 def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, value):
     """pyrung's choice (a CLICK For takes an integer count): a REAL count
     holding Inf or NaN runs no iteration, sets SC43, and the scan runs on."""
@@ -322,7 +322,7 @@ def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, v
     with Program() as program:
         with Rung():
             with forloop(r):
-                calc(hits + 1, hits)
+                math(hits + 1, hits)
         with Rung():
             out(after)
     plc = runner_factory(program)
@@ -342,7 +342,7 @@ def test_only_a_real_forloop_count_declares_sc43():
     from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
 
     assert for_loop_iterations(INF) == 0
-    assert for_loop_iterations(math.nan) == 0
+    assert for_loop_iterations(pymath.nan) == 0
     assert for_loop_iterations(3.9) == 3
     assert ForLoopInstruction(Real("R"), Int("I"))._fault_writes == ("fault.out_of_range",)
     assert ForLoopInstruction(Int("N"), Int("I"))._fault_writes == ()
@@ -354,12 +354,12 @@ def test_a_nan_result_sets_no_flag(runner_factory):
     nan = Real("NaN")
     with Program() as program:
         with Rung():
-            calc(inf - inf, nan)
+            math(inf - inf, nan)
     plc = runner_factory(program)
     plc.patch({inf: INF})
     plc.step()
     tags = plc.current_state.tags
-    assert math.isnan(tags["NaN"])
+    assert pymath.isnan(tags["NaN"])
     assert tags[SC43.name] is False
 
 
@@ -369,7 +369,7 @@ def test_division_by_zero_of_inf_is_still_zero_and_sc40(runner_factory):
     dest = Real("Dest", default=5.5)
     with Program() as program:
         with Rung():
-            calc(inf / zero, dest)
+            math(inf / zero, dest)
     plc = runner_factory(program)
     plc.patch({inf: INF})
     plc.step()
@@ -384,7 +384,7 @@ def test_sqrt_of_minus_inf_is_a_domain_error(runner_factory):
     dest = Real("Dest", default=5.0)
     with Program() as program:
         with Rung():
-            calc(sqrt(neg), dest)
+            math(sqrt(neg), dest)
     plc = runner_factory(program)
     plc.patch({neg: -INF})
     plc.step()
@@ -400,9 +400,9 @@ def test_calc_inf_into_an_integer_is_zero_and_sc43(runner_factory):
     w = Word("W", default=7)
     with Program() as program:
         with Rung():
-            calc(inf * 1, i)
-            calc(inf * 1, d)
-            calc(inf * 1, w)
+            math(inf * 1, i)
+            math(inf * 1, d)
+            math(inf * 1, w)
     plc = runner_factory(program)
     plc.patch({inf: INF})
     plc.step()
@@ -427,7 +427,7 @@ def test_copy_inf_into_an_integer_clamps(runner_factory):
             copy(pos, w)
             copy(nan, n)
     plc = runner_factory(program)
-    plc.patch({pos: INF, neg: -INF, nan: math.nan})
+    plc.patch({pos: INF, neg: -INF, nan: pymath.nan})
     plc.step()
     tags = plc.current_state.tags
     assert tags["I"] == 32767
@@ -450,7 +450,7 @@ def test_inf_and_nan_compare_as_ieee(runner_factory):
     plc.step()
     assert plc.current_state.tags["Above"] is True
     assert plc.current_state.tags["Equal"] is True
-    plc.patch({r: math.nan})
+    plc.patch({r: pymath.nan})
     plc.step()
     assert plc.current_state.tags["Above"] is False
     assert plc.current_state.tags["Equal"] is False
@@ -470,7 +470,7 @@ def test_a_real_that_overflows_in_the_loop_matches_stepping(start):
             with Rung():
                 on_delay(tmr, 100_000, "ms")
             with Rung():
-                calc(r * 2, r)
+                math(r * 2, r)
         return program, r
 
     states = []
@@ -496,19 +496,19 @@ def _prover_programs():
     zeroed = Bool("Zeroed")
     with Program() as overflow:
         with Rung(go):
-            calc((x + 3.0e38) * 10, x)
+            math((x + 3.0e38) * 10, x)
         with Rung(x > 3.0e38):
             out(above)
     with Program() as nan:
         with Rung(go):
-            calc((x + 3.0e38) * 10, x)
-            calc(x - x, n)
+            math((x + 3.0e38) * 10, x)
+            math(x - x, n)
         with Rung(n != n):
             out(unequal)
     with Program() as into_int:
         with Rung(go):
-            calc((x + 3.0e38) * 10, x)
-            calc(x * 1, i)
+            math((x + 3.0e38) * 10, x)
+            math(x * 1, i)
         with Rung(go, i == 0, x > 1.0):
             out(zeroed)
     return [(overflow, above), (nan, unequal), (into_int, zeroed)]

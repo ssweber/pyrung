@@ -8,7 +8,7 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import Phase, given, note, settings
 
-from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, calc, copy
+from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, copy, math
 
 from .conftest import DT, MAX_EXAMPLES, PARITY_SCANS
 from .minimize import minimize
@@ -115,7 +115,7 @@ def test_indirect_copy_tag_materialization():
 
     with Program(strict=False) as logic:
         with Rung(In0):
-            calc(W0 + 1, W0)
+            math(W0 + 1, W0)
         with Rung(In0):
             copy(W0, W0)
         with Rung(In0):

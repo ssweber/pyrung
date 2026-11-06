@@ -173,7 +173,7 @@ def _evaluate_fact(
                 ClickFinding(
                     code=CLK_EXPR_ONLY_IN_CALC,
                     severity=_route_severity(CLK_EXPR_ONLY_IN_CALC, mode),
-                    message=f"Expression used outside calc instruction at {location_str}.",
+                    message=f"Expression used outside a math() instruction at {location_str}.",
                     location=location_str,
                     suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_CALC, fact, tag_map),
                 )
@@ -593,7 +593,7 @@ def _walk_mode_violations(
 _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 # SUM reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, SD in decimal mode and DH, XD, YD in hex
 # mode.  Only these two banks are out in both.  A bank in the wrong mode needs no check here:
-# TagMap ties a tag's type to its bank, and a mixed calc() gets CLK_CALC_MODE_MIXED.
+# TagMap ties a tag's type to its bank, and a mixed math() gets CLK_CALC_MODE_MIXED.
 _NO_SUM_BANKS = frozenset({"CT", "TXT"})
 # Banks whose CLICK address space has slot gaps (X001..X016, X101..X116, ...).
 _SLOTTED_BANKS = frozenset({"X", "Y"})
@@ -621,7 +621,7 @@ def _evaluate_range_aggregates(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """Check each calc() range aggregate against CLICK's range rules."""
+    """Check each math() range aggregate against CLICK's range rules."""
     if type(instruction).__name__ != "CalcInstruction":
         return []
     from pyrung.click.ladder.translator import _RANGE_AGGREGATE_CLICK_NAME
@@ -657,7 +657,7 @@ def _evaluate_range_aggregates(
                 CLK_CALC_RANGE_MIXED_BANKS,
                 f"{click_name} range spans more than one address block ({', '.join(banks)})",
                 f"Map every member of the {click_name} range into one bank, or split the "
-                "calc() into one aggregate per bank.",
+                "math() into one aggregate per bank.",
             )
             continue
         bank = banks[0]
@@ -700,7 +700,7 @@ def _evaluate_range_aggregates(
                     f"MDN range is {size} bytes; CLICK allows at most {_MDN_MAX_BYTES} "
                     "(512 DS/DH or 256 DD/DF registers)",
                     "Shrink the median range, or take the median of smaller ranges in "
-                    "separate calc() steps.",
+                    "separate math() steps.",
                 )
     return findings
 
@@ -993,13 +993,13 @@ def _evaluate_instruction_portability(
                     code=CLK_CALC_MODE_MIXED,
                     severity=_route_severity(CLK_CALC_MODE_MIXED, mode),
                     message=(
-                        "calc() mixes WORD (hex-family) and non-WORD (decimal-family) operands "
+                        "math() mixes WORD (hex-family) and non-WORD (decimal-family) operands "
                         f"at {location_text}."
                     ),
                     location=location_text,
                     suggestion=(
-                        "Split mixed calc math into separate decimal and WORD-only calc() steps, "
-                        "or convert through an intermediate tag so each calc() stays one family."
+                        "Split mixed math into separate decimal and WORD-only math() steps, "
+                        "or convert through an intermediate tag so each math() stays one family."
                     ),
                 )
             )
@@ -1011,13 +1011,13 @@ def _evaluate_instruction_portability(
                     code=CLK_CALC_FLOOR_DIV,
                     severity=_route_severity(CLK_CALC_FLOOR_DIV, mode),
                     message=(
-                        f"calc() uses floor division (//) which Click does not support "
+                        f"math() uses floor division (//) which Click does not support "
                         f"at {location_text}."
                     ),
                     location=location_text,
                     suggestion=(
                         "Click has no floor-division operator. "
-                        "Use calc(a / b, int_dest) instead; "
+                        "Use math(a / b, int_dest) instead; "
                         "copying the result to an Int or Dint tag truncates toward zero automatically."
                     ),
                 )
@@ -1035,13 +1035,13 @@ def _evaluate_instruction_portability(
                         code=CLK_CALC_FUNC_MODE_MISMATCH,
                         severity=_route_severity(CLK_CALC_FUNC_MODE_MISMATCH, mode),
                         message=(
-                            f"calc() in {mode_info.mode} mode uses {names} "
+                            f"math() in {mode_info.mode} mode uses {names} "
                             f"which {'is' if len(unique) == 1 else 'are'} "
                             f"only available in {other_mode} mode at {location_text}."
                         ),
                         location=location_text,
                         suggestion=(
-                            f"Move {names} into a separate calc() with "
+                            f"Move {names} into a separate math() with "
                             f"{other_mode}-family tags, or remap operands to "
                             f"{'WORD (DH)' if other_mode == 'hex' else 'INT/DINT/REAL (DS/DD/DF)'} "
                             f"addresses."
@@ -1057,13 +1057,13 @@ def _evaluate_instruction_portability(
                     code=CLK_CALC_NESTING_DEPTH,
                     severity=_route_severity(CLK_CALC_NESTING_DEPTH, mode),
                     message=(
-                        f"calc() expression has {depth} levels of parenthetical nesting "
+                        f"math() expression has {depth} levels of parenthetical nesting "
                         f"at {location_text}; Click allows at most "
                         f"{_CLICK_MAX_PAREN_DEPTH}."
                     ),
                     location=location_text,
                     suggestion=(
-                        "Break the expression into intermediate calc() steps "
+                        "Break the expression into intermediate math() steps "
                         "with temporary tags to reduce nesting depth."
                     ),
                 )
@@ -1082,7 +1082,7 @@ def _evaluate_instruction_portability(
                 location=location_text,
                 suggestion=(
                     "Replace run_function/run_enabled_function with Click-portable instructions "
-                    "(copy/calc/timer/counter/send/receive)."
+                    "(copy/math/timer/counter/send/receive)."
                 ),
             )
         )
@@ -1275,7 +1275,7 @@ def _evaluate_rand_bounds(
                     f"only a tag or a constant there (its editor refuses RAND ( DD1 / 2 , 10 ))."
                 ),
                 location=location_text,
-                suggestion="Compute the argument into a tag in a calc() above, and pass the tag.",
+                suggestion="Compute the argument into a tag in a math() above, and pass the tag.",
             )
         )
     rands: list[RandIntExpr] = []
@@ -1371,7 +1371,7 @@ def _evaluate_wide_constants(
             code=CLK_CALC_WIDE_CONSTANT,
             severity=_route_severity(CLK_CALC_WIDE_CONSTANT, mode),
             message=(
-                f"calc() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
+                f"math() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
                 + (
                     "hex Math reads each constant as its low 16 bits, unsigned, so 70000 "
                     "reads 4464 and -1 reads 65535."

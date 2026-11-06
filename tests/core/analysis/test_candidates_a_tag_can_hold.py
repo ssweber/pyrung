@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, calc, copy, fill, latch, out
+from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, fill, latch, math, out
 from pyrung.core import PLC, Block, TagType
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.skiff import _declared_domain
@@ -218,7 +218,7 @@ def _copy_into(words) -> None:
 
 
 def _add_five_into(words) -> None:
-    calc(In + 5, words[1])
+    math(In + 5, words[1])
 
 
 def _fill_into(words) -> None:

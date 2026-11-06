@@ -43,7 +43,6 @@ from pyrung.core import (
     Tag,
     blockcopy,
     branch,
-    calc,
     call,
     comment,
     copy,
@@ -56,6 +55,7 @@ from pyrung.core import (
     forloop,
     immediate,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -420,37 +420,37 @@ def _():
 @probe("X1 -> calc DS30 + DS31 -> DS32")
 def _():
     with Rung(x[1]):
-        calc(ds[30] + ds[31], ds[32])
+        math(ds[30] + ds[31], ds[32])
 
 
 @probe("X1 -> calc (DS33*DS34 + DS35) / DS36 -> DS37 (longer formula)")
 def _():
     with Rung(x[1]):
-        calc((ds[33] * ds[34] + ds[35]) / ds[36], ds[37])
+        math((ds[33] * ds[34] + ds[35]) / ds[36], ds[37])
 
 
 @probe("X1 -> calc DF1 * DF2 -> DF3 (REAL)")
 def _():
     with Rung(x[1]):
-        calc(df[1] * df[2], df[3])
+        math(df[1] * df[2], df[3])
 
 
 @probe("X1 -> calc DF1 * DF2 -> DF4, oneshot")
 def _():
     with Rung(x[1]):
-        calc(df[1] * df[2], df[4], oneshot=True)
+        math(df[1] * df[2], df[4], oneshot=True)
 
 
 @probe("rise(X1) -> calc DF1*1.8 + 32.0 -> DF5 (community '10 steps' case)")
 def _():
     with Rung(rise(x[1])):
-        calc(df[1] * 1.8 + 32.0, df[5])
+        math(df[1] * 1.8 + 32.0, df[5])
 
 
 @probe("X1 -> calc DH5 AND DH6 -> DH7 (hex math)")
 def _():
     with Rung(x[1]):
-        calc(dh[5] & dh[6], dh[7])
+        math(dh[5] & dh[6], dh[7])
 
 
 # --- search, shift, drum ---------------------------------------------------

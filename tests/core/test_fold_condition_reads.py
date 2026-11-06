@@ -22,10 +22,10 @@ from pyrung import (
     Rung,
     TagType,
     Timer,
-    calc,
     copy,
     count_up,
     latch,
+    math,
     on_delay,
     out,
 )
@@ -213,13 +213,13 @@ def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
     timer so the fold has a plateau to fold.
 
     Unprotected, X moves by a constant the scan loop checks: one unconditional
-    ``calc(X + 1, X)`` into an INT."""
+    ``math(X + 1, X)`` into an INT."""
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     X = Int("X")
     with Program() as prog:
         with Rung():
-            calc(X + 1, X)  # X := X + 1, unconditional, self-referential
+            math(X + 1, X)  # X := X + 1, unconditional, self-referential
         with Rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
     return prog
@@ -248,9 +248,9 @@ class TestUnreadOutputs:
         Gate = Bool("Gate", external=True)
         with Program() as program:
             with Rung():
-                calc(1, Terminal)
+                math(1, Terminal)
             with Rung(Gate):
-                calc(2, Terminal)
+                math(2, Terminal)
 
         folded, stepped = _fold_nofold(program, Bool("Never"), max_cycles=50)
         _assert_landing_parity(folded, stepped)
@@ -260,7 +260,7 @@ class TestUnreadOutputs:
         Gate = Bool("Gate", external=True)
         with Program() as program:
             with Rung(Gate):
-                calc(2, Terminal)
+                math(2, Terminal)
 
         folded, stepped = _fold_nofold(program, Bool("Never"), patch={"Gate": True}, max_cycles=50)
         assert folded.state.tags["Terminal"] == 2
@@ -270,7 +270,7 @@ class TestUnreadOutputs:
         Terminal = Int("Terminal")
         with Program() as program:
             with Rung():
-                calc(1, Terminal)
+                math(1, Terminal)
 
         folded, stepped = _fold_nofold(program, Terminal == 1)
         assert folded.state.tags["Terminal"] == 1

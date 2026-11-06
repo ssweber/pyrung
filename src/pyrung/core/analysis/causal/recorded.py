@@ -632,7 +632,7 @@ def _walk_backward(
     A walk frame yields each predecessor transition it would recurse into; the
     driver runs that frame to completion before resuming the parent, so steps
     and roots land in exactly the order plain recursion would produce.  Chain
-    depth grows with history (an accumulator ``calc(T + 3, T)`` hops once per
+    depth grows with history (an accumulator ``math(T + 3, T)`` hops once per
     scan), so the walk must not consume one interpreter frame per hop.
     """
     stack: list[_WalkFrame] = [_walk_frame(context, transition, trail, frozenset())]
@@ -662,7 +662,7 @@ def _walk_frame(
     system / unattributed).
 
     A writer already on the current path (*lineage*) for the same tag is a
-    recurrence, not a new cause: ``calc(T + 3, T)`` reads its own previous
+    recurrence, not a new cause: ``math(T + 3, T)`` reads its own previous
     result, and two calcs feeding each other hand the value back and forth.
     The step above already names the value read; walking on would repeat the
     same explanation once per scan, so the walk stops there.
@@ -1235,7 +1235,7 @@ def _recurrence_seed(
 ) -> Transition | None:
     """The transition that seeded a recurrence: the last write by any other writer.
 
-    ``copy(Setpoint, T)`` then ``calc(T + 3, T)`` every scan: the recurrence
+    ``copy(Setpoint, T)`` then ``math(T + 3, T)`` every scan: the recurrence
     explains nothing new, but where it started from does.  Main-scope writers
     only (the firing timelines index them by rung); no other writer, or no write
     by one in the retained history, means the recurrence ran from the initial

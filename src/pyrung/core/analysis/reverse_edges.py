@@ -1,6 +1,6 @@
 """Reverse-edge computation for backward value propagation.
 
-Given a program with instructions like ``copy(X, Y)`` or ``calc(X + 5, Y)``,
+Given a program with instructions like ``copy(X, Y)`` or ``math(X + 5, Y)``,
 build a map from source tags to target tags with inverse transforms.  This
 lets a snapshot value for the target be back-propagated to constrain the
 source: if ``Y = X + 5`` and ``Y = 42``, then ``X = 37``.

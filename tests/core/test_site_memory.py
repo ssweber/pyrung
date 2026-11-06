@@ -12,12 +12,12 @@ from pyrung.core import (
     Program,
     Rung,
     branch,
-    calc,
     call,
     count_down,
     count_up,
     fall,
     forloop,
+    math,
     out,
     rise,
     subroutine,
@@ -57,7 +57,7 @@ def _program() -> tuple[Program, object]:
             call("sub")
         with subroutine("sub"):
             with Rung(rise(B)):
-                calc(N + 1, N, oneshot=True)
+                math(N + 1, N, oneshot=True)
     return logic, shared
 
 

@@ -16,7 +16,7 @@ import pytest
 
 from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, generate_circuitpy
 from pyrung.click import TagMap
-from pyrung.core import PLC, Int, Program, Rung, Timer, calc, copy, on_delay, out
+from pyrung.core import PLC, Int, Program, Rung, Timer, copy, math, on_delay, out
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_system_points import _StubBase
@@ -189,9 +189,9 @@ _SC50_WRITE = "_mb_write_coil_plc('SC', 50, True)"
 def _count_program() -> Program:
     with Program(strict=False) as prog:
         with Rung():
-            calc(RunScans + 1, RunScans)
+            math(RunScans + 1, RunScans)
         with Rung(system.sys.mode_run):
-            calc(ModeScans + 1, ModeScans)
+            math(ModeScans + 1, ModeScans)
     return prog
 
 
@@ -249,9 +249,9 @@ def _rung_stop_program() -> Program:
     # The second scan writes SC50; SC11 is read after it.
     with Program(strict=False) as prog:
         with Rung():
-            calc(RunScans + 1, RunScans)
+            math(RunScans + 1, RunScans)
         with Rung(system.sys.mode_run):
-            calc(ModeScans + 1, ModeScans)
+            math(ModeScans + 1, ModeScans)
         with Rung(RunScans == 2):
             out(system.sys.cmd_mode_stop)
     return prog

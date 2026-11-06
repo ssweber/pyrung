@@ -14,7 +14,7 @@ Assignment is so fundamental in Python that it barely registers as a concept. Yo
 In ladder logic, moving data is an explicit instruction that lives on the instruction side of a rung. It executes when the rung is true and does nothing when the rung is false.
 
 ```python
-from pyrung import Bool, Int, Program, rung, PLC, copy, calc, rise
+from pyrung import Bool, Int, Program, rung, PLC, copy, math, rise
 
 EntrySensor = Bool()
 BoxSize     = Int()          # Raw sensor reading
@@ -25,26 +25,26 @@ CycleCount  = Int()          # Scans since startup
 with Program() as logic:
     with rung(rise(EntrySensor)):
         copy(BoxSize, CurrentSize)           # Snapshot the size reading
-        calc(SortCount + 1, SortCount)    # Increment total
+        math(SortCount + 1, SortCount)    # Increment total
 
     with rung():
-        calc(CycleCount + 1, CycleCount)  # Always counting (every scan)
+        math(CycleCount + 1, CycleCount)  # Always counting (every scan)
 ```
 
-`copy` moves a value into a tag. `calc` evaluates an expression and stores the result. Both are instructions that only execute when their rung has power. A `copy` inside a rung that's false simply doesn't happen, and the destination keeps whatever value it had.
+`copy` moves a value into a tag. `math` evaluates an expression and stores the result. Both are instructions that only execute when their rung has power. A `copy` inside a rung that's false simply doesn't happen, and the destination keeps whatever value it had.
 
 ```
   rise(EntrySensor) -- fires one scan:
       BoxSize --copy--> CurrentSize
-      SortCount + 1 --calc--> SortCount
+      SortCount + 1 --math--> SortCount
 
   Every scan:
-      CycleCount + 1 --calc--> CycleCount
+      CycleCount + 1 --math--> CycleCount
 ```
 
 ## Edge detection: `rise()` and `fall()`
 
-`rise(EntrySensor)` fires for exactly one scan when the sensor transitions from False to True. Without it, the copy and calc above would execute *every scan* while the sensor stays active. If a box sits on the sensor for 100 scans, you'd get 100 copies and 100 increments instead of one.
+`rise(EntrySensor)` fires for exactly one scan when the sensor transitions from False to True. Without it, the copy and math above would execute *every scan* while the sensor stays active. If a box sits on the sensor for 100 scans, you'd get 100 copies and 100 increments instead of one.
 
 This is the biggest conceptual jump from Python. In Python, `if sensor:` is about the *current value*. In ladder, `rise()` is about the *transition* — it detects the leading edge and fires once. `fall()` does the same for the trailing edge (True → False). You'll use `rise()` constantly from here on: state transitions in [Lesson 7](state-machines.md), and anywhere you need "do this once when the condition changes."
 
@@ -64,9 +64,9 @@ with PLC(logic) as plc:
     assert CycleCount.value == 2      # Unconditional rung runs every scan
 ```
 
-## copy vs calc
+## copy vs math
 
-These two handle overflow differently, and the difference matters. `copy` clamps: if you copy 50000 into a 16-bit signed Int, you get 32767 (the max). `calc` wraps: if an Int at 32767 has 1 added, it rolls to -32768. Reach for `copy` when moving data (don't silently roll over a sensor reading) and `calc` for arithmetic (wrapping matches how real PLC counters and accumulators behave).
+These two handle overflow differently, and the difference matters. `copy` clamps: if you copy 50000 into a 16-bit signed Int, you get 32767 (the max). `math` wraps: if an Int at 32767 has 1 added, it rolls to -32768. Reach for `copy` when moving data (don't silently roll over a sensor reading) and `math` for arithmetic (wrapping matches how real PLC counters and accumulators behave).
 
 Note the argument order: `copy(source, dest)` reads like an assignment left-to-right. Some PLC editors display it destination-first. pyrung always uses source-first.
 
@@ -86,4 +86,4 @@ The conveyor needs to wait -- hold the diverter gate open long enough for the bo
 
 !!! info "Also known as..."
 
-    `copy` is `MOV`, `COP`, or `MOVE`. `calc` is `MATH` or `CPT`. `rise()` and `fall()` are one-shots (`ONS`/`OSR`) or edge triggers (`R_TRIG`/`F_TRIG`). An unconditional rung is "always on" — some PLCs expose a special always-true bit, others just wire straight from the rail.
+    `copy` is `MOV`, `COP`, or `MOVE`. `math` is `MATH` or `CPT`. `rise()` and `fall()` are one-shots (`ONS`/`OSR`) or edge triggers (`R_TRIG`/`F_TRIG`). An unconditional rung is "always on" — some PLCs expose a special always-true bit, others just wire straight from the rail.

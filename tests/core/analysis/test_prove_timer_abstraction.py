@@ -14,10 +14,10 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     copy,
     count_up,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -728,7 +728,7 @@ class TestAccumulatorThresholds:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter.Acc + 5, counter.Acc)
+                math(counter.Acc + 5, counter.Acc)
             with Rung(enable):
                 count_up(counter, preset=10).reset(reset_btn)
             with Rung(counter.Acc >= 5):
@@ -759,7 +759,7 @@ class TestAccumulatorThresholds:
             with Rung(reset_btn):
                 copy(0, ticks)
             with Rung(enable):
-                calc(ticks + 1, ticks)
+                math(ticks + 1, ticks)
             with Rung(ticks > threshold):
                 out(alarm)
 
@@ -779,7 +779,7 @@ class TestAccumulatorThresholds:
                 copy(1, stride)
                 copy(5, threshold)
             with Rung(enable):
-                calc(ticks + stride, ticks)
+                math(ticks + stride, ticks)
             with Rung(ticks > threshold):
                 out(alarm)
 
@@ -797,7 +797,7 @@ class TestAccumulatorThresholds:
             with Rung():
                 copy(1, stride)
             with Rung(enable):
-                calc(ticks - stride, ticks)
+                math(ticks - stride, ticks)
             with Rung(ticks <= 5):
                 out(alarm)
 
@@ -821,7 +821,7 @@ class TestAccumulatorThresholds:
             with Rung():
                 copy(500, threshold)
             with Rung(enable):
-                calc(ticks + stride, ticks)
+                math(ticks + stride, ticks)
             with Rung(ticks > threshold):
                 out(alarm)
 
@@ -833,7 +833,7 @@ class TestAccumulatorThresholds:
         assert "VariableTickThreshold" in stateful
 
     def test_int_progress_eq_comparison_becomes_tractable(self):
-        """calc(ticks + 1, ticks) with Rung(ticks == k) decomposes into ge/gt boundary atoms."""
+        """math(ticks + 1, ticks) with Rung(ticks == k) decomposes into ge/gt boundary atoms."""
         enable = Bool("Enable", external=True)
         reset_btn = Bool("Reset", external=True)
         ticks = Int("EqTicks")
@@ -843,7 +843,7 @@ class TestAccumulatorThresholds:
             with Rung(reset_btn):
                 copy(0, ticks)
             with Rung(enable):
-                calc(ticks + 1, ticks)
+                math(ticks + 1, ticks)
             with Rung(ticks == 5):
                 out(at_five)
 
@@ -853,7 +853,7 @@ class TestAccumulatorThresholds:
         assert frozenset({("AtFive", False)}) in states
 
     def test_int_progress_ne_comparison_becomes_tractable(self):
-        """calc(ticks + 1, ticks) with Rung(ticks != 0) decomposes into ge/gt boundary atoms."""
+        """math(ticks + 1, ticks) with Rung(ticks != 0) decomposes into ge/gt boundary atoms."""
         enable = Bool("Enable", external=True)
         reset_btn = Bool("Reset", external=True)
         ticks = Int("NeTicks")
@@ -863,7 +863,7 @@ class TestAccumulatorThresholds:
             with Rung(reset_btn):
                 copy(0, ticks)
             with Rung(enable):
-                calc(ticks + 1, ticks)
+                math(ticks + 1, ticks)
             with Rung(ticks != 0):
                 out(running)
 
@@ -887,7 +887,7 @@ class TestAccumulatorThresholds:
             with Rung(reset_btn):
                 copy(0, step)
             with Rung(enable):
-                calc(step + 1, step)
+                math(step + 1, step)
             with Rung(step == 3):
                 out(at_step)
             with Rung(step > threshold):
@@ -1006,7 +1006,7 @@ class TestAccumulatorThresholds:
             with Rung(reset_btn):
                 copy(0, ticks)
             with Rung(enable):
-                calc(ticks + 1, ticks)
+                math(ticks + 1, ticks)
             with Rung(ticks > threshold):
                 out(alarm)
 

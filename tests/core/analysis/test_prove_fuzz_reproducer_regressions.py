@@ -25,7 +25,6 @@ from pyrung.core import (
     Word,
     blockcopy,
     branch,
-    calc,
     call,
     copy,
     count_down,
@@ -35,6 +34,7 @@ from pyrung.core import (
     forloop,
     latch,
     lsh,
+    math,
     off_delay,
     on_delay,
     out,
@@ -173,7 +173,7 @@ def test_fuzz_internal_edge_source_is_not_elided():
         with Rung(In0, W0 == 0):
             reset(B0)
             copy(R0, R0)
-            calc(R0 + 1, W0)
+            math(R0 + 1, W0)
 
     optimized = always(logic, B0 == False, max_states=10_000, depth_budget=20)  # noqa: E712
     unoptimized = always(
@@ -196,7 +196,7 @@ def test_fuzz_entry_sensitive_hidden_word_is_not_elided():
 
     with Program(strict=False) as logic:
         with Rung(In0):
-            calc(R0 + 1, R0)
+            math(R0 + 1, R0)
         with Rung(In0):
             out(B0)
         with Rung(In0):
@@ -205,7 +205,7 @@ def test_fuzz_entry_sensitive_hidden_word_is_not_elided():
             copy(0, R0)
         with Rung(W0 == 0):
             reset(B0)
-            calc(R0 + 1, W0)
+            math(R0 + 1, W0)
 
     _assert_soundness(logic, ~B0)
 
@@ -229,7 +229,7 @@ def test_fuzz_entry_dependent_exit_value_is_not_concrete_elided():
         with Rung(In1, W0 == 0):
             reset(B0)
             copy(1, R0)
-            calc(R0 + R0, W0)
+            math(R0 + R0, W0)
 
     _assert_soundness(logic, R0 < 3)
 
@@ -308,7 +308,7 @@ def test_fuzz_timer_preset_overwritten_after_owner_scan_reaches_done(decrement: 
             on_delay(t0, n0)
         with Rung():
             with forloop(n2):
-                calc(n0 - decrement, n0)
+                math(n0 - decrement, n0)
 
     states = reachable_states(logic, project=["T0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
@@ -434,7 +434,7 @@ def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
         with Rung(N0 != 0, fall(B0)):
             count_down(C0, -1).reset(B0)
         with Rung(In0):
-            calc(N0 + 1, N0)
+            math(N0 + 1, N0)
         with Rung():
             out(B0)
 
@@ -444,10 +444,10 @@ def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
 
 
 def test_fuzz_calc_from_choices_domain_reaches_truthy_guard():
-    """choices= source domains must bound calc() targets used as truthy guards.
+    """choices= source domains must bound math() targets used as truthy guards.
 
     Reproducer family: reachability_20260514_152443_001/_002.  ExtN0 has
-    choices but no min/max; D0 is written by calc(ExtN0 * -100, D0) and must
+    choices but no min/max; D0 is written by math(ExtN0 * -100, D0) and must
     stay in the BFS state key so a later scan can enter the D0-gated rung.
     """
     In2 = Bool("In2", external=True)
@@ -459,7 +459,7 @@ def test_fuzz_calc_from_choices_domain_reaches_truthy_guard():
         with Rung():
             call("sub_0")
         with Rung(~In2):
-            calc(ExtN0 * -100, D0)
+            math(ExtN0 * -100, D0)
         with subroutine("sub_0"):
             with Rung(rise(B1)):
                 return_early()
@@ -486,7 +486,7 @@ def test_fuzz_call_guard_reaches_subroutine_writes_in_slice():
         with Rung(D0):
             call("sub_0")
         with Rung():
-            calc(ExtN0 * -100, D0)
+            math(ExtN0 * -100, D0)
         with subroutine("sub_0"):
             with Rung(rise(B1)):
                 return_early()
@@ -619,7 +619,7 @@ def test_search_result_domain_inference():
     with Program(strict=False) as logic:
         with Rung():
             out(B0)
-            calc(N0 + N0, W0)
+            math(N0 + N0, W0)
         with Rung(In0):
             search(DS.select(1, 1) == 0, result=N0, found=B0)
 
@@ -644,7 +644,7 @@ def test_concrete_elision_includes_default_value():
             out(B0)
         with Rung(~In0):
             out(B0)
-            calc(N0 + N0, W0)
+            math(N0 + N0, W0)
         with Rung(B0):
             out(B0)
             out(B0)
@@ -695,7 +695,7 @@ def test_fuzz_oneshot_out_elision_false_convergence():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -802,7 +802,7 @@ def test_fuzz_return_early_guard_in_scope():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(N0 + 1, N0)
+            math(N0 + 1, N0)
         with Rung():
             call("sub_0")
         with subroutine("sub_0"):
@@ -864,7 +864,7 @@ def test_fuzz_off_delay_completion_with_accumulating_condition():
         with Rung(R0 <= 2):
             off_delay(T0, ExtN1)
         with Rung():
-            calc(R0 + ExtN0, R0)
+            math(R0 + ExtN0, R0)
         with Rung():
             out(B0)
 
@@ -889,7 +889,7 @@ def test_fuzz_counter_acc_conditional_calc_not_elided():
 
     with Program(strict=False) as logic:
         with Rung(In0):
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung(C0.Acc >= 5):
@@ -929,7 +929,7 @@ def test_fuzz_counter_acc_count_up_not_elided():
         with Rung():
             copy(ExtN0, N0)
         with Rung(In0):
-            calc(DS.select(1, 2).sum(), N0)
+            math(DS.select(1, 2).sum(), N0)
         with Rung(N0 != 0):
             out(B0)
 
@@ -1027,7 +1027,7 @@ def test_fuzz_indirect_block_write_not_excluded():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(DS.select(1, 2).sum(), D0)
+            math(DS.select(1, 2).sum(), D0)
         with Rung(D0 != 0):
             out(B0)
         with Rung():
@@ -1106,7 +1106,7 @@ def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, R0)
+            math(ExtN0 + 0, R0)
         with Rung(R0 == 0):
             out(B0)
         with Rung(~B0):
@@ -1122,7 +1122,7 @@ def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
 def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shift: int):
     """N0 written by unconditional copy(ExtN0, N0) must not be elided.
 
-    The traced influence cone sees N0 read only by calc(lsh(N0, X), N1)
+    The traced influence cone sees N0 read only by math(lsh(N0, X), N1)
     which writes N1, concluding N0's entry value is unobservable. But N0
     IS the property target — its exit value is directly observed.
     Reproducer: soundness_20260516_201852_000/_001.
@@ -1133,7 +1133,7 @@ def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shif
 
     with Program(strict=False) as logic:
         with Rung(N1 != 0):
-            calc(lsh(N0, shift), N1)
+            math(lsh(N0, shift), N1)
         with Rung():
             copy(ExtN0, N0)
 
@@ -1228,7 +1228,7 @@ def test_fuzz_self_copy_carry_over_not_dead_input():
         with Rung(N0):
             out(B0)
         with Rung():
-            calc(D0 + ExtN0, N0)
+            math(D0 + ExtN0, N0)
 
     projection = ["B0"]
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
@@ -1246,7 +1246,7 @@ def test_fuzz_self_copy_carry_over_not_dead_input():
 def test_fuzz_band_tagged_range_sum_dest_not_elided():
     """Band-tagged calc dest from range-sum must not be elided.
 
-    BandTotal is written by calc(DS.select(1,2).sum(), BandTotal) and
+    BandTotal is written by math(DS.select(1,2).sum(), BandTotal) and
     gates B0 via BandTotal != 0.  The optimizer incorrectly proves
     Or(~B1, ~B0) when unoptimized finds a counterexample.
     Reproducer: soundness_20260517_191754_001.
@@ -1262,7 +1262,7 @@ def test_fuzz_band_tagged_range_sum_dest_not_elided():
         with Rung():
             unpack_to_words(D0, DS.select(1, 2))
         with Rung():
-            calc(DS.select(1, 2).sum(), BandTotal)
+            math(DS.select(1, 2).sum(), BandTotal)
         with Rung(BandTotal != 0):
             out(B0)
         with Rung():
@@ -1288,7 +1288,7 @@ def test_fuzz_indirect_block_write_band_sum_reachability():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(DS.select(1, 2).sum(), BandTotal)
+            math(DS.select(1, 2).sum(), BandTotal)
         with Rung(BandTotal != 0):
             out(B0)
         with Rung():
@@ -1313,7 +1313,7 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
 
     copy(N0, N2, oneshot=True) writes N2 on scan 0, then becomes inert.
     On scan 1+, Rung(N2) reads the entry value (set by the prior scan's
-    calc(DS.select(2,2).sum(), N2)), which determines whether latch(B1)
+    math(DS.select(2,2).sum(), N2)), which determines whether latch(B1)
     fires.  Without warming natural traces with oneshot-fired memory
     state, the entry:N2 dependency is invisible and N2 is wrongly elided.
     Reproducer: reachability_20260517_191754_000.
@@ -1328,9 +1328,9 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
             copy(N0, N2, oneshot=True)
         with Rung(N2):
             latch(B1)
-            calc(N2 + 0, N2)
+            math(N2 + 0, N2)
         with Rung():
-            calc(DS.select(2, 2).sum(), N2)
+            math(DS.select(2, 2).sum(), N2)
         with Rung():
             fill(-55, DS.select(2, 4), oneshot=True)
 
@@ -1343,7 +1343,7 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
 def test_fuzz_backward_propagation_drops_choices_values():
     """Backward propagation through calc narrows choices domain to comparison boundaries.
 
-    calc(ExtN0 + 0, N0) with N0 == 0 back-propagates boundary {-1, 0, 1}
+    math(ExtN0 + 0, N0) with N0 == 0 back-propagates boundary {-1, 0, 1}
     to ExtN0.  Intersection with choices={0,1,2} yielded {0,1}, dropping
     value 2.  Without ExtN0=2 the BFS never writes -1 to DS[4], so
     pack_words cannot make D1 nonzero and B0=True is unreachable.
@@ -1358,7 +1358,7 @@ def test_fuzz_backward_propagation_drops_choices_values():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung(N0 == 0):
             out(B0)
         with Rung():
@@ -1483,7 +1483,7 @@ def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
 
 
 def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
-    """calc(ExtN0 + 0, N0) with copy chain N0→N1→N2→D0, D0 >= 5 gates B0.
+    """math(ExtN0 + 0, N0) with copy chain N0→N1→N2→D0, D0 >= 5 gates B0.
 
     The copy chain must propagate the full domain so BFS reaches B0=True.
     Reproducer: reachability_20260518_175626_010.
@@ -1497,7 +1497,7 @@ def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung():
             copy(N0, N1)
         with Rung():
@@ -1513,7 +1513,7 @@ def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
 
 
 def test_fuzz_copy_chain_expression_partition_domain_collapse():
-    """calc(ExtN0 + 0, N0) with copy chain, two out(B0) writers, no choices.
+    """math(ExtN0 + 0, N0) with copy chain, two out(B0) writers, no choices.
 
     N0–N2 elided as traced, D0 absorbed as comparison-only.  ExtN0's
     expression_partition collapses to {0,1} (from N0 == 0 boundary),
@@ -1529,7 +1529,7 @@ def test_fuzz_copy_chain_expression_partition_domain_collapse():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung(N0 == 0):
             out(B0)
         with Rung():
@@ -1638,7 +1638,7 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
     B0 = (ExtN0 < 5), so the timer only accumulates while ExtN0 >= 5.
 
     ExtN0 feeds two comparisons: its own rung condition (ExtN0 < 5) and,
-    through calc(ExtN0 + 0, N0), the downstream test N0 == 0.  Backward
+    through math(ExtN0 + 0, N0), the downstream test N0 == 0.  Backward
     propagation seeded ExtN0's domain from the N0 == 0 boundary only,
     producing {0, 1} and suppressing ExtN0's own < 5 partition.  With no
     representative >= 5 the timer never accumulated, so BFS never reached
@@ -1658,7 +1658,7 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
         with Rung():
             on_delay(T0, 100).reset(B0)
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung(N0 == 0):
             out(B0)
 
@@ -1863,7 +1863,7 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
         with Rung():
             out(B0)
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -1894,7 +1894,7 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
         with Rung():
             out(B0)
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -1926,7 +1926,7 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
         with Rung():
             out(B0)
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -1952,10 +1952,10 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
     D0 is absorbed as comparison-only (only appears in the property D0 < 43).
     Rung 0's condition is D0 (truthy), so when D0=0 at default the rung never
     fires in natural traces.  This hides the entry:R0 → D0 dependency behind
-    calc(R0 * 32767, D0), causing R0 to be incorrectly elided.
+    math(R0 * 32767, D0), causing R0 to be incorrectly elided.
 
     The counterexample: scan 1 sets R0=5.93 (via copy) and D0=2 (via copy),
-    then scan 2 fires calc(5.93 * 32767, D0) = 194312 >= 43.  (32767, not
+    then scan 2 fires math(5.93 * 32767, D0) = 194312 >= 43.  (32767, not
     32768: a Math cuts 32768 to -32768.)
     """
     In0 = Bool("In0", external=True)
@@ -1965,7 +1965,7 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
 
     with Program(strict=False) as logic:
         with Rung(D0):
-            calc(R0 * 32767, D0)
+            math(R0 * 32767, D0)
         with Rung(In2):
             copy(5.930127848501925, R0)
         with Rung(In0):

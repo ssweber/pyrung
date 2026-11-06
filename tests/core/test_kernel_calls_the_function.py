@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import functools
-import math
+import math as pymath
 import types
 
 import pytest
 
-from pyrung import Bool, Int, Or, Program, Rung, calc, run_function
+from pyrung import Bool, Int, Or, Program, Rung, math, run_function
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.analysis.prove.lockfile import program_hash
@@ -26,7 +26,7 @@ MODULE_VALUE = 7
 def _program(fn, *, ins=None) -> Program:
     with Program(strict=False) as program:
         with Rung():
-            calc(A + 1, A)
+            math(A + 1, A)
         with Rung(Run):
             run_function(fn, ins=ins if ins is not None else {"v": A}, outs={"out": B})
     return program
@@ -56,11 +56,11 @@ def plain(v):
 
 
 def floors(v):
-    return {"out": math.floor(v / 2)}
+    return {"out": pymath.floor(v / 2)}
 
 
 def reads_pi(v):
-    return {"out": int(math.pi)}
+    return {"out": int(pymath.pi)}
 
 
 def reads_a_global(v):
@@ -105,7 +105,7 @@ def test_a_kernel_runs_no_text_of_the_function_and_a_lock_hashes_it():
 def test_a_program_with_no_function_locks_the_source_it_runs():
     with Program(strict=False) as program:
         with Rung():
-            calc(A + 1, A)
+            math(A + 1, A)
     kernel = compile_kernel(program)
 
     assert kernel.lock_source == kernel.source
@@ -126,9 +126,9 @@ def test_analysis_takes_any_callable_a_scan_can_call(fn):
         with Rung(In1):
             run_function(fn, ins={"v": A}, outs={"out": B})
         with Rung(B == 1):
-            calc(1, A)
+            math(1, A)
         with Rung(In1):
-            calc(1, Lamp)
+            math(1, Lamp)
 
     assert compile_kernel(program, blockless=True, proof_metadata=True).source
     assert program_hash(program) == program_hash(program)
@@ -318,7 +318,7 @@ def _reads_a_dunder(v):
 
 
 def _sets_an_attribute_of_math(v):
-    math.pyrung_memo = v
+    pymath.pyrung_memo = v
     return {"out": v}
 
 

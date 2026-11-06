@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, reset, search
+from pyrung.core import Rung, copy, fill, math, reset, search
 from tests.conformance.memory import c, dd, dh, ds
 from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
@@ -61,7 +61,7 @@ def prove_oneshot_against_dd_result(slot: Any) -> None:
             copy(result, field)
     for k, bit in enumerate(found):
         with Rung(slot.Cmd != 0, slot.Scratch == READ_SCAN, bit):
-            calc(slot.ErrorCode + (1 << k), slot.ErrorCode)
+            math(slot.ErrorCode + (1 << k), slot.ErrorCode)
     done(slot)
 
 

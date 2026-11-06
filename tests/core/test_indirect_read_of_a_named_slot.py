@@ -26,8 +26,8 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
+    math,
     out,
 )
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
@@ -76,7 +76,7 @@ def _program(name_slot: Any, *, pointer: int = 3) -> Program:
     name = name_slot(slots)
     with Program(strict=False) as program:
         with Rung():
-            calc(count + 1, count)
+            math(count + 1, count)
         with Rung():
             copy(count, name)
         with Rung():

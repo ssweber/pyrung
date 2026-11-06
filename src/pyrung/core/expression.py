@@ -983,7 +983,7 @@ class RandIntExpr(Expression):
 def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntExpr:
     """Random integer from ``lo`` to ``hi`` inclusive, drawn once per scan (CLICK ``RAND``).
 
-    Use it inside ``calc()``.  Draws are deterministic per scan, so replay, seek
+    Use it inside ``math()``.  Draws are deterministic per scan, so replay, seek
     and fork see the same values; ``patch()`` or ``force()`` the site's tag
     (``expr.tag``) to choose a draw in a test.  A bare ``Real`` tag as a bound reads
     0 with no flag.  Equal bounds, constants or tag values, are a math error: the

@@ -99,7 +99,7 @@ tells apart:
 from __future__ import annotations
 
 from pyrung.conformance import Group, TeeSpec, assert_all_passed, case, run
-from pyrung.core import And, Or, Rung, calc, copy, count_down, count_up, latch, out, rise, system
+from pyrung.core import And, Or, Rung, copy, count_down, count_up, latch, math, out, rise, system
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
@@ -160,7 +160,7 @@ def prove_preset_raised_resumes(slot):
     with Rung(slot.Cmd != 0, on(slot, *range(1, w, 2))):
         count_up(counter, slot.Result4).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Scratch <= w, counter.Done):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch >= 9, slot.Scratch <= w, counter.Done, slot.Result2 == 0):
         copy(slot.Scratch, slot.Result2)
     with Rung(slot.Cmd != 0):
@@ -196,7 +196,7 @@ def prove_reset_wins_over_count(slot):
     with Rung(slot.Cmd != 0):
         copy(counter.Acc, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, counter.Done):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     done(slot)
 
 
@@ -208,7 +208,7 @@ def prove_reset_zero_preset(slot):
     with Rung(slot.Cmd != 0, slot.Scratch <= 4):
         count_up(counter, slot.Result4).reset(Or(slot.Cmd == 0, slot.Scratch == 4))
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, counter.Done):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, ~counter.Done, slot.Result2 == 0):
         copy(slot.Scratch, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, ~counter.Done):
@@ -242,7 +242,7 @@ def prove_up_down_same_scan(slot):
     with Rung(slot.Cmd != 0):
         copy(counter.Acc, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, counter.Done):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     done(slot)
 
 
@@ -259,11 +259,11 @@ def prove_acc_clamps_at_dint_range(slot):
     with Rung(slot.Cmd != 0, on(slot, 1, 3, 5, 7)):
         count_down(down, 100).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, up.Acc == DINT_MAX):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, up.Acc == DINT_MAX, slot.Result2 == 0):
         copy(slot.Scratch, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, down.Acc == DINT_MIN):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, down.Acc == DINT_MIN, slot.Result4 == 0):
         copy(slot.Scratch, slot.Result4)
     done(slot)

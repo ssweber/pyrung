@@ -37,7 +37,7 @@ Each cost below excludes the rung's contacts unless noted.
 | `blockcopy`, `pack_bits`, `pack_words` | 5 |
 | `search` | 6 |
 | `shift` | 2, plus 1 per clock and reset contact |
-| `calc` | 2 + operands + operators |
+| `math` | 2 + operands + operators |
 | `call`, `break`, `continue` | 1 |
 | For and Next rungs (no contacts) | 5 together |
 | Main with only END | 3 |
@@ -45,7 +45,7 @@ Each cost below excludes the rung's contacts unless noted.
 
 A rung with two or more output legs pays extra: 1, plus 1 for each leg without a contact of its own (the first leg counts as one). Two coils on one rung cost 6 with their contact, not 3.
 
-`calc` fits its six measured formulas, counting operands and operators but not parentheses: `DS30 + DS31` is 5 and `(DS33 * DS34 + DS35) / DS36` is 9. A formula with REAL constants came out 1 lower than the rule (`DF1 * 1.8 + 32.0` is 6), so the rule rounds up there.
+`math` fits its six measured formulas, counting operands and operators but not parentheses: `DS30 + DS31` is 5 and `(DS33 * DS34 + DS35) / DS36` is 9. A formula with REAL constants came out 1 lower than the rule (`DF1 * 1.8 + 32.0` is 6), so the rule rounds up there.
 
 One drum was measured: an event or time drum with 2 outputs and 3 steps is 14, plus its contacts. Other sizes are estimated as 8 + pattern cells, a guess.
 

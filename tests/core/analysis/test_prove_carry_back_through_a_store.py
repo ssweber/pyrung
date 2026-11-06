@@ -12,7 +12,7 @@ over programs generated from the literals that have got this wrong before.
 
 from __future__ import annotations
 
-import math
+import math as pymath
 import operator
 from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
@@ -30,9 +30,9 @@ from pyrung.core import (
     TagType,
     Word,
     blockcopy,
-    calc,
     copy,
     fill,
+    math,
     out,
     unpack_to_bits,
 )
@@ -61,11 +61,11 @@ OPS: dict[str, Callable[[Any, Any], bool]] = {
 }
 EDGES: dict[str, Callable[[Any, Any], Any] | None] = {
     "copy": copy,
-    "calc+1": lambda s, d: calc(s + 1, d),
-    "calc-1": lambda s, d: calc(s - 1, d),
-    "calc+5": lambda s, d: calc(s + 5, d),
-    "5-": lambda s, d: calc(5 - s, d),
-    "neg": lambda s, d: calc(-s, d),
+    "calc+1": lambda s, d: math(s + 1, d),
+    "calc-1": lambda s, d: math(s - 1, d),
+    "calc+5": lambda s, d: math(s + 5, d),
+    "5-": lambda s, d: math(5 - s, d),
+    "neg": lambda s, d: math(-s, d),
     "fill": None,
     "blockcopy": None,
 }
@@ -258,7 +258,7 @@ def test_a_feeder_of_a_declined_hop_has_no_answer_either(source, bound) -> None:
         with Rung():
             copy(feeder, middle)
         with Rung():
-            calc(middle * 3, last)
+            math(middle * 3, last)
         with Rung(last == bound, feeder != 0):
             out(hit)
     assert isinstance(never(program, hit), Intractable)
@@ -271,7 +271,7 @@ def test_a_declared_real_is_not_all_its_whole_numbers() -> None:
     hit = Bool("Hit")
     with Program(strict=False) as program:
         with Rung():
-            calc(source * 2, last)
+            math(source * 2, last)
         with Rung(last == 5):
             out(hit)
     assert _fires_at(program, "R", 2.5, hit)
@@ -285,7 +285,7 @@ def test_a_multiply_the_inverse_has_no_answer_for_is_not_proven_where_a_scan_fir
     hit = Bool("Hit")
     with Program(strict=False) as program:
         with Rung():
-            calc(source * 3, dest)
+            math(source * 3, dest)
         with Rung(dest == 1):
             out(hit)
     assert _fires_at(program, "S", -21845, hit)
@@ -329,27 +329,27 @@ def _hit() -> None:
 def _scale_select() -> Program:
     return _rungs(
         (lambda: copy(_I, _DI), _MODE),
-        (lambda: calc(_I * 10, _DI), ~_MODE),
+        (lambda: math(_I * 10, _DI), ~_MODE),
         (_hit, ~_MODE, _DI == 500),
     )
 
 
 def _copy_then_calc() -> Program:
-    return _rungs((lambda: copy(_I, _DI),), (lambda: calc(_I + 100, _DI),), (_hit, _DI == 5000))
+    return _rungs((lambda: copy(_I, _DI),), (lambda: math(_I + 100, _DI),), (_hit, _DI == 5000))
 
 
 def _calc_then_copy() -> Program:
-    return _rungs((lambda: calc(_I + 100, _DI),), (lambda: copy(_I, _DI),), (_hit, _DI == 5000))
+    return _rungs((lambda: math(_I + 100, _DI),), (lambda: copy(_I, _DI),), (_hit, _DI == 5000))
 
 
 def _copy_then_double() -> Program:
-    return _rungs((lambda: copy(_I, _DI),), (lambda: calc(_I * 2, _DI),), (_hit, _DI == 6))
+    return _rungs((lambda: copy(_I, _DI),), (lambda: math(_I * 2, _DI),), (_hit, _DI == 6))
 
 
 def _diamond() -> Program:
     return _rungs(
         (lambda: copy(_J, _A),),
-        (lambda: calc(_J + 100, _B),),
+        (lambda: math(_J + 100, _B),),
         (lambda: copy(_A, _T), _MODE),
         (lambda: copy(_B, _T), ~_MODE),
         (_hit, ~_MODE, _T == 5000),
@@ -370,7 +370,7 @@ def _two_hops(source: Any, first: float, second: float) -> Program:
 
 def _a_sum_and_a_copy() -> Program:
     return _rungs(
-        (lambda: calc(_R + 1, _DA),),
+        (lambda: math(_R + 1, _DA),),
         (lambda: copy(_R, _DB),),
         (_hit, _DA > 2.5, _DB < 1.6),
     )
@@ -380,7 +380,7 @@ def _a_copy_and(calc_of: Callable[[Any], Any], source: Any, compared: Any) -> Pr
     """A hop gives the source its domain, and the other edge has no way back."""
     return _rungs(
         (lambda: copy(source, _DI),),
-        (lambda: calc(calc_of(source), _DD),),
+        (lambda: math(calc_of(source), _DD),),
         (_hit, _DI > 0, _DD == compared),
     )
 
@@ -409,7 +409,7 @@ def _a_square_compared_a_hop_later(source: Any, then: Callable[[Any, Any], None]
     later = Dint("Later")
     return _rungs(
         (lambda: copy(source, _DI),),
-        (lambda: calc(source * source, _DD),),
+        (lambda: math(source * source, _DD),),
         (lambda: then(_DD, later),),
         (_hit, _DI > 0, later == 49),
     )
@@ -419,7 +419,7 @@ def _a_square_through_a_chain() -> Program:
     return _rungs(
         (lambda: copy(_I, _A),),
         (lambda: copy(_A, _DI),),
-        (lambda: calc(_A * _A, _DD),),
+        (lambda: math(_A * _A, _DD),),
         (_hit, _DI > 0, _DD == 49),
     )
 
@@ -441,7 +441,7 @@ UNEVALUATED = [
     pytest.param(
         lambda: _rungs(
             (lambda: copy(_R, _DI),),
-            (lambda: calc(_R * _R, _DD),),
+            (lambda: math(_R * _R, _DD),),
             (_hit, _DD > 30, _DI == 5),
         ),
         "R",
@@ -451,7 +451,7 @@ UNEVALUATED = [
     pytest.param(_a_square_through_a_chain, "I", 7, id="square-through-a-chain"),
     pytest.param(lambda: _a_square_compared_a_hop_later(_I, copy), "I", 7, id="square-then-copy"),
     pytest.param(
-        lambda: _a_square_compared_a_hop_later(_I, lambda s, d: calc(s + 0, d)),
+        lambda: _a_square_compared_a_hop_later(_I, lambda s, d: math(s + 0, d)),
         "I",
         7,
         id="square-then-sum",
@@ -499,8 +499,8 @@ def _a_square_squared() -> Program:
     squared = Dint("Squared")
     return _rungs(
         (lambda: copy(_I, _DI),),
-        (lambda: calc(_I * _I, _DD),),
-        (lambda: calc(_DD * _DD, squared),),
+        (lambda: math(_I * _I, _DD),),
+        (lambda: math(_DD * _DD, squared),),
         (_hit, _DI > 0, squared == 2401),
     )
 
@@ -712,7 +712,7 @@ def test_the_same_edge_twice_still_proves() -> None:
 def test_a_declared_real_compared_once_still_proves() -> None:
     """One hop and no comparison of its own: nothing here needs a cell the search skips."""
     scaled = Real("ScaledR")
-    program = _rungs((lambda: calc(_RB * 2, scaled),), (_hit, scaled > 250))
+    program = _rungs((lambda: math(_RB * 2, scaled),), (_hit, scaled > 250))
     assert isinstance(never(program, _HIT, max_states=3000, depth_budget=6), Proven)
 
 
@@ -772,13 +772,13 @@ def _copy_edge() -> Edge:
 
 
 def _edges(literals: Iterable[Any], factors: Iterable[Any]) -> list[Edge]:
-    edges = [_copy_edge(), Edge("-s", lambda s, d: calc(-s, d))]
+    edges = [_copy_edge(), Edge("-s", lambda s, d: math(-s, d))]
     for k in literals:
-        edges.append(Edge(f"s+{k}", lambda s, d, k=k: calc(s + k, d), k))
-        edges.append(Edge(f"s-{k}", lambda s, d, k=k: calc(s - k, d), k))
-        edges.append(Edge(f"{k}-s", lambda s, d, k=k: calc(k - s, d), k))
+        edges.append(Edge(f"s+{k}", lambda s, d, k=k: math(s + k, d), k))
+        edges.append(Edge(f"s-{k}", lambda s, d, k=k: math(s - k, d), k))
+        edges.append(Edge(f"{k}-s", lambda s, d, k=k: math(k - s, d), k))
     for k in factors:
-        edges.append(Edge(f"s*{k}", lambda s, d, k=k: calc(s * k, d), k))
+        edges.append(Edge(f"s*{k}", lambda s, d, k=k: math(s * k, d), k))
     return edges
 
 
@@ -870,7 +870,7 @@ def _left_on_the_target(built: Built, values: Iterable[Any]) -> dict[Any, Any]:
 def _bounds_of(left: dict[Any, Any]) -> list[Any]:
     """Comparison values a target can hold at its ends, and the ones a store has got wrong."""
     held = [value for value in left.values() if isinstance(value, int | float)]
-    finite = [value for value in held if math.isfinite(value)]
+    finite = [value for value in held if pymath.isfinite(value)]
     if not finite:
         return [5]
     low, high = min(finite), max(finite)
@@ -981,10 +981,10 @@ def test_a_plain_chain_still_proves() -> None:
 @pytest.mark.parametrize(
     ("write", "bound", "value"),
     [
-        pytest.param(lambda s, d: calc(s + 1.5, d), -32768, 32767, id="i + 1.5, rolls over"),
-        pytest.param(lambda s, d: calc(s - 0.5, d), -1, -1, id="i - 0.5 truncates to nothing"),
-        pytest.param(lambda s, d: calc(s + 65536.5, d), 5, 5, id="i + 65536.5"),
-        pytest.param(lambda s, d: calc(s + 100000.5, d), 5, 31077, id="i + 100000.5"),
+        pytest.param(lambda s, d: math(s + 1.5, d), -32768, 32767, id="i + 1.5, rolls over"),
+        pytest.param(lambda s, d: math(s - 0.5, d), -1, -1, id="i - 0.5 truncates to nothing"),
+        pytest.param(lambda s, d: math(s + 65536.5, d), 5, 5, id="i + 65536.5"),
+        pytest.param(lambda s, d: math(s + 100000.5, d), 5, 31077, id="i + 100000.5"),
     ],
 )
 def test_a_fractional_literal_truncates_before_it_wraps(write, bound, value) -> None:

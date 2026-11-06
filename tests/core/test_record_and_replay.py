@@ -44,7 +44,7 @@ from datetime import datetime
 import pytest
 
 from pyrung import Rung, program
-from pyrung.core import PLC, Bool, Dint, calc, out
+from pyrung.core import PLC, Bool, Dint, math, out
 
 # --------------------------------------------------------------------------- #
 # Equality helper — explicit field coverage for every replay channel.
@@ -365,7 +365,7 @@ def test_replay_with_logic_present() -> None:
         with Rung(a):
             out(b)
         with Rung(b):
-            calc(c + 1, c)
+            math(c + 1, c)
 
     source = PLC(logic=ladder, dt=0.01)
 

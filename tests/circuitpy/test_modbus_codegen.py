@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word, calc
+from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word, math
 from pyrung.circuitpy import (
     P1AM,
     CircuitPyOutput,
@@ -149,7 +149,7 @@ def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
     mapping = TagMap({src: ds[1], dest: ds[2]})
     with Program(strict=False) as prog:
         with Rung():
-            calc(src * 7, dest)
+            math(src * 7, dest)
 
     result = _ctx_and_source(prog, mapping)
     assert result.runtime

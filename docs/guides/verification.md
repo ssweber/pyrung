@@ -89,7 +89,7 @@ Scoping restricts input enumeration to the upstream cone of the named tags — t
 The verifier classifies every tag into one of three roles:
 
 - **Combinational** — OTE-only writes, derived from inputs each scan and read only below their writer. Not a state dimension. A coil a rung reads above the rung that writes it sees the previous scan's value, so it is stateful.
-- **Stateful** — latch/reset, timer/counter, copy, calc. Tracked in the visited set.
+- **Stateful** — latch/reset, timer/counter, copy, math. Tracked in the visited set.
 - **Nondeterministic** — external inputs. Enumerated at each state. `InputBlock` tags (e.g., `x[1]`), `receive()` destination tags, and semantic tags mapped to input banks via `TagMap` are all automatically nondeterministic — no `external=True` annotation required.
 
 Value domains come from the expression tree: comparison literals in conditions, `choices` metadata, `min`/`max` bounds. A tag compared against `== 1` and `== 2` gets domain `{1, 2, unmatched}` — three values instead of 65K.
@@ -415,7 +415,7 @@ pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
-`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `calc` count advances one step per scan, so a count past the budget is not reached. A `Proven` cut short by the budget says so in a caveat.
+`--depth-budget` is the BFS depth: the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth, but a counter or a `math` count advances one step per scan, so a count past the budget is not reached. A `Proven` cut short by the budget says so in a caveat.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

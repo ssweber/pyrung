@@ -13,10 +13,10 @@ from pyrung.core import (
     Rung,
     Timer,
     Word,
-    calc,
     count_up,
     fall,
     latch,
+    math,
     off_delay,
     out,
     receive,
@@ -179,7 +179,7 @@ class TestFreeInputPartition:
 
         with Program(strict=False) as logic:
             with Rung(gate):
-                calc(acc + 1, acc)
+                math(acc + 1, acc)
             with Rung(acc):
                 receive(
                     target="device1",
@@ -278,7 +278,7 @@ class TestFactoringProveIntegration:
 
         with Program(strict=False) as logic:
             with Rung(In0):
-                calc(N0 + 1, N0)
+                math(N0 + 1, N0)
             with Rung(N0):
                 receive(
                     target="device1",
@@ -404,7 +404,7 @@ class TestFactoringReachableStates:
 
         with Program(strict=False) as logic:
             with Rung(in0):
-                calc(c0.Acc + 5, c0.Acc)
+                math(c0.Acc + 5, c0.Acc)
             with Rung(in0):
                 count_up(c0, 10).reset(b0)
             with Rung(d0 != 0):

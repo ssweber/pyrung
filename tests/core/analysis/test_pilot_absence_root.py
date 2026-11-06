@@ -24,7 +24,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_delay, out
+from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, math, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.corrections import _absence_root_correctives
@@ -55,7 +55,7 @@ def _sail_trap_program() -> Program:
         with Rung(Tmr.Done):
             latch(AlmTrig)  # latched alarm
         with Rung(Phase >= 0):
-            calc(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
+            math(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
         with Rung(AlmExtent >= 1, ~Suspend):
             copy(8, Phase)  # abort Execute -> Aborting
 
@@ -178,7 +178,7 @@ def _cold_heater_program() -> Program:
         with Rung(Tmr.Done):
             latch(AlmTrig)  # latched alarm
         with Rung(Phase >= 0):
-            calc(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
+            math(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
         with Rung(AlmExtent >= 1, ~Suspend):
             copy(8, Phase)  # abort Execute -> Aborting
 

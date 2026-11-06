@@ -35,12 +35,12 @@ from pyrung.core import (
     TagType,
     Timer,
     break_loop,
-    calc,
     compiled_run,
     continue_loop,
     debounce,
     flasher,
     forloop,
+    math,
     randint,
     scan_trace,
     timed,
@@ -182,18 +182,18 @@ def _emit(instruction: tuple, k: int) -> None:
         with forloop(count) as loop:
             for leaf, at in leaves:
                 if leaf == "inc":
-                    calc(total + 1, total)
+                    math(total + 1, total)
                 else:
                     with Rung(loop.idx == at):
                         break_loop() if leaf == "break" else continue_loop()
     elif kind == "agg":
         _, agg, lo, hi = instruction
-        calc(getattr(RG.select(lo, hi), agg)(), Int(f"AgAgg{k}"))
+        math(getattr(RG.select(lo, hi), agg)(), Int(f"AgAgg{k}"))
     elif kind == "rand":
         _, lo, hi = instruction
-        calc(randint(lo, hi), Dint(f"AgRand{k}"))
+        math(randint(lo, hi), Dint(f"AgRand{k}"))
     else:  # randagg
-        calc(randint(1, 6) + RG.select(1, 6).sum(), Int(f"AgMix{k}"))
+        math(randint(1, 6) + RG.select(1, 6).sum(), Int(f"AgMix{k}"))
 
 
 def _build(spec: Spec) -> Program:

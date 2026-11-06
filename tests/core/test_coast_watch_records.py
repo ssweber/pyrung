@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, on_delay, out, system
+from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, math, on_delay, out, system
 from pyrung.core import PLC
 from pyrung.core.coast_run import coast_until
 from tests.fold_check import compare_records
@@ -28,7 +28,7 @@ def _timer_tick() -> Program:
         with Rung():
             on_delay(Tmr, 30000, "ms")
         with Rung():
-            calc(Tmr.Acc // 1000, Q)
+            math(Tmr.Acc // 1000, Q)
         with Rung(Q == 7):
             out(Bool("WrHit"))
     return prog
@@ -41,7 +41,7 @@ def _real_tick() -> Program:
         with Rung():
             on_delay(Tmr, 30000, "ms")
         with Rung():
-            calc(Tmr.Acc // 1000 * 1.5, Real("WrR"))
+            math(Tmr.Acc // 1000 * 1.5, Real("WrR"))
     return prog
 
 
@@ -150,7 +150,7 @@ def test_a_real_that_moves_on_each_scan_says_its_values() -> None:
     def build() -> Program:
         with Program(strict=False) as prog:
             with Rung():
-                calc(R + 0.5, R)
+                math(R + 0.5, R)
         return prog
 
     ref = _plc(build)

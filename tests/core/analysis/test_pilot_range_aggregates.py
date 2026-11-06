@@ -1,10 +1,10 @@
-"""PILOT on programs that use range aggregates (max / min / median / mean) in calc()."""
+"""PILOT on programs that use range aggregates (max / min / median / mean) in math()."""
 
 from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, calc, copy, out
+from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, copy, math, out
 
 
 def _program(kind: str):
@@ -19,7 +19,7 @@ def _program(kind: str):
             copy(ext_a, vals[1])
             copy(ext_b, vals[2])
         with Rung():
-            calc(getattr(vals.select(1, 2), kind)(), result)
+            math(getattr(vals.select(1, 2), kind)(), result)
         with Rung(result == target):
             out(hit)
     return logic, hit

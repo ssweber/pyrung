@@ -1050,15 +1050,15 @@ class TestCopyAndMathReferenceExamples:
     def test_math_hex_shift_rotate_example(self):
         """math_hex.md: RSH/RRO example with DH1=0x45B1."""
         from pyrung.core import rro, rsh
-        from pyrung.core.program import Program, Rung, calc
+        from pyrung.core.program import Program, Rung, math
 
         Enable = Bool("Enable")
         DH = Block("DH", TagType.WORD, 1, 200)
 
         with Program() as prog:
             with Rung(Enable):
-                calc(rsh(DH[1], 1), DH[2])
-                calc(rro(DH[1], 1), DH[3])
+                math(rsh(DH[1], 1), DH[2])
+                math(rro(DH[1], 1), DH[3])
 
         state = SystemState().with_tags({"Enable": True, "DH1": 0x45B1})
         new_state = evaluate_program(prog, state)
@@ -1067,7 +1067,7 @@ class TestCopyAndMathReferenceExamples:
         assert new_state.tags["DH3"] == 0xA2D8
 
     def test_calc_dsl_rejects_mode_keyword(self):
-        from pyrung.core.program import Program, Rung, calc
+        from pyrung.core.program import Program, Rung, math
 
         Enable = Bool("Enable")
         Result = Int("Result")
@@ -1075,7 +1075,7 @@ class TestCopyAndMathReferenceExamples:
         with Program():
             with pytest.raises(TypeError):
                 with Rung(Enable):
-                    calc(1 + 2, Result, mode="decimal")  # ty: ignore[unknown-argument]
+                    math(1 + 2, Result, mode="decimal")  # ty: ignore[unknown-argument]
 
 
 class TestClickPrebuiltProgramIntegration:

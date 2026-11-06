@@ -13,11 +13,11 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
-    calc,
     copy,
     fall,
     forloop,
     latch,
+    math,
     out,
     rise,
 )
@@ -243,7 +243,7 @@ class TestAutoJointDetectionLimits:
 
 
 class TestAdversarialElisionSoundness:
-    """calc(C + Step, C) where Step is a tag — the elision pass
+    """math(C + Step, C) where Step is a tag — the elision pass
     incorrectly classifies C as scan-local (write-before-read) without
     tracking that the calc source expression reads C from the previous scan.
 
@@ -253,7 +253,7 @@ class TestAdversarialElisionSoundness:
     """
 
     def test_self_referencing_calc_not_elided(self):
-        """calc(C + Step, C) reads C cross-scan — C must stay in state key."""
+        """math(C + Step, C) reads C cross-scan — C must stay in state key."""
         step = Int("Step")
         c = Int("C")
         target = Bool("Target")
@@ -262,7 +262,7 @@ class TestAdversarialElisionSoundness:
             with Rung():
                 copy(1, step)
             with Rung():
-                calc(c + step, c)
+                math(c + step, c)
             with Rung(c >= 5):
                 latch(target)
 
@@ -406,7 +406,7 @@ class TestAdversarialDepthTruncation:
             with Rung():
                 copy(1, step)
             with Rung(enable):
-                calc(c + step, c)
+                math(c + step, c)
             with Rung(c >= 55):
                 latch(target)
 
@@ -539,7 +539,7 @@ class TestAdversarialNDDomainCompleteness:
         )
 
     def test_calc_offset_to_stateful_tag_with_comparison(self):
-        """calc(Level + 10, Stored) + Stored == 85 requires Level=75 in the ND domain."""
+        """math(Level + 10, Stored) + Stored == 85 requires Level=75 in the ND domain."""
         level = Int("Level", external=True)
         stored = Int("Stored")
         alarm_a = Bool("AlarmA")
@@ -549,7 +549,7 @@ class TestAdversarialNDDomainCompleteness:
             with Rung(level > 100):
                 latch(alarm_a)
             with Rung():
-                calc(level + 10, stored)
+                math(level + 10, stored)
             with Rung(stored == 85):
                 latch(alarm_b)
 
@@ -560,7 +560,7 @@ class TestAdversarialNDDomainCompleteness:
 
         result = always(logic, ~alarm_b)
         assert isinstance(result, Counterexample), (
-            f"Level=75 flows through calc(level+10) to Stored=85 which latches AlarmB, "
+            f"Level=75 flows through math(level+10) to Stored=85 which latches AlarmB, "
             f"but prove returned {type(result).__name__} "
             f"(ND domain for Level likely missing 75)"
         )
@@ -570,7 +570,7 @@ class TestReversePropagationFallbacks:
     """Unsupported reverse shapes must widen to declared domains or become Intractable."""
 
     def test_bounded_unsupported_reverse_widens_to_declared_domain(self):
-        """calc(source % 10, stored) with stored == 5 and source min=0/max=20:
+        """math(source % 10, stored) with stored == 5 and source min=0/max=20:
         backward propagation cannot invert %, but source's declared domain
         covers the critical value (source=5), so prove finds the counterexample."""
         source = Int("Source", external=True, min=0, max=20)
@@ -581,7 +581,7 @@ class TestReversePropagationFallbacks:
             with Rung(source > 100):
                 latch(alarm)
             with Rung():
-                calc(source % 10, stored)
+                math(source % 10, stored)
             with Rung(stored == 5):
                 latch(alarm)
 
@@ -597,7 +597,7 @@ class TestReversePropagationFallbacks:
         )
 
     def test_unbounded_unsupported_reverse_is_intractable(self):
-        """calc(source % 10, stored) with stored == 5 and no source metadata:
+        """math(source % 10, stored) with stored == 5 and no source metadata:
         backward propagation cannot invert % and source has no safe finite
         fallback, so the result must be Intractable (not a false Proven)."""
         source = Int("Source", external=True)
@@ -608,7 +608,7 @@ class TestReversePropagationFallbacks:
             with Rung(source > 100):
                 latch(alarm)
             with Rung():
-                calc(source % 10, stored)
+                math(source % 10, stored)
             with Rung(stored == 5):
                 latch(alarm)
 

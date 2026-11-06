@@ -3827,7 +3827,7 @@ def _internal_tags_script() -> str:
         "with Program(strict=False) as prog:",
     ]
     for name in _INTERNAL_TAGS + _LOOKALIKE_TAGS:
-        lines += ["    with Rung():", f"        calc(Int({name!r}) + 1, Int({name!r}))"]
+        lines += ["    with Rung():", f"        math(Int({name!r}) + 1, Int({name!r}))"]
     lines += ["", "runner = PLC(prog)", ""]
     return "\n".join(lines)
 

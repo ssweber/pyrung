@@ -553,7 +553,7 @@ def _extract_inequality_prereqs(
 # prove.classify domain bounding).
 #
 # A tag is *pinned* when a consumer is committed to its value: a held one-hot
-# state peer, or a self-referential affine source (``calc(CurStep+1, CurStep)``
+# state peer, or a self-referential affine source (``math(CurStep+1, CurStep)``
 # -> ``CurStep == 1`` to produce ``CurStep == 2``) plus its one-hop-derived
 # tags (``valstepisodd = CurStep % 2 = 1``).  Evaluating a writer's guard in the
 # pinned prerequisite state makes writer selection fall out natively: a FALSE

@@ -509,7 +509,7 @@ def _comparison_influencing_tags(
 ) -> frozenset[str]:
     """Tags whose value can reach a comparison atom via invertible copy/calc.
 
-    A free input that only feeds arithmetic — ``calc(100 - level, pv)`` — still
+    A free input that only feeds arithmetic — ``math(100 - level, pv)`` — still
     influences a downstream comparison such as ``pv < band``.  The direct
     ``atom_idx`` membership test misses this transitive case and would
     misclassify the input as constant storage.
@@ -1175,11 +1175,11 @@ def _hop_affine_index(
     idx_tag: str,
     writer_instrs: dict[str, list[Any]],
 ) -> tuple[str, int, int | float]:
-    """Follow a single-writer bijective ``copy`` / ``calc(src ± k)`` pointer back
+    """Follow a single-writer bijective ``copy`` / ``math(src ± k)`` pointer back
     to its root register, tracking the address-as-a-function-of-root transform.
 
     A scratch pointer is often computed from the real driver
-    (``calc(StateRequested + 150, JumpIdx)``); the scratch itself never steps, so
+    (``math(StateRequested + 150, JumpIdx)``); the scratch itself never steps, so
     the coupling must reach the root.  Only bijective affine hops (scale ∈ {1, -1})
     are followed — they preserve "cycles through values", so the root steps iff
     the pointer does.  Returns ``(root, scale, offset)`` where the addressed slot
@@ -1266,8 +1266,8 @@ def _compute_stepping_tags(
 ) -> frozenset[str]:
     """Tags with write-site structure that actively cycles through values.
 
-    A tag is *stepping* if it has an arithmetic self-write (``calc(tag ± N, tag)``),
-    a self-referential calc (``calc(f(tag), tag)``), or >=2 distinct literal write
+    A tag is *stepping* if it has an arithmetic self-write (``math(tag ± N, tag)``),
+    a self-referential calc (``math(f(tag), tag)``), or >=2 distinct literal write
     values.  Copy-coupled tags inherit stepping from their source — including a
     ``copy(block[index], tag)`` indirect copy over a *constant* table, which
     couples the destination to the table index (see
@@ -1938,7 +1938,7 @@ def _domain_from_write_instruction(
 
 
 def _is_monotone_self_feed_calc(instr: Any, target_name: str) -> bool:
-    """True for direct non-oneshot ``calc(T +/- k, T)`` progress writes."""
+    """True for direct non-oneshot ``math(T +/- k, T)`` progress writes."""
     from pyrung.core.instruction.calc import CalcInstruction
 
     if not isinstance(instr, CalcInstruction):
@@ -2581,7 +2581,7 @@ def _backward_propagate_comparison_boundaries(
     """Propagate comparison boundary values from write targets back to sources.
 
     Covers ``copy``, ``fill``, ``blockcopy`` (identity), and invertible
-    ``calc(expr, target)`` expressions.  When a target has downstream
+    ``math(expr, target)`` expressions.  When a target has downstream
     comparisons (e.g. ``target == 75``), the boundary values are transformed
     through the inverse and added to the source's domain so the BFS
     enumerates them.  *real_gap_points* is :func:`_extract_value_domain`'s.
@@ -4149,7 +4149,7 @@ def _classify_dimensions_from_graph(
                 ):
                     # Read from outside the program (projected, or by a
                     # callable) and accumulated from its own value
-                    # (``calc(N + 1, N)``): its values are the answer, and
+                    # (``math(N + 1, N)``): its values are the answer, and
                     # with no domain the search cannot track them.
                     infeasible_tags.append(tag_name)
                 elif unclassified is not None:
@@ -4329,8 +4329,8 @@ def _has_data_feedback(tag_name: str, graph: ProgramGraph) -> bool:
 
     Follows ``data_reads`` through writer rungs — condition-only reads do
     not count as data feedback.  Returns True for direct self-feed
-    (e.g. ``calc(Count + 1, Count)``) and transitive cycles
-    (e.g. ``calc(A + 1, B)`` plus ``copy(B, A)``).
+    (e.g. ``math(Count + 1, Count)``) and transitive cycles
+    (e.g. ``math(A + 1, B)`` plus ``copy(B, A)``).
     """
     writer_indices = graph.writers_of.get(tag_name, frozenset())
     if not writer_indices:

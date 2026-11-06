@@ -16,7 +16,7 @@ of the site's tag picks the draw.
 from __future__ import annotations
 
 import functools
-import math
+import math as pymath
 from fractions import Fraction
 
 import pytest
@@ -35,7 +35,7 @@ from pyrung.core import (
     Rung,
     TagType,
     Word,
-    calc,
+    math,
     randint,
     system,
 )
@@ -54,7 +54,7 @@ Go = Bool("AgGo")
 
 
 def _trunc(value: Fraction) -> int:
-    return math.trunc(value)
+    return pymath.trunc(value)
 
 
 def _wrap(value: int, bits: int, signed: bool) -> int:
@@ -120,7 +120,7 @@ def _build_aggregate_program() -> tuple[Program, dict]:
                     _, kind, (lo, hi), dest_type = key
                     tag = DEST_TYPES[dest_type](f"AgOut_{src}_{kind}_{lo}_{hi}_{dest_type}")
                     dests[key] = tag
-                    calc(getattr(block.select(lo, hi), kind)(), tag)
+                    math(getattr(block.select(lo, hi), kind)(), tag)
     return logic, dests
 
 
@@ -202,7 +202,7 @@ def _build_division_programs() -> dict[tuple[str, str], tuple[Program, object]]:
             dest = ctor(f"AgDivOut_{kind}_{dest_type}")
             with Program(strict=False) as logic:
                 with Rung(Go):
-                    calc(getattr(DIV_SRC.select(1, 5), kind)() / Divisor, dest)
+                    math(getattr(DIV_SRC.select(1, 5), kind)() / Divisor, dest)
             programs[(kind, dest_type)] = (logic, dest)
     return programs
 
@@ -247,8 +247,8 @@ def _randint_program(lo, hi):
     expr = randint(lo, hi)
     with Program(strict=False) as logic:
         with Rung(Go):
-            calc(expr, Draw)
-            calc(expr, Draw2)
+            math(expr, Draw)
+            math(expr, Draw2)
     return logic, expr
 
 
@@ -318,7 +318,7 @@ def test_randint_tag_bounds_are_read_each_scan(lo, hi, scans):
     expr = randint(LoTag, HiTag)
     with Program(strict=False) as logic:
         with Rung(Go):
-            calc(expr, Draw)
+            math(expr, Draw)
     plc, kernel = PLC(logic), CompiledPLC(logic)
     for low, high in scans:
         for runner in (plc, kernel):
@@ -363,7 +363,7 @@ def _real_sum_on_each_backend(values: list[float]) -> list[float]:
     dest = Real("AgRSOut")
     with Program(strict=False) as logic:
         with Rung(Go):
-            calc(block.select(1, len(values)).sum(), dest)
+            math(block.select(1, len(values)).sum(), dest)
     results = []
     for runner in (PLC(logic), CompiledPLC(logic)):
         runner.patch({"AgGo": True} | {block[i].name: v for i, v in enumerate(values, start=1)})

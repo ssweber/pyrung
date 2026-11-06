@@ -63,11 +63,11 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
     blockcopy,
-    calc,
     copy,
     count_up,
     event_drum,
     fill,
+    math,
     on_delay,
     pack_bits,
     pack_text,
@@ -95,7 +95,7 @@ FIRST_PROBE = 3
 def _read(slot: Any, scan: int, flag: Any, field: Any, bit: int, *, on: bool = True) -> None:
     """Add *bit* to *field* on *scan* if *flag* is on (``on``) or off right now."""
     with Rung(slot.Scratch == scan, flag if on else ~flag):
-        calc(field + bit, field)
+        math(field + bit, field)
 
 
 # --- flag_boxes -----------------------------------------------------------------
@@ -275,7 +275,7 @@ def prove_oneshot_settles_sc43(slot: Any) -> None:
         copy(40000, big)
     probes: list[Callable[[Any], object]] = [
         lambda dest: copy(1, dest, oneshot=True),
-        lambda dest: calc(dest + 1, dest, oneshot=True),
+        lambda dest: math(dest + 1, dest, oneshot=True),
     ]
     for k, op in enumerate(probes):
         with Rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
@@ -339,7 +339,7 @@ def prove_df_into_dd(slot: Any) -> None:
         with Rung(slot.Scratch == FIRST_PROBE + 1, into == reading):
             copy(number, slot.Result1)
     with Rung(slot.Scratch == FIRST_PROBE + 1):
-        calc(into / scale, slot.Result2)
+        math(into / scale, slot.Result2)
     done(slot, HALF_WINDOW)
 
 

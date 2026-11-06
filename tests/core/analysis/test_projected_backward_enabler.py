@@ -9,13 +9,13 @@ The fixture is a minimal SFC step sequencer with the burner's shape:
 * there is no admissible successor past step 3.
 
 So the true reachable domain is ``{1, 2, 3}`` even though the gate-agnostic
-forward writers ``calc(CurStep + 1, CurStep)`` would otherwise enumerate it
+forward writers ``math(CurStep + 1, CurStep)`` would otherwise enumerate it
 without bound.
 """
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, calc, copy
+from pyrung.core import Bool, Int, Program, Rung, copy, math
 from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.sp_values import (
     _enabler_reachable,
@@ -35,12 +35,12 @@ def _build_sfc() -> Program:
         with Rung(CurStep == 1, fb):  # rung 0: Trans set ONLY from CurStep==1
             copy(1, Trans)
         with Rung(Trans == 1):  # rung 1: transition increment
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
             copy(0, Trans)
         with Rung():  # rung 2: parity derive
-            calc(CurStep % 2, valstepisodd)
+            math(CurStep % 2, valstepisodd)
         with Rung(valstepisodd != 1):  # rung 3: even-step neutral bump
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
     return prog
 
 

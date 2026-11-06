@@ -238,7 +238,7 @@ _INSTRUCTION_LABELS: dict[str, str] = {
     "LatchInstruction": "latch",
     "ResetInstruction": "reset",
     "CopyInstruction": "copy",
-    "CalcInstruction": "calc",
+    "CalcInstruction": "math",
     "OnDelayInstruction": "on_delay",
     "OffDelayInstruction": "off_delay",
     "CountUpInstruction": "count_up",

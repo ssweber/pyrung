@@ -6,7 +6,7 @@ into an INT, so a value of another type is a register nobody can read.
 
 from __future__ import annotations
 
-import math
+import math as pymath
 from typing import Any
 
 import pytest
@@ -28,8 +28,8 @@ from pyrung.core import (
     TagType,
     Word,
     blockcopy,
-    calc,
     copy,
+    math,
     out,
     search,
 )
@@ -84,18 +84,18 @@ HELD = [
     ("D", 0xFFFF0001, 2147483647),
     ("W", -1, 65535),
     ("W", 65537, 1),
-    ("I", math.inf, 32767),
-    ("I", -math.inf, -32768),
-    ("I", math.nan, 0),
+    ("I", pymath.inf, 32767),
+    ("I", -pymath.inf, -32768),
+    ("I", pymath.nan, 0),
     # Not bool(inf): a non-finite stores as 0 into anything but a clamp's bound.
-    ("Enable", math.inf, False),
-    ("Enable", -math.inf, False),
-    ("Enable", math.nan, False),
+    ("Enable", pymath.inf, False),
+    ("Enable", -pymath.inf, False),
+    ("Enable", pymath.nan, False),
 ]
 
 
 def _same(held: Any, want: Any) -> bool:
-    return type(held) is type(want) and math.copysign(1, held) == math.copysign(1, want)
+    return type(held) is type(want) and pymath.copysign(1, held) == pymath.copysign(1, want)
 
 
 @pytest.mark.parametrize(("name", "value", "want"), HELD, ids=repr)
@@ -144,7 +144,7 @@ def test_a_value_no_store_can_make_sense_of_is_refused(name: str, value: Any, me
         assert name not in plc.forces
 
 
-@pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan])
+@pytest.mark.parametrize("value", [pymath.inf, -pymath.inf, pymath.nan])
 def test_a_real_still_takes_inf_and_nan(value: float) -> None:
     for plc in _engines():
         plc.patch({R: value})
@@ -152,7 +152,7 @@ def test_a_real_still_takes_inf_and_nan(value: float) -> None:
         assert repr(plc.current_state.tags["R"]) == repr(value)
 
 
-@pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan])
+@pytest.mark.parametrize("value", [pymath.inf, -pymath.inf, pymath.nan])
 def test_a_copy_of_a_non_finite_into_a_bool_is_false_on_each_engine(value: float) -> None:
     def program() -> Program:
         with Program(strict=False) as built:
@@ -183,12 +183,12 @@ def test_a_copy_of_a_non_finite_into_a_bool_is_false_in_generated_code(
     dst = Bool("Dst", default=True)
     with Program(strict=False) as program:
         with Rung():
-            calc(big * big, inf)
-            calc(held(big, inf), src)
+            math(big * big, inf)
+            math(held(big, inf), src)
             copy(src, dst)
 
     held_src, held_dst = _run(program, engine, (src, dst), monkeypatch)
-    assert not math.isfinite(held_src)
+    assert not pymath.isfinite(held_src)
     assert held_dst is False
 
 

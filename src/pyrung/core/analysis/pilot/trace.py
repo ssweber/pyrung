@@ -2711,8 +2711,8 @@ def _transition_fire_pins(
     - a registered writer reverse — copy, aligned block-copy, or affine calc —
       returns singleton ``Eq`` constraints for the producer values forced on its
       firing scan;
-    - a **non-affine calc** — ``calc(A * B, tag)``, ``calc(A & mask, tag)``,
-      ``calc((A << 2) | B, tag)`` — that the crossing can't invert symbolically,
+    - a **non-affine calc** — ``math(A * B, tag)``, ``math(A & mask, tag)``,
+      ``math((A << 2) | B, tag)`` — that the crossing can't invert symbolically,
       solved by enumerate-and-evaluate over the sources' *complete* finite
       domains (:func:`~pyrung.core.analysis.pilot.tide_tables.solve_calc_preimage`),
       pinning only the FORCED source values (those shared by every satisfying
@@ -2819,7 +2819,7 @@ def _table_enablement_prereqs(
     """Prerequisites for an enablement flag decided by a constant-table predicate.
 
     A PackML transition (``copy(StateReq, StateCur)``, an affine
-    ``calc(StateReq + k, StateCur)``, or a decode ``copy(10, StateCur)`` gated on
+    ``math(StateReq + k, StateCur)``, or a decode ``copy(10, StateCur)`` gated on
     ``StateReq == 10``) is gated by ``isStateEnbl_Yes==1``, whose own writer is
     gated by ``stateMask[StateReq] & disabledMask[Mode] == 0``.  That predicate
     register is recomputed from ``StateReq`` every scan, so its snapshot value is

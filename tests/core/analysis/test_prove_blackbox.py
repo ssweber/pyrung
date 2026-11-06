@@ -19,13 +19,13 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     call,
     copy,
     count_down,
     count_up,
     flasher,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -587,9 +587,9 @@ class TestReviewRound2:
         y, z, bad = Bool("BbR2HY"), Bool("BbR2HZ"), Bool("BbR2HBad")
         with Program(strict=False) as logic:
             with Rung(rise(pulse), lo < 30):
-                calc(lo + 20, lo)
+                math(lo + 20, lo)
             with Rung(rise(pulse), hi < 35):
-                calc(hi + 20, hi)
+                math(hi + 20, hi)
             with Rung(lo > 25):
                 out(y)
             with Rung(hi > 25):
@@ -671,9 +671,9 @@ class TestElision:
             with Rung(n == 2, ~timer.Done, z):
                 latch(bad)
             with Rung(rise(x)):
-                calc(n + 1, n)
+                math(n + 1, n)
             with Rung(timer.Done, rise(x)):
-                calc(n + 1, n)
+                math(n + 1, n)
         seq = [
             ({"BbElX": True}, 1),
             ({"BbElX": False}, 1),

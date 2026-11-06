@@ -153,13 +153,13 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
                     return (
                         f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
                         f"Store the index in a DS tag and use copy(): "
-                        f"calc({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
+                        f"math({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
                     )
                 except (KeyError, ValueError):
                     pass
             return (
                 f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
-                "Pre-compute the index with calc() into a DS pointer tag, "
+                "Pre-compute the index with math() into a DS pointer tag, "
                 "then use block[Ptr]."
             )
         return "Replace computed pointer arithmetic with DS pointer tag updated separately."
@@ -169,9 +169,9 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         if expr_dsl:
             return (
                 f"Expression '{expr_dsl}' cannot be used directly here. "
-                f"Move it into calc({expr_dsl}, temp) and use temp in this context."
+                f"Move it into math({expr_dsl}, temp) and use temp in this context."
             )
-        return "Move expression into calc(expr, temp) and use temp in this context."
+        return "Move expression into math(expr, temp) and use temp in this context."
 
     if code == CLK_TILDE_BOOL_CONTACT_ONLY:
         expr_dsl = str(meta.get("expr_dsl", ""))
@@ -203,18 +203,18 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_FUNCTION_CALL_NOT_PORTABLE:
         return (
             "Replace run_function/run_enabled_function with Click-portable instructions "
-            "(copy/calc/timer/counter/send/receive)."
+            "(copy/math/timer/counter/send/receive)."
         )
 
     if code == CLK_CALC_MODE_MIXED:
         return (
-            "Split mixed calc math into separate decimal and WORD-only calc() steps, "
-            "or convert through an intermediate tag so each calc() stays one family."
+            "Split mixed math into separate decimal and WORD-only math() steps, "
+            "or convert through an intermediate tag so each math() stays one family."
         )
 
     if code == CLK_CALC_FLOOR_DIV:
         return (
-            "Click has no floor-division operator. Use calc(a / b, int_dest) instead; "
+            "Click has no floor-division operator. Use math(a / b, int_dest) instead; "
             "copying the result to an Int or Dint tag truncates toward zero automatically."
         )
 
@@ -224,7 +224,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_CALC_NESTING_DEPTH:
         return (
             "Click limits parenthetical nesting to 8 levels. "
-            "Break the expression into intermediate calc() steps with temporary tags."
+            "Break the expression into intermediate math() steps with temporary tags."
         )
 
     if code == CLK_COPY_CONVERTER_INCOMPATIBLE:

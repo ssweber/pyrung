@@ -19,11 +19,11 @@ from pyrung import (
     TagType,
     Timer,
     Word,
-    calc,
     call,
     copy,
     count_up,
     latch,
+    math,
     on_delay,
     out,
     subroutine,
@@ -42,7 +42,7 @@ def _die_program() -> tuple[Program, RandIntExpr, Tag]:
     draw = randint(1, 6)
     with Program(strict=False) as logic:
         with Rung():
-            calc(draw, die)
+            math(draw, die)
     return logic, draw, die
 
 
@@ -50,9 +50,9 @@ def _int_and_word() -> tuple[Program, RandIntExpr, list[str]]:
     roll = randint(100000, 110000)
     with Program(strict=False) as logic:
         with Rung():
-            calc(roll, Int("I"))
+            math(roll, Int("I"))
         with Rung():
-            calc(roll, Word("W"))
+            math(roll, Word("W"))
     name = roll.tag.name
     return logic, roll, [name, f"{name}.cut", f"{name}.ucut", "I", "W"]
 
@@ -64,7 +64,7 @@ def _tag_read_by_a_rung(
     with Program(strict=False) as logic:
         if with_calc:
             with Rung():
-                calc(roll, Int("Die"))
+                math(roll, Int("Die"))
         if as_condition:
             with Rung(roll.tag > 80000):
                 copy(1, Int("High"))
@@ -81,7 +81,7 @@ def _tag_read_in_a_subroutine() -> tuple[Program, RandIntExpr, list[str]]:
     roll = randint(70000, 90000)
     with Program(strict=False) as logic:
         with Rung():
-            calc(roll, Int("Die"))
+            math(roll, Int("Die"))
         with Rung():
             call("show")
         with subroutine("show"):
@@ -129,8 +129,8 @@ class TestDraws:
         a, b = Int("A"), Int("B")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(1, 1000), a)
-                calc(randint(1, 1000), b)
+                math(randint(1, 1000), a)
+                math(randint(1, 1000), b)
         plc = PLC(logic, dt=0.01)
         pairs = [(s.tags["A"], s.tags["B"]) for s in (plc.step() or plc.state for _ in range(20))]
         assert any(x != y for x, y in pairs)
@@ -139,7 +139,7 @@ class TestDraws:
         lo, hi, result = Int("Lo", default=10), Int("Hi", default=12), Int("Result")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, hi), result)
+                math(randint(lo, hi), result)
         plc = PLC(logic, dt=0.01)
         assert set(_draws(plc, "Result", 100)) == {10, 11, 12}
         plc.patch({lo: 50, hi: 51})
@@ -150,7 +150,7 @@ class TestDraws:
         result = Int("Result")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(6, 1), result)
+                math(randint(6, 1), result)
         assert set(_draws(PLC(logic, dt=0.01), "Result", 300)) == {1, 2, 3, 4, 5, 6}
 
     def test_compiled_backend_draws_the_same(self):
@@ -196,7 +196,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(4, 4), die)
+                math(randint(4, 4), die)
         state = factory(logic, dt=0.01).step()
         assert state.tags["Die"] == 0
         assert state.tags["fault.math_operation_error"] is True
@@ -206,9 +206,9 @@ class TestBoundsAsCLICKReadsThem:
         lo = Int("Lo", default=4)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(4, 4), Int("A"))
-                calc(randint(4, 5), Int("B"))
-                calc(randint(lo, lo), Int("C"))
+                math(randint(4, 4), Int("A"))
+                math(randint(4, 5), Int("B"))
+                math(randint(lo, lo), Int("C"))
         faults = [instr._fault_writes for instr in logic.rungs[0]._instructions]
         assert ["fault.math_operation_error" in writes for writes in faults] == [
             True,
@@ -223,7 +223,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die", default=9)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, hi), die)
+                math(randint(lo, hi), die)
         state = factory(logic, dt=0.01).step()
         assert state.tags["Die"] == 0
         assert state.tags["fault.math_operation_error"] is True
@@ -237,7 +237,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die", default=9)
         with Program(strict=False) as logic:
             with Rung():
-                calc((randint(lo, hi) if tags else randint(7, 7)) + 5, die)
+                math((randint(lo, hi) if tags else randint(7, 7)) + 5, die)
         state = factory(logic, dt=0.01).step()
         assert state.tags["Die"] == 5
         assert state.tags["fault.math_operation_error"] is True
@@ -248,7 +248,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die", default=9)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(r, r) + 5, die)
+                math(randint(r, r) + 5, die)
         state = factory(logic, dt=0.01).step()
         assert state.tags["Die"] == 5
         assert state.tags["fault.math_operation_error"] is False
@@ -264,7 +264,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(*bounds), die)
+                math(randint(*bounds), die)
         values = _draws(PLC(logic, dt=0.01), "Die", 2000)
         assert (min(values), max(values)) == (lowest, highest)
 
@@ -274,7 +274,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, die)
+                math(roll, die)
         assert (roll.cut_tag.min, roll.cut_tag.max) == (-536, 464)
         values = _draws(PLC(logic, dt=0.01), "Die", 2000)
         assert -536 <= min(values) < -500
@@ -284,7 +284,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(70000, 4464), die)
+                math(randint(70000, 4464), die)
         state = PLC(logic, dt=0.01).step()
         assert state.tags["Die"] == 0
         assert state.tags["fault.math_operation_error"] is True
@@ -294,7 +294,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Dint("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(hi, 70001), die)
+                math(randint(hi, 70001), die)
         state = PLC(logic, dt=0.01).step()
         assert state.tags["Die"] in (70000, 70001)
         assert state.tags["fault.math_operation_error"] is False
@@ -305,7 +305,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, die)
+                math(roll, die)
         plc = factory(logic, dt=0.01)
         plc.patch({roll.cut_tag: 4465})
         assert plc.step().tags["Die"] == 4465
@@ -315,7 +315,7 @@ class TestBoundsAsCLICKReadsThem:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, die)
+                math(roll, die)
         assert (roll.cut_tag.min, roll.cut_tag.max) == (4464, 4466)
         assert (roll.tag.min, roll.tag.max) == (70000, 70002)
         with warnings.catch_warnings():
@@ -326,7 +326,7 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 70002)
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll / 2, Int("Die"))
+                math(roll / 2, Int("Die"))
         instr = logic.rungs[0]._instructions[0]
         assert format_expr(instr.source_expression.left) == "randint(70000, 70002)"
         assert format_expr(instr.expression.left) == "randint(4464, 4466)"
@@ -339,7 +339,7 @@ class TestBoundsAsCLICKReadsThem:
         with Program(strict=False) as logic:
             with Rung():
                 for dest in (narrow, wide) if narrow_first else (wide, narrow):
-                    calc(roll, dest)
+                    math(roll, dest)
         plc = factory(logic, dt=0.01)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -353,8 +353,8 @@ class TestBoundsAsCLICKReadsThem:
         first, second = Int("First"), Int("Second")
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, first)
-                calc(roll, second)
+                math(roll, first)
+                math(roll, second)
         plc = PLC(logic, dt=0.01)
         for _ in range(30):
             state = plc.step()
@@ -365,13 +365,13 @@ class TestBoundsAsCLICKReadsThem:
         wide = Dint("Wide")
         with Program(strict=False) as first:
             with Rung():
-                calc(roll, wide)
+                math(roll, wide)
         running = PLC(first, dt=0.01)
         before = _draws(PLC(first, dt=0.01), "Wide", 20)
 
         with Program(strict=False) as second:
             with Rung():
-                calc(roll, Int("Narrow"))
+                math(roll, Int("Narrow"))
 
         assert (roll.tag.min, roll.tag.max) == (70000, 70002)
         assert _draws(running, "Wide", 20) == before
@@ -382,12 +382,12 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 70002)
         with Program(strict=False) as first:
             with Rung():
-                calc(roll, Int("Narrow"))
+                math(roll, Int("Narrow"))
         before = _draws(PLC(first, dt=0.01), "Narrow", 20)
 
         with Program(strict=False) as second:
             with Rung():
-                calc(roll, Dint("Wide"))
+                math(roll, Dint("Wide"))
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -399,8 +399,8 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 70002)
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, Int("Narrow"))
-                calc(roll, Dint("Wide"))
+                math(roll, Int("Narrow"))
+                math(roll, Dint("Wide"))
         narrow, wide = logic.rungs[0]._instructions
         assert format_expr(narrow.source_expression) == "randint(70000, 70002)"
         assert format_expr(narrow.expression) == "randint(4464, 4466)"
@@ -427,7 +427,7 @@ class TestBoundsAsCLICKReadsThem:
         with Program(strict=False) as logic:
             with Rung():
                 for index, dest in enumerate(dests):
-                    calc(roll, dest(f"Die{index}"))
+                    math(roll, dest(f"Die{index}"))
         sites = {
             "uncut": (roll.tag.name, roll.site, 70000, 90000),
             "cut": (f"{roll.tag.name}.cut", ~roll.site, 4464, 24464),
@@ -449,9 +449,9 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(100000, 110000)
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, Int("I"))
+                math(roll, Int("I"))
             with Rung():
-                calc(roll, Word("W"))
+                math(roll, Word("W"))
         assert {roll.cut_tag.name, roll.ucut_tag.name} == {
             f"{roll.tag.name}.cut",
             f"{roll.tag.name}.ucut",
@@ -497,7 +497,7 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 90000)
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, Int("Die"))
+                math(roll, Int("Die"))
         natural = _draws(factory(logic, dt=0.01), "Die", 9)
         plc = factory(logic, dt=0.01)
         dice = []
@@ -530,7 +530,7 @@ class TestBoundsAsWritten:
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(0, df[2]) + 3, die)
+                math(randint(0, df[2]) + 3, die)
         state = factory(logic, dt=0.01).step()
         assert state.tags["Die"] == 3
         assert state.tags["fault.out_of_range"] is False
@@ -549,7 +549,7 @@ class TestBoundsAsWritten:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(make(n), die)
+                math(make(n), die)
         plc = factory(logic, dt=0.01)
         values = {plc.step().tags["Die"] for _ in range(40)}
         assert values == {low, high}
@@ -560,7 +560,7 @@ class TestBoundsAsWritten:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(r + 0, 5), die)
+                math(randint(r + 0, 5), die)
         plc = factory(logic, dt=0.01)
         assert {plc.step().tags["Die"] for _ in range(40)} == {3, 4, 5}
 
@@ -569,7 +569,7 @@ class TestBoundsAsWritten:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(2.5, 4.5), die)
+                math(randint(2.5, 4.5), die)
         plc = factory(logic, dt=0.01)
         assert {plc.step().tags["Die"] for _ in range(40)} == {2, 3, 4}
 
@@ -579,7 +579,7 @@ class TestBoundsAsWritten:
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(2.5, 2.5), die)
+                math(randint(2.5, 2.5), die)
         state = factory(logic, dt=0.01).step()
         assert state.tags["Die"] == 0
         assert state.tags["fault.math_operation_error"] is True
@@ -590,7 +590,7 @@ class TestBoundsAsWritten:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, 5), die)
+                math(randint(lo, 5), die)
         plc = factory(logic, dt=0.01)
         assert {plc.step().tags["Die"] for _ in range(40)} == {3, 4, 5}
 
@@ -607,7 +607,7 @@ class TestBoundsAsWritten:
         die = Int("Die", default=9)
         with Program(strict=False) as logic:
             with Rung():
-                calc(roll, die)
+                math(roll, die)
         plc = factory(logic, dt=0.01)
         plc.patch({roll.tag: 6})
         assert plc.step().tags["Die"] == 0
@@ -640,7 +640,7 @@ class TestReplay:
             with Rung():
                 on_delay(timer, 5000)
             with Rung():
-                calc(randint(1, 6), die)
+                math(randint(1, 6), die)
             with Rung(die == 6):
                 count_up(sixes, 100_000).reset(six)
 
@@ -659,7 +659,7 @@ class TestBuild:
             with Program(strict=False):
                 with Rung():
                     with forloop(3):
-                        calc(randint(1, 6), result)
+                        math(randint(1, 6), result)
 
     def test_call_inside_forloop_does_not_see_a_randint_elsewhere(self):
         from pyrung.core import call, subroutine
@@ -668,10 +668,10 @@ class TestBuild:
         with Program(strict=False):
             with subroutine("Other"):
                 with Rung():
-                    calc(randint(1, 6), result)
+                    math(randint(1, 6), result)
             with subroutine("Work"):
                 with Rung():
-                    calc(result + 1, result)
+                    math(result + 1, result)
             with Rung():
                 with forloop(3):
                     call("Work")
@@ -684,7 +684,7 @@ class TestBuild:
             with Program(strict=False):
                 with subroutine("Work"):
                     with Rung():
-                        calc(randint(1, 6), result)
+                        math(randint(1, 6), result)
                 with subroutine("Outer"):
                     with Rung():
                         call("Work")
@@ -706,7 +706,7 @@ class TestProver:
         die, six = Int("Die"), Bool("Six")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(1, 6), die)
+                math(randint(1, 6), die)
             with Rung(die == 6):
                 latch(six)
         verdict = always(logic, ~six)
@@ -722,14 +722,14 @@ class TestProver:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(1, 6), die)
+                math(randint(1, 6), die)
         assert isinstance(always(logic, die <= 6), Proven)
 
     def test_a_cut_draw_stays_in_its_cut_range(self):
         die = Int("Die", default=4464)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(70000, 70002), die)
+                math(randint(70000, 70002), die)
         assert isinstance(always(logic, die <= 4466), Proven)
         assert isinstance(always(logic, die >= 4464), Proven)
 
@@ -738,7 +738,7 @@ class TestProver:
         lo = Real("Lo", min=1.0, max=3.0, default=1.0)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, 5), die)
+                math(randint(lo, 5), die)
         assert isinstance(always(logic, die == 0), Proven)
 
     @pytest.mark.parametrize(
@@ -757,7 +757,7 @@ class TestProver:
     def test_the_math_error_flag_is_written_where_a_bound_can_hit_one(self, make, writes_it):
         with Program(strict=False) as logic:
             with Rung():
-                calc(make(Int("N")), Dint("D"))
+                math(make(Int("N")), Dint("D"))
         instr = logic.rungs[0]._instructions[0]
         assert ("fault.math_operation_error" in instr._fault_writes) is writes_it
 
@@ -769,7 +769,7 @@ class TestProver:
         def build():
             with Program(strict=False) as logic:
                 with Rung():
-                    calc(randint(0, sqrt(n)), d)
+                    math(randint(0, sqrt(n)), d)
                 with Rung(system.fault.math_operation_error):
                     out(b)
             return logic
@@ -785,7 +785,7 @@ class TestProver:
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(7, 7), die)
+                math(randint(7, 7), die)
         verdict = always(logic, die == 0)
         assert isinstance(verdict, Intractable)
         hint = verdict.hints[0]
@@ -797,7 +797,7 @@ class TestProver:
         die, six, lo = Int("Die"), Bool("Six"), Int("Lo")
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, 6), die)
+                math(randint(lo, 6), die)
             with Rung(die == 6):
                 latch(six)
         verdict = always(logic, ~six)
@@ -808,7 +808,7 @@ class TestProver:
         die, six, lo = Int("Die"), Bool("Six"), Int("Lo", min=1, max=3)
         with Program(strict=False) as logic:
             with Rung():
-                calc(randint(lo, 6), die)
+                math(randint(lo, 6), die)
             with Rung(die == 6):
                 latch(six)
         assert isinstance(always(logic, ~six), Counterexample)

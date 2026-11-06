@@ -16,12 +16,12 @@ from pyrung.core import (
     Timer,
     branch,
     break_loop,
-    calc,
     call,
     copy,
     count_up,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -56,7 +56,7 @@ def _body_rung_program() -> Program:
     with Program() as logic:
         with Rung(Enable):
             with forloop(3):
-                calc(A + 1, A)
+                math(A + 1, A)
                 with Rung(Stop):
                     break_loop()
                 with Rung(Gate):
@@ -211,7 +211,7 @@ def test_prover_names_body_rungs_as_intractable():
         with Rung(Enable):
             with forloop(3):
                 with Rung(Gate):
-                    calc(A + 1, A)
+                    math(A + 1, A)
         with Rung(A > 5):
             out(Y)
 

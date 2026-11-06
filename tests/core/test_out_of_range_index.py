@@ -2,7 +2,7 @@
 
 In a rung condition such an element reads as 0 (the type's zero), with no
 fault flag and the scan carrying on: the same rule as any other expression
-outside ``calc``.  ``copy()`` and ``calc()`` read a source past its block as 0
+outside ``calc``.  ``copy()`` and ``math()`` read a source past its block as 0
 with no flag, and a source below it sets ``fault.address_error`` and writes
 nothing.  Every form must behave the same in the interpreted runtime, the
 compiled kernel (legacy and blockless) and the generated CircuitPython code.
@@ -30,9 +30,9 @@ from pyrung.core import (
     Real,
     Rung,
     TagType,
-    calc,
     copy,
     latch,
+    math,
     out,
     system,
 )
@@ -372,14 +372,14 @@ def _build_reads() -> tuple[Program, dict[str, Any]]:
     sources = {
         "D_copy_past": lambda dest: copy(Tbl[P], dest),
         "D_copy_past_expr": lambda dest: copy(Tbl[Q + 100], dest),
-        "D_calc_past": lambda dest: calc(Tbl[P], dest),
-        "D_calc_past_expr": lambda dest: calc(Tbl[Q + 100], dest),
+        "D_calc_past": lambda dest: math(Tbl[P], dest),
+        "D_calc_past_expr": lambda dest: math(Tbl[Q + 100], dest),
         "D_copy_below": lambda dest: copy(Tbl[N], dest),
         "D_copy_below_expr": lambda dest: copy(Tbl[Q - 5], dest),
-        "D_calc_below": lambda dest: calc(Tbl[N], dest),
-        "D_calc_below_expr": lambda dest: calc(Tbl[Q - 5], dest),
-        "D_calc_div0": lambda dest: calc(Tbl[Q // Z], dest),
-        "D_calc_sum": lambda dest: calc(Tbl[Q + 0], dest),
+        "D_calc_below": lambda dest: math(Tbl[N], dest),
+        "D_calc_below_expr": lambda dest: math(Tbl[Q - 5], dest),
+        "D_calc_div0": lambda dest: math(Tbl[Q // Z], dest),
+        "D_calc_sum": lambda dest: math(Tbl[Q + 0], dest),
     }
 
     with Program(strict=False) as prog:

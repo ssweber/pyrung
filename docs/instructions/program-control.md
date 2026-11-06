@@ -128,7 +128,7 @@ on the innermost:
 with rung(Enable):
     with forloop(Rows) as row:
         with forloop(Cols) as col:
-            calc(Total + Grid[row.idx * 8 + col.idx], Total)
+            math(Total + Grid[row.idx * 8 + col.idx], Total)
 ```
 
 A nested loop is a body rung of the outer loop, so it can have contacts:

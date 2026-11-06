@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core import Rung, calc, copy
+from pyrung.core import Rung, copy, math
 
 #: Scans a case records by default.
 WINDOW = 8
@@ -33,7 +33,7 @@ def scans_for(window: int = WINDOW) -> int:
 def count_scans(slot: Any, window: int = WINDOW) -> None:
     """``Scratch`` = the scan in progress, holding at ``window + 1``.  The case's first rung."""
     with Rung(slot.Cmd != 0, slot.Scratch <= window):
-        calc(slot.Scratch + 1, slot.Scratch)
+        math(slot.Scratch + 1, slot.Scratch)
 
 
 def trace(slot: Any, bit: Any, window: int = WINDOW) -> None:
@@ -44,7 +44,7 @@ def trace(slot: Any, bit: Any, window: int = WINDOW) -> None:
     with Rung(slot.Cmd != 0, slot.Scratch <= window, bit, slot.Result1 == 0):
         copy(slot.Scratch, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch <= window, bit):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
         copy(slot.Scratch, slot.Result3)
 
 
@@ -56,7 +56,7 @@ def edges(edge: Any, slot: Any, count: Any, at: Any = None, window: int = WINDOW
     behind an open contact still tracks its bit is a probe of its own.
     """
     with Rung(edge, slot.Cmd != 0, slot.Scratch <= window):
-        calc(count + 1, count)
+        math(count + 1, count)
         if at is not None:
             copy(slot.Scratch, at)
 
@@ -69,7 +69,7 @@ def firings(edge: Any, slot: Any, dest: Any, *more: Any, window: int = WINDOW) -
     digit; an Int holds at most four of them (32767).
     """
     with Rung(edge, slot.Cmd != 0, slot.Scratch <= window, *more):
-        calc(dest * 10 + slot.Scratch, dest)
+        math(dest * 10 + slot.Scratch, dest)
 
 
 def done(slot: Any, window: int = WINDOW) -> None:

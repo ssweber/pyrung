@@ -45,9 +45,9 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
     blockcopy,
-    calc,
     copy,
     fill,
+    math,
     pack_text,
     reset,
     system,
@@ -65,9 +65,9 @@ SC44 = system.fault.address_error
 def _pair(slot, first, second, into):
     with Rung(*once(slot)):
         copy(first, slot.Scratch, convert=to_ascii)
-        calc(slot.Scratch * 128, into)
+        math(slot.Scratch * 128, into)
         copy(second, slot.Scratch, convert=to_ascii)
-        calc(into + slot.Scratch, into)
+        math(into + slot.Scratch, into)
 
 
 def prove_across_types(slot):
@@ -188,7 +188,7 @@ def prove_pack_text_forms(slot):
         copy(99, dh[69])
         copy(99, slot.ErrorCode)
         pack_text(txt.select(701, 704), df[197])
-        calc(df[197] * 10, slot.Result1)
+        math(df[197] * 10, slot.Result1)
         pack_text(txt.select(711, 717), df[198])
     flag_bit(slot, SC43, slot.Result2, 10)
     with Rung(*once(slot)):
@@ -200,7 +200,7 @@ def prove_pack_text_forms(slot):
         pack_text(txt.select(741, 742), slot.ErrorCode)
     class_of(slot, df[198], [150.0, 1.0, 99.0], slot.Scratch)
     with Rung(*once(slot)):
-        calc(slot.Result2 + slot.Scratch, slot.Result2)
+        math(slot.Result2 + slot.Scratch, slot.Result2)
     class_of(slot, dh[69], [0xFF, 99], slot.Result4)
     finish(slot)
 
@@ -220,7 +220,7 @@ def prove_block_forms(slot):
     with Rung(*once(slot)):
         fill(99, ds.select(3915, 3917))
         blockcopy(txt.select(751, 753), ds.select(3915, 3917), convert=to_value)
-        calc(ds[3915] * 10 + ds[3917], slot.Result1)
+        math(ds[3915] * 10 + ds[3917], slot.Result1)
         copy(2.7, df[200])
         fill(df[200], ds.select(3918, 3919))
         fill(2, c.select(1738, 1740))

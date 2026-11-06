@@ -17,7 +17,7 @@ from pyrung import (
     PLC,
     rung,
     Timer,
-    calc,
+    math,
     latch,
     on_delay,
     out,
@@ -72,9 +72,9 @@ def logic():
 
     # Alarm extent — nonzero when any alarm active
     with rung(rise(FlowAlarm)):
-        calc(AlarmExtent + 1, AlarmExtent)
+        math(AlarmExtent + 1, AlarmExtent)
     with rung(fall(FlowAlarm)):
-        calc(AlarmExtent - 1, AlarmExtent)
+        math(AlarmExtent - 1, AlarmExtent)
 
 
 # ---------------------------------------------------------------------------

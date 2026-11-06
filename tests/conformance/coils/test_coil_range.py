@@ -20,10 +20,10 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
-    calc,
     copy,
     fill,
     latch,
+    math,
     out,
     reset,
     search,
@@ -37,14 +37,14 @@ def prove_ranges_and_search(slot):
     with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 3):
         out(c.select(1623, 1625))
     with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1623]):
-        calc(slot.Result1 + 100, slot.Result1)
+        math(slot.Result1 + 100, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1625]):
-        calc(slot.Result1 + 10, slot.Result1)
+        math(slot.Result1 + 10, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1626]):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     for bit in (1623, 1624, 1625):
         with Rung(slot.Cmd != 0, slot.Scratch == 4, c[bit]):
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
         latch(c.select(1627, 1629))
         copy(5, dh[72])
@@ -54,11 +54,11 @@ def prove_ranges_and_search(slot):
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
         reset(c.select(1627, 1628))
     with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1627]):
-        calc(slot.Result3 + 100, slot.Result3)
+        math(slot.Result3 + 100, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1628]):
-        calc(slot.Result3 + 10, slot.Result3)
+        math(slot.Result3 + 10, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1629]):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
         search(dh.select(72, 74) > 0x8000, result=slot.Result4, found=c[1630])
     # The table moves after the search's first scan, its rung still true.

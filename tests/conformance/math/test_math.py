@@ -36,7 +36,7 @@ case now uses data that does:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, randint
+from pyrung.core import Rung, copy, fill, math, randint
 from tests.conformance.memory import dd, df, dh, ds
 
 
@@ -45,11 +45,11 @@ def prove_avg_mdn_positive(slot):
         copy(1, ds[4401])
         copy(2, ds[4402])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(ds.select(4401, 4402).mean(), slot.Result1)
-        calc(ds.select(4401, 4402).median(), slot.Result2)
-        calc(ds.select(4401, 4402).mean(), df[1])
-        calc(df[1] * 10, slot.Result3)
-        calc(ds.select(4401, 4402).mean() * 10, slot.Result4)
+        math(ds.select(4401, 4402).mean(), slot.Result1)
+        math(ds.select(4401, 4402).median(), slot.Result2)
+        math(ds.select(4401, 4402).mean(), df[1])
+        math(df[1] * 10, slot.Result3)
+        math(ds.select(4401, 4402).mean() * 10, slot.Result4)
         copy(1, slot.Fired)
 
 
@@ -58,8 +58,8 @@ def prove_avg_mdn_negative(slot):
         copy(-1, ds[4411])
         copy(-2, ds[4412])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(ds.select(4411, 4412).mean(), slot.Result1)
-        calc(ds.select(4411, 4412).median(), slot.Result2)
+        math(ds.select(4411, 4412).mean(), slot.Result1)
+        math(ds.select(4411, 4412).median(), slot.Result2)
         copy(1, slot.Fired)
 
 
@@ -69,7 +69,7 @@ def prove_avg_odd_count(slot):
         copy(1, ds[4422])
         copy(2, ds[4423])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(ds.select(4421, 4423).mean(), slot.Result1)
+        math(ds.select(4421, 4423).mean(), slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -78,7 +78,7 @@ def prove_avg_dint_no_overflow(slot):
         copy(2147483647, dd[1])
         copy(2147483647, dd[2])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dd.select(1, 2).mean(), dd[3])
+        math(dd.select(1, 2).mean(), dd[3])
     with Rung(slot.Cmd != 0, slot.Fired == 0, dd[3] == 2147483647):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
@@ -96,11 +96,11 @@ def prove_mdn_even_count(slot):
         copy(-10, ds[4437])
         copy(-1, ds[4438])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(ds.select(4431, 4434).median(), slot.Result1)
-        calc(ds.select(4431, 4434).median() * 10, slot.Result2)
-        calc(ds.select(4431, 4434).median(), df[2])
-        calc(df[2] * 10, slot.Result3)
-        calc(ds.select(4435, 4438).median(), slot.Result4)
+        math(ds.select(4431, 4434).median(), slot.Result1)
+        math(ds.select(4431, 4434).median() * 10, slot.Result2)
+        math(ds.select(4431, 4434).median(), df[2])
+        math(df[2] * 10, slot.Result3)
+        math(ds.select(4435, 4438).median(), slot.Result4)
         copy(1, slot.Fired)
 
 
@@ -114,10 +114,10 @@ def prove_mdn_real_range(slot):
         copy(2.5, df[16])
         copy(0.5, df[17])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(df.select(11, 14).median(), df[18])
-        calc(df.select(15, 17).median(), df[19])
-        calc(df[18] * 10, slot.Result1)
-        calc(df[19] * 10, slot.Result2)
+        math(df.select(11, 14).median(), df[18])
+        math(df.select(15, 17).median(), df[19])
+        math(df[18] * 10, slot.Result1)
+        math(df[19] * 10, slot.Result2)
         copy(1, slot.Fired)
 
 
@@ -126,8 +126,8 @@ def prove_max_min_word_unsigned(slot):
         copy(0x0001, dh[1])
         copy(0xFFFF, dh[2])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dh.select(1, 2).max(), dh[3])
-        calc(dh.select(1, 2).min(), dh[4])
+        math(dh.select(1, 2).max(), dh[3])
+        math(dh.select(1, 2).min(), dh[4])
     with Rung(slot.Cmd != 0, slot.Fired == 0, dh[3] == 0xFFFF):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, dh[4] == 0x0001):
@@ -138,9 +138,9 @@ def prove_max_min_word_unsigned(slot):
 
 def prove_rand_range(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(randint(1, 6), slot.Result1)
-        calc(randint(10, 12), slot.Result2)
-        calc(randint(6, 1), slot.Result3)
+        math(randint(1, 6), slot.Result1)
+        math(randint(10, 12), slot.Result2)
+        math(randint(6, 1), slot.Result3)
         copy(1, slot.Fired)
 
 

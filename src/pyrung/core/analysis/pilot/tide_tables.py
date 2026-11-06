@@ -203,7 +203,7 @@ def solve_table_predicate(
 ) -> PredicateSolution | None:
     """Solve ``expr(<operands>) <op> target_value`` for the free index registers.
 
-    *result_tag* must be written by a single ``calc(expr, result_tag)`` whose
+    *result_tag* must be written by a single ``math(expr, result_tag)`` whose
     expression tags each resolve to a constant, a ``fixed`` context value, or a
     constant-table lookup indexed by a register with a finite domain.  *fixed*
     pins context indices (e.g. ``S_StateRequested`` = the state being enabled);
@@ -249,7 +249,7 @@ def solve_calc_preimage(
     fixed: dict[str, Any] | None = None,
     domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, Any] | None:
-    """Forced source pins for a **non-affine** ``calc(expr, result_tag)`` decode.
+    """Forced source pins for a **non-affine** ``math(expr, result_tag)`` decode.
 
     The value-side sibling of :func:`solve_table_predicate`: where that solver
     inverts a boolean *predicate* over constant-table operands, this one inverts
@@ -416,7 +416,7 @@ def guard_verdict(
 
 
 def _sole_calc_expr(tag: str, pdg: ProgramGraph, program: Any) -> Any | None:
-    """The expression of the single ``calc(expr, tag)`` writer, else ``None``."""
+    """The expression of the single ``math(expr, tag)`` writer, else ``None``."""
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
 
@@ -497,7 +497,7 @@ def table_from_indirect_src(
 ) -> _TableOperand | None:
     """Model an ``IndirectRef``/``IndirectExprRef`` copy source as a
     :class:`_TableOperand`: the index register plus an ``address(index)``
-    evaluator, hopping through calc-defined scratch pointers (``calc(X+200, idx)``).
+    evaluator, hopping through calc-defined scratch pointers (``math(X+200, idx)``).
 
     Shared by :func:`_model_table_operand` (the tide tables' predicate solver) and
     ``trace._invert_indirect`` (the single-table value-jump inverter): the two are
@@ -745,7 +745,7 @@ def _producible_int_domain(
         elif isinstance(wv, Affine) and wv.source != idx_tag:
             # Propagate the source domain through the affine map ``y = scale*x +
             # offset``.  An identity copy (scale 1, offset 0) forwards the domain
-            # unchanged; a computed pointer ``calc(200 + Cmd, idx)`` shifts it, so
+            # unchanged; a computed pointer ``math(200 + Cmd, idx)`` shifts it, so
             # ``idx`` inherits the command's domain offset by the constant rather
             # than resolving to just its current value.
             for v in _producible_int_domain(

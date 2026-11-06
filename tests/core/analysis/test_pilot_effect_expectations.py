@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 from types import SimpleNamespace
 
-from pyrung import PLC, Bool, Int, Program, calc, call, copy, latch, out, reset, rung, subroutine
+from pyrung import PLC, Bool, Int, Program, call, copy, latch, math, out, reset, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.candidate_read import _Candidate
@@ -1091,7 +1091,7 @@ def test_unrelated_long_kernel_stream_projects_only_relevant_write_scans() -> No
         with rung(command):
             latch(effect)
         with rung():
-            calc(unrelated + 1, unrelated)
+            math(unrelated + 1, unrelated)
     plc = PLC(program)
     plc.patch({command.name: True})
     plc.step()
@@ -1431,7 +1431,7 @@ def test_incomplete_historical_retention_falls_back_to_full_stream() -> None:
         with rung():
             copy(1, effect)
         with rung():
-            calc(unrelated + 1, unrelated)
+            math(unrelated + 1, unrelated)
     plc = PLC(program)
     for _ in range(4):
         plc.step()
@@ -2279,7 +2279,7 @@ def test_coast_landing_writer_is_retained_without_claiming_gap_coverage() -> Non
         with rung(counter == 3):
             copy(1, effect)
         with rung():
-            calc(counter + 1, counter)
+            math(counter + 1, counter)
     plc = PLC(program)
     expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
     session = CoastSession(plc, kind="expectation-landing")

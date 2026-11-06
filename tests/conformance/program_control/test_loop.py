@@ -78,12 +78,12 @@ from pyrung.core import (
     Or,
     Rung,
     break_loop,
-    calc,
     continue_loop,
     copy,
     count_up,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -102,7 +102,7 @@ def prove_loop_runs_n_times(slot):
     # F1
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
     _fire(slot)
 
 
@@ -113,7 +113,7 @@ def prove_false_for_rung_skips_body(slot):
     with Rung(slot.Cmd != 0, slot.Scratch != 0):
         with forloop(2):
             out(c[1701])
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Fired == 0, c[1701]):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[1701]):
@@ -125,7 +125,7 @@ def prove_zero_count(slot):
     # F3: a count register of 0 (Scratch).
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Scratch):
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
             copy(1, slot.Result2)
     _fire(slot)
 
@@ -136,7 +136,7 @@ def prove_negative_count_reads_unsigned(slot):
         copy(-1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Result3):
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
@@ -146,7 +146,7 @@ def prove_count_read_once(slot):
         copy(5, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Result3):
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
             copy(2, slot.Result3)
     _fire(slot)
 
@@ -155,11 +155,11 @@ def prove_body_rung_contact_per_iteration(slot):
     # F5: the body rung's contact is true on iteration 2 of 3 only.
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(3):
-            calc(slot.Scratch + 1, slot.Scratch)
+            math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Scratch == 2):
                 out(c[1711])
             with Rung(slot.Scratch >= 2):
-                calc(slot.Result2 + 1, slot.Result2)
+                math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Fired == 0, c[1711]):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[1711]):
@@ -172,11 +172,11 @@ def prove_edge_contact_inside_loop(slot):
     with Rung():
         with forloop(3):
             with Rung(slot.Cmd != 0, slot.Fired == 0):
-                calc(slot.Scratch + 1, slot.Scratch)
+                math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Scratch == 1):
                 latch(c[1721])
             with Rung(rise(c[1721])):
-                calc(slot.Result1 + 1, slot.Result1)
+                math(slot.Result1 + 1, slot.Result1)
     _fire(slot)
 
 
@@ -191,7 +191,7 @@ def prove_timer_inside_loop(slot):
     with Rung(slot.Cmd != 0):
         on_delay(plain_timer, 30000)
     with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0):
-        calc(loop_timer.Acc - plain_timer.Acc * 5, slot.Result3)
+        math(loop_timer.Acc - plain_timer.Acc * 5, slot.Result3)
     with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0, slot.Result3 > 0):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0, slot.Result3 <= 0):
@@ -206,7 +206,7 @@ def prove_counter_inside_loop(slot):
     with Rung():
         with forloop(4):
             with Rung(slot.Cmd != 0, slot.Fired == 0):
-                calc(slot.Scratch + 1, slot.Scratch)
+                math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 count_up(counter, 100).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
@@ -220,11 +220,11 @@ def prove_break_leaves_innermost_loop(slot):
         with forloop(3):
             copy(0, slot.Scratch)
             with forloop(4):
-                calc(slot.Scratch + 1, slot.Scratch)
-                calc(slot.Result1 + 1, slot.Result1)
+                math(slot.Scratch + 1, slot.Scratch)
+                math(slot.Result1 + 1, slot.Result1)
                 with Rung(slot.Scratch == 2):
                     break_loop()
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
@@ -232,11 +232,11 @@ def prove_break_runs_earlier_body_rungs(slot):
     # F10
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
-            calc(slot.Scratch + 1, slot.Scratch)
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Scratch + 1, slot.Scratch)
+            math(slot.Result1 + 1, slot.Result1)
             with Rung(slot.Scratch == 3):
                 break_loop()
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
@@ -244,11 +244,11 @@ def prove_continue_skips_rest_of_iteration(slot):
     # F11
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
-            calc(slot.Scratch + 1, slot.Scratch)
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Scratch + 1, slot.Scratch)
+            math(slot.Result1 + 1, slot.Result1)
             with Rung(slot.Scratch == 2):
                 continue_loop()
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
@@ -256,11 +256,11 @@ def prove_continue_on_last_iteration(slot):
     # F12
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
-            calc(slot.Scratch + 1, slot.Scratch)
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Scratch + 1, slot.Scratch)
+            math(slot.Result1 + 1, slot.Result1)
             with Rung(slot.Scratch == 5):
                 continue_loop()
-            calc(slot.Result2 + 1, slot.Result2)
+            math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
@@ -268,12 +268,12 @@ def prove_break_on_same_iteration_write(slot):
     # F13: a body rung turns C1731 on in iteration 3; the next body rung breaks on it.
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
-            calc(slot.Scratch + 1, slot.Scratch)
+            math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Scratch == 3):
                 out(c[1731])
             with Rung(c[1731]):
                 break_loop()
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(slot.Scratch, slot.Result2)
     _fire(slot)
@@ -284,10 +284,10 @@ def prove_oneshot_inside_loop(slot):
     with Rung():
         with forloop(4):
             with Rung(slot.Cmd != 0, slot.Fired == 0):
-                calc(slot.Scratch + 1, slot.Scratch)
+                math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
-                calc(slot.Result1 + 1, slot.Result1, oneshot=True)
-                calc(slot.Result2 + 1, slot.Result2)
+                math(slot.Result1 + 1, slot.Result1, oneshot=True)
+                math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
 
 
@@ -298,8 +298,8 @@ def prove_body_oneshot_holds_while_for_false(slot):
     with Rung(slot.Cmd != 0, slot.Scratch != 2, slot.Scratch <= 4):
         with forloop(1):
             with Rung(slot.Scratch != 4):
-                calc(slot.Result1 + 1, slot.Result1, oneshot=True)
-            calc(slot.Result2 + 1, slot.Result2)
+                math(slot.Result1 + 1, slot.Result1, oneshot=True)
+            math(slot.Result2 + 1, slot.Result2)
     done(slot, window=4)
 
 
@@ -314,7 +314,7 @@ def prove_edge_memory_across_iterations(slot):
     with Rung():
         with forloop(4):
             with Rung(slot.Cmd != 0, slot.Scratch == 2):
-                calc(slot.Result3 + 1, slot.Result3)
+                math(slot.Result3 + 1, slot.Result3)
             with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 1):
                 reset(bit)
             with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 2):
@@ -322,8 +322,8 @@ def prove_edge_memory_across_iterations(slot):
             with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 4):
                 reset(bit)
             with Rung(rise(bit), slot.Cmd != 0, slot.Scratch == 2):
-                calc(slot.Result1 * 10 + slot.Result3, slot.Result1)
-                calc(slot.Result2 + 1, slot.Result2)
+                math(slot.Result1 * 10 + slot.Result3, slot.Result1)
+                math(slot.Result2 + 1, slot.Result2)
     done(slot, window=2)
 
 

@@ -14,7 +14,7 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   exempt.
 
 * ``CMP_EQ_ON_COMPUTED_REAL`` — ``==`` / ``!=`` where a side is a REAL the ladder
-  computes: written by ``calc()`` (directly, or through a ``copy()`` of such a REAL) or
+  computes: written by ``math()`` (directly, or through a ``copy()`` of such a REAL) or
   an inline computed REAL expression.  Rounding can step over the exact value.
   A REAL nothing writes (analog input, setpoint), one only ``copy()``-ed from a
   constant or integer, and ``== 0`` / ``!= 0`` are exempt; ordered compares are
@@ -495,7 +495,7 @@ def _real_dest(instr: Any) -> Tag | None:
 
 
 def _computed_real_names(program: Program) -> set[str]:
-    """REAL tag names the ladder computes: a float ``calc()`` result, or a ``copy()``
+    """REAL tag names the ladder computes: a float ``math()`` result, or a ``copy()``
     of one (to a fixed point).  A REAL only copied from constants or integer tags,
     or never written, is not in the set."""
     from pyrung.core.expression import may_be_float

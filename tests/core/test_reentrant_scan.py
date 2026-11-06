@@ -16,8 +16,8 @@ from pyrung import (
     Int,
     Program,
     Rung,
-    calc,
     copy,
+    math,
     run_enabled_function,
     run_function,
     subroutine,
@@ -87,7 +87,7 @@ def _program(call: Call) -> Program:
         with Rung():
             run_function(call, ins={"c": Cnt}, outs={"seen": Seen})
         with Rung():
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
     return program
 
 
@@ -154,7 +154,7 @@ def test_enabled_function_refused_on_both_paths(make):
         with Rung(Cnt == 2):
             run_enabled_function(body, outs={"seen": Seen})
         with Rung():
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
     plc = make(program)
     plc.run(2)
     with pytest.raises(RuntimeError, match=REFUSAL):
@@ -239,7 +239,7 @@ def test_a_kernel_says_whether_it_calls_a_function():
     """The marker is skipped on the word of this flag, so a body must never be left out."""
     with Program(strict=False) as plain:
         with Rung():
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
     assert compile_kernel(plain).calls_functions is False
     assert compile_kernel(_program(Call())).calls_functions is True
 
@@ -321,7 +321,7 @@ def test_a_long_run_raises_on_a_lifecycle_call_too(act):
         with Rung():
             run_function(inner, ins={"c": Cnt}, outs={"seen": Seen})
         with Rung():
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
     plc = PLC(program, dt=0.01)
     assert plc._compiled_replay_supported_kernel() is None
     with pytest.raises(RuntimeError, match=REFUSAL):
@@ -812,7 +812,7 @@ def _self_stepper(fires_at: int) -> tuple[PLC, Any]:
         with Rung():
             run_function(inner, ins={"c": Cnt}, outs={"seen": Seen})
         with Rung():
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
     plc = PLC(program, dt=0.01)
     return plc, inner
 

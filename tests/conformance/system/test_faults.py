@@ -137,7 +137,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, latch, out, reset, system, to_ascii, to_text
+from pyrung.core import Rung, copy, fill, latch, math, out, reset, system, to_ascii, to_text
 from pyrung.core.expression import randint, sin, sqrt
 from tests.conformance.memory import c, dd, df, txt
 from tests.conformance.scans import count_scans, done, scans_for
@@ -186,7 +186,7 @@ def _probe(slot, now, taken, op, flag, field, bit):
     with Rung(now):
         op()
     with Rung(now, flag):
-        calc(field + bit, field)
+        math(field + bit, field)
 
 
 def _stage(slot, *instructions):
@@ -202,7 +202,7 @@ def _end(slot):
 
 
 def _stage_inf(into):
-    return [lambda: copy(3.0e38, into), lambda: calc(into * 10, into)]
+    return [lambda: copy(3.0e38, into), lambda: math(into * 10, into)]
 
 
 def _reset_bits(index):
@@ -230,15 +230,15 @@ def prove_math_store_out_of_range(slot):
 
     def dint_wrap():
         copy(0, dd[502])
-        calc(dd[501] + 1, dd[502])
+        math(dd[501] + 1, dd[502])
 
     def into_int():
         copy(99, slot.Result4)
-        calc(dd[503] + 1, slot.Result4)
+        math(dd[503] + 1, slot.Result4)
 
     def wrap_then_fits():
         copy(99, slot.ErrorCode)
-        calc(dd[501] + dd[501] + 7, slot.ErrorCode)
+        math(dd[501] + dd[501] + 7, slot.ErrorCode)
 
     probe(slot, dint_wrap, SC43, slot.Result1)
     probe(slot, into_int, SC43, slot.Result2)
@@ -273,11 +273,11 @@ def prove_rand_wide_bounds_flags(slot):
 
     def wide():
         copy(99, slot.Result4)
-        calc(randint(70000, 70000) / 2, slot.Result4)
+        math(randint(70000, 70000) / 2, slot.Result4)
 
     def control():
         copy(99, slot.Result3)
-        calc(randint(7, 7), slot.Result3)
+        math(randint(7, 7), slot.Result3)
 
     for k, flag in enumerate((SC40, SC43, SC46)):
         probe(slot, wide, flag, slot.Result1, 1 << k)
@@ -294,15 +294,15 @@ def prove_rand_unequal_bounds(slot):
 
     def wide():
         copy(99, slot.Result4)
-        calc(randint(70000, 70002) / 2, slot.Result4)
+        math(randint(70000, 70002) / 2, slot.Result4)
 
     def control():
         copy(99, slot.Result3)
-        calc(randint(7, 9), slot.Result3)
+        math(randint(7, 9), slot.Result3)
 
     def from_reals():
         copy(99, slot.ErrorCode)
-        calc(randint(low, high), slot.ErrorCode)
+        math(randint(low, high), slot.ErrorCode)
 
     probe(slot, wide, SC43, slot.Result1, 2)
     probe(slot, wide, SC46, slot.Result1, 4)
@@ -369,17 +369,17 @@ def prove_power_overflow_is_inf(slot):
 
     def positive():
         copy(1.0, df[473])
-        calc(df[471] ** 100, df[473])
+        math(df[471] ** 100, df[473])
 
     def negative():
         copy(1.0, df[474])
-        calc(df[472] ** 101, df[474])
+        math(df[472] ** 101, df[474])
 
     probe(slot, positive, SC43, slot.Result2)
     probe(slot, negative, SC43, slot.Result4)
     with Rung(*_end(slot)):
-        calc(df[473] / 2, df[475])
-        calc(df[474] / 2, df[476])
+        math(df[473] / 2, df[475])
+        math(df[474] / 2, df[476])
     with Rung(*_end(slot), df[475] >= 3.0e38):
         copy(1, slot.Result1)
     with Rung(*_end(slot), df[476] <= -3.0e38):
@@ -394,7 +394,7 @@ def prove_real_intermediate_range(slot):
 
     def op():
         copy(1.0, df[482])
-        calc(df[481] * 10 / 100, df[482])
+        math(df[481] * 10 / 100, df[482])
 
     probe(slot, op, SC43, slot.Result3)
     with Rung(*_end(slot), df[482] >= 2.9e37, df[482] <= 3.1e37):
@@ -412,11 +412,11 @@ def prove_inf_and_nan_arithmetic(slot):
 
     def double():
         copy(1.0, doubled)
-        calc(inf * 2, doubled)
+        math(inf * 2, doubled)
 
     def not_a_number():
         copy(1.0, nan)
-        calc(inf - inf, nan)
+        math(inf - inf, nan)
 
     probe(slot, double, SC43, slot.Result2)
     for k, flag in enumerate((SC43, SC46)):
@@ -426,7 +426,7 @@ def prove_inf_and_nan_arithmetic(slot):
         copy(1, slot.Result1)
     for bit, compare in ((1, nan == nan), (2, nan > 0), (4, nan < 0), (8, nan != nan)):
         with Rung(*end, compare):
-            calc(slot.Result3 + bit, slot.Result3)
+            math(slot.Result3 + bit, slot.Result3)
     done(slot, WINDOW)
 
 
@@ -434,19 +434,19 @@ def prove_non_finite_math_into_int(slot):
     probe = _Probes(8)
     count_scans(slot, WINDOW)
     inf, nan = df[486], df[487]
-    _stage(slot, *_stage_inf(inf), lambda: calc(inf - inf, nan))
+    _stage(slot, *_stage_inf(inf), lambda: math(inf - inf, nan))
 
     def inf_int():
         copy(99, slot.Result1)
-        calc(inf, slot.Result1)
+        math(inf, slot.Result1)
 
     def nan_int():
         copy(99, slot.Result2)
-        calc(nan, slot.Result2)
+        math(nan, slot.Result2)
 
     def inf_dint():
         copy(99, dd[521])
-        calc(inf, dd[521])
+        math(inf, dd[521])
 
     for k, op in enumerate((inf_int, nan_int, inf_dint)):
         probe(slot, op, SC43, slot.Result4, 1 << k)
@@ -466,8 +466,8 @@ def prove_copy_non_finite_to_int(slot):
     _stage(
         slot,
         *_stage_inf(inf),
-        lambda: calc(inf * -1, minus_inf),
-        lambda: calc(inf - inf, nan),
+        lambda: math(inf * -1, minus_inf),
+        lambda: math(inf - inf, nan),
     )
     fields = (slot.Result1, slot.Result2, slot.Result3)
     for k, (source, field) in enumerate(zip((inf, minus_inf, nan), fields, strict=True)):
@@ -503,15 +503,15 @@ def prove_non_finite_functions(slot):
     probe = _Probes(11)
     count_scans(slot, WINDOW)
     inf, minus_inf, sine, root = df[492], df[493], df[494], df[495]
-    _stage(slot, *_stage_inf(inf), lambda: calc(inf * -1, minus_inf))
+    _stage(slot, *_stage_inf(inf), lambda: math(inf * -1, minus_inf))
 
     def sine_op():
         copy(1.0, sine)
-        calc(sin(inf), sine)
+        math(sin(inf), sine)
 
     def root_op():
         copy(1.0, root)
-        calc(sqrt(minus_inf), root)
+        math(sqrt(minus_inf), root)
 
     probe(slot, sine_op, SC46, slot.Result2)
     probe(slot, sine_op, SC43, slot.Result3)

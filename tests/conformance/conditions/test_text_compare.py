@@ -38,7 +38,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, to_ascii
+from pyrung.core import Rung, copy, fill, math, to_ascii
 from tests.conformance.memory import OWNED, OWNED_APART, ranges, txt
 from tests.conformance.probe_kit import finish, once
 
@@ -48,7 +48,7 @@ BLANK = "\x00"
 def _digit(slot: Any, into: Any, weight: int, compare: Any) -> None:
     """Add *weight* to ``into`` where *compare* passes power."""
     with Rung(*once(slot), compare):
-        calc(into + weight, into)
+        math(into + weight, into)
 
 
 def _both(slot: Any, into: Any, left: Any, right: Any) -> None:

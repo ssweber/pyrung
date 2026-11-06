@@ -21,9 +21,9 @@ from pyrung import (
     Program,
     Real,
     Rung,
-    calc,
     copy,
     latch,
+    math,
     on_delay,
     out,
     rise,
@@ -41,7 +41,7 @@ def _plc() -> PLC:
     n = Int("N")
     with Program(strict=False) as prog:
         with Rung():
-            calc(n + 1, n)
+            math(n + 1, n)
     return PLC(prog)
 
 
@@ -490,7 +490,7 @@ def _timed() -> PLC:
         with Rung(Tm.Done):
             latch(Y)
         with Rung(Y):
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
     plc = PLC(program, dt=0.01)
     plc.patch({"Go": True})
     return plc
@@ -655,7 +655,7 @@ def _raising(function: Any = _raises_at_1500) -> PLC:
         with Rung(Go):
             on_delay(Tm, 2000)
         with Rung():
-            calc(Cnt + 1, Cnt)
+            math(Cnt + 1, Cnt)
         with Rung():
             run_function(function, ins={"v": Cnt}, outs={"out": Hr})
     plc = PLC(program, dt=0.01)
@@ -1409,7 +1409,7 @@ def _counting() -> PLC:
     n = Int("N")
     with Program(strict=False) as prog:
         with Rung():
-            calc(n + 1, n)
+            math(n + 1, n)
     return PLC(prog, checkpoint_interval=10)
 
 

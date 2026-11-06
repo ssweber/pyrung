@@ -155,7 +155,7 @@ def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
         return
     seen.add(id(value))
     if isinstance(value, float):
-        check_real_value(value, "calc() constant")
+        check_real_value(value, "math() constant")
     elif isinstance(value, Expression):
         for child in vars(value).values():
             check_float_literals(child, seen)
@@ -365,10 +365,10 @@ class CalcInstruction(OneShotMixin, Instruction):
     no flag.  MOD truncates: the result has the dividend's sign.
 
     **Constants:** each integer constant in `expression` is cut to 16 bits, as
-    a CLICK Math stores it, whatever the destination: ``calc(DD1 / 65536, DD2)``
+    a CLICK Math stores it, whatever the destination: ``math(DD1 / 65536, DD2)``
     divides by 0 (writes 0 and sets the division-error flag), and
-    ``calc(DD1 * 40000, DD2)`` multiplies by -25536.  Tags keep their width
-    (``calc(DD1 / DD2, DS1)`` with ``DD2 = 65536`` divides by 65536).  See
+    ``math(DD1 * 40000, DD2)`` multiplies by -25536.  Tags keep their width
+    (``math(DD1 / DD2, DS1)`` with ``DD2 = 65536`` divides by 65536).  See
     :func:`calc_form`.  ``expression`` holds the formula as it runs;
     ``source_expression`` the one written, which the CLICK export writes.
 
@@ -404,8 +404,8 @@ class CalcInstruction(OneShotMixin, Instruction):
     ):
         if isinstance(dest, (IndirectRef, IndirectExprRef)):
             raise TypeError(
-                "calc() writes a tag, not a pointer address: "
-                "calc into a tag, then copy() it to the pointer destination"
+                "math() writes a tag, not a pointer address: "
+                "math() into a tag, then copy() it to the pointer destination"
             )
         OneShotMixin.__init__(self, oneshot)
         check_float_literals(expression)

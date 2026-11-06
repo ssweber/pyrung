@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, calc, copy, run_function
+from pyrung import Bool, Int, Program, Rung, copy, math, run_function
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.core.function_source import embedded_source, is_the_function
 from pyrung.core.runner import PLC
@@ -26,7 +26,7 @@ _modules = itertools.count()
 def _program(*functions):
     with Program(strict=False) as program:
         with Rung():
-            calc(A + 1, A)
+            math(A + 1, A)
         with Rung(Run):
             for fn, out in zip(functions, (B, C), strict=False):
                 run_function(fn, ins={"v": A}, outs={"out": out})
@@ -296,8 +296,8 @@ def _stores_two_ways(fn):
     """A program whose generated code clamps a copy and wraps a calc, and calls *fn*."""
     with Program(strict=False) as program:
         with Rung():
-            calc(A + 1, A)
-            calc(A * 40000, Wrapped)
+            math(A + 1, A)
+            math(A * 40000, Wrapped)
             copy(70000, Clamped)
         with Rung(Run):
             run_function(fn, ins={"v": A}, outs={"out": B})

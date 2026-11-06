@@ -26,12 +26,12 @@ from pyrung import (
     TagType,
     Timer,
     branch,
-    calc,
     call,
     copy,
     count_up,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -81,7 +81,7 @@ def _program(body: Body) -> Callable[[], Program]:
             body()
             # Counts the scans since the hit: a latch alone hides a late landing.
             with Rung(Hit):
-                calc(Since + 1, Since)
+                math(Since + 1, Since)
         return prog
 
     return build
@@ -202,7 +202,7 @@ def _pulse_and_a_blink() -> None:
     with Rung(clk1s):
         out(G)
     with Rung(H, G):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _chain_of_two_clocks() -> None:
@@ -212,7 +212,7 @@ def _chain_of_two_clocks() -> None:
     with Rung(H):
         out(Lamp)
     with Rung(Lamp):
-        calc(N + 1, N)
+        math(N + 1, N)
     _timer()
 
 
@@ -282,7 +282,7 @@ def _blink_written_in_a_sub() -> None:
         out(G)
     _timer()
     with Rung(F, G):
-        calc(N + 1, N)
+        math(N + 1, N)
     with subroutine("s"):
         with Rung(clk100):
             out(F)
@@ -295,7 +295,7 @@ def _sampled_by_a_blink_on_the_call() -> None:
         call("s")
     _timer()
     with Rung(H):
-        calc(N + 1, N)
+        math(N + 1, N)
     with subroutine("s"):
         with Rung(G):
             out(H)
@@ -310,7 +310,7 @@ def _blink_return_early() -> None:
         with Rung(F):
             return_early()
         with Rung(G):
-            calc(N + 1, N)
+            math(N + 1, N)
 
 
 def _branch_comparison() -> None:
@@ -345,7 +345,7 @@ def _loop_body_second_blink() -> None:
             with Rung(G):
                 out(H)
     with Rung(H):
-        calc(N + 1, N)
+        math(N + 1, N)
     _timer()
 
 
@@ -357,7 +357,7 @@ def _two_clocks_latch_and_reset(reader: bool) -> Body:
             reset(X)
         if reader:
             with Rung(X):
-                calc(N + 1, N)
+                math(N + 1, N)
         _timer()
 
     return body
@@ -370,7 +370,7 @@ def _two_blinks_latch_and_reset() -> None:
     with Rung(G):
         reset(X)
     with Rung(X):
-        calc(N + 1, N)
+        math(N + 1, N)
     _timer()
 
 
@@ -382,7 +382,7 @@ def _two_clocks_copied() -> None:
     with Rung(V == 1):
         out(H)
     with Rung(H):
-        calc(N + 1, N)
+        math(N + 1, N)
     _timer()
 
 
@@ -465,7 +465,7 @@ class TestAClockThroughATag:
             pytest.param(_crossing, None, id="comparison-beside-a-blink"),
             pytest.param(_crossing_above_a_write, None, id="comparison-above-its-operand-write"),
             pytest.param(_two_blinks(lambda: latch(Hit)), None, id="two-blinks-latch"),
-            pytest.param(_two_blinks(lambda: calc(N + 1, N)), None, id="two-blinks-calc"),
+            pytest.param(_two_blinks(lambda: math(N + 1, N)), None, id="two-blinks-calc"),
             pytest.param(_two_blinks(_count), None, id="two-blinks-count"),
             pytest.param(_two_blinks(_retentive), None, id="two-blinks-retentive"),
             pytest.param(
@@ -484,7 +484,7 @@ class TestAClockThroughATag:
 
     def test_with_one_blink_forced(self) -> None:
         def body() -> None:
-            _two_blinks(lambda: calc(N + 1, N))()
+            _two_blinks(lambda: math(N + 1, N))()
 
         def run(jit: bool) -> PLC:
             plc = _plc(body, None)
@@ -530,7 +530,7 @@ class TestAClockThroughATag:
         [
             pytest.param(_between_out_comparison, None, id="out-comparison"),
             pytest.param(_between_out_second_clock(_retentive), None, id="out-retentive"),
-            pytest.param(_between_out_second_clock(lambda: calc(N + 1, N)), None, id="out-calc"),
+            pytest.param(_between_out_second_clock(lambda: math(N + 1, N)), None, id="out-calc"),
             pytest.param(_between_copy_comparison, None, id="copy-comparison"),
             pytest.param(_between_into_a_rebuilt_bit, None, id="into-a-rebuilt-bit"),
             pytest.param(_between_indirect_write, {"Ptr": 3}, id="indirect-write"),
@@ -548,7 +548,7 @@ class TestTheWindowEndsAtTheEdge:
         _assert_exact(_crossing, 40)
 
     def test_two_blinks_on_a_rung(self) -> None:
-        body = _two_blinks(lambda: calc(N + 1, N))
+        body = _two_blinks(lambda: math(N + 1, N))
         _assert_lands_as_stepped(body, N >= 1, N >= 7, N >= 30)
 
     def test_a_standing_value(self) -> None:
@@ -777,7 +777,7 @@ def _clock_over_a_counting_branch() -> None:
     with Rung(clk100):
         out(F)
         with branch(G):
-            calc(N + 1, N)
+            math(N + 1, N)
 
 
 def _blink_in_a_branch_read_below() -> None:
@@ -797,7 +797,7 @@ def _branch_reads_a_sibling_coil() -> None:
         with branch(F):
             out(H)
     with Rung(H):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _branch_above_its_writer() -> None:
@@ -808,7 +808,7 @@ def _branch_above_its_writer() -> None:
         with branch(clk100):
             out(F)
     with Rung(H):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _edge_in_a_branch_under_a_clock() -> None:
@@ -825,7 +825,7 @@ def _one_shot_in_a_branch() -> None:
         with branch(G):
             out(F, oneshot=True)
     with Rung(F):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _contact_on_an_accumulator() -> None:
@@ -839,7 +839,7 @@ def _contact_on_an_accumulator() -> None:
 def _contact_on_a_wrapping_value() -> None:
     _timer()
     with Rung():
-        calc((V + 1) % 7, V)
+        math((V + 1) % 7, V)
     with Rung(V, clk100):
         out(F)
     with Rung(F):
@@ -849,7 +849,7 @@ def _contact_on_a_wrapping_value() -> None:
 def _contact_on_a_rebuilt_view() -> None:
     _timer()
     with Rung():
-        calc(T.Acc // 100, V)
+        math(T.Acc // 100, V)
     with Rung(V, clk100):
         out(F)
     with Rung(F):
@@ -861,17 +861,17 @@ def _contact_on_first_scan() -> None:
     with Rung(system.sys.first_scan, clk100):
         out(F)
     with Rung(F):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _contact_on_a_fault_flag() -> None:
     _timer()
     with Rung():
-        calc(T.Acc + 30000, V)
+        math(T.Acc + 30000, V)
     with Rung(system.fault.out_of_range, clk100):
         out(F)
     with Rung(F):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _contact_on_a_comparison_result() -> None:
@@ -995,7 +995,7 @@ def _two_gates_on_a_comparison(threshold: int) -> Body:
 
 def _two_clocks_on_a_rung() -> None:
     with Rung(clk100, clk1s):
-        calc(N + 1, N)
+        math(N + 1, N)
     _timer()
 
 
@@ -1005,7 +1005,7 @@ def _constant_then_blink() -> None:
     with Rung(clk1s):
         out(F)
     with Rung(F, V == 7):
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _seed_282_shape(preset: int) -> Body:
@@ -1051,7 +1051,7 @@ class TestBlinkRows:
     @pytest.mark.parametrize(
         "body",
         [
-            pytest.param(_two_blinks(lambda: calc(N + 1, N)), id="two-blinks-calc"),
+            pytest.param(_two_blinks(lambda: math(N + 1, N)), id="two-blinks-calc"),
             pytest.param(_two_blinks(lambda: latch(Hit)), id="two-blinks-latch"),
             pytest.param(_two_clocks_on_a_rung, id="two-clocks-on-a-rung"),
             pytest.param(_constant_then_blink, id="constant-then-blink"),

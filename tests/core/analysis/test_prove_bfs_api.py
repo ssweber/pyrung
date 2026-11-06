@@ -16,11 +16,11 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     call,
     copy,
     count_up,
     latch,
+    math,
     named_array,
     on_delay,
     out,
@@ -634,14 +634,14 @@ class TestReachableStates:
 
 
 def _divide_by_input() -> tuple[Program, Int]:
-    """``calc(100 / Divisor, Quotient)`` on an unconditioned rung: no rung
+    """``math(100 / Divisor, Quotient)`` on an unconditioned rung: no rung
     condition names Divisor, it reaches Quotient and the division fault only
     through data flow."""
     divisor = Int("Divisor", external=True, choices={1: "one", 0: "zero", 2: "two"}, default=1)
     quotient = Int("Quotient", default=100)
     with Program(strict=False) as logic:
         with Rung():
-            calc(100 / divisor, quotient)
+            math(100 / divisor, quotient)
     return logic, quotient
 
 

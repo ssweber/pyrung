@@ -20,7 +20,6 @@ from pyrung.core import (
     TagType,
     branch,
     break_loop,
-    calc,
     call,
     comment,
     continue_loop,
@@ -28,6 +27,7 @@ from pyrung.core import (
     event_drum,
     forloop,
     latch,
+    math,
     out,
     program,
     subroutine,
@@ -94,13 +94,13 @@ def test_break_and_continue_semantics(runner_factory):
     with Program() as logic:
         with Rung(Enable):
             with forloop(5) as loop:
-                calc(A + 1, A)
+                math(A + 1, A)
                 with Rung(loop.idx == 2):
                     continue_loop()
-                calc(B + 1, B)
+                math(B + 1, B)
                 with Rung(loop.idx == 3):
                     break_loop()
-                calc(C + 1, C)
+                math(C + 1, C)
 
     runner = runner_factory(logic)
     runner.patch({"Enable": True})
@@ -116,13 +116,13 @@ def test_continue_on_last_iteration_and_break_in_inner_loop_only(runner_factory)
         with Rung(Enable):
             with forloop(3) as outer:
                 with forloop(4) as inner:
-                    calc(N + 1, N)
+                    math(N + 1, N)
                     with Rung(inner.idx == 1):
                         break_loop()
-                calc(A + 1, A)
+                math(A + 1, A)
                 with Rung(outer.idx == 2):
                     continue_loop()
-                calc(B + 1, B)
+                math(B + 1, B)
 
     runner = runner_factory(logic)
     runner.patch({"Enable": True})
@@ -142,7 +142,7 @@ def test_body_rung_contacts_are_evaluated_each_iteration(runner_factory):
         with Rung(Enable):
             with forloop(4) as loop:
                 with Rung(flag):
-                    calc(hits + 1, hits)
+                    math(hits + 1, hits)
                 with Rung(loop.idx == 1):
                     latch(flag)
 
@@ -160,7 +160,7 @@ def test_body_rung_contact_driven_by_same_iteration_write(runner_factory):
     with Program() as logic:
         with Rung(Enable):
             with forloop(5):
-                calc(A + 1, A)
+                math(A + 1, A)
                 with Rung(A == 3):
                     out(trip)
                 with Rung(trip):
@@ -242,10 +242,10 @@ def test_body_order_is_source_order():
     with Program() as logic:
         with Rung(Enable):
             with forloop(2) as loop:
-                calc(A + 1, A)
+                math(A + 1, A)
                 with Rung(loop.idx == 0):
-                    calc(B + 1, B)
-                calc(C + 1, C)
+                    math(B + 1, B)
+                math(C + 1, C)
 
     loop = _loop(logic)
     kinds = [type(item).__name__ for item in loop.body]
@@ -373,7 +373,7 @@ def test_subroutine_registered_from_a_loop_body_keeps_its_own_rungs():
     @subroutine("work")
     def work():
         with Rung():
-            calc(A + 1, A)
+            math(A + 1, A)
 
     with Program() as logic:
         with Rung(Enable):
@@ -410,7 +410,7 @@ def test_oneshot_in_body_rung_rearms_when_its_contact_drops(runner_factory):
         with Rung(Enable):
             with forloop(4) as loop:
                 with Rung(gate[loop.idx] == 1):
-                    calc(hits + 1, hits, oneshot=True)
+                    math(hits + 1, hits, oneshot=True)
 
     runner = runner_factory(logic)
     runner.patch({"Enable": True, "Gate0": 1, "Gate1": 0, "Gate2": 1, "Gate3": 1})

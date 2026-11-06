@@ -14,9 +14,9 @@ from pyrung.core import (
     Real,
     Rung,
     Word,
-    calc,
     copy,
     latch,
+    math,
     out,
     run_function,
 )
@@ -97,7 +97,7 @@ class TestValueDomainExtraction:
             with Rung(step == 3):
                 out(Bool("AtThree"))
             with Rung():
-                calc((step + 1) % 6, step)
+                math((step + 1) % 6, step)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
@@ -114,7 +114,7 @@ class TestValueDomainExtraction:
             with Rung(d < 0):
                 latch(neg)
             with Rung():
-                calc(n % 3, d)
+                math(n % 3, d)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
@@ -132,7 +132,7 @@ class TestValueDomainExtraction:
             with Rung(w > 2):
                 latch(high)
             with Rung():
-                calc(n % 3, w)
+                math(n % 3, w)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
@@ -146,7 +146,7 @@ class TestValueDomainExtraction:
         hi = Bool("Hi")
         with Program(strict=False) as logic:
             with Rung():
-                calc(r % 3, x)
+                math(r % 3, x)
             with Rung(x > 2.2):
                 latch(hi)
         return logic, hi
@@ -247,7 +247,7 @@ class TestValueDomainExtraction:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(step % 2, odd)
+                math(step % 2, odd)
             with Rung(step == 5):
                 out(flag)
 
@@ -574,7 +574,7 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
         with Rung(go):
             copy(1, ds[7])
         with Rung():
-            calc(sel + 6, wptr)
+            math(sel + 6, wptr)
         with Rung(put):
             copy(val, ds[wptr])
 

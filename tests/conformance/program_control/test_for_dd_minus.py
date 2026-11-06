@@ -46,7 +46,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, forloop, latch, reset
+from pyrung.core import Rung, copy, fill, forloop, latch, math, reset
 from tests.conformance.memory import c, dd
 from tests.conformance.probe_kit import between, class_of, finish, once
 
@@ -64,12 +64,12 @@ def prove_minus_one_count(slot: Any) -> None:
         reset(ENABLE)
     with Rung(*once(slot), ARMED):
         with forloop(COUNT):
-            calc(RUNS + 1, RUNS)
+            math(RUNS + 1, RUNS)
     with Rung(ARMED):
         reset(ARMED)
     class_of(slot, RUNS, [0, 65535, 1], slot.Result2)
     with Rung(*once(slot)):
-        calc(RUNS / 1000, slot.Result3)
+        math(RUNS / 1000, slot.Result3)
     finish(slot)
 
 

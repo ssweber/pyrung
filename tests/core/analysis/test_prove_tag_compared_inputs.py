@@ -32,9 +32,9 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
-    calc,
     copy,
     latch,
+    math,
     on_delay,
     out,
     pack_words,
@@ -146,7 +146,7 @@ def _stepped_int_equals_input() -> tuple[Program, Bool, list[tuple[dict[str, Any
     window, first, second, bad = Bool("KY"), Bool("KA"), Bool("KB"), Bool("KBad")
     with Program(strict=False) as logic:
         with Rung(en, stepped < 200):
-            calc(stepped + 10, stepped)
+            math(stepped + 10, stepped)
         with Rung(value > 100, value < 160):
             out(window)
         with Rung(stepped == value, stepped < 120, window):
@@ -230,7 +230,7 @@ def test_stepped_tag_equal_to_input_plus_offset(config) -> None:
     bad = Bool("KBad")
     with Program(strict=False) as logic:
         with Rung(en, stepped < 60):
-            calc(stepped + 7, stepped)
+            math(stepped + 7, stepped)
         with Rung(value > 3, stepped == value + 5, stepped > 20):
             latch(bad)
     assert _witness_hits(logic, [({"KEn": True, "KIn": 23}, 4)], "KBad")
@@ -261,7 +261,7 @@ def test_input_copied_then_compared_with_stepped_tag(config) -> None:
     bad = Bool("KBad")
     with Program(strict=False) as logic:
         with Rung(en, stepped < 60):
-            calc(stepped + 7, stepped)
+            math(stepped + 7, stepped)
         with Rung():
             copy(value, stored)
         with Rung(value > 3, stored == stepped, stepped > 20):
@@ -310,7 +310,7 @@ def test_indirect_element_equal_to_input(config) -> None:
     bad = Bool("KBad")
     with Program(strict=False) as logic:
         with Rung(en, regs[1] < 50):
-            calc(regs[1] + 7, regs[1])
+            math(regs[1] + 7, regs[1])
         with Rung(value > 3, value < 40, regs[pointer] == value, regs[1] > 20):
             latch(bad)
     assert _witness_hits(logic, [({"KEn": True, "KIn": 28, "KPtr": 1}, 4)], "KBad")
@@ -325,7 +325,7 @@ def test_search_for_input(config) -> None:
     result, found, bad = Int("KR"), Bool("KF"), Bool("KBad")
     with Program(strict=False) as logic:
         with Rung(en, regs[1] < 50):
-            calc(regs[1] + 7, regs[1])
+            math(regs[1] + 7, regs[1])
         with Rung():
             search(regs.select(1, 2) == value, result=result, found=found)
         with Rung(value > 3, value < 40, found, result == 1):
@@ -416,7 +416,7 @@ def test_real_input_compared_with_tag_is_refused() -> None:
     bad = Bool("KBad")
     with Program(strict=False) as logic:
         with Rung():
-            calc(setpoint + 0.5, setpoint)
+            math(setpoint + 0.5, setpoint)
         with Rung(level > 2.0, level < setpoint):
             latch(bad)
     result = never(logic, bad)
@@ -490,7 +490,7 @@ def test_property_compares_input_with_stepped_int(config) -> None:
     stepped = Int("KD")
     with Program(strict=False) as logic:
         with Rung(en, stepped < 200):
-            calc(stepped + 10, stepped)
+            math(stepped + 10, stepped)
         with Rung(value > 100, value < 160):
             out(Bool("KWin"))
     prop = And(stepped == value, stepped > 100, stepped < 120)
@@ -527,10 +527,10 @@ def _indexed_table(*, via_calc: bool) -> tuple[Program, Bool]:
             for i in range(1, 51):
                 copy(i * 10, table[i])
         with Rung(en, stepped < 400):
-            calc(stepped + 10, stepped)
+            math(stepped + 10, stepped)
         if via_calc:
             with Rung():
-                calc(pointer + 0, index)
+                math(pointer + 0, index)
             with Rung(index >= 1, index <= 50):
                 copy(table[index], loaded)
             with Rung(loaded == stepped, stepped > 365, stepped < 375):
@@ -665,7 +665,7 @@ def test_packing_indirect_dest_is_a_writer(packing) -> None:
     strict=True,
     reason=(
         "review N1: a REAL with integer min/max (L = Real(min=0.0, max=10.0), "
-        "calc(L * L, P); P > 30, P < 31) is enumerated at integers only, so "
+        "math(L * L, P); P > 30, P < 31) is enumerated at integers only, so "
         "L = 5.5 is never tried: false Proven"
     ),
 )
@@ -675,7 +675,7 @@ def test_real_with_integer_bounds_is_not_enumerated_as_integers() -> None:
     bad = Bool("KBad")
     with Program(strict=False) as logic:
         with Rung():
-            calc(level * level, square)
+            math(level * level, square)
         with Rung(square > 30, square < 31):
             latch(bad)
     assert _witness_hits(logic, [({"KL": 5.5}, 1)], "KBad")
@@ -813,7 +813,7 @@ def test_input_equal_to_written_external(config, ext_max) -> None:
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "review N3 (base too): an index through calc (calc(Ptr + 0, P2); "
+        "review N3 (base too): an index through calc (math(Ptr + 0, P2); "
         "copy(Tbl[P2], D); D == 370) keeps Ptr's own partition (1, 2, 49, 50): "
         "the literal is not carried back through the table and the calc, so "
         "Ptr = 37 is never tried: false Proven"
@@ -831,7 +831,7 @@ def test_index_through_calc_of_element_compared_with_literal() -> None:
         with Rung(pointer > 10, pointer < 45):
             out(Bool("KY"))
         with Rung():
-            calc(pointer + 0, index)
+            math(pointer + 0, index)
         with Rung(index >= 1, index <= 50):
             copy(table[index], loaded)
         with Rung(loaded == 370):
@@ -851,7 +851,7 @@ def test_expression_index_compared_with_stepped_int() -> None:
             for i in range(1, 51):
                 copy(i * 10, table[i])
         with Rung(en, stepped < 400):
-            calc(stepped + 10, stepped)
+            math(stepped + 10, stepped)
         with Rung(table[pointer + 0] == stepped, stepped > 365):
             latch(bad)
     _assert_counterexample(logic, bad, _OptConfig())

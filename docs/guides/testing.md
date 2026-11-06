@@ -296,7 +296,7 @@ def test_inspect_changes():
 Tags with `min`/`max` or `choices` get runtime bounds checking at the end of every scan. Values are never clamped — the write goes through, but a warning fires and the violation lands in `plc.bounds_violations`:
 
 ```python
-from pyrung import Bool, Int, Real, PLC, Program, rung, calc, copy
+from pyrung import Bool, Int, Real, PLC, Program, rung, math, copy
 
 Pressure = Real(min=0, max=100)
 Mode     = Int(choices={0: "Off", 1: "On", 2: "Auto"})
@@ -306,7 +306,7 @@ Src    = Int()
 
 with Program() as logic:
     with rung(Enable):
-        calc(Pressure + 60, Pressure)
+        math(Pressure + 60, Pressure)
         copy(Src, Mode)
 
 def test_pressure_stays_in_range():

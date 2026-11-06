@@ -8,9 +8,9 @@ from pyrung import (
     Int,
     Program,
     Timer,
-    calc,
     copy,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -132,7 +132,7 @@ def _step_chain_program():
         with rung(AtTwo, Dwell.Done):
             latch(Trans)
         with rung(Trans):
-            calc(Step + 1, Step)
+            math(Step + 1, Step)
             reset(Trans)
         with rung(Resetting):
             copy(1, Step)
@@ -203,7 +203,7 @@ def _banked_reset_alternative_program(*, initial_step: int):
             latch(SafeWake2)
             latch(SafeWake3)
         with rung(Step == 2, rise(Advance)):
-            calc(Step + 1, Step)
+            math(Step + 1, Step)
         with rung(Step == 3):
             latch(Done)
 
@@ -271,7 +271,7 @@ def test_level_driven_counter_stays_out_of_the_earned_work() -> None:
 
     with Program() as logic:
         with rung(Run):
-            calc(Count + 1, Count)
+            math(Count + 1, Count)
         with rung(Count >= 100):
             latch(Done)
 

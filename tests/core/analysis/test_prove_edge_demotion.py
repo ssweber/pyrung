@@ -22,10 +22,10 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
-    calc,
     copy,
     fall,
     latch,
+    math,
     out,
     reset,
     rise,
@@ -170,7 +170,7 @@ class TestDemotionClassification:
         counter = Int("Counter", min=0, max=5)
         with Program(strict=False) as logic:
             with Rung(button):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(counter >= 3):
                 out(flag)
             with Rung(rise(flag)):

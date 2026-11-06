@@ -17,9 +17,9 @@ from pyrung import (
     Program,
     TagType,
     branch,
-    calc,
     call,
     copy,
+    math,
     out,
     rise,
     rung,
@@ -168,11 +168,11 @@ def fault_recovery() -> None:
 @subroutine("indirect_route_manual_steps")
 def manual_steps() -> None:
     with rung():
-        calc(800 + SequenceState, NextAddress)
+        math(800 + SequenceState, NextAddress)
     with rung():
         copy(Words[NextAddress], NextState)
     with rung():
-        calc(1000 + SequenceState, PreviousAddress)
+        math(1000 + SequenceState, PreviousAddress)
     with rung():
         copy(Words[PreviousAddress], PreviousState)
     with rung(NextStep, ~AutomaticMode, SequenceState < 150):

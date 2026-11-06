@@ -21,10 +21,10 @@ from pyrung import (
     Rung,
     TagType,
     Timer,
-    calc,
     call,
     copy,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -103,7 +103,7 @@ def _one_shot_copy() -> None:
     with Rung(T2.Done):
         copy(1, Cmd, oneshot=True)
     with Rung(Cmd == 0):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung():
         copy(0, Cmd)
     with Rung():
@@ -115,7 +115,7 @@ def _one_shot_copy_wrapping() -> None:
     with Rung(T2.Done):
         copy(1, Cmd, oneshot=True)
     with Rung(Cmd == 0):
-        calc((N + 1) % 7, N)
+        math((N + 1) % 7, N)
     with Rung():
         copy(0, Cmd)
     with Rung():
@@ -130,7 +130,7 @@ def _transient(fire: Body) -> Body:
         _timer()
         fire()
         with Rung(~F):
-            calc(N + 1, N)
+            math(N + 1, N)
         with Rung():
             reset(F)
         with Rung(G):
@@ -167,7 +167,7 @@ def _shift_clock_edge() -> None:
     with Rung(G):
         shift(Bits.select(1, 8)).clock(A).reset(R)
     with Rung(~Bits[1]):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung():
         reset(Bits.select(1, 8))
     with Rung(G):
@@ -238,7 +238,7 @@ class TestAProbeThatLeftMemoryBehind:
 def _rebuilt_seconds() -> None:
     _timer()
     with Rung(A):
-        calc(T.Acc // 1000, Secs)
+        math(T.Acc // 1000, Secs)
     with Rung(T.Acc >= 7000):
         latch(Hit)
 
@@ -247,7 +247,7 @@ def _stale_fault_flag() -> None:
     with Rung():
         on_delay(T, preset=40000)
     with Rung():
-        calc(T.Acc + 30000, Q)
+        math(T.Acc + 30000, Q)
 
 
 def _lamp() -> None:
@@ -266,7 +266,7 @@ def _done_read() -> None:
 
 def _clocked() -> None:
     with Rung(clk100):
-        calc(N + 1, N)
+        math(N + 1, N)
     _timer()
 
 
@@ -397,13 +397,13 @@ class TestAMonitor:
 def _seconds_gated() -> None:
     _timer()
     with Rung(A):
-        calc(T.Acc // 1000, Secs)
+        math(T.Acc // 1000, Secs)
 
 
 def _acc_view() -> None:
     _timer()
     with Rung():
-        calc(T.Acc + 5, Q)
+        math(T.Acc + 5, Q)
 
 
 class TestADeclaredRead:

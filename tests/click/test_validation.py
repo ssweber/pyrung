@@ -44,8 +44,8 @@ from pyrung.core.expression import lro, lsh, rro, rsh
 from pyrung.core.program import (
     Program,
     Rung,
-    calc,
     copy,
+    math,
     on_delay,
     out,
     reset,
@@ -356,7 +356,7 @@ class TestExpressionInCopy:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Expression in calc() â€” no violation
+# Test 7: Expression in math() â€” no violation
 # ---------------------------------------------------------------------------
 
 
@@ -367,7 +367,7 @@ class TestExpressionInMath:
 
         def logic():
             with Rung():
-                calc(A * 2, Dest)
+                math(A * 2, Dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(include_system=False)
@@ -389,7 +389,7 @@ class TestCalcModeMixedValidation:
 
         def logic():
             with Rung():
-                calc(a + h, dest)
+                math(a + h, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -407,7 +407,7 @@ class TestCalcModeMixedValidation:
 
         def logic():
             with Rung():
-                calc(a + h, dest)
+                math(a + h, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -425,7 +425,7 @@ class TestCalcModeMixedValidation:
 
         def logic():
             with Rung():
-                calc(a + b, dest)
+                math(a + b, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -445,7 +445,7 @@ class TestCalcModeMixedValidation:
 
         def logic():
             with Rung():
-                calc(h1 | h2, dest)
+                math(h1 | h2, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -467,7 +467,7 @@ class TestFloorDivisionPortability:
 
         def logic():
             with Rung():
-                calc(a // b, dest)
+                math(a // b, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -485,7 +485,7 @@ class TestFloorDivisionPortability:
 
         def logic():
             with Rung():
-                calc(a // b, dest)
+                math(a // b, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -503,7 +503,7 @@ class TestFloorDivisionPortability:
 
         def logic():
             with Rung():
-                calc(a / b, dest)
+                math(a / b, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -525,7 +525,7 @@ class TestCalcFuncModeMismatch:
 
         def logic():
             with Rung():
-                calc(a << 3, dest)
+                math(a << 3, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -545,7 +545,7 @@ class TestCalcFuncModeMismatch:
 
         def logic():
             with Rung():
-                calc(sqrt(h), dest)
+                math(sqrt(h), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -564,7 +564,7 @@ class TestCalcFuncModeMismatch:
 
         def logic():
             with Rung():
-                calc(h1 & h2, dest)
+                math(h1 & h2, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -585,7 +585,7 @@ class TestCalcFuncModeMismatch:
 
         def logic():
             with Rung():
-                calc(a**2, dest)
+                math(a**2, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -606,7 +606,7 @@ class TestCalcFuncModeMismatch:
 
         def logic():
             with Rung():
-                calc(a << 3, dest)
+                math(a << 3, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -649,7 +649,7 @@ class TestCalcNestingDepth:
 
         def logic():
             with Rung():
-                calc(expr_8, dest)
+                math(expr_8, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -671,7 +671,7 @@ class TestCalcNestingDepth:
 
         def logic():
             with Rung():
-                calc(expr, dest)
+                math(expr, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -690,7 +690,7 @@ class TestCalcNestingDepth:
 
         def logic():
             with Rung():
-                calc(expr, dest)
+                math(expr, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -714,7 +714,7 @@ class TestCalcNestingDepth:
 
         def logic():
             with Rung():
-                calc(expr, dest)
+                math(expr, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -733,7 +733,7 @@ class TestCalcNestingDepth:
 
         def logic():
             with Rung():
-                calc(a + b, dest)
+                math(a + b, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -760,7 +760,7 @@ class TestAbsMode:
 
         def logic():
             with Rung():
-                calc(abs(h), dest)
+                math(abs(h), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([h.map_to(dh[1]), dest.map_to(dh[2])], include_system=False)
@@ -776,7 +776,7 @@ class TestAbsMode:
 
         def logic():
             with Rung():
-                calc(abs(a), dest)
+                math(abs(a), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([a.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
@@ -793,7 +793,7 @@ class TestRangeAggregateModes:
 
         def logic():
             with Rung():
-                calc(H.select(1, 4).max() + H.select(1, 4).median(), dest)
+                math(H.select(1, 4).max() + H.select(1, 4).median(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([H.map_to(dh.select(1, 4)), dest.map_to(dh[10])], include_system=False)
@@ -812,7 +812,7 @@ class TestRangeAggregateModes:
 
         def logic():
             with Rung():
-                calc(expr, dest)
+                math(expr, dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
@@ -828,7 +828,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(V.select(1, 4).mean(), dest)
+                math(V.select(1, 4).mean(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([V.map_to(ds.select(11, 14)), dest.map_to(ds[1])], include_system=False)
@@ -843,7 +843,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(V.select(1, 3).max(), dest)
+                math(V.select(1, 3).max(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(
@@ -860,7 +860,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(V.select(1, 4).reverse().sum(), dest)
+                math(V.select(1, 4).reverse().sum(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
@@ -875,7 +875,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(V.select(1, 2).min(), dest)
+                math(V.select(1, 2).min(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap({V[1]: ds[1], V[2]: sd[1], dest: ds[10]}, include_system=False)
@@ -891,7 +891,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(dd.select(1, 257).median(), dest)
+                math(dd.select(1, 257).median(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(dd[1000])], include_system=False)
@@ -904,8 +904,8 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(ds.select(1, 512).median(), dest)
-                calc(ds.select(1, 600).mean(), dest)
+                math(ds.select(1, 512).median(), dest)
+                math(ds.select(1, 600).mean(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
@@ -919,7 +919,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(c.select(1, 8).sum(), dest)
+                math(c.select(1, 8).sum(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
@@ -933,7 +933,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(c.select(1, 8).max(), dest)
+                math(c.select(1, 8).max(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
@@ -947,7 +947,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(block.select(1, 4).sum(), dest)
+                math(block.select(1, 4).sum(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(dest_address)], include_system=False)
@@ -974,7 +974,7 @@ class TestRangeAggregateRules:
 
         def logic():
             with Rung():
-                calc(dh.select(1, 4).sum(), dest)
+                math(dh.select(1, 4).sum(), dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
@@ -991,7 +991,7 @@ class TestTildeExpressionPortability:
 
         def logic():
             with Rung():
-                calc(~A, Dest)
+                math(~A, Dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([Dest.map_to(ds[1])], include_system=False)
@@ -1005,7 +1005,7 @@ class TestTildeExpressionPortability:
 
         def logic():
             with Rung():
-                calc(~A, Dest)
+                math(~A, Dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([Dest.map_to(ds[1])], include_system=False)
@@ -1647,7 +1647,7 @@ class TestForLoopCountAndRandBounds:
 
         def logic():
             with Rung():
-                calc(randint(lo, hi), dest)
+                math(randint(lo, hi), dest)
 
         return validate_click_program(
             _build_program(logic),
@@ -1720,7 +1720,7 @@ class TestCalcPlainArguments:
 
         def logic():
             with Rung():
-                calc(expr, out_tag)
+                math(expr, out_tag)
 
         report = validate_click_program(
             _build_program(logic),
@@ -1786,7 +1786,7 @@ class TestCalcWideConstant:
 
         def logic():
             with Rung():
-                calc(build(n, w), dest)
+                math(build(n, w), dest)
 
         report = validate_click_program(
             _build_program(logic),
@@ -1859,7 +1859,7 @@ def test_export_refuses_a_real_rand_bound_unless_allowed():
 
     def logic():
         with Rung():
-            calc(randint(lo, 9), dest)
+            math(randint(lo, 9), dest)
 
     prog = _build_program(logic)
     tag_map = TagMap([lo.map_to(df[1]), dest.map_to(dd[100])], include_system=False)

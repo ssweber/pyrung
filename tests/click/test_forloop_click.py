@@ -25,7 +25,7 @@ with Program(strict=False) as p:
                 copy(1, DS1)
             with rung(X4):
                 with forloop(2):
-                    calc(DS2 + 1, DS2)
+                    math(DS2 + 1, DS2)
                     with rung(C2):
                         break_loop()
             with forloop(DS3):
@@ -95,7 +95,7 @@ def test_import_restores_body_rungs_and_nesting():
                         copy(1, DS1)
                     with rung(X004):
                         with forloop(2):
-                            calc(DS2 + 1, DS2)
+                            math(DS2 + 1, DS2)
                             with rung(C2):
                                 break_loop()
                     with forloop(DS3):

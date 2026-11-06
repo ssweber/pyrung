@@ -14,10 +14,10 @@ from pyrung.click.ladder.layout import assert_no_column_a_vertical
 from pyrung.core import Counter, Program, Rung, Timer
 from pyrung.core.program import (
     branch,
-    calc,
     copy,
     count_up,
     forloop,
+    math,
     on_delay,
     out,
     subroutine,
@@ -51,7 +51,7 @@ def _multi():
 def _calc_copy():
     with Program() as p:
         with Rung():
-            calc(ds[1] + 1, ds[1])
+            math(ds[1] + 1, ds[1])
             copy(1, ds[2])
     return p
 
@@ -147,7 +147,7 @@ def _subroutine():
     with Program() as p:
         with subroutine("Gate"):
             with Rung():
-                calc(ds[1] + 1, ds[1])
+                math(ds[1] + 1, ds[1])
                 copy(1, ds[2])
     return p
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+import math as pymath
 import re
 import sys
 import types
@@ -40,7 +40,6 @@ from pyrung.core import (
     atan,
     blockcopy,
     branch,
-    calc,
     call,
     copy,
     count_down,
@@ -52,6 +51,7 @@ from pyrung.core import (
     forloop,
     lro,
     lsh,
+    math,
     named_array,
     off_delay,
     on_delay,
@@ -370,7 +370,7 @@ class TestGenerateCircuitPyAPI:
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=0.0)
         with pytest.raises(ValueError, match="target_scan_ms"):
-            generate_circuitpy(prog, hw, target_scan_ms=math.inf)
+            generate_circuitpy(prog, hw, target_scan_ms=pymath.inf)
         with pytest.raises(TypeError, match="watchdog_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)
         with pytest.raises(TypeError, match="runstop"):
@@ -620,10 +620,10 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
+        assert "_math_func(pymath.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
         # Outside calc a domain error gives 0 (permissive), so sqrt goes through
         # _permissive_math; a division by a variable through _permissive_op.
-        assert "_permissive_math(math.sqrt, " in compile_expression(sqrt(a), ctx)
+        assert "_permissive_math(pymath.sqrt, " in compile_expression(sqrt(a), ctx)
         assert "_permissive_op('/', " in compile_expression(a / b, ctx)
         assert " / " in compile_expression(a / b, ctx, strict=True)
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)
@@ -662,7 +662,7 @@ class TestInstructionCoverage:
                 count_down(Counter2, preset=2).reset(reset_tag)
             with Rung(Bool("Enable")):
                 copy(40000, source)
-                calc(source + 1, calc_out)
+                math(source + 1, calc_out)
                 blockcopy(ds.select(1, 3), dd.select(1, 3))
                 fill(7, dd.select(idx, idx + 2))
 
@@ -1213,10 +1213,10 @@ class TestPersistenceWatchdogAndDiagnostics:
         save_section = result.code.split("def save_memory():", 1)[1].split("\ndef ", 1)[0]
         line = next(ln for ln in save_section.splitlines() if 'values["Level"] =' in ln)
         entry_expr = line.split("=", 1)[1].strip()
-        for value in (1.5, math.inf, -math.inf, math.nan):
+        for value in (1.5, pymath.inf, -pymath.inf, pymath.nan):
             entry = eval(entry_expr, {"str": str}, {symbol: value})  # noqa: S307
             loaded = float(json.loads(json.dumps(entry, allow_nan=False))["value"])
-            assert loaded == value or (math.isnan(value) and math.isnan(loaded))
+            assert loaded == value or (pymath.isnan(value) and pymath.isnan(loaded))
 
     def test_auto_save_dirty_check_treats_a_saved_nan_real_as_clean(self):
         """NaN != NaN: a REAL saved as NaN and NaN still must not resave every interval."""
@@ -1239,9 +1239,9 @@ class TestPersistenceWatchdogAndDiagnostics:
         def dirty(now: float, saved: float | None) -> bool:
             return eval(dirty_expr, {}, {symbol: now, "_ret_snapshot": {"Level": saved}})  # noqa: S307
 
-        nan = math.nan
+        nan = pymath.nan
         assert not dirty(nan, nan)
-        assert not dirty(math.inf, math.inf)
+        assert not dirty(pymath.inf, pymath.inf)
         assert not dirty(1.5, 1.5)
         assert dirty(nan, 1.5)
         assert dirty(1.5, nan)
@@ -1529,11 +1529,11 @@ class TestBoardPeripheralsAndRunStop:
         neg = Real("Neg", default=-3.0e38)
         with Program(strict=False) as prog:
             with Rung():
-                calc(big * 10, dest)
-                calc(big * -10, low)
+                math(big * 10, dest)
+                math(big * -10, low)
                 copy(dint, copied)
-                calc(big**2, square)
-                calc(neg**3, cube)
+                math(big**2, square)
+                math(neg**3, cube)
 
         result = generate_circuitpy(
             prog,
@@ -1565,11 +1565,11 @@ class TestBoardPeripheralsAndRunStop:
             result.code, monkeypatch, StubBase(), runtime_source=result.runtime
         )
         ctx = _context_for_program(prog, hw)
-        assert namespace[ctx.symbol_for_tag(dest)] == math.inf
-        assert namespace[ctx.symbol_for_tag(low)] == -math.inf
+        assert namespace[ctx.symbol_for_tag(dest)] == pymath.inf
+        assert namespace[ctx.symbol_for_tag(low)] == -pymath.inf
         assert namespace[ctx.symbol_for_tag(copied)] == 2147483647.0
-        assert namespace[ctx.symbol_for_tag(square)] == math.inf
-        assert namespace[ctx.symbol_for_tag(cube)] == -math.inf
+        assert namespace[ctx.symbol_for_tag(square)] == pymath.inf
+        assert namespace[ctx.symbol_for_tag(cube)] == -pymath.inf
         assert namespace[ctx.symbol_for_tag(system.fault.out_of_range)] is True
 
     @pytest.mark.parametrize(
@@ -1603,10 +1603,10 @@ class TestBoardPeripheralsAndRunStop:
             # Scan 0 builds the operand (setting SC43); scan 1 starts with SC43
             # off, so the flag on scan 1 is the bitwise op's.
             with Rung(system.sys.first_scan):
-                calc(big * 10, inf)
-                calc(inf - inf if operand == "nan" else inf + 0, odd)
+                math(big * 10, inf)
+                math(inf - inf if operand == "nan" else inf + 0, odd)
             with Rung(~system.sys.first_scan):
-                calc(make(odd), dest)
+                math(make(odd), dest)
                 out(after)
 
         results = _on_every_backend(
@@ -1635,9 +1635,9 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
-                calc(r * 2, dest)
+                math(r * 2, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
         assert results == {name: (0, flagged) for name in results}
@@ -1652,14 +1652,14 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
-                calc(r * 2, dest)
+                math(r * 2, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
         for stored, flag in results.values():
             assert repr(stored) == repr(
-                {"nan": math.nan, "inf": math.inf, "-inf": -math.inf}[operand]
+                {"nan": pymath.nan, "inf": pymath.inf, "-inf": -pymath.inf}[operand]
             )
             assert flag is flagged
 
@@ -1688,7 +1688,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
                 copy(r, dest)
 
@@ -1813,7 +1813,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
                 copy("Z", chars[1])
             with Rung(~system.sys.first_scan):
                 copy(r, chars[1], convert=to_text(exponential=exponential))
@@ -1848,7 +1848,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
                 copy(r, reals[1])
                 copy(r, reals[2])
             with Rung(~system.sys.first_scan):
@@ -1870,7 +1870,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
                 copy(r, ch)
 
@@ -1914,7 +1914,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
                 copy(r, ch, convert=to_binary)
                 out(after)
@@ -1934,9 +1934,9 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
-                calc(randint(0, r) + 5, dest)
+                math(randint(0, r) + 5, dest)
                 copy(5, after)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS, after), scans=2)
@@ -1949,7 +1949,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest", default=7)
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(low, high), dest)
+                math(randint(low, high), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=2)
         assert results == {name: (0, False, False, False) for name in results}
@@ -1967,7 +1967,7 @@ class TestBoardPeripheralsAndRunStop:
         after = Int("After")
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(*bounds) / 2, dest)
+                math(randint(*bounds) / 2, dest)
                 copy(5, after)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS, after), scans=1)
@@ -1992,7 +1992,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest", default=7)
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(70000, 70002), dest)
+                math(randint(70000, 70002), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
@@ -2008,7 +2008,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung():
                 for dest in (narrow, wide) if narrow_first else (wide, narrow):
-                    calc(roll, dest)
+                    math(roll, dest)
 
         results = _on_every_backend(prog, monkeypatch, (narrow, wide, *self._FAULTS), scans=3)
         for low, high, *faults in results.values():
@@ -2031,7 +2031,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest")
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(make(n), make(n) + 1), dest)
+                math(randint(make(n), make(n) + 1), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
@@ -2045,7 +2045,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest")
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(r + 0, 5), dest)
+                math(randint(r + 0, 5), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
@@ -2066,7 +2066,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest", default=9)
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(*bounds), dest)
+                math(randint(*bounds), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
@@ -2094,7 +2094,7 @@ class TestBoardPeripheralsAndRunStop:
         after = Bool("After")
         with Program(strict=False) as prog:
             with Rung():
-                calc(make(randint, n), d)
+                math(make(randint, n), d)
             with Rung():
                 out(after)
 
@@ -2125,7 +2125,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest")
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(lo, 5), dest)
+                math(randint(lo, 5), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
@@ -2145,11 +2145,11 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
                 copy(randint(0, r + 0), copied)
             with Rung(~system.sys.first_scan):
-                calc(randint(0, r + 0) + 5, dest)
+                math(randint(0, r + 0) + 5, dest)
                 out(after)
 
         results = _on_every_backend(
@@ -2164,7 +2164,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Dint("Dest", default=7)
         with Program(strict=False) as prog:
             with Rung():
-                calc(randint(70000, 70002), dest)
+                math(randint(70000, 70002), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
@@ -2183,10 +2183,10 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
                 with forloop(r):
-                    calc(hits + 1, hits)
+                    math(hits + 1, hits)
             with Rung(~system.sys.first_scan):
                 out(after)
 
@@ -2201,7 +2201,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung():
                 with forloop(r):
-                    calc(hits + 1, hits)
+                    math(hits + 1, hits)
 
         results = _on_every_backend(prog, monkeypatch, (hits, system.fault.out_of_range), scans=2)
         assert results == {name: (6, False) for name in results}
@@ -2216,10 +2216,10 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 with forloop(wide):
-                    calc(wide_hits + 1, wide_hits)
+                    math(wide_hits + 1, wide_hits)
             with Rung(system.sys.first_scan):
                 with forloop(narrow):
-                    calc(narrow_hits + 1, narrow_hits)
+                    math(narrow_hits + 1, narrow_hits)
 
         results = _on_every_backend(prog, monkeypatch, (wide_hits, narrow_hits), scans=1)
         assert results == {name: (65537, 32768) for name in results}
@@ -2263,13 +2263,13 @@ class TestBoardPeripheralsAndRunStop:
         after = Int("After")
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
-                calc(big * 10, r)  # +Inf, with SC43 on scan 0 only
+                math(big * 10, r)  # +Inf, with SC43 on scan 0 only
             with Rung(~system.sys.first_scan, expr == (5 if label == "div_then_add" else 0)):
                 out(hit)
             with Rung(~system.sys.first_scan):
                 copy(expr, copied)
                 with forloop(expr):
-                    calc(hits + 1, hits)
+                    math(hits + 1, hits)
             with Rung(~system.sys.first_scan):
                 copy(5, after)
 
@@ -2291,7 +2291,7 @@ class TestBoardPeripheralsAndRunStop:
             with Rung((i / z) == 0):
                 out(hit)
             with Rung():
-                calc(i / z, dest)
+                math(i / z, dest)
 
         results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
         assert results == {name: (True, 0, True, False, False) for name in results}
@@ -2319,7 +2319,7 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with Rung(system.sys.first_scan):
                 for expr, target in setup:
-                    calc(expr, target)
+                    math(expr, target)
             with Rung(~system.sys.first_scan):
                 copy(randint(0, r), copied)
             with Rung(~system.sys.first_scan, randint(0, r) == 0):
@@ -2378,8 +2378,8 @@ class TestBoardPeripheralsAndRunStop:
     #: integer past the double range is Inf (SC43 into a Real), sin(Inf) NaN (no
     #: flag), atan(Inf) pi / 2.
     _HUGE_IN_CALC = {
-        "sin_of_pow": (math.nan, False),
-        "atan_of_pow": (math.atan(math.inf), False),
+        "sin_of_pow": (pymath.nan, False),
+        "atan_of_pow": (pymath.atan(pymath.inf), False),
     }
 
     @pytest.mark.parametrize(("label", "make"), _HUGE, ids=[label for label, _ in _HUGE])
@@ -2391,12 +2391,12 @@ class TestBoardPeripheralsAndRunStop:
         dest = Real("Dest", default=7.0)
         with Program(strict=False) as prog:
             with Rung():
-                calc(make(e, bd), dest)
+                math(make(e, bd), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
-        value, flagged = self._HUGE_IN_CALC.get(label, (math.inf, True))
+        value, flagged = self._HUGE_IN_CALC.get(label, (pymath.inf, True))
         for stored, *faults in results.values():
-            assert stored == value or (math.isnan(value) and math.isnan(stored)), label
+            assert stored == value or (pymath.isnan(value) and pymath.isnan(stored)), label
             assert faults == [False, flagged, False], label
 
     #: (label, formula of (n, d, z, w, r), destination type, stored, flags as
@@ -2437,14 +2437,14 @@ class TestBoardPeripheralsAndRunStop:
         dest = dest_type("Dest", default=99)
         with Program(strict=False) as prog:
             with Rung():
-                calc(make(n, d, z, w, r), dest)
+                math(make(n, d, z, w, r), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         expected = (stored, *(bool(flag) for flag in flags))
         assert results == {name: expected for name in results}, label
 
     def test_mod_floors_and_zero_to_zero_is_one_outside_calc_on_every_backend(self, monkeypatch):
-        """CLICK's MOD and 0 ^ 0 are calc()'s: anywhere else ``%`` and ``**`` are
+        """CLICK's MOD and 0 ^ 0 are math()'s: anywhere else ``%`` and ``**`` are
         Python's, so the wrap-around index ``(P - 1) % 10 + 1`` still works."""
         n, z, p = Int("N", default=-3), Int("Z"), Int("P")
         odd, zero_power = Bool("Odd"), Bool("ZeroPower")
@@ -2474,7 +2474,7 @@ class TestBoardPeripheralsAndRunStop:
         assert type(r.default) is float
         with Program(strict=False) as prog:
             with Rung():
-                calc(r * r + 1 - r * r, dest)
+                math(r * r + 1 - r * r, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         assert results == {name: (0, False, False, False) for name in results}
@@ -2502,13 +2502,13 @@ class TestBoardPeripheralsAndRunStop:
                 copy(big(), copied)
 
         results = _on_every_backend(prog, monkeypatch, (hit, copied), scans=1)
-        assert results == {name: (True, math.inf) for name in results}
+        assert results == {name: (True, pymath.inf) for name in results}
 
     def test_a_real_calc_step_is_not_stepped_as_a_double(self):
         r1, r2, r3 = Real("R1"), Real("R2"), Real("R3")
         with Program() as prog:
             with Rung():
-                calc(r1 + r2 * r1 - r2, r3)
+                math(r1 + r2 * r1 - r2, r3)
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -2522,7 +2522,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = dest_type("Dest", default=99)
         with Program(strict=False) as prog:
             with Rung():
-                calc(abs(source), dest)
+                math(abs(source), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         assert results == {name: (0, False, True, False) for name in results}
@@ -2549,7 +2549,7 @@ class TestBoardPeripheralsAndRunStop:
             with Rung():
                 copy(make(n, h), copied)
             with Rung():
-                calc(make(n, h), dest)
+                math(make(n, h), dest)
 
         results = _on_every_backend(prog, monkeypatch, (hit, copied, dest, *self._FAULTS), scans=1)
         assert results == {name: (True, 0.0, 0.0, False, False, True) for name in results}, label
@@ -2577,7 +2577,7 @@ class TestBoardPeripheralsAndRunStop:
             with Rung(make(w, c) == 0):
                 out(hit)
             with Rung():
-                calc(make(w, c), dest)
+                math(make(w, c), dest)
 
         results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
         assert results == {name: (True, 0, False, True, False) for name in results}, label
@@ -2623,7 +2623,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Real("Dest", default=9.0)
         with Program(strict=False) as prog:
             with Rung():
-                calc(sqrt(x), dest)
+                math(sqrt(x), dest)
                 out(outputs[1])
 
         result = generate_circuitpy(
@@ -3259,7 +3259,7 @@ class TestRandIntCodegen:
         lo = Int("Lo")
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                calc(randint(lo, 6), Int("Out"))
+                math(randint(lo, 6), Int("Out"))
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         compile(source_code, "code.py", "exec")
@@ -3272,7 +3272,7 @@ class TestRandIntCodegen:
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                calc(Int("A") + 1, Int("Out"))
+                math(Int("A") + 1, Int("Out"))
         assert "import random" not in generate_circuitpy(prog, hw, target_scan_ms=10.0).code
 
 
@@ -3285,11 +3285,11 @@ class TestRangeAggregateCodegen:
         outs = [Int(f"Out{i}") for i in range(5)]
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                calc(vals.select(1, 4).max(), outs[0])
-                calc(vals.select(1, 4).min(), outs[1])
-                calc(vals.select(1, 4).median(), outs[2])
-                calc(vals.select(1, 3).median(), outs[3])
-                calc(vals.select(1, 4).mean() + abs(outs[0]), outs[4])
+                math(vals.select(1, 4).max(), outs[0])
+                math(vals.select(1, 4).min(), outs[1])
+                math(vals.select(1, 4).median(), outs[2])
+                math(vals.select(1, 3).median(), outs[3])
+                math(vals.select(1, 4).mean() + abs(outs[0]), outs[4])
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         compile(source_code, "code.py", "exec")

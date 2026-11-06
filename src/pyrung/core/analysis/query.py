@@ -240,7 +240,7 @@ def _step_write_target(instr: Any) -> str | None:
 
     Two idioms, one meaning — the rung sets where the sequence goes next:
 
-    * ``calc(X + 1, X)`` — the self-increment.
+    * ``math(X + 1, X)`` — the self-increment.
     * ``copy(k, X)`` — stamping the next state number in, the commoner Click form.
 
     ``copy(k, X)`` alone is far too broad (``copy(1, Err)`` is not a sequencer), so
@@ -277,7 +277,7 @@ def _step_write_target(instr: Any) -> str | None:
 
 
 def _self_increment_target(instr: Any) -> str | None:
-    """Return the tag name for a ``calc(X + 1, X)`` self-increment, else None.
+    """Return the tag name for a ``math(X + 1, X)`` self-increment, else None.
 
     The narrow form: unlike :func:`_step_write_target` this never matches a
     ``copy``, so it identifies a step register without needing the rung's guard.
@@ -292,7 +292,7 @@ def _self_increment_target(instr: Any) -> str | None:
 def _step_registers(rungs: list[Rung]) -> set[str]:
     """Registers this scope drives as a step machine.
 
-    A self-increment names its own register (``calc(X + 1, X)``).  A literal
+    A self-increment names its own register (``math(X + 1, X)``).  A literal
     stamp does not — ``copy(1, Err)`` is a fault write, not a sequencer — so it
     counts only when the same rung *reads* the register it writes (``Step == j``
     gating ``copy(k, Step)``).  Read-to-decide plus write-to-move is the step

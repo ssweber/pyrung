@@ -1127,7 +1127,7 @@ def _opaque_observer_nd_names(
     Live-input pruning keeps an input only while a residual expression names
     it (or a hidden tag one names depends on it).  A projection or a callable
     names no expression, so an input that reaches an observed tag through
-    data flow alone (``calc(100 / D, Q)`` with ``Q`` projected) would be held
+    data flow alone (``math(100 / D, Q)`` with ``Q`` projected) would be held
     at its current value and its other values never explored.  Every input in
     the upstream cone of an observed tag stays live instead.  A callable with
     no ``scope=`` may read any tag, so every input stays live.
@@ -1509,7 +1509,7 @@ def _writers_all_unconditional(
 
     The gate for ND-input-sourced functional deps: with no X writers the
     ``x_writers <= y_writers`` containment is vacuous, so this is what
-    separates "Y is recomputed from the input every scan" (``calc(100 -
+    separates "Y is recomputed from the input every scan" (``math(100 -
     analog, pv)``) from a gated ``copy(REF, y)`` where Y holds its old
     value whenever the gate is off.  A write the rung's power alone does not
     decide (a oneshot, a forloop body: :func:`_writes_run_when_powered`) is
@@ -1671,7 +1671,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     disqualified: set[str] = set()
 
     # Walk-only: slice elision has already claimed write-before-read
-    # scratch (the jump-table pointer idiom: ``calc(S_StateRequested +
+    # scratch (the jump-table pointer idiom: ``math(S_StateRequested +
     # 150, sm__jump_target_ds_idx)``), but the walker still wants the
     # ``y = x + offset`` relation as idx-chase advice.  Admit elided tags
     # as candidates; their projections are recorded as advice only — no

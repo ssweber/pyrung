@@ -31,8 +31,8 @@ from pyrung import (
     Program,
     TagType,
     Timer,
-    calc,
     copy,
+    math,
     on_delay,
     rise,
     rung,
@@ -323,7 +323,7 @@ def _tide_gated_program() -> tuple[Program, dict[str, object]]:
         with rung():
             copy(1, EnblYes)
         with rung():
-            calc(StateRequested + 150, JumpIdx)
+            math(StateRequested + 150, JumpIdx)
         with rung():
             copy(JT[JumpIdx], JumpTarget)
         with rung(StateRequested != 0, EnblYes == 1):

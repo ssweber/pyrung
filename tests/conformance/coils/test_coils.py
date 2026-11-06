@@ -57,7 +57,7 @@ The round 2 probes, each answered as the expectation adopts:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, branch, calc, copy, fall, latch, out, reset, rise, system
+from pyrung.core import Or, Rung, branch, copy, fall, latch, math, out, reset, rise, system
 from tests.conformance.memory import c
 from tests.conformance.scans import WINDOW, count_scans, done, edges, firings, scans_for, trace
 
@@ -157,9 +157,9 @@ def prove_edge_behind_open_contact(slot):
     count_scans(slot)
     _gated_bit(slot, bit, gate)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, gate, rise(bit)):
-        calc(slot.Result1 * 10 + slot.Scratch, slot.Result1)
+        math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, gate, fall(bit)):
-        calc(slot.Result2 * 10 + slot.Scratch, slot.Result2)
+        math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
     firings(rise(bit), slot, slot.Result3)
     firings(fall(bit), slot, slot.Result4)
     done(slot)
@@ -173,9 +173,9 @@ def prove_edge_in_false_rung_branch(slot):
     _gated_bit(slot, bit, gate)
     with Rung(gate, slot.Cmd != 0, slot.Scratch <= WINDOW):
         with branch(rise(bit)):
-            calc(slot.Result1 * 10 + slot.Scratch, slot.Result1)
+            math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
         with branch(fall(bit)):
-            calc(slot.Result2 * 10 + slot.Scratch, slot.Result2)
+            math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
     done(slot)
 
 

@@ -73,7 +73,6 @@ class _LadderExporter(
     # DSL name → CSV token name (only entries where names differ)
     _RENAME_TABLE: tuple[tuple[str, str, str], ...] = (
         # (instruction_class_name, dsl_name, csv_name)
-        ("CalcInstruction", "calc", "math"),
         ("ReturnInstruction", "return_early", "return"),
         ("ForLoopInstruction", "forloop", "for"),
         ("BreakInstruction", "break_loop", "break"),

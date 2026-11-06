@@ -300,7 +300,7 @@ def test_findings_show_real_dsl_names(cls_name: str, verb: str) -> None:
 
 def test_a_calc_finding_shows_calc_as_it_is_written() -> None:
     a, dest = Int("A"), Int("Dest")
-    assert render_instruction(CalcInstruction(a + 1, dest), "Dest")[0] == "calc((A + 1), Dest)"
+    assert render_instruction(CalcInstruction(a + 1, dest), "Dest")[0] == "math((A + 1), Dest)"
 
 
 def test_every_pin_is_exported() -> None:

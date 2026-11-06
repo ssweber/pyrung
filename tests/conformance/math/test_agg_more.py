@@ -38,7 +38,7 @@ The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66, C522..C526 a
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, latch, reset, system
+from pyrung.core import Rung, copy, fill, latch, math, reset, system
 from pyrung.core.expression import randint
 from tests.conformance.memory import c, dd, df, dh, ds
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
@@ -51,18 +51,18 @@ def prove_sum_int_wrap(slot):
     with Rung(*once(slot)):
         copy(32767, ds[4318])
         copy(1, ds[4319])
-        calc(ds.select(4318, 4319).sum(), slot.Result1)
+        math(ds.select(4318, 4319).sum(), slot.Result1)
     flag_bit(slot, SC43, slot.Result2, 1)
     with Rung(*once(slot)):
         copy(2147483647, dd[41])
         copy(1, dd[42])
-        calc(dd.select(41, 42).sum(), dd[43])
+        math(dd.select(41, 42).sum(), dd[43])
     flag_bit(slot, SC43, slot.Result2, 2)
     with Rung(*once(slot)):
-        calc(ds.select(4318, 4319).sum(), dd[44])
+        math(ds.select(4318, 4319).sum(), dd[44])
         copy(0xFFFF, dh[61])
         copy(1, dh[62])
-        calc(dh.select(61, 62).sum(), dh[63])
+        math(dh.select(61, 62).sum(), dh[63])
     flag_bit(slot, SC43, slot.Result2, 4)
     class_of(slot, dd[43], [-2147483648], slot.Result3)
     class_of(slot, dd[44], [32768, -32768], slot.Result4)
@@ -81,9 +81,9 @@ def prove_sum_bits(slot):
         latch(c[522])
         latch(c[524])
         latch(c[525])
-        calc(c.select(522, 526).sum(), slot.Result1)
-        calc(c.select(522, 526).sum(), df[170])
-        calc(c.select(1586, 1590).sum(), slot.Result3)
+        math(c.select(522, 526).sum(), slot.Result1)
+        math(c.select(522, 526).sum(), df[170])
+        math(c.select(1586, 1590).sum(), slot.Result3)
     class_of(slot, df[170], [3.0], slot.Result2)
     finish(slot)
 
@@ -98,22 +98,22 @@ def prove_agg_signed(slot):
     with Rung(*once(slot)):
         copy(-5, ds[4320])
         copy(3, ds[4321])
-        calc(ds.select(4320, 4321).max(), slot.Result1)
-        calc(ds.select(4320, 4321).min(), slot.Result2)
+        math(ds.select(4320, 4321).max(), slot.Result1)
+        math(ds.select(4320, 4321).min(), slot.Result2)
         copy(-100000, dd[45])
         copy(3, dd[46])
-        calc(dd.select(45, 46).max(), dd[47])
-        calc(dd.select(45, 46).min(), dd[48])
+        math(dd.select(45, 46).max(), dd[47])
+        math(dd.select(45, 46).min(), dd[48])
         copy(-3, dd[49])
         copy(-4, dd[50])
-        calc(dd.select(49, 50).mean(), slot.Result4)
+        math(dd.select(49, 50).mean(), slot.Result4)
         copy(0xFFFF, dh[64])
         copy(0xFFFF, dh[65])
-        calc(dh.select(64, 65).mean(), dh[66])
+        math(dh.select(64, 65).mean(), dh[66])
     with Rung(*once(slot), dd[47] == 3):
-        calc(slot.Result3 + 10, slot.Result3)
+        math(slot.Result3 + 10, slot.Result3)
     with Rung(*once(slot), dd[48] == -100000):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     class_of(slot, dh[66], [0xFFFF, 0x7FFF], slot.ErrorCode)
     finish(slot)
 
@@ -134,15 +134,15 @@ def _nan_class(slot, value, into):
 def prove_agg_nan_order(slot):
     with Rung(*once(slot)):
         copy(3.0e38, df[171])
-        calc(df[171] * 10, df[172])
-        calc(df[172] - df[172], df[173])
+        math(df[171] * 10, df[172])
+        math(df[172] - df[172], df[173])
         copy(1.0, df[174])
         copy(1.0, df[175])
         copy(df[173], df[176])
-        calc(df.select(173, 174).max(), df[177])
-        calc(df.select(175, 176).max(), df[178])
-        calc(df.select(173, 174).min(), df[179])
-        calc(df.select(175, 176).min(), df[180])
+        math(df.select(173, 174).max(), df[177])
+        math(df.select(175, 176).max(), df[178])
+        math(df.select(173, 174).min(), df[179])
+        math(df.select(175, 176).min(), df[180])
     _nan_class(slot, df[177], slot.Result1)
     _nan_class(slot, df[178], slot.Result2)
     _nan_class(slot, df[179], slot.Result3)
@@ -162,15 +162,15 @@ def _inf_class(slot, value, into):
 def prove_agg_inf(slot):
     with Rung(*once(slot)):
         copy(3.0e38, df[181])
-        calc(df[181] * 10, df[182])
-        calc(df[181] * -10, df[183])
-        calc(df.select(182, 183).sum(), df[184])
+        math(df[181] * 10, df[182])
+        math(df[181] * -10, df[183])
+        math(df.select(182, 183).sum(), df[184])
         copy(df[182], df[185])
         copy(1.0, df[186])
-        calc(df.select(185, 186).mean(), df[187])
+        math(df.select(185, 186).mean(), df[187])
         copy(3.0e38, df[188])
         copy(3.0e38, df[189])
-        calc(df.select(188, 189).mean(), df[190])
+        math(df.select(188, 189).mean(), df[190])
     with Rung(*once(slot), df[184] != df[184]):
         copy(2, slot.Result1)
     _inf_class(slot, df[187], slot.Result2)
@@ -179,7 +179,7 @@ def prove_agg_inf(slot):
     with Rung(*once(slot), df[190] > 3.4028235e38):
         copy(2, slot.Result3)
     with Rung(*once(slot)):
-        calc(df.select(188, 189).sum(), df[191])
+        math(df.select(188, 189).sum(), df[191])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
     with Rung(*once(slot), df[191] > 3.4028235e38):
         copy(1, slot.Result4)
@@ -198,21 +198,21 @@ def prove_rand_sites(slot):
         copy(5, dd[51])
         copy(5, dd[52])
     with Rung(slot.Scratch <= 8, slot.Scratch != 0):
-        calc(randint(1, 30000), dd[53])
-        calc(randint(1, 30000), dd[54])
-        calc(randint(1, 30000) - randint(1, 30000), dd[55])
+        math(randint(1, 30000), dd[53])
+        math(randint(1, 30000), dd[54])
+        math(randint(1, 30000) - randint(1, 30000), dd[55])
     with Rung(slot.Scratch <= 8, slot.Scratch != 0, dd[53] == dd[54]):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Scratch >= 2, slot.Scratch <= 8, dd[53] != dd[56]):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Scratch <= 8, slot.Scratch != 0, dd[55] == 0):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     with Rung():
         copy(dd[53], dd[56])
     with Rung(slot.Scratch == 4):
         copy(9, dd[51])
         copy(9, dd[52])
-        calc(randint(dd[51], dd[52]), slot.Result4)
+        math(randint(dd[51], dd[52]), slot.Result4)
     done(slot)
 
 

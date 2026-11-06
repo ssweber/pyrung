@@ -16,11 +16,11 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
-    calc,
     call,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -468,7 +468,7 @@ class TestScanLocalStateElision:
                 copy(20, table[2])
                 copy(1, init_done)
             with Rung():
-                calc(selector, idx)
+                math(selector, idx)
             with Rung():
                 copy(table[idx], tmp)
 
@@ -488,7 +488,7 @@ class TestScanLocalStateElision:
             with Rung():
                 copy(0, idx)
             with Rung():
-                calc(idx + 1, idx)
+                math(idx + 1, idx)
             with Rung(idx == 1):
                 out(flag)
 
@@ -639,7 +639,7 @@ class TestScanLocalStateElision:
 class TestDomainsOnlyFunctionalDepAdvice:
     """``domains_only`` admits slice-elided / ordering-violating scratch as
     advice-grade functional-dep projections (the jump-table pointer idiom:
-    ``calc(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
+    ``math(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
     touching dims; default-opt behavior is unchanged."""
 
     @staticmethod
@@ -654,7 +654,7 @@ class TestDomainsOnlyFunctionalDepAdvice:
             with Rung(adv):
                 copy(3, req)
             with Rung():
-                calc(req + 2, scratch)
+                math(req + 2, scratch)
             with Rung():
                 copy(table[scratch], dest)
             with Rung(dest != 0):

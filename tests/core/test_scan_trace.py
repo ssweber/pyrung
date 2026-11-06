@@ -10,7 +10,7 @@ cannot pass as agreement.
 from __future__ import annotations
 
 import ast
-import math
+import math as pymath
 import random
 from collections import Counter
 from collections.abc import Callable
@@ -34,7 +34,6 @@ from pyrung import (
     TagType,
     Timer,
     blockcopy,
-    calc,
     call,
     copy,
     count_down,
@@ -43,6 +42,7 @@ from pyrung import (
     fill,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -277,21 +277,21 @@ def _corpus_counter_down() -> None:
 
 def _corpus_calc_wraps() -> None:
     with Rung():
-        calc(N + 7, N)
+        math(N + 7, N)
     with Rung(N < 0):
         latch(Hit)
 
 
 def _corpus_calc_gated_by_clock() -> None:
     with Rung(system.sys.clock_1s):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung(N >= 5):
         out(Lamp)
 
 
 def _corpus_real_accumulates() -> None:
     with Rung(Run):
-        calc(Temp + 0.25, Temp)
+        math(Temp + 0.25, Temp)
     with Rung(Temp >= 10.0):
         latch(Hit)
 
@@ -304,7 +304,7 @@ def _median_of(*addresses: int) -> None:
     with Rung(Rst):
         copy(9, values[2])
     with Rung():
-        calc(values.select(addresses[0], addresses[-1]).median(), level)
+        math(values.select(addresses[0], addresses[-1]).median(), level)
     with Rung(level >= 8):
         latch(Hit)
 
@@ -321,7 +321,7 @@ def _corpus_real_overflows() -> None:
     with Rung():
         copy(1.5e30, Temp, oneshot=True)
     with Rung():
-        calc(Temp * 1.5, Temp)
+        math(Temp * 1.5, Temp)
     with Rung(Temp > 1e37):
         latch(Hit)
 
@@ -330,12 +330,12 @@ def _corpus_division_by_moving() -> None:
     with Rung():
         on_delay(T, 2_000)
     with Rung():
-        calc(100 / (T.Acc - 1_000), N)
+        math(100 / (T.Acc - 1_000), N)
 
 
 def _corpus_copy_out_of_range() -> None:
     with Rung():
-        calc(Big + 300, Big)
+        math(Big + 300, Big)
     with Rung():
         copy(Big, N)
 
@@ -349,7 +349,7 @@ def _corpus_clock_stored() -> None:
 
 def _corpus_rtc_gate() -> None:
     with Rung(system.rtc.second < 30):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung():
         on_delay(T, 60_000)
 
@@ -363,9 +363,9 @@ def _corpus_rtc_stored() -> None:
 
 def _corpus_edges() -> None:
     with Rung(rise(system.sys.clock_1s)):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung(fall(Run)):
-        calc(M + 1, M)
+        math(M + 1, M)
     with Rung(rise(Run)):
         latch(Lamp)
 
@@ -374,7 +374,7 @@ def _corpus_oneshot() -> None:
     with Rung(T.Done):
         copy(1, N, oneshot=True)
     with Rung(N == 0):
-        calc(M + 1, M)
+        math(M + 1, M)
     with Rung():
         copy(0, N)
     with Rung():
@@ -418,14 +418,14 @@ def _corpus_block_fill_and_copy() -> None:
     with Rung():
         blockcopy(Ds.select(1, 3), Ds.select(4, 6))
     with Rung():
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _corpus_indirect() -> None:
     with Rung():
         copy(Step, Ds[N])
     with Rung(T.Done):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung(~T.Done):
         on_delay(T, 250)
     with Rung(N >= 8):
@@ -447,7 +447,7 @@ def _corpus_subroutine() -> None:
         with Rung(Rst):
             return_early()
         with Rung():
-            calc(N + 1, N)
+            math(N + 1, N)
         with Rung(N >= 100):
             copy(0, N)
 
@@ -513,19 +513,19 @@ def _corpus_mode_stop() -> None:
     with Rung(rise(T.Done)):
         out(system.sys.cmd_mode_stop)
     with Rung():
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _corpus_mode_stop_at_once() -> None:
     with Rung(Run):
         out(system.sys.cmd_mode_stop)
     with Rung():
-        calc(N + 1, N)
+        math(N + 1, N)
 
 
 def _corpus_forloop() -> None:
     with Rung(Run), forloop(3):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung(N >= 900):
         latch(Hit)
 
@@ -826,7 +826,7 @@ def _pulsed_negative_gain() -> None:
     with Rung(~Hit):
         copy(0.0, Source)
     with Rung():
-        calc(Source * -1.0, Gained)
+        math(Source * -1.0, Gained)
 
 
 LAST_WRITTEN = {
@@ -863,12 +863,12 @@ def test_stepping_publishes_the_write_that_equals_what_the_tag_held() -> None:
         with Rung(Run):
             out(Coiled)
         with Rung():
-            calc(Source * -1.0, Gained)
+            math(Source * -1.0, Gained)
 
     plc = PLC(_build(program), dt=0.01)
     plc.step()
     assert plc.state.tags[Coiled.name] is False
-    assert math.copysign(1.0, plc.state.tags[Gained.name]) == -1.0
+    assert pymath.copysign(1.0, plc.state.tags[Gained.name]) == -1.0
 
 
 @pytest.mark.parametrize(
@@ -932,7 +932,7 @@ def _stop_program() -> None:
     with Rung(T1.Acc >= 100):
         out(Lamp)
     with Rung(system.sys.clock_500ms):
-        calc(N + 1, N)
+        math(N + 1, N)
     with Rung():
         copy(N, Ds[2])
     with Rung():
@@ -1003,7 +1003,7 @@ def test_bounds_are_watched_on_every_scan_of_the_loop(fine_loop: None) -> None:
 
     def fill_program() -> None:
         with Rung(system.sys.clock_100ms):
-            calc(Limited + 1, Limited)
+            math(Limited + 1, Limited)
         with Rung(T.Done):
             copy(5, Choice)
         with Rung():
@@ -1037,7 +1037,7 @@ def _timer_program() -> Program:
         with Rung():
             on_delay(T, 2_000)
         with Rung():
-            calc(N + 3, N)
+            math(N + 3, N)
 
     return _build(fill_program)
 
@@ -1107,9 +1107,9 @@ def _busy_toggle() -> Program:
         with Rung(~Lamp):
             out(Lamp)
         with Rung(Lamp):
-            calc(N + 1, N)
+            math(N + 1, N)
         with Rung(~Lamp):
-            calc(M + N, M)
+            math(M + N, M)
         with Rung(M > 100):
             copy(0, M)
 
@@ -1145,7 +1145,7 @@ def test_a_program_that_keeps_exiting_backs_off(monkeypatch: pytest.MonkeyPatch)
 def test_scan_derived_tag_declines_the_run(tag: Any, fine_loop: None) -> None:
     def fill_program() -> None:
         with Rung(tag):
-            calc(N + 1, N)
+            math(N + 1, N)
         with Rung():
             copy(tag, M)
 

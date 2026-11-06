@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Real, Rung, calc, copy
+from pyrung.core import PLC, Bool, Int, Program, Real, Rung, copy, math
 
 
 class TestRangeViolation:
@@ -30,7 +30,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(P + 150, P)
+                math(P + 150, P)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "P": 50.0})
@@ -46,7 +46,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(P - 10, P)
+                math(P - 10, P)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "P": 5.0})
@@ -62,7 +62,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(P + 10, P)
+                math(P + 10, P)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "P": 40.0})
@@ -77,7 +77,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Temp - 100, Temp)
+                math(Temp - 100, Temp)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "Temp": 0.0})
@@ -91,7 +91,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Speed + 500, Speed)
+                math(Speed + 500, Speed)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "Speed": 800})

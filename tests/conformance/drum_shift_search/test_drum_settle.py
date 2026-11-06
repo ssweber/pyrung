@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, event_drum, out, time_drum, time_event_drum
+from pyrung.core import Or, Rung, copy, event_drum, math, out, time_drum, time_event_drum
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pattern_for, pool_of, put, track
 from tests.conformance.memory import dd, ds, td
 from tests.conformance.scans import count_scans, done, scans_for
@@ -199,18 +199,18 @@ def pause_on(slot: Any, bit: Any, first: int, last: int) -> None:
 
 def snap_two(slot: Any, top: Side, under: Side, scan: int, into: Any) -> None:
     with Rung(slot.Scratch == scan):
-        calc(top.state * 100 + under.state, into)
+        math(top.state * 100 + under.state, into)
 
 
 def acc_hundreds(slot: Any, s: Side, scan: int, into: Any) -> None:
     with Rung(slot.Scratch == scan):
-        calc(s.acc / 100, into)
+        math(s.acc / 100, into)
 
 
 def moves(slot: Any, acc: Any, prev: Any, first: int, last: int, into: Any) -> None:
     """*into* = the scans of *first*..*last* on which *acc* moved up.  Below the drum."""
     with Rung(slot.Scratch >= first, slot.Scratch <= last, acc > prev):
-        calc(into + 1, into)
+        math(into + 1, into)
     with Rung():
         copy(acc, prev)
 

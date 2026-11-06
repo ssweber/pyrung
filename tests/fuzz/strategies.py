@@ -19,7 +19,6 @@ from pyrung.core import (
     Rung,
     blockcopy,
     branch,
-    calc,
     call,
     copy,
     count_down,
@@ -31,6 +30,7 @@ from pyrung.core import (
     latch,
     lro,
     lsh,
+    math,
     off_delay,
     on_delay,
     out,
@@ -815,14 +815,14 @@ def emit_instruction(spec: InstrSpec) -> None:
             expr = source**lit
         else:
             expr = source + lit
-        calc(expr, args["dest"])
+        math(expr, args["dest"])
     elif kind == "calc_tag_tag":
         s1, s2 = args["source1"], args["source2"]
         expr = _CALC_TAG_TAG_OPS[args["op"]](s1, s2)
-        calc(expr, args["dest"])
+        math(expr, args["dest"])
     elif kind == "calc_shift":
         fn = _SHIFT_FNS[args["shift_op"]]
-        calc(fn(args["source"], args["count"]), args["dest"])
+        math(fn(args["source"], args["count"]), args["dest"])
     elif kind == "on_delay":
         builder = on_delay(args["timer"], args["preset"], unit=args.get("unit", "ms"))
         if args.get("reset") is not None:
@@ -938,11 +938,11 @@ def emit_instruction(spec: InstrSpec) -> None:
             builder.jog(args["jog"])
     elif kind == "range_sum_calc":
         blk = args["block"]
-        calc(blk.select(args["start"], args["end"]).sum(), args["dest"])
+        math(blk.select(args["start"], args["end"]).sum(), args["dest"])
     elif kind == "range_agg_calc":
         blk = args["block"]
         rng = blk.select(args["start"], args["end"])
-        calc(getattr(rng, args["agg"])(), args["dest"])
+        math(getattr(rng, args["agg"])(), args["dest"])
 
 
 # ---------------------------------------------------------------------------

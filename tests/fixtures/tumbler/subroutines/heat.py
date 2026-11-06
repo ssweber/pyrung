@@ -3,11 +3,11 @@
 from pyrung import (
     Or,
     branch,
-    calc,
     comment,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -109,7 +109,7 @@ def heat():
 
     comment("### Calculate a dynamic seconds (Ts) limit to heat per heat `cycle`")
     with rung(Heat_CurStep == 1):  # R9
-        calc((Heat_TargetTemp_F - Heat_PvTemp_F) * Heat_TsPerDegree, Heat__val_ts_limit)
+        math((Heat_TargetTemp_F - Heat_PvTemp_F) * Heat_TsPerDegree, Heat__val_ts_limit)
 
     with rung(Heat_CurStep == 1, Heat_tmr.Acc > 1):  # R10
         copy(1, Heat_Trans)
@@ -179,7 +179,7 @@ def heat():
 
     comment("Check if current step is odd")
     with rung():  # R20
-        calc(Heat_CurStep % 2, Heat__valstepisodd)
+        math(Heat_CurStep % 2, Heat__valstepisodd)
 
     comment("""\
         EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
@@ -188,11 +188,11 @@ def heat():
             # we immediately increment to the next odd step without executing any step logic.
             # This provides a safe "neutral zone" when manually changing step numbers.""")
     with rung(Heat__valstepisodd != 1, Heat_xPause == 0):  # R21
-        calc(Heat_CurStep + 1, Heat_CurStep)
+        math(Heat_CurStep + 1, Heat_CurStep)
 
     comment("Step advancement when transition is triggered")
     with rung(Heat_Trans == 1):  # R22
-        calc(Heat_CurStep + 1, Heat_CurStep)
+        math(Heat_CurStep + 1, Heat_CurStep)
         copy(0, Heat_Trans)
 
     comment("""\

@@ -25,13 +25,13 @@ from pyrung.core import (
     TagType,
     Timer,
     blockcopy,
-    calc,
     copy,
     count_down,
     count_up,
     fill,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     rise,
@@ -199,14 +199,14 @@ class TestThresholdAbsorptionConditionalResets:
     hidden by threshold absorption."""
 
     def test_sawtooth_counter_stopped_reachable(self):
-        """calc(C + 1, C) resets at C>=50 — Stopped must be reachable."""
+        """math(C + 1, C) resets at C>=50 — Stopped must be reachable."""
         enable = Bool("Enable", external=True)
         c = Int("SawtoothC")
         stopped = Bool("Stopped")
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 1, c)
+                math(c + 1, c)
             with Rung(c >= 50):
                 copy(0, c)
                 latch(stopped)
@@ -234,7 +234,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 1, c)
+                math(c + 1, c)
             with Rung(c > 0):
                 latch(counting)
             with Rung(c >= 10):
@@ -265,7 +265,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         with Program(strict=False) as logic:
             with Rung(tick):
-                calc(c + 1, c)
+                math(c + 1, c)
             with Rung(pet):
                 copy(0, c)
             with Rung(c >= 20):
@@ -390,7 +390,7 @@ class TestThresholdAbsorptionRealAccumulator:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(x + 0.1, x)
+                math(x + 0.1, x)
             with Rung(x >= 1.0):
                 out(alarm)
 
@@ -482,7 +482,7 @@ class TestBackwardPropagationNonInvertible:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sensor * sensor, squared)
+                math(sensor * sensor, squared)
             with Rung(squared >= 100):
                 out(alarm)
 
@@ -499,7 +499,7 @@ class TestBackwardPropagationNonInvertible:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sensor * sensor, squared)
+                math(sensor * sensor, squared)
             with Rung(squared >= 100):
                 out(alarm)
 
@@ -523,7 +523,7 @@ class TestBackwardPropagationMultiHop:
             with Rung():
                 copy(level, stored)
             with Rung():
-                calc(stored + 10, shifted)
+                math(stored + 10, shifted)
             with Rung(shifted >= 85):
                 out(high)
 
@@ -543,7 +543,7 @@ class TestBackwardPropagationMultiHop:
             with Rung():
                 copy(level, stored)
             with Rung():
-                calc(stored + 10, shifted)
+                math(stored + 10, shifted)
             with Rung(shifted >= 85):
                 out(high)
 
@@ -630,7 +630,7 @@ class TestBackwardPropagationWordBitwise:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(mask & 0x00FF, masked)
+                math(mask & 0x00FF, masked)
             with Rung(masked >= 16):
                 out(flag)
 
@@ -649,7 +649,7 @@ class TestBackwardPropagationWordBitwise:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(mask & 0x00FF, masked)
+                math(mask & 0x00FF, masked)
             with Rung(masked >= 16):
                 out(flag)
 
@@ -788,7 +788,7 @@ class TestFastForwardElisionTimerPath:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sensor + 10, temp)
+                math(sensor + 10, temp)
             with Rung(run):
                 on_delay(t1, preset=50)
             with Rung(t1.Done):
@@ -871,7 +871,7 @@ class TestElisionNonBool:
             with Rung(mode == 7):
                 copy(temp, result_tag)
             with Rung():
-                calc(sensor + 10, temp)
+                math(sensor + 10, temp)
 
         plc = PLC(logic, dt=0.010)
         plc.patch({"Mode": 7, "Sensor": 5})
@@ -898,7 +898,7 @@ class TestElisionNonBool:
 
         with Program(strict=False) as logic:
             with Rung(step == 2):
-                calc(acc + 1, acc)
+                math(acc + 1, acc)
             with Rung(step == 3):
                 copy(0, acc)
             with Rung(acc >= 5):
@@ -966,14 +966,14 @@ class TestIntegerOverflowWraparound:
     """Gap 3: calc-based int progress must respect PLC integer wrapping."""
 
     def test_int_wraparound_negative_reachable(self):
-        """calc(C + 100, C) on Int — C < 0 must be reachable via wraparound."""
+        """math(C + 100, C) on Int — C < 0 must be reachable via wraparound."""
         enable = Bool("Enable", external=True)
         c = Int("Counter")
         fault = Bool("Fault")
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 100, c)
+                math(c + 100, c)
             with Rung(c < 0):
                 latch(fault)
 
@@ -992,7 +992,7 @@ class TestIntegerOverflowWraparound:
         _assert_trace_replays(logic, result, "Fault")
 
     def test_dint_large_stride_wraparound(self):
-        """calc(C + 1_000_000, C) on Dint wraps after ~2148 scans: past the
+        """math(C + 1_000_000, C) on Dint wraps after ~2148 scans: past the
         budget, the result is a Proven that says it was cut short."""
         from pyrung.core import Dint
 
@@ -1002,7 +1002,7 @@ class TestIntegerOverflowWraparound:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 1_000_000, c)
+                math(c + 1_000_000, c)
             with Rung(c < 0):
                 latch(wrapped)
 
@@ -1034,7 +1034,7 @@ class TestCompiledKernelOverflowParity:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(c + 10, c)
+                math(c + 10, c)
 
         plc = PLC(logic, dt=0.010)
         plc.step()
@@ -1064,7 +1064,7 @@ class TestRealFloatStateKeys:
     non-termination."""
 
     def test_real_feedback_loop_is_intractable(self):
-        """calc(X + 0.1, X) with Real tag — unbounded, should be Intractable."""
+        """math(X + 0.1, X) with Real tag — unbounded, should be Intractable."""
         from pyrung.core import Real
 
         enable = Bool("Enable", external=True)
@@ -1073,7 +1073,7 @@ class TestRealFloatStateKeys:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(x + 0.1, x)
+                math(x + 0.1, x)
             with Rung(x > 10.0):
                 out(alarm)
 
@@ -1097,7 +1097,7 @@ class TestRealFloatStateKeys:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(temp + 0.5, temp)
+                math(temp + 0.5, temp)
             with Rung(temp > 50.0):
                 out(high)
             with Rung(temp < 10.0):
@@ -1453,7 +1453,7 @@ class TestOteInForLoopClassification:
 # from the state key when Y is recomputed whenever X moves.  A write on a
 # rung with no contacts still may not run: a ForLoop with a tag count of 0
 # runs no iteration, a oneshot ForLoop runs its body on the first scan
-# only, a oneshot calc() fires once, a branch has its own contacts.  Y
+# only, a oneshot math() fires once, a branch has its own contacts.  Y
 # then holds a stale value the projection cannot represent.
 # ===================================================================
 
@@ -1483,22 +1483,22 @@ def _stale_projection_program(writer: str, *, check_first: bool):
             with Rung(inc):
                 copy(v, x)
                 with ForLoop(n):
-                    calc(x + 1, y)
+                    math(x + 1, y)
         else:
             with Rung(inc):
                 copy(v, x)
             with Rung():
                 if writer == "tag_count":
                     with ForLoop(n):
-                        calc(x + 1, y)
+                        math(x + 1, y)
                 elif writer == "oneshot_loop":
                     with ForLoop(1, oneshot=True):
-                        calc(x + 1, y)
+                        math(x + 1, y)
                 elif writer == "oneshot_calc":
-                    calc(x + 1, y, oneshot=True)
+                    math(x + 1, y, oneshot=True)
                 elif writer == "branch":
                     with branch(pick):
-                        calc(x + 1, y)
+                        math(x + 1, y)
                 else:
                     raise AssertionError(writer)
         if not check_first:
@@ -1511,7 +1511,7 @@ class TestSkippableWriteProjection:
     """Y = X + 1 written by a write the rung's power alone does not decide."""
 
     def test_zero_tag_count_loop_holds_y(self):
-        """The reviewer's case: forloop(N) with N == 0 skips calc(), Y holds.
+        """The reviewer's case: forloop(N) with N == 0 skips math(), Y holds.
 
         Before the fix the sequential-unconditional gate projected Y onto X
         and always() returned Proven(states_explored=2).
@@ -1529,7 +1529,7 @@ class TestSkippableWriteProjection:
                 copy(1, x)
             with Rung():
                 with ForLoop(n):
-                    calc(x + 1, y)
+                    math(x + 1, y)
             with Rung(x == 1, y == 1):
                 out(stale)
 
@@ -1592,7 +1592,7 @@ class TestSkippableWriteProjection:
                 copy(1, x)
             with Rung():
                 with ForLoop(2):
-                    calc(x + 1, y)
+                    math(x + 1, y)
             with Rung(x == 1, y == 1):
                 out(stale)
 
@@ -1603,8 +1603,8 @@ class TestSkippableWriteProjection:
 # Classifier boundary back-propagation gaps
 #
 # The classifier currently propagates downstream comparison boundaries
-# back through copy() and calc(source +/- k), but not through more
-# general calc() shapes or structural writers like fill() and
+# back through copy() and math(source +/- k), but not through more
+# general math() shapes or structural writers like fill() and
 # blockcopy(). That can shrink ND domains below the values required to
 # reach a downstream comparison.
 # ===================================================================
@@ -1623,7 +1623,7 @@ class TestClassifierBackPropagationGaps:
             with Rung(level > 100):
                 latch(alarm_a)
             with Rung():
-                calc(level * 2, stored)
+                math(level * 2, stored)
             with Rung(stored == 150):
                 latch(alarm_b)
 
@@ -1635,7 +1635,7 @@ class TestClassifierBackPropagationGaps:
 
         result = always(logic, ~alarm_b, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            "Level=75 should flow through calc(level * 2) to Stored=150, "
+            "Level=75 should flow through math(level * 2) to Stored=150, "
             f"but prove returned {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "AlarmB")
@@ -1696,7 +1696,7 @@ class TestClassifierBackPropagationGaps:
         _assert_trace_replays(logic, result, "AlarmB")
 
     def test_transitive_copy_then_calc_multiplication(self):
-        """copy(Level, Stored) then calc(Stored * 2, Shifted) with Shifted == 150
+        """copy(Level, Stored) then math(Stored * 2, Shifted) with Shifted == 150
         must propagate 75 back through both hops to Level."""
         level = Int("Level", external=True)
         stored = Int("Stored")
@@ -1709,7 +1709,7 @@ class TestClassifierBackPropagationGaps:
             with Rung():
                 copy(level, stored)
             with Rung():
-                calc(stored * 2, shifted)
+                math(stored * 2, shifted)
             with Rung(shifted == 150):
                 latch(alarm)
 
@@ -1721,7 +1721,7 @@ class TestClassifierBackPropagationGaps:
 
         result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            "Level=75 should flow through copy+calc(*2) to Shifted=150, "
+            "Level=75 should flow through copy+math(*2) to Shifted=150, "
             f"but prove returned {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
@@ -2357,7 +2357,7 @@ class TestUnboundedIndexReads:
             with Rung(start):
                 fill(7, ds.select(3, 4))
             with Rung():
-                calc(inp + 3, ptr)
+                math(inp + 3, ptr)
             with Rung():
                 copy(ds[ptr], n)
             with Rung(n == 7):
@@ -2409,7 +2409,7 @@ class TestUnboundedIndexReads:
             with Rung(start):
                 copy(7, ds[written])
             with Rung():
-                calc(sel * 10 + 100, ptr)
+                math(sel * 10 + 100, ptr)
             with Rung():
                 copy(ds[ptr], n)
             with Rung(n == 7):
@@ -2436,7 +2436,7 @@ class TestUnboundedIndexReads:
                 copy(7, ds[3])
                 latch(init)
             with Rung(go):
-                calc(state + 10, idx)
+                math(state + 10, idx)
                 copy(ds[idx], state)
             with Rung():
                 copy(ds[state], n)
@@ -2455,11 +2455,11 @@ class TestUnboundedIndexReads:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sel * 10 + 500, wptr)
+                math(sel * 10 + 500, wptr)
             with Rung(start):
                 copy(7, ds[wptr])
             with Rung():
-                calc(sel * 10 + read_base, rptr)
+                math(sel * 10 + read_base, rptr)
             with Rung():
                 copy(ds[rptr], n)
             with Rung(n == 7):
@@ -2478,7 +2478,7 @@ class TestUnboundedIndexReads:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sel * 10 + 500, wptr)
+                math(sel * 10 + 500, wptr)
             with Rung(start):
                 copy(7, ds[wptr])
             with Rung(ds[510] == 7):
@@ -2517,9 +2517,9 @@ class TestUnboundedIndexReads:
 
         with Program(strict=False) as logic:
             with Rung(go) if guarded else Rung():
-                calc(sel * 10 + 500, ptr)
+                math(sel * 10 + 500, ptr)
             with Rung():
-                calc(ptr + 5, dest)
+                math(ptr + 5, dest)
             with Rung(start):
                 copy(7, ds[dest])
             with Rung(clear):
@@ -2543,11 +2543,11 @@ class TestUnboundedIndexReads:
 
         with Program(strict=False) as logic:
             with Rung(rise(tick)):
-                calc(loop + 1, loop)
+                math(loop + 1, loop)
             with Rung(loop >= 5):
                 copy(0, loop)
             with Rung():
-                calc(sel + 6, ptr)
+                math(sel + 6, ptr)
             with Rung():
                 copy(ds[ptr], n)
             with Rung(n == 3):
@@ -2574,11 +2574,11 @@ class TestUnboundedIndexReads:
             with Rung(loop == 4, ~seen3):
                 latch(hit)
             with Rung(rise(tick)):
-                calc(loop + 1, loop)
+                math(loop + 1, loop)
             with Rung(loop >= 5):
                 copy(0, loop)
             with Rung():
-                calc(sel + 6, wptr)
+                math(sel + 6, wptr)
             with Rung(clr):
                 copy(4, ds[wptr])
 
@@ -2606,7 +2606,7 @@ class TestUnboundedIndexReads:
             with Rung(go):
                 copy(9, src[2])
             with Rung():
-                calc(sel + 6, wptr)
+                math(sel + 6, wptr)
             with Rung(put):
                 blockcopy(src.select(1, 2), ds.select(wptr, wptr + 1))
             with Rung(clr):

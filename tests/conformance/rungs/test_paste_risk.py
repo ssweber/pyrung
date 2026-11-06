@@ -51,12 +51,12 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
     Rung,
-    calc,
     copy,
     count_up,
     event_drum,
     fill,
     forloop,
+    math,
     out,
     reset,
 )
@@ -117,11 +117,11 @@ def prove_rand_real_bounds(slot):
 
     def finite():
         copy(99, slot.Result1)
-        calc(randint(df[411], df[411]), slot.Result1)
+        math(randint(df[411], df[411]), slot.Result1)
 
     def infinite():
         copy(99, slot.Result2)
-        calc(randint(df[412], df[412]), slot.Result2)
+        math(randint(df[412], df[412]), slot.Result2)
 
     probe(finite, SC46, slot.ErrorCode)
     for k, flag in enumerate((SC43, SC46)):
@@ -147,9 +147,9 @@ def prove_loop_body_split(slot):
     with Rung():
         with forloop(4):
             with Rung(slot.Cmd != 0, slot.Fired == 0):
-                calc(slot.Scratch + 1, slot.Scratch)
+                math(slot.Scratch + 1, slot.Scratch)
             with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
-                calc(slot.Result2 + 1, slot.Result2)
+                math(slot.Result2 + 1, slot.Result2)
                 count_up(counter, 100).reset(slot.Cmd == 0)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(counter.Acc, slot.Result1)

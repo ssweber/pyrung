@@ -158,7 +158,7 @@ def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any, index: int)
                 caret_label=label if span else "",
             ),
         ),
-        hint="make the divisor nonzero before this calc executes",
+        hint="make the divisor nonzero before this math() executes",
     )
 
 

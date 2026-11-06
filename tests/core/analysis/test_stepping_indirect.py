@@ -29,8 +29,8 @@ from pyrung import (
     Int,
     Program,
     TagType,
-    calc,
     copy,
+    math,
     rung,
 )
 
@@ -101,7 +101,7 @@ def _indirect_state_program(*, table_write: str | None) -> tuple[Program, dict[s
 
         # constant-table enable (indirect copy #2 — arms detect_opaque_loop)
         with rung():
-            calc(StateRequested + MASK_BASE, MaskIdx)
+            math(StateRequested + MASK_BASE, MaskIdx)
         with rung():
             copy(MT[MaskIdx], EnblYes)
 

@@ -34,12 +34,12 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
     Rung,
-    calc,
     copy,
     count_up,
     fill,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -63,7 +63,7 @@ def prove_oneshot_and_edges(slot):
         out(rung)
     with Rung(rung):
         with forloop(2, oneshot=True):
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
             copy(slot.Scratch, slot.Result2)
     # The bit rises on scan 3, the For's rung false on scans 2..4.  The rung is true
     # with Cmd at 0, so the reset reaches the body's edge.
@@ -141,13 +141,13 @@ def prove_clock_edges_in_a_body(slot):
         (system.sys.scan_clock_toggle, dd[80], dd[83], dd[81]),
     ):
         with Rung(rise(edge_clock), *live):
-            calc(plain + 1, plain)
-            calc(double + 2, double)
+            math(plain + 1, plain)
+            math(double + 2, double)
         # The For's rung is always true, so the reset reaches the body's edge.
         with Rung():
             with forloop(2):
                 with Rung(rise(edge_clock), *live):
-                    calc(inner + 1, inner)
+                    math(inner + 1, inner)
     ready = (*once(slot), clock >= 550)
     with Rung(*ready, dd[79] == dd[78]):
         copy(1, slot.Result1)

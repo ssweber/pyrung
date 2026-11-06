@@ -10,9 +10,9 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     call,
     copy,
+    math,
     on_delay,
     out,
     reset,
@@ -231,7 +231,7 @@ def test_sparse_replay_preserves_clock_edge_memory() -> None:
 
     with Program(strict=False) as program:
         with Rung(rise(system.sys.clock_1s)):
-            calc(pulses + 1, pulses)
+            math(pulses + 1, pulses)
 
     source = PLC(program, dt=0.01)
     source.run(333)

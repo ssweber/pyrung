@@ -23,10 +23,10 @@ from pyrung import (
     TagType,
     Timer,
     Word,
-    calc,
     copy,
     count_up,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -84,7 +84,7 @@ def _churn_timer_program(preset_ms: int = 500) -> tuple[Program, Timer]:
 
     with Program() as prog:
         with Rung():
-            calc((Cycle + 1) % 2, Cycle)
+            math((Cycle + 1) % 2, Cycle)
         with Rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
         with Rung(Tmr.Done):
@@ -401,7 +401,7 @@ class TestSystemClockFold:
             with Rung(Enable):
                 on_delay(Tmr, 100_000, "ms")
             with Rung(rise(system.sys.clock_1s)):
-                calc(Ticks + 1, Ticks)
+                math(Ticks + 1, Ticks)
         return prog
 
     def test_fold_lands_on_clock_1s_edges(self) -> None:
@@ -431,7 +431,7 @@ class TestSystemClockFold:
             with Rung(Enable):
                 on_delay(Tmr, 100_000, "ms")
             with Rung(system.sys.scan_counter == 25):
-                calc(Ticks + 1, Ticks)
+                math(Ticks + 1, Ticks)
         return prog
 
     def test_fold_does_not_skip_scan_counter_crossing(self) -> None:
@@ -459,7 +459,7 @@ class TestSystemClockFold:
             with Rung(Enable):
                 on_delay(Tmr, 100_000, "ms")
             with Rung(rise(system.sys.scan_clock_toggle)):
-                calc(Ticks + 1, Ticks)
+                math(Ticks + 1, Ticks)
         return prog
 
     def test_reading_scan_clock_toggle_disables_fold(self) -> None:
@@ -518,7 +518,7 @@ class TestResolvedOnReadSignalFold:
             with Rung(Tmr.Done):
                 out(Done)
             with Rung(rise(system.sys.clock_1s)):
-                calc(A + B, Extent)
+                math(A + B, Extent)
         return prog
 
     def test_clock_heartbeat_folds_between_edges(self) -> None:
@@ -569,9 +569,9 @@ class TestResolvedOnReadSignalFold:
             with Rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
             with Rung(rise(system.sys.clock_1s)):
-                calc(A + B, Extent)  # stable inputs
+                math(A + B, Extent)  # stable inputs
             with Rung(rise(system.sys.clock_1s)):
-                calc(Ticks + 1, Ticks)  # self-referential
+                math(Ticks + 1, Ticks)  # self-referential
         return prog
 
     def test_clock_shared_by_live_rung_stays_bounded(self) -> None:
@@ -655,7 +655,7 @@ class TestClockSaturationFold:
             with Rung(Tmr.Done):
                 out(Done)
             with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
-                calc(A + B, Extent)
+                math(A + B, Extent)
         return prog
 
     def test_saturated_heartbeat_folds_between_edges(self) -> None:
@@ -869,7 +869,7 @@ class TestAffineAccumulatorViews:
                 with Rung(Enable):
                     on_delay(Tmr, 1000, "ms")
                 with Rung():
-                    calc(1000 - Tmr.Acc, Remaining)
+                    math(1000 - Tmr.Acc, Remaining)
                 with Rung(Remaining < 500):
                     out(Done)
             return program
@@ -997,7 +997,7 @@ class TestRungsAcrossAWindow:
                 with Rung(rise(system.sys.clock_1s), Sensor):
                     out(Indicator)
                 with Rung(rise(system.sys.clock_1s)):
-                    calc(Tmr.Acc, AccView)
+                    math(Tmr.Acc, AccView)
             return prog
 
         plc = PLC(build(), dt=0.010)
@@ -1052,7 +1052,7 @@ class TestRungsAcrossAWindow:
 def _self_feeding_calc():
     X = Int("X", default=1)
     with Rung():
-        calc((X * 3) % 7, X)
+        math((X * 3) % 7, X)
     return X == 5
 
 
@@ -1062,7 +1062,7 @@ def _scan_counter_calc():
     X = Int("X")
     Seen = Bool("Seen")
     with Rung():
-        calc(system.sys.scan_counter % 50, X)
+        math(system.sys.scan_counter % 50, X)
     with Rung(X == 40):
         latch(Seen)
     return Seen
@@ -1073,7 +1073,7 @@ def _sum_expr_calc():
 
     DS = Block("DS", TagType.INT, 1, 2)
     with Rung():
-        calc((DS.select(1, 2).sum() + 1) % 7, DS[1])
+        math((DS.select(1, 2).sum() + 1) % 7, DS[1])
     return DS[1] == 5
 
 
@@ -1082,7 +1082,7 @@ def _shift_func_calc():
 
     X = Int("X", default=1)
     with Rung():
-        calc(rro(X, 1), X)
+        math(rro(X, 1), X)
     return X == 4
 
 
@@ -1093,7 +1093,7 @@ def _math_func_calc():
     # sqrt(R * R) == |R|: a per-scan +1 ramp the affine matcher cannot see.
     R = Real("R")
     with Rung():
-        calc(sqrt(R * R) + 1.0, R)
+        math(sqrt(R * R) + 1.0, R)
     return R >= 503.0
 
 
@@ -1218,7 +1218,7 @@ class TestScanVaryingValuesAreExact:
             }[form]
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(expr, X)
+                    math(expr, X)
             return prog
 
         _assert_fold_is_exact(build, _scans(100), patch={"DS1": 9, "DS2": 9})
@@ -1262,7 +1262,7 @@ def _not_first_scan_counter_program() -> tuple[Program, Bool]:
         with Rung(~system.sys.first_scan):
             out(Z)
         with Rung(Z):
-            calc(N + 1, N)
+            math(N + 1, N)
         with Rung(Tmr.Done):
             out(Hit)
     return prog, Hit
@@ -1384,7 +1384,7 @@ def _rtc_gated_counter_program() -> Program:
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
         with Rung(system.rtc.second < 30):
-            calc(N + 1, N)
+            math(N + 1, N)
         with Rung():
             on_delay(Tmr, 60_000)
     return prog
@@ -1401,7 +1401,7 @@ def _rtc_mirror_only_program() -> tuple[Program, Bool]:
         with Rung():
             copy(system.rtc.second, Sec)
         with Rung():
-            calc(system.rtc.hour * 100 + system.rtc.minute, HHMM)
+            math(system.rtc.hour * 100 + system.rtc.minute, HHMM)
         with Rung():
             on_delay(Tmr, 60_000)
         with Rung(Tmr.Done):
@@ -1546,7 +1546,7 @@ class TestAClockEdgeAfterTheProbe:
                 with Rung(Enable):
                     on_delay(Tmr, 19_006, "ms")
                 with Rung(rise(system.sys.clock_1s), Tmr.Acc > 8_505):
-                    calc(A + B, Extent)
+                    math(A + B, Extent)
             plc = PLC(prog, dt=0.005)
             plc.patch({"Enable": True, "A": 0, "B": 1})
             plc.run_until(Tmr.Done, max_cycles=40_000, jit=jit)
@@ -1587,7 +1587,7 @@ def _rtc_mirror_program(
         with Rung():
             copy(system.rtc.second, Sec)
         with Rung():
-            calc(system.rtc.hour * 100 + system.rtc.minute, HHMM)
+            math(system.rtc.hour * 100 + system.rtc.minute, HHMM)
         with Rung(Or(rise(Alarm), Manual != 0)):
             copy(Hist2, Hist3)
             copy(Hist1, Hist2)
@@ -1598,7 +1598,7 @@ def _rtc_mirror_program(
         if live_stamp:
             # Read below, so StopSec is not unread churn: it stays guarded.
             with Rung(Stopped):
-                calc(StopSec + Sec, StopSec)
+                math(StopSec + Sec, StopSec)
             with Rung(StopSec > 30_000):
                 out(Bool("StopSecHigh"))
         with Rung():
@@ -1752,13 +1752,13 @@ def _branch_position_program(shape: str) -> Program:
                 copy(1, X)
             with Rung().continued():
                 with branch(X == 0):
-                    calc(Sec // 30, Half)
+                    math(Sec // 30, Half)
         else:
             with Rung():
                 if shape == "below":
                     copy(1, X)
                 with branch(X == 0):
-                    calc(Sec // 30, Half)
+                    math(Sec // 30, Half)
                 if shape == "above":
                     copy(1, X)
         with Rung(Half == 1):
@@ -1780,7 +1780,7 @@ def _rtc_reader_shape(shape: str) -> Program:
     @subroutine("R")
     def reader() -> None:
         with Rung():
-            calc(Sec // 30, Half)
+            math(Sec // 30, Half)
 
     @subroutine("S")
     def stamper() -> None:
@@ -1794,7 +1794,7 @@ def _rtc_reader_shape(shape: str) -> Program:
             with Rung():
                 call(stamper)
             with Rung(Req):
-                calc(Sec // 30, Half)
+                math(Sec // 30, Half)
         else:
             with Rung():
                 copy(system.rtc.second, Sec)
@@ -1808,10 +1808,10 @@ def _rtc_reader_shape(shape: str) -> Program:
         elif shape == "forloop":
             with Rung(Req):
                 with forloop(2):
-                    calc(Sec // 30, Half)
+                    math(Sec // 30, Half)
         elif shape == "plain":
             with Rung(Req):
-                calc(Sec // 30, Half)
+                math(Sec // 30, Half)
         with Rung(Half == 1):
             latch(Seen)
         with Rung():
@@ -1886,7 +1886,7 @@ class TestSoftRtcRefusals:
             Big, Req, Log = Int("Big"), Bool("Req"), Int("Log")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(system.rtc.second * 1000, Big)
+                    math(system.rtc.second * 1000, Big)
                 with Rung(Req):
                     copy(Big, Log)
             return prog
@@ -1927,7 +1927,7 @@ class TestSoftRtcRefusals:
                 with Rung():
                     copy(system.rtc.second, Sec)
                 with Rung():
-                    calc(Tot + system.rtc.second, Tot)
+                    math(Tot + system.rtc.second, Tot)
             return prog
 
         self._assert_matches_stepped(build)
@@ -1974,15 +1974,15 @@ class TestClickMathInTheLoop:
             Floor = Int("Floor")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(Tick + 1, Tick)
-                    calc(Tick % 60, Sec)
-                    calc(Sec - 30, Back)
-                    calc(Back % 7, Mod)
-                    calc(Sec % (Sec - 10), ModZero)
-                    calc((Sec - 10) ** (Sec - 10), Pow)
-                    calc(Wide * Wide - (Wide * Wide - Sec), Dbl)
-                    calc(Sec * 546 + -32768, Floor)
-                    calc(abs(Floor), Abs)
+                    math(Tick + 1, Tick)
+                    math(Tick % 60, Sec)
+                    math(Sec - 30, Back)
+                    math(Back % 7, Mod)
+                    math(Sec % (Sec - 10), ModZero)
+                    math((Sec - 10) ** (Sec - 10), Pow)
+                    math(Wide * Wide - (Wide * Wide - Sec), Dbl)
+                    math(Sec * 546 + -32768, Floor)
+                    math(abs(Floor), Abs)
             return prog
 
         for scans in (61, 3000):
@@ -2240,7 +2240,7 @@ class TestClockEdgeProbe:
             with Program(strict=False) as prog:
                 with Rung(system.sys.clock_1s):
                     if work == "calc":
-                        calc(Dint("C_Acc") + 1, Dint("C_Acc"))
+                        math(Dint("C_Acc") + 1, Dint("C_Acc"))
                     else:
                         # Counts the level's rises: once a second.
                         count_up(Counter.clone("C"), 100_000).reset(Bool("CR"))
@@ -2421,11 +2421,11 @@ class TestSelfFeedingChurnExact:
         return build
 
     _SHAPES: dict[str, Callable[[Any], Any]] = {
-        "tag_step": lambda tot: calc(tot + Int("K"), tot),
-        "literal": lambda tot: calc(tot + 7, tot),
-        "negative": lambda tot: calc(tot - 9, tot),
-        "modular": lambda tot: calc((tot + 7) % 1_000, tot),
-        "not_affine": lambda tot: calc(tot * 3 + 1, tot),
+        "tag_step": lambda tot: math(tot + Int("K"), tot),
+        "literal": lambda tot: math(tot + 7, tot),
+        "negative": lambda tot: math(tot - 9, tot),
+        "modular": lambda tot: math((tot + 7) % 1_000, tot),
+        "not_affine": lambda tot: math(tot * 3 + 1, tot),
     }
 
     @pytest.mark.parametrize("shape", sorted(_SHAPES))
@@ -2457,7 +2457,7 @@ class TestSelfFeedingChurnExact:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(Wide + 7, Wide)
+                    math(Wide + 7, Wide)
                 with Rung():
                     copy(Wide, Narrow)
                 with Rung(system.fault.out_of_range):
@@ -2494,7 +2494,7 @@ class TestSelfFeedingChurnExact:
                         store(Wide, View)
                     reader(View)
                 with Rung():
-                    calc(Wide + step, Wide)
+                    math(Wide + step, Wide)
                 if not store_first:
                     with Rung():
                         store(Wide, View)
@@ -2511,7 +2511,7 @@ class TestSelfFeedingChurnExact:
         "store",
         [
             pytest.param(lambda a, b: copy(a, b), id="copy"),
-            pytest.param(lambda a, b: calc(a + 0, b), id="calc"),
+            pytest.param(lambda a, b: math(a + 0, b), id="calc"),
         ],
     )
     @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
@@ -2530,7 +2530,7 @@ class TestSelfFeedingChurnExact:
         def reader(_view: Any) -> None:
             N = Int("N")
             with Rung(system.fault.out_of_range):
-                calc(N + 1, N)
+                math(N + 1, N)
 
         build = self._view_of_a_moving_tag(store, reader, step=step, store_first=store_first)
         plc = _assert_fold_is_exact(
@@ -2544,7 +2544,7 @@ class TestSelfFeedingChurnExact:
         "store",
         [
             pytest.param(lambda a, b: copy(a, b), id="copy"),
-            pytest.param(lambda a, b: calc(a + 0, b), id="calc"),
+            pytest.param(lambda a, b: math(a + 0, b), id="calc"),
         ],
     )
     @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
@@ -2566,7 +2566,7 @@ class TestSelfFeedingChurnExact:
         "store",
         [
             pytest.param(lambda a, b: copy(a, b), id="copy"),
-            pytest.param(lambda a, b: calc(a + 0, b), id="calc"),
+            pytest.param(lambda a, b: math(a + 0, b), id="calc"),
         ],
     )
     @pytest.mark.parametrize(
@@ -2598,7 +2598,7 @@ class TestSelfFeedingChurnExact:
                 with Rung():
                     copy(Cnt.Acc, Narrow)
                 with Rung(system.fault.out_of_range):
-                    calc(N + 1, N)
+                    math(N + 1, N)
                 with Rung():
                     on_delay(Tmr, 5_000)
                 with Rung(Tmr.Done):
@@ -2614,7 +2614,7 @@ class TestSelfFeedingChurnExact:
                 out(Bool("Hit"))
 
         plc = _assert_fold_is_exact(
-            self._view_of_a_moving_tag(lambda a, b: calc(a + 0, b), reader),
+            self._view_of_a_moving_tag(lambda a, b: math(a + 0, b), reader),
             _until_hit(10_000),
             patch={"Wide": 32_000},
         )
@@ -2633,9 +2633,9 @@ class TestSelfFeedingChurnExact:
 
         def reader(v: Any) -> None:
             with Rung(v == 32_767):
-                calc(Int("N") + 1, Int("N"))
+                math(Int("N") + 1, Int("N"))
 
-        store = (lambda a, b: copy(a, b)) if view == "copy" else (lambda a, b: calc(a + 0, b))
+        store = (lambda a, b: copy(a, b)) if view == "copy" else (lambda a, b: math(a + 0, b))
         build = self._view_of_a_moving_tag(store, reader)
         _assert_fold_is_exact(
             build,
@@ -2651,7 +2651,7 @@ class TestSelfFeedingChurnExact:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(Wide + step, Wide)
+                    math(Wide + step, Wide)
                 with Rung():
                     copy(Wide, View)
                 reader(View)
@@ -2689,7 +2689,7 @@ class TestSelfFeedingChurnExact:
 
         def reader(v: Any) -> None:
             with Rung(read(v)):
-                calc(Int("N") + 1, Int("N"))
+                math(Int("N") + 1, Int("N"))
 
         _assert_fold_is_exact(
             self._copy_into_a_word(step, reader),
@@ -2728,7 +2728,7 @@ class TestSelfFeedingChurnExact:
 
         def reader(v: Any) -> None:
             with Rung(v > 1_000_000):
-                calc(Int("N") + 1, Int("N"))
+                math(Int("N") + 1, Int("N"))
 
         build = self._copy_into_a_word(1, reader)
         _assert_fold_is_exact(
@@ -2768,9 +2768,9 @@ class TestSelfFeedingChurnExact:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(Wide + 7, Wide)
+                    math(Wide + 7, Wide)
                 with Rung():
-                    calc(expr_of(Wide), Same)
+                    math(expr_of(Wide), Same)
                 with Rung(Same == 123_456_789):
                     out(Bool("Never"))
                 with Rung(system.fault.out_of_range):
@@ -2824,7 +2824,7 @@ class TestSelfFeedingChurnExact:
                 with Rung(~Osc):
                     out(Osc)  # a period-2 cycle: the ordinary fold never sees a plateau
                 with Rung():
-                    calc(Tot + 7, Tot)
+                    math(Tot + 7, Tot)
                 with Rung(Tot > 30_000):
                     out(Bool("High"))
                 with Rung(system.fault.out_of_range):
@@ -2863,7 +2863,7 @@ class TestSelfFeedingChurnExact:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc((Phase + 1) % 5, Phase)
+                    math((Phase + 1) % 5, Phase)
                 with Rung(Phase == 2):
                     count_up(Seen, 10_000).reset(Bool("SR"))
                 with Rung():
@@ -2917,10 +2917,10 @@ class TestClockEdgesAsRead:
                     if pulse:
                         out(Bool("P"))
                     else:
-                        calc(S + 3, S)
+                        math(S + 3, S)
                 if pulse:
                     with Rung(Bool("P")):
-                        calc(S + 1, S)
+                        math(S + 1, S)
             return prog
 
         return build
@@ -2938,7 +2938,7 @@ class TestClockEdgesAsRead:
             S = Int("S")
             with Program(strict=False) as prog:
                 with Rung(rise(system.sys.clock_100ms)):
-                    calc(S + 3, S)
+                    math(S + 3, S)
             return prog
 
         plc = PLC(build(), dt=0.25)
@@ -3028,7 +3028,7 @@ class TestFlagsFollowInsideAWindow:
             ),
             pytest.param(
                 lambda: copy(Dint("Big", default=99_999), Int("Small")),
-                lambda: calc(Int("One", default=1) + 1, Int("Plain")),
+                lambda: math(Int("One", default=1) + 1, Int("Plain")),
                 SC43,
                 False,
                 id="sc43_cleared_by_a_calc",
@@ -3070,14 +3070,14 @@ class TestFlagsFollowInsideAWindow:
                 )
             ),
             pytest.param(
-                lambda: calc(Int("One", default=1) / Int("Zero"), Int("Quotient")),
-                lambda: calc(Int("One", default=1) + 1, Int("Plain")),
+                lambda: math(Int("One", default=1) / Int("Zero"), Int("Quotient")),
+                lambda: math(Int("One", default=1) + 1, Int("Plain")),
                 SC40,
                 False,
                 id="sc40_cleared_by_a_calc",
             ),
             pytest.param(
-                lambda: calc(Int("One", default=1) / Int("Zero"), Int("Quotient")),
+                lambda: math(Int("One", default=1) / Int("Zero"), Int("Quotient")),
                 lambda: copy(1, Int("Plain")),
                 SC40,
                 True,
@@ -3167,7 +3167,7 @@ class TestFlagsFollowInsideAWindow:
                 with Rung():
                     on_delay(Tmr, 3_000)
                 with Rung():
-                    calc(start + step * (Tmr.Acc // 1_000), ptr)
+                    math(start + step * (Tmr.Acc // 1_000), ptr)
                 with Rung():
                     faulting(ptr)
                 with Rung(self.SC44):
@@ -3234,7 +3234,7 @@ class TestFlagsFollowInsideAWindow:
                 with Rung():
                     on_delay(Tmr, 32_000)
                 with Rung():
-                    calc(Tmr.Acc + 10_000, Int("View"))
+                    math(Tmr.Acc + 10_000, Int("View"))
                 if cleared:
                     with Rung():
                         copy(1, Int("Plain"))
@@ -3253,7 +3253,7 @@ class TestFlagsFollowInsideAWindow:
                 with Rung():
                     on_delay(Tmr, 32_000)
                 with Rung():
-                    calc(Tmr.Acc + 10_000, Int("View"))
+                    math(Tmr.Acc + 10_000, Int("View"))
                 with Rung(self.SC43):
                     out(Bool("Hit"))
                 if cleared:
@@ -3302,7 +3302,7 @@ class TestFlagsFollowInsideAWindow:
                 with Rung(Tmr.Acc > at):
                     copy(1, Int("Plain"))
                 with Rung(self.SC43):
-                    calc(Int("Seen") + 1, Int("Seen"))
+                    math(Int("Seen") + 1, Int("Seen"))
                 with Rung(Tmr.Done):
                     out(Bool("End"))
             return prog
@@ -3318,14 +3318,14 @@ class TestFlagsFollowInsideAWindow:
             with Program(strict=False) as prog:
                 if store_first:
                     with Rung():
-                        calc(100 / Wide, Int("Quotient"))
+                        math(100 / Wide, Int("Quotient"))
                 with Rung():
-                    calc(Wide + 7, Wide)
+                    math(Wide + 7, Wide)
                 if not store_first:
                     with Rung():
-                        calc(100 / Wide, Int("Quotient"))
+                        math(100 / Wide, Int("Quotient"))
                 with Rung(self.SC40):
-                    calc(Int("Seen") + 1, Int("Seen"))
+                    math(Int("Seen") + 1, Int("Seen"))
                 with Rung():
                     on_delay(Tmr, 5_000)
                 with Rung(Tmr.Done):
@@ -3344,11 +3344,11 @@ class TestFlagsFollowInsideAWindow:
             table = Block("FoldTbl", TagType.INT, 1, 500, default_factory=lambda _addr: 3)
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(Wide + step, Wide)
+                    math(Wide + step, Wide)
                 with Rung():
                     copy(table[Wide], Int("Read"))
                 with Rung(self.SC44):
-                    calc(Int("Seen") + 1, Int("Seen"))
+                    math(Int("Seen") + 1, Int("Seen"))
                 with Rung():
                     on_delay(Tmr, 2_000)
                 with Rung(Tmr.Done):
@@ -3366,12 +3366,12 @@ class TestFlagsFollowInsideAWindow:
             table = Block("FoldTbl", TagType.INT, 1, 500, default_factory=lambda _addr: 3)
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(Wide + 7, Wide)
+                    math(Wide + 7, Wide)
                 with Rung():
                     copy(table[Wide], Int("Read"))
                 if read_it:
                     with Rung(Int("Read") == 0):
-                        calc(Int("Seen") + 1, Int("Seen"))
+                        math(Int("Seen") + 1, Int("Seen"))
                 with Rung():
                     on_delay(Tmr, 2_000)
                 with Rung(Tmr.Done):
@@ -3399,7 +3399,7 @@ class TestUnseenStopsStayExact:
             T = Int("T")
             with Program(strict=False) as prog:
                 with Rung():
-                    calc(T + (Int("K") if step_tag else 1), T)
+                    math(T + (Int("K") if step_tag else 1), T)
                 if timer:
                     with Rung():
                         on_delay(Timer.clone("Tmr"), 30_000)
@@ -3497,7 +3497,7 @@ class TestUnseenStopsStayExact:
 
 
 class TestTagStepSelfCalcGuardedWhenRead:
-    """``calc(T + K, T)`` with ``K`` a tag is a fold source only when nothing
+    """``math(T + K, T)`` with ``K`` a tag is a fold source only when nothing
     else reads ``T``; a moving preset, a comparison against a moving tag or
     an expression read keeps it in the plateau guard."""
 
@@ -3508,7 +3508,7 @@ class TestTagStepSelfCalcGuardedWhenRead:
         T = Int("T")
         with Program(strict=False) as prog:
             with Rung():
-                calc(T + Int("K"), T)
+                math(T + Int("K"), T)
             with Rung((T // 100) == 3):
                 latch(Bool("L"))
             with Rung(T > 2_000):
@@ -3521,7 +3521,7 @@ class TestTagStepSelfCalcGuardedWhenRead:
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
             with Rung():
-                calc(P - Int("K"), P)
+                math(P - Int("K"), P)
             with Rung():
                 on_delay(Tmr, P)
             with Rung(Tmr.Done):
@@ -3534,7 +3534,7 @@ class TestTagStepSelfCalcGuardedWhenRead:
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
             with Rung():
-                calc(T - Int("K"), T)
+                math(T - Int("K"), T)
             with Rung():
                 on_delay(Tmr, 30_000)
             with Rung(Tmr.Acc > T):
@@ -3565,7 +3565,7 @@ class TestFoldedHistoryReplays:
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
             with Rung():
-                calc(T + 3, T)
+                math(T + 3, T)
             with Rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
                 count_up(C, 1_000).reset(Bool("CR"))
             with Rung():
@@ -3604,7 +3604,7 @@ def _scan_stamp_program(source: Callable[[], None], reader: Any, above: bool) ->
     SC = Dint("SC")
     with Program(strict=False) as prog:
         with Rung():
-            calc(SC + 1, SC)
+            math(SC + 1, SC)
         if not above:
             source()
         with Rung(reader()):
@@ -3631,8 +3631,8 @@ class TestReadAboveTheSource:
             "timer_gt": (lambda: on_delay(T, 2_000), lambda: T.Acc > 500),
             # A counter counts edges: the 100 ms clock's rises, one in ten scans.
             "counter": (lambda: count_up(C, 2_000).reset(Bool("CR")), lambda: C.Acc >= 12),
-            "selfcalc": (lambda: calc(S + 1, S), lambda: S >= 50),
-            "modwrap": (lambda: calc((M + 1) % 1_000, M), lambda: M >= 50),
+            "selfcalc": (lambda: math(S + 1, S), lambda: S >= 50),
+            "modwrap": (lambda: math((M + 1) % 1_000, M), lambda: M >= 50),
         }
         body, reader = sources[kind]
         gate = (system.sys.clock_100ms,) if kind == "counter" else ()
@@ -3880,7 +3880,7 @@ class TestTimedDrumReadsAnotherStep:
                         copy(below, Int("Step"))
                 if reader:  # What the drum did, each scan it holds.
                     with Rung(Bool("O2")):
-                        calc(Int("N") + 1, Int("N"))
+                        math(Int("N") + 1, Int("N"))
             return prog
 
         return build
@@ -3994,7 +3994,7 @@ class TestTimedDrumReadsAnotherStep:
             with Program(strict=False) as program:
                 with Rung(Bool("Stage")):
                     if how == "calc":
-                        calc(Int("Step") * 0 + 1, Int("Step"))
+                        math(Int("Step") * 0 + 1, Int("Step"))
                     elif how == "pointer":
                         copy(1, bank[Int("I", default=2)])
                     else:
@@ -4150,13 +4150,13 @@ class TestReadsOutsideTheCrossings:
         with Program(strict=False) as prog:
             if shape in ("expr", "index", "index_copy", "operand", "both_moving"):
                 with Rung():
-                    calc(T + 1 if shape != "operand" else T - 3, T)
+                    math(T + 1 if shape != "operand" else T - 3, T)
             if shape == "both_moving":
                 with Rung():
-                    calc(U - 2, U)
+                    math(U - 2, U)
             if shape in ("preset", "counter_preset"):
                 with Rung():
-                    calc(P - 1, P)
+                    math(P - 1, P)
             if shape in ("operand", "stateful", "copied", "expr_timer", "preset"):
                 with Rung():
                     on_delay(Tmr, P if shape == "preset" else 20_000)
@@ -4184,10 +4184,10 @@ class TestReadsOutsideTheCrossings:
                 reader = lambda: Q == 5  # noqa: E731
             if shape == "copied":
                 with Rung():
-                    calc(Tmr.Acc // 5_000, Q)
+                    math(Tmr.Acc // 5_000, Q)
             if shape == "stateful":
                 with Rung():
-                    calc(Y + Tmr.Acc // 5_000, Y)
+                    math(Y + Tmr.Acc // 5_000, Y)
             if reader is not None:
                 with Rung(reader()):
                     latch(Bool("L"))
@@ -4278,13 +4278,13 @@ class TestReadsOutsideTheCrossings:
         Tmr, N = Timer.clone("Tmr"), Dint("N")
         with Program(strict=False) as prog:
             with Rung():
-                calc(N + 1, N)  # per-scan work (a counter would count once)
+                math(N + 1, N)  # per-scan work (a counter would count once)
             with Rung():
                 on_delay(Tmr, 20_000)
             if shape == "display":
                 # Nothing reads the display: the landing scan rebuilds it.
                 with Rung():
-                    calc(30_000 - Tmr.Acc, Int("Left"))
+                    math(30_000 - Tmr.Acc, Int("Left"))
             else:
                 # A snapshot gated by an edge never fires inside a window.
                 with Rung(rise(Bool("X"))):
@@ -4328,7 +4328,7 @@ class TestIndexedDisplays:
             with Rung():
                 on_delay(Tmr, 20_000)
             with Rung():
-                calc(Tmr.Acc // 1_000, DS[5])
+                math(Tmr.Acc // 1_000, DS[5])
             if reader == "contact":
                 with Rung(DS[Idx] == 3):
                     latch(Bool("Hit"))
@@ -4385,7 +4385,7 @@ class TestFoldedHistoryQueries:
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
             with Rung():
-                calc(T + 3, T)
+                math(T + 3, T)
             with Rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
                 count_up(C, 1_000).reset(Bool("CR"))
             with Rung():

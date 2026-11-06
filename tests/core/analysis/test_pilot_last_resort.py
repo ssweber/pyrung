@@ -10,8 +10,8 @@ from pyrung import (
     Program,
     Rung,
     Timer,
-    calc,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -87,7 +87,7 @@ def test_a_count_the_program_runs_every_other_scan_is_waited_for_without_the_las
         with Rung(~osc):
             out(osc)
         with Rung(osc):
-            calc(count + 1, count)
+            math(count + 1, count)
         with Rung(count == 40):
             latch(hit)
     plc = PLC(logic, dt=0.01)
@@ -113,7 +113,7 @@ def test_a_count_the_program_runs_for_itself_is_a_stated_wait() -> None:
         with Rung(~ring[-1]):
             out(ring[0])
         with Rung(ring[0], ~ring[1]):
-            calc(count + 1, count)
+            math(count + 1, count)
         with Rung(count == 40):
             latch(hit)
     plc = PLC(logic, dt=0.01)

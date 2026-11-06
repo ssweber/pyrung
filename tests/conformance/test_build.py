@@ -30,7 +30,7 @@ from pyrung.conformance import (
 )
 from pyrung.conformance._ladder import case_comment, emit_case
 from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
-from pyrung.core import PLC, Program, Rung, calc, copy
+from pyrung.core import PLC, Program, Rung, copy, math
 from pyrung.core.system_points import system
 from pyrung.core.validation._common import _collect_write_sites
 from tests.conformance import memory, suite
@@ -554,7 +554,7 @@ def test_pending_and_probe_are_checked_and_reported() -> None:
 def _prove_calls(slot):
     # Result1 counts the calls while Cmd is up; in-process the case runs 10 scans.
     with Rung(slot.Cmd != 0):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -632,7 +632,7 @@ def test_the_reset_rung_zeroes_the_slot_with_one_fill(tmp_path) -> None:
 def _prove_counts_runs(slot):
     # Leaks unless DS4000 is reset: each run adds one to it.
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(ds[4000] + 1, ds[4000])
+        math(ds[4000] + 1, ds[4000])
         copy(ds[4000], slot.Result1)
         copy(1, slot.Fired)
 
@@ -710,7 +710,7 @@ def _prove_calls_a_helper(slot):
         copy(1, slot.Fired)
     with subroutine("Conf_H_Inc"):
         with Rung():
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
 
 
 def test_an_in_main_group_runs_its_rungs_in_main_with_helper_subroutines(tmp_path) -> None:
@@ -745,7 +745,7 @@ def _in_main_case(id: str, helper_step: int):
             copy(1, slot.Fired)
         with subroutine(f"Conf_H_{id}"):
             with Rung():
-                calc(slot.Result1 + helper_step, slot.Result1)
+                math(slot.Result1 + helper_step, slot.Result1)
 
     return case("c", ladder=ladder, expect={"Result1": 2 * helper_step}, id=id)
 

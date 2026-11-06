@@ -58,12 +58,12 @@ from pyrung import (  # noqa: E402
     Rung,
     TagType,
     Timer,
-    calc,
     call,
     copy,
     fill,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -1403,7 +1403,7 @@ def _rescue_oscillator():
         with Rung(~osc):
             out(osc)
         with Rung(osc):
-            calc(count + 1, count)
+            math(count + 1, count)
         with Rung(count == 40):
             latch(hit)
     plc = PLC(prog, dt=0.01)

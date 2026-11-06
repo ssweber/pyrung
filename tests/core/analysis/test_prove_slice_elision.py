@@ -16,11 +16,11 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     call,
     copy,
     fall,
     latch,
+    math,
     out,
     reset,
     rise,
@@ -268,7 +268,7 @@ def _historian_program(shape: str) -> tuple[Program, Bool]:
     @subroutine("hist", strict=False)
     def hist() -> None:
         with Rung():
-            calc(hid * 10 + 9, idx)
+            math(hid * 10 + 9, idx)
         if shape == "read_first":
             with Rung():
                 copy(ds[idx], echo)

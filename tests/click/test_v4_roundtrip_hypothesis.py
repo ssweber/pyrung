@@ -23,11 +23,11 @@ from pyrung.core import (
     Rung,
     Timer,
     break_loop,
-    calc,
     continue_loop,
     debounce,
     flasher,
     forloop,
+    math,
     randint,
     timed,
     toggle,
@@ -88,19 +88,19 @@ def _emit(instruction: tuple, k: int, timers: list, rands: list) -> None:
         with forloop(count):
             for leaf, at in leaves:
                 if leaf == "inc":
-                    calc(total + 1, total)
+                    math(total + 1, total)
                 else:
                     with Rung(total >= at):
                         break_loop() if leaf == "break" else continue_loop()
     elif kind == "agg":
         _, agg, lo, hi = instruction
-        calc(getattr(ds.select(100 + lo, 100 + hi), agg)(), ds[300 + k])
+        math(getattr(ds.select(100 + lo, 100 + hi), agg)(), ds[300 + k])
     elif kind == "rand":
         _, lo, hi = instruction
-        calc(randint(lo, hi), ds[400 + k])
+        math(randint(lo, hi), ds[400 + k])
         rands.append((f"DS{400 + k}", min(lo, hi), max(lo, hi)))
     else:  # randagg
-        calc(randint(1, 6) + ds.select(101, 106).sum(), ds[500 + k])
+        math(randint(1, 6) + ds.select(101, 106).sum(), ds[500 + k])
 
 
 def _build(spec: Spec) -> tuple[Program, TagMap, list]:

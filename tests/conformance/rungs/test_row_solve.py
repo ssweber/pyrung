@@ -110,11 +110,11 @@ from pyrung.core import (
     Or,
     Rung,
     branch,
-    calc,
     copy,
     count_up,
     event_drum,
     fall,
+    math,
     out,
     rise,
 )
@@ -158,9 +158,9 @@ def prove_edge_on_branch_reads_row_above(slot):
         with branch(slot.Scratch >= 3, slot.Scratch <= 5):
             out(bit)
         with branch(rise(bit)):
-            calc(slot.Result1 * 10 + slot.Scratch, slot.Result1)
+            math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
         with branch(fall(bit)):
-            calc(slot.Result2 * 10 + slot.Scratch, slot.Result2)
+            math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
     firings(rise(bit), slot, slot.Result3)
     firings(fall(bit), slot, slot.Result4)
     done(slot)
@@ -180,9 +180,9 @@ def prove_edge_under_unpowered_branch(slot):
         out(c[413])
         with branch(gate):
             with branch(rise(bit)):
-                calc(slot.Result1 * 10 + slot.Scratch, slot.Result1)
+                math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
             with branch(fall(bit)):
-                calc(slot.Result2 * 10 + slot.Scratch, slot.Result2)
+                math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
     firings(rise(bit), slot, slot.Result3)
     firings(fall(bit), slot, slot.Result4)
     done(slot)
@@ -234,9 +234,9 @@ def prove_edge_after_false_contact_in_branch(slot):
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         out(c[13])
         with branch(gate, rise(bit)):
-            calc(slot.Result1 * 10 + slot.Scratch, slot.Result1)
+            math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
         with branch(gate, fall(bit)):
-            calc(slot.Result2 * 10 + slot.Scratch, slot.Result2)
+            math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
     firings(rise(bit), slot, slot.Result3)
     firings(fall(bit), slot, slot.Result4)
     done(slot)

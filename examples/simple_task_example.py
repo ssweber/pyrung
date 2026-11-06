@@ -15,7 +15,7 @@ from pyrung import (
     rung,
     Timer,
     branch,
-    calc,
+    math,
     call,
     copy,
     on_delay,
@@ -65,7 +65,7 @@ def task_logic() -> None:
 
     # Consume advance: increment step, reset step timer.
     with rung(Task.Advance == 1):
-        calc(Task.Step + 1, Task.Step)
+        math(Task.Step + 1, Task.Step)
         copy(0, Task.Advance)
         copy(0, StepTimer.Acc)
 

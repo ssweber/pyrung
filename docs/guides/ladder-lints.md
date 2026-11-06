@@ -167,7 +167,7 @@ The check looks at contacts: a rung's or continued rung's conditions, a branch's
 | `CMP_ALWAYS_FALSE` | Warning | A comparison that is false for every value in its complete Bool, choices, bounded-integer, or fully understood producer domain. The finding names the operand's values and whether they come from a declaration or from its writer rungs. Open domains are left alone. |
 | `CMP_ALWAYS_TRUE` | Info | An equality or inequality comparison that is true for every value in a complete domain. Ordered range comparisons are retained as defensive guards. |
 | `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
-| `CMP_EQ_ON_COMPUTED_REAL` | Advisory | `==` or `!=` on a REAL the ladder computes with `calc()` (or copies from one), where rounding can step over the exact value. Use a range or a tolerance. Analog inputs, setpoints, REALs only copied from constants or integers, `== 0`, and ordered comparisons are left alone. REALs written through a block index or pointer are not followed. |
+| `CMP_EQ_ON_COMPUTED_REAL` | Advisory | `==` or `!=` on a REAL the ladder computes with `math()` (or copies from one), where rounding can step over the exact value. Use a range or a tolerance. Analog inputs, setpoints, REALs only copied from constants or integers, `== 0`, and ordered comparisons are left alone. REALs written through a block index or pointer are not followed. |
 | `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. Configured defaults, external and physical inputs, read-only constants, and numeric `0`/`1` Boolean conventions are left alone. |
 | `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer, counter or drum step preset has an implicit zero start and no ladder writer, so a timer or counter completes at once and a drum step never ends. Configured and literal zero presets are left alone. |
 | `CMP_STEPPER_VALUE_NOT_SET` | Warning | A discrete stepping tag is compared with a value that none of its understood producers can establish. Dynamic, external, and unresolved producer paths are left alone. |
@@ -214,7 +214,7 @@ Each instruction reads its conditions when the scan reaches it. A guard covers t
 |---|---|---|
 | `CALL_NEVER_CALLED` | Info | A program-owned subroutine with no call path from Main. |
 | `CALL_RECURSION` | Error | A direct or indirect recursive subroutine component. One concrete closed call path is shown for each recursive component. |
-| `MATH_DIV_ZERO` | Error | A `/`, `//`, or `%` divisor in `calc` that is proved zero whenever the instruction can execute. Literal/constant zero, solely-zero closed domains, and guard-proved scan-stable tags are covered; possible-zero and control-flow-ambiguous cases are left alone. |
+| `MATH_DIV_ZERO` | Error | A `/`, `//`, or `%` divisor in `math` that is proved zero whenever the instruction can execute. Literal/constant zero, solely-zero closed domains, and guard-proved scan-stable tags are covered; possible-zero and control-flow-ambiguous cases are left alone. |
 
 ### Physical behavior
 

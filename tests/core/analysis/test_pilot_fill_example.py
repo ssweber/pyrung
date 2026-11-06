@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, calc, copy, out
+from pyrung import PLC, Bool, Int, Program, Rung, copy, math, out
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.tag import Tag
 
@@ -10,7 +10,7 @@ from pyrung.core.tag import Tag
 def _fill_program() -> tuple[Program, Tag]:
     """Synthetic replica of the live fill station shape.
 
-    Rung 0: (unconditional) calc(SetPoint - Band, Lower)
+    Rung 0: (unconditional) math(SetPoint - Band, Lower)
     Rung 1: TareBtn → copy(PV, SetPoint)
     Rung 2: PV >= Lower → out(Target)
 
@@ -27,7 +27,7 @@ def _fill_program() -> tuple[Program, Tag]:
 
     with Program() as prog:
         with Rung():
-            calc(SetPoint - Band, Lower)
+            math(SetPoint - Band, Lower)
         with Rung(TareBtn):
             copy(PV, SetPoint)
         with Rung(PV >= Lower):

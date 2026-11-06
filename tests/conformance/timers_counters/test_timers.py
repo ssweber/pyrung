@@ -67,7 +67,7 @@ hold however short the PLC's scan is.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, off_delay, on_delay, out
+from pyrung.core import Or, Rung, copy, math, off_delay, on_delay, out
 from tests.conformance.memory import ClickTimer, c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for, trace
 
@@ -145,11 +145,11 @@ def prove_tof_never_enabled(slot):
     with Rung(slot.Cmd != 0, slot.Scratch == 0):
         off_delay(never, TOF_LONG_PRESET)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Done):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, dropped.Done):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Acc != 0):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     done(slot)
 
 
@@ -162,12 +162,12 @@ def prove_tof_times_only_when_false(slot):
         off_delay(tof, 200)
     # Rung true (100..299 ms): count the scans Done is off or Acc is not 0.
     with Rung(slot.Cmd != 0, clock.Acc >= 100, clock.Acc < 300, Or(~tof.Done, tof.Acc != 0)):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     # Rung false (300..799 ms): count the scans Done disagrees with Acc < 200.
     with Rung(slot.Cmd != 0, clock.Acc >= 300, clock.Acc < 800, tof.Done, tof.Acc >= 200):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0, clock.Acc >= 300, clock.Acc < 800, ~tof.Done, tof.Acc < 200):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     # It timed with Done still on ...
     with Rung(slot.Cmd != 0, clock.Acc >= 300, tof.Done, tof.Acc > 0, tof.Acc < 200):
         copy(1, slot.Result3)
@@ -187,7 +187,7 @@ def prove_tof_enable_atomic(slot):
         off_delay(tof, 0)
     trace(slot, ~tof.Done)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, tof.Done, tof.Acc != 0):
-        calc(slot.Result4 + 1, slot.Result4)
+        math(slot.Result4 + 1, slot.Result4)
     done(slot)
 
 
@@ -264,7 +264,7 @@ def prove_acc_clamps_at_32767(slot):
     with Rung(slot.Cmd != 0, ton.Acc >= 32000):
         copy(1, slot.Result3)
     with Rung(slot.Cmd != 0, ton.Acc == 32767, slot.Scratch < 10):
-        calc(slot.Scratch + 1, slot.Scratch)
+        math(slot.Scratch + 1, slot.Scratch)
     with Rung(slot.Cmd != 0, slot.Scratch >= 10):
         copy(ton.Acc, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch >= 10, ton.Done):

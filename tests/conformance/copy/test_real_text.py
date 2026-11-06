@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, to_ascii
+from pyrung.core import Rung, copy, fill, math, to_ascii
 from tests.conformance.memory import df, txt
 from tests.conformance.probe_kit import between, once
 
@@ -76,7 +76,7 @@ def _ladder(index: int, value: float, window: int) -> Any:
             for k, field in enumerate(fields):
                 copy(txt[first + 2 * k], field, convert=to_ascii)
                 copy(txt[first + 2 * k + 1], slot.Scratch, convert=to_ascii)
-                calc(field * 128 + slot.Scratch, field)
+                math(field * 128 + slot.Scratch, field)
             copy(1, slot.Fired)
 
     return ladder

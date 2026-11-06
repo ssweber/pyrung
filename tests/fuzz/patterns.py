@@ -123,7 +123,7 @@ def timer_acc_zero_copy(pool: TagPool) -> list[RungSpec] | None:
 
 
 def counter_acc_calc_boost(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #6: calc(C.Acc + K, C.Acc) alongside one counter owner."""
+    """Pattern #6: math(C.Acc + K, C.Acc) alongside one counter owner."""
     if not pool.counters or not pool.writable_bool():
         return None
     counter = pool.counters[0]
@@ -221,7 +221,7 @@ def bidirectional_counter(pool: TagPool) -> list[RungSpec] | None:
 
 
 def self_referencing_accumulator(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #10: calc(N + 1, N) using a numeric tag."""
+    """Pattern #10: math(N + 1, N) using a numeric tag."""
     if not pool.writable_numeric():
         return None
     tag = pool.writable_numeric()[0]
@@ -335,7 +335,7 @@ def multi_hop_copy_chain(pool: TagPool) -> list[RungSpec] | None:
 
 
 def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #29: calc(block.select(start, end).sum(), Total) + Rung(Total != 0)."""
+    """Pattern #29: math(block.select(start, end).sum(), Total) + Rung(Total != 0)."""
     if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
         return None
     blk = pool.int_block
@@ -360,7 +360,7 @@ def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
 
 
 def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #29b: calc(block.select(start, end).max(), Out) + Rung(Out > 0).
+    """Pattern #29b: math(block.select(start, end).max(), Out) + Rung(Out > 0).
 
     The non-additive siblings of range_sum_into_compare: the prover must keep
     every member as a read of the calc (no element-wise sum decomposition).
@@ -443,7 +443,7 @@ def indirect_oob_source(pool: TagPool) -> list[RungSpec] | None:
 
 
 def identity_calc(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #32: calc(X + 0, Y) + Rung(Y == K) — identity calc keeps X observed."""
+    """Pattern #32: math(X + 0, Y) + Rung(Y == K) — identity calc keeps X observed."""
     writable_nums = pool.writable_numeric()
     all_nums = pool.all_numeric()
     if not writable_nums or not all_nums:
@@ -711,7 +711,7 @@ def self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
 
 
 def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: copy(lit, A) -> copy(A, B) -> calc(B + k, C) + Rung(C >= k).
+    """Adjacency: copy(lit, A) -> copy(A, B) -> math(B + k, C) + Rung(C >= k).
 
     A mixed copy+calc chain (>=2 hops) whose tail is read by a comparison.
     """
@@ -743,7 +743,7 @@ def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
 
 
 def chain_tail_preset(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: copy(lit, A) -> calc(A + k, B), then on_delay(T, preset=B).
+    """Adjacency: copy(lit, A) -> math(A + k, B), then on_delay(T, preset=B).
 
     The tail of a copy/calc chain is consumed as a timer preset.
     """

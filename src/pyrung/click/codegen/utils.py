@@ -653,7 +653,7 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "copy",
         "blockcopy",
         "fill",
-        "calc",
+        "math",
         "on_delay",
         "off_delay",
         "count_up",

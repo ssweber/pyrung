@@ -21,8 +21,8 @@ from pyrung import (
     Program,
     Rung,
     Timer,
-    calc,
     copy,
+    math,
     on_delay,
     out,
     rise,
@@ -86,7 +86,7 @@ def _stops_itself() -> Program:
         with Rung(Run):
             out(Lamp)
         with Rung():
-            calc(N + 1, N)
+            math(N + 1, N)
     return program
 
 
@@ -278,7 +278,7 @@ def _only_reads_new_second() -> Program:
         with Rung(system.rtc.new_second == 0):
             out(Lamp)
         with Rung():
-            calc(N + 1, N)
+            math(N + 1, N)
     return program
 
 
@@ -548,7 +548,7 @@ def test_a_mutable_default_is_the_function_s_own_list(
     def build() -> PLC:
         with Program(strict=False) as program:
             with Rung():
-                calc(N + 1, N)
+                math(N + 1, N)
             with Rung(Lamp):
                 run_function(fn, ins={"value": N}, outs={"out": Counted})
         plc = PLC(program, dt=0.01)

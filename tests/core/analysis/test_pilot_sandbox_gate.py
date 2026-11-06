@@ -32,7 +32,7 @@ needs rework), and named-reason failures.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, calc, copy, out, rise, rung
+from pyrung import PLC, Bool, Int, Program, copy, math, out, rise, rung
 from pyrung.core.analysis.pilot import pilot_how
 
 
@@ -84,11 +84,11 @@ def _live_mask_program(cfg_choices=None):
             copy(6, StateRequested)
         # The constant half: per-state mask from a declared-constant table.
         with rung():
-            calc(300 + StateRequested, StateMaskIdx)
+            math(300 + StateRequested, StateMaskIdx)
         with rung():
             copy(ds[StateMaskIdx], StateMask)
         with rung():
-            calc(StateMask & DisabledMask, MaskResult)
+            math(StateMask & DisabledMask, MaskResult)
         with rung(StateRequested != 0, MaskResult == 0, DisabledMask != 0):
             copy(StateRequested, StateCurrent)
             copy(0, StateRequested)
@@ -185,11 +185,11 @@ def _command_mask_program():
         with rung(CmdStart, StateCurrent == 1):
             copy(6, StateRequested)
         with rung():
-            calc(300 + StateRequested, StateMaskIdx)
+            math(300 + StateRequested, StateMaskIdx)
         with rung():
             copy(ds[StateMaskIdx], StateMask)
         with rung():
-            calc(StateMask & DisabledMask, MaskResult)
+            math(StateMask & DisabledMask, MaskResult)
         with rung(StateRequested != 0, MaskResult == 0, DisabledMask != 0):
             copy(StateRequested, StateCurrent)
             copy(0, StateRequested)

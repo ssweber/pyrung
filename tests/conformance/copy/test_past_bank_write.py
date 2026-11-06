@@ -29,7 +29,7 @@ The group owns C1381, C1382 and DS4226 (the pointer).
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, latch, reset, system
+from pyrung.core import Rung, copy, latch, math, reset, system
 from tests.conformance.memory import c, dd, ds
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -61,9 +61,9 @@ def prove_past_bank_write(slot):
     with Rung(slot.Scratch == 5):
         copy(dd[pointer], slot.Result2)
     with Rung(slot.Scratch == 6, c[1381]):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     with Rung(slot.Scratch == 6, c[1382]):
-        calc(slot.Result3 + 2, slot.Result3)
+        math(slot.Result3 + 2, slot.Result3)
     done(slot, WINDOW)
 
 

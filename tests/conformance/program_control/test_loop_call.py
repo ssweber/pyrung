@@ -31,7 +31,7 @@ one.  Candidate answers per case:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, call, copy, forloop, subroutine
+from pyrung.core import Rung, call, copy, forloop, math, subroutine
 
 
 def _fire(slot) -> None:
@@ -46,7 +46,7 @@ def prove_call_inside_loop(slot):
     _fire(slot)
     with subroutine("Conf_LoopCall_Inc"):
         with Rung():
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
 
 
 def prove_body_contact_after_call(slot):
@@ -57,7 +57,7 @@ def prove_body_contact_after_call(slot):
     _fire(slot)
     with subroutine("Conf_LoopCall_Gate"):
         with Rung():
-            calc(slot.Result1 + 1, slot.Result1)
+            math(slot.Result1 + 1, slot.Result1)
             copy(1, slot.Scratch)
 
 
@@ -70,7 +70,7 @@ def prove_loop_in_called_subroutine(slot):
     with subroutine("Conf_LoopCall_Deep"):
         with Rung():
             with forloop(2):
-                calc(slot.Result1 + 1, slot.Result1)
+                math(slot.Result1 + 1, slot.Result1)
 
 
 group = Group(

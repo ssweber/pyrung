@@ -16,10 +16,10 @@ from pyrung import (
     Rung,
     TagType,
     Timer,
-    calc,
     copy,
     count_up,
     latch,
+    math,
     on_delay,
     out,
     time_drum,
@@ -120,7 +120,7 @@ class TestBitEqual:
         SoakDone = Bool("LayeredReceiptDone")
         with Program() as program:
             with Rung():
-                calc(Soak + 1, Soak)
+                math(Soak + 1, Soak)
             with Rung(Soak >= 100):
                 out(SoakDone)
 
@@ -424,7 +424,7 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
 
     with Program() as prog:
         with Rung():
-            calc(Ctr + 1, Ctr)
+            math(Ctr + 1, Ctr)
         with Rung():
             on_delay(WD, 200, "ms").reset(Osc)
         with Rung(system.sys.clock_1s):
@@ -474,7 +474,7 @@ class TestAcrossClocks:
 def _rtc_reader_cycle_program() -> Program:
     """A period-2 oscillation beside an unconditional reader of the RTC second
     and a rung that latches on its value: a coast must not miss a tick."""
-    from pyrung import calc, copy, latch
+    from pyrung import copy, latch, math
 
     Sec = Int("RcSec")
     Half = Int("RcHalf")
@@ -487,7 +487,7 @@ def _rtc_reader_cycle_program() -> Program:
         with Rung(~T):
             out(T)
         with Rung():
-            calc(Sec // 30, Half)
+            math(Sec // 30, Half)
         with Rung(Half == 1):
             latch(Seen)
         with Rung():
@@ -545,7 +545,7 @@ def _clock_mirror_cycle_program(
     live, so the branch is off where it stands (it was on when it read the
     earlier rung's snapshot); *continued_live* makes it ``X == 1``, on there.
     """
-    from pyrung import Or, branch, calc, copy
+    from pyrung import Or, branch, copy, math
 
     T = Bool("CmT")
     Blink = Bool("CmBlink")
@@ -562,7 +562,7 @@ def _clock_mirror_cycle_program(
         with Rung():
             copy(system.rtc.second, Sec)
         with Rung():
-            calc(system.rtc.hour * 100 + system.rtc.minute, HHMM)
+            math(system.rtc.hour * 100 + system.rtc.minute, HHMM)
         with Rung(~T):
             out(T)
         with Rung(system.sys.clock_1s):
@@ -572,7 +572,7 @@ def _clock_mirror_cycle_program(
             copy(Sec, Hist1)
         if live_stamp:
             with Rung(Or(Stopped, Alarm)):
-                calc(Sec // 30, StopSec)
+                math(Sec // 30, StopSec)
             with Rung(StopSec > 0):
                 out(Bool("CmStopSecHigh"))
         if continued or continued_live:
@@ -584,7 +584,7 @@ def _clock_mirror_cycle_program(
                 copy(1, X)
             with Rung().continued():
                 with branch(X == (1 if continued_live else 0)):
-                    calc(Sec // 30, Half)
+                    math(Sec // 30, Half)
             with Rung(Half == 1):
                 out(Bool("CmHalfOn"))
         with Rung():
@@ -792,7 +792,7 @@ class TestReadsTheIntegerAccumulator:
                 with Rung():
                     on_delay(Tmr, 60, "s")
                 with Rung(cond):
-                    calc(N + 1, N)
+                    math(N + 1, N)
                 with Rung(cond):
                     out(Hit)
             return prog
@@ -887,7 +887,7 @@ class TestDrumStep:
                     with Rung():
                         copy(below, Step)
                 with Rung(O2):
-                    calc(N + 1, N)
+                    math(N + 1, N)
                 with Rung(Flag):
                     on_delay(Timer.clone("Rd"), 60_000)
             return prog
@@ -977,7 +977,7 @@ class TestWrittenInputs:
                     with Rung():
                         copy(below, P)
                 with Rung(Bool("Hit")):
-                    calc(Int("Since") + 1, Int("Since"))
+                    math(Int("Since") + 1, Int("Since"))
             return prog
 
         return build
@@ -1027,7 +1027,7 @@ class TestWrittenInputs:
                 with Rung(T.Acc >= P):
                     latch(Hit)
                 with Rung(Bool("Hit")):
-                    calc(Int("Since") + 1, Int("Since"))
+                    math(Int("Since") + 1, Int("Since"))
             return prog
 
         plc, ref, _stats = _coast_and_step(build)
@@ -1057,7 +1057,7 @@ class TestWrittenInputs:
                 with Rung():
                     copy(5000, P)
                 with Rung(Bool("Hit")):
-                    calc(Int("Since") + 1, Int("Since"))
+                    math(Int("Since") + 1, Int("Since"))
             return prog
 
         plc, ref, _stats = _coast_and_step(build)
@@ -1135,7 +1135,7 @@ class TestInputWrites:
                 with Rung(~Tog):
                     out(Tog)
                 with Rung():
-                    calc(Ptr + 1, Ptr)
+                    math(Ptr + 1, Ptr)
                 with Rung():
                     on_delay(T, Big[50])
                 with Rung(T.Done):

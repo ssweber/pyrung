@@ -252,7 +252,7 @@ def test_elided_intermediate_keeps_choice_input_live(label, target):
     in the restored snapshot (0), found it constant False, and never enumerated
     ``ExtA``: ``always(~Hit)`` came back Proven although ``Hit`` is one scan away.
     """
-    from pyrung.core import calc, copy
+    from pyrung.core import copy, math
 
     ext_a = Int("ExtA", external=True, choices={0: "zero", 3: "low", 7: "mid"})
     result = Int("Result")
@@ -262,9 +262,9 @@ def test_elided_intermediate_keeps_choice_input_live(label, target):
             if label == "copy":
                 copy(ext_a, result)
             elif label == "plus_one":
-                calc(ext_a + 1, result)
+                math(ext_a + 1, result)
             else:
-                calc(ext_a % 10, result)
+                math(ext_a % 10, result)
         with Rung(result == target):
             out(hit)
 

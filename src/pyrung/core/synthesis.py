@@ -161,9 +161,9 @@ def analog_feedback_rungs(
     is stable across scan periods.  The rungs are exactly what a hand-written
     plant-sim ladder would use::
 
-        Rung(enable):            calc(fb + up*dt,   fb)   # advance while energized
+        Rung(enable):            math(fb + up*dt,   fb)   # advance while energized
         Rung(enable):            latch(armed)             # wake on first energize
-        Rung(armed AND disable): calc(fb + down*dt, fb)   # decay once armed, off-enable only
+        Rung(armed AND disable): math(fb + down*dt, fb)   # decay once armed, off-enable only
 
     ``disable`` is the caller-supplied negation of ``enable`` (the harness knows
     whether the enable is a bit or an ``== trigger`` compare, so it builds the
@@ -198,7 +198,7 @@ def analog_approach_rung(
     One guarded ``calc`` plant rung — ``fb += rate*(toward - fb)*dt`` while
     energized, holding on enable fall::
 
-        Rung(enable): calc(fb + rate*(toward - fb)*dt, fb)
+        Rung(enable): math(fb + rate*(toward - fb)*dt, fb)
 
     ``toward`` is a constant setpoint or a setpoint tag.  There is no decay/arm:
     the plant holds its last value when disabled (a first-order lag has no

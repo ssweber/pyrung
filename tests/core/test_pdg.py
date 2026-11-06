@@ -16,10 +16,10 @@ from pyrung.core import (
     TagType,
     Timer,
     branch,
-    calc,
     call,
     copy,
     latch,
+    math,
     on_delay,
     out,
     return_early,
@@ -64,7 +64,7 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
 
     with Program() as prog:
         with Rung(enable):
-            calc(scale + 1, result)
+            math(scale + 1, result)
             on_delay(pdg_timer, preset=preset, unit="Ts").reset(reset)
 
     graph = build_program_graph(prog)
@@ -282,7 +282,7 @@ def test_isolated_role_prefers_same_rung_read_write_cycles() -> None:
     with Program() as prog:
         with Rung():
             copy(1, temp)
-            calc(temp + 1, dest)
+            math(temp + 1, dest)
 
     graph = build_program_graph(prog)
 
@@ -374,7 +374,7 @@ def test_collect_program_tags_matches_graph_extraction() -> None:
 
     with Program() as prog:
         with Rung(enable):
-            calc(source + values[1], result)
+            math(source + values[1], result)
             copy(values[pointer], result)
             with branch():
                 copy(values.select(6, 8), values.select(9, 11))

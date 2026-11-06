@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.core import Or, Rung, calc, copy, out, time_drum, time_event_drum
+from pyrung.core import Or, Rung, copy, math, out, time_drum, time_event_drum
 from tests.conformance.memory import c
 
 #: A time drum step's preset (ms): longer than any trace.
@@ -302,19 +302,19 @@ def track(slot: Any, side: Side) -> None:
     and the state is only read by :func:`snap` on a scan of the window.
     """
     with Rung():
-        calc(side.step * 10, side.state)
+        math(side.step * 10, side.state)
     with Rung(side.flag):
-        calc(side.state + 4, side.state)
+        math(side.state + 4, side.state)
     with Rung(side.b):
-        calc(side.state + 2, side.state)
+        math(side.state + 2, side.state)
     with Rung(side.a):
-        calc(side.state + 1, side.state)
+        math(side.state + 1, side.state)
 
 
 def snap(slot: Any, pair: Pair, scan: int, into: Any) -> None:
     """*into* = the time drum's state above the time & event drum's, as of scan *scan*."""
     with Rung(slot.Scratch == scan):
-        calc(pair.time.state * 100 + pair.event.state, into)
+        math(pair.time.state * 100 + pair.event.state, into)
 
 
 def track_both(slot: Any, pair: Pair) -> None:

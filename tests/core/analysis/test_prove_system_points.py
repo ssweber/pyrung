@@ -18,11 +18,11 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
-    calc,
     call,
     copy,
     fall,
     latch,
+    math,
     out,
     rise,
     subroutine,
@@ -266,7 +266,7 @@ class TestFaultFlags:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(100 / divisor, quotient)
+                math(100 / divisor, quotient)
             with Rung(F.division_error):
                 out(hit)
         result = always(logic, ~hit)
@@ -279,7 +279,7 @@ class TestFaultFlags:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(100 / divisor, quotient)
+                math(100 / divisor, quotient)
             with Rung(F.division_error):
                 out(hit)
         assert isinstance(always(logic, ~hit), Proven)
@@ -291,9 +291,9 @@ class TestFaultFlags:
         q2 = Int("Q2")
         with Program(strict=False) as logic:
             with Rung():
-                calc(100 / first, q1)
+                math(100 / first, q1)
             with Rung():
-                calc(100 / second, q2)
+                math(100 / second, q2)
         result = always(logic, ~F.division_error)
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "fault.division_error")
@@ -307,7 +307,7 @@ class TestFaultFlags:
             with Rung(~F.division_error, seen):
                 out(hit)
             with Rung():
-                calc(100 / divisor, quotient)
+                math(100 / divisor, quotient)
             with Rung(F.division_error):
                 latch(seen)
         result = always(logic, ~hit)
@@ -320,7 +320,7 @@ class TestFaultFlags:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(100 / divisor, quotient)
+                math(100 / divisor, quotient)
             with Rung(rise(F.division_error)):
                 out(hit)
         result = always(logic, ~hit)
@@ -333,7 +333,7 @@ class TestFaultFlags:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(scale * 1000, product)
+                math(scale * 1000, product)
             with Rung(F.out_of_range):
                 out(hit)
         result = always(logic, ~hit)
@@ -347,7 +347,7 @@ class TestFaultFlags:
         with Program(strict=False) as logic:
             with subroutine("work"):
                 with Rung():
-                    calc(100 / divisor, quotient)
+                    math(100 / divisor, quotient)
             with Rung():
                 call("work")
             with Rung(F.division_error):
@@ -364,9 +364,9 @@ class TestFaultFlags:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(100 / first, q1)
+                math(100 / first, q1)
             with Rung():
-                calc(100 / second, q2)
+                math(100 / second, q2)
             with Rung(F.division_error):
                 out(hit)
         result = always(logic, ~hit)
@@ -377,7 +377,7 @@ class TestFaultFlags:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(sqrt(_operand()), Real("Root"))
+                math(sqrt(_operand()), Real("Root"))
             with Rung(F.math_operation_error):
                 out(hit)
         result = always(logic, ~hit)
@@ -392,7 +392,7 @@ class TestFaultFlags:
             with Rung(F.math_operation_error):
                 out(hit)
             with Rung():
-                calc(sqrt(_operand()), Real("Root"))
+                math(sqrt(_operand()), Real("Root"))
         assert isinstance(always(logic, ~hit), Proven)
 
     def test_scans_after_a_math_error_run(self):
@@ -402,7 +402,7 @@ class TestFaultFlags:
             with Rung(~F.math_operation_error, seen):
                 out(hit)
             with Rung():
-                calc(sqrt(_operand()), Real("Root"))
+                math(sqrt(_operand()), Real("Root"))
             with Rung(F.math_operation_error):
                 latch(seen)
         result = always(logic, ~hit)
@@ -490,7 +490,7 @@ class TestCalendarRanges:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(R.minute, minute)
+                math(R.minute, minute)
             with Rung(minute == 30):
                 out(hit)
         result = always(logic, ~hit)
@@ -502,7 +502,7 @@ class TestCalendarRanges:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(R.hour * 100 + R.minute, hhmm)
+                math(R.hour * 100 + R.minute, hhmm)
             with Rung(hhmm == 1230):
                 out(hit)
         result = always(logic, ~hit)
@@ -532,7 +532,7 @@ class TestCalendarRanges:
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung():
-                calc(R.year4 * 10000 + R.month * 100 + R.day, stamp)
+                math(R.year4 * 10000 + R.month * 100 + R.day, stamp)
             with Rung(stamp == 20261225):
                 out(hit)
         result = always(logic, ~hit)
@@ -595,7 +595,7 @@ class TestHowPriorUnchanged:
         alarm = Bool("Alarm")
         with Program(strict=False) as logic:
             with Rung():
-                calc(100 / divisor, quotient)
+                math(100 / divisor, quotient)
             with Rung(F.division_error):
                 latch(alarm)
         ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))

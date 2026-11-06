@@ -30,9 +30,9 @@ from pyrung.core import (
     Program,
     Rung,
     break_loop,
-    calc,
     continue_loop,
     forloop,
+    math,
     out,
 )
 
@@ -216,7 +216,7 @@ class _Model:
 
 def _emit_leaf(leaf) -> None:
     if leaf[0] == "inc":
-        calc(REGS[leaf[1]] + 1, REGS[leaf[1]])
+        math(REGS[leaf[1]] + 1, REGS[leaf[1]])
     elif leaf[0] == "out":
         out(FLAGS[leaf[1]])
     elif leaf[0] == "break":

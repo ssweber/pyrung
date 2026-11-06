@@ -1411,13 +1411,13 @@ class TestLongRecordedChains:
     def test_self_accumulator_is_one_step(self):
         import sys
 
-        from pyrung.core import calc
+        from pyrung.core import math
 
         En = Bool("En")
         T = Int("T")
         with Program() as prog:
             with Rung(En):
-                calc(T + 3, T)
+                math(T + 3, T)
 
         plc = PLC(prog)
         plc.patch({"En": True})
@@ -1434,16 +1434,16 @@ class TestLongRecordedChains:
     def test_mutual_accumulators_are_one_round(self):
         import sys
 
-        from pyrung.core import calc
+        from pyrung.core import math
 
         En = Bool("En")
         A = Int("A")
         B = Int("B")
         with Program() as prog:
             with Rung(En):
-                calc(B + 1, A)
+                math(B + 1, A)
             with Rung(En):
-                calc(A + 1, B)
+                math(A + 1, B)
 
         plc = PLC(prog)
         plc.patch({"En": True})
@@ -1455,7 +1455,7 @@ class TestLongRecordedChains:
         assert [r.tag_name for r in chain.roots] == ["En"]
 
     def test_accumulator_walks_to_its_seed(self):
-        from pyrung.core import calc
+        from pyrung.core import math
 
         Reset = Bool("Reset")
         Setpoint = Int("Setpoint")
@@ -1464,7 +1464,7 @@ class TestLongRecordedChains:
             with Rung(rise(Reset)):
                 copy(Setpoint, T)
             with Rung(~Reset):
-                calc(T + 3, T)
+                math(T + 3, T)
 
         plc = PLC(prog)
         plc.patch({"Setpoint": 100})

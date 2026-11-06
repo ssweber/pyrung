@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, off_delay, on_delay, time_drum
+from pyrung.core import Rung, copy, math, off_delay, on_delay, time_drum
 from pyrung.core.system_points import system
 from tests.conformance.memory import ClickTimer, c, ds, td
 from tests.conformance.probe_kit import between
@@ -49,7 +49,7 @@ READING: dict[str, range] = {
 def count_scans(slot: Any) -> None:
     """``Scratch`` = the scan in progress, holding at the top of its Int: the first rung."""
     with Rung(slot.Cmd != 0, slot.Scratch < 32767):
-        calc(slot.Scratch + 1, slot.Scratch)
+        math(slot.Scratch + 1, slot.Scratch)
 
 
 def latch_count(slot: Any, done: Any, into: Any) -> None:
@@ -71,7 +71,7 @@ def fire_with_the_scan_setting(slot: Any) -> None:
 
 def _prove_scan_setup(slot: Any) -> None:
     with Rung(slot.Cmd != 0, slot.Scratch < 3):
-        calc(slot.Scratch + 1, slot.Scratch)
+        math(slot.Scratch + 1, slot.Scratch)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(system.sys.scan_time_fixed_setup_ms, slot.Result2)
         copy(system.sys.scan_time_current_ms, slot.Result3)
@@ -104,7 +104,7 @@ def _prove_off_delay_and_drum(slot: Any) -> None:
     with Rung(slot.Cmd != 0, slot.Scratch <= _RUNG_ON):
         off_delay(timer, preset=1, unit="Ts")
     with Rung(slot.Cmd != 0, slot.Scratch > _RUNG_ON, ~timer.Done, slot.Result1 == 0):
-        calc(slot.Scratch - _RUNG_ON, slot.Result1)
+        math(slot.Scratch - _RUNG_ON, slot.Result1)
     with Rung(slot.Cmd != 0):
         time_drum(
             outputs=[c[3]],

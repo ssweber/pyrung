@@ -193,6 +193,6 @@ Each input counts its own rising edges; an up edge and a down edge on the same s
 
 ### Counting a held condition
 
-A counter never counts a held condition more than once. To count scans or time while something is on, use a timer, or `calc()` (`calc(N + 1, N)` adds one every scan its rung is True). `rise()` on the rung is allowed but redundant: the counter already counts edges.
+A counter never counts a held condition more than once. To count scans or time while something is on, use a timer, or `math()` (`math(N + 1, N)` adds one every scan its rung is True). `rise()` on the rung is allowed but redundant: the counter already counts edges.
 
 For chained builders (counters, shift registers, drums), complete the full chain (`.down(...)`, `.clock(...)`, `.reset(...)`) before any later DSL statement.

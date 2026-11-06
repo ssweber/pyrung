@@ -1544,7 +1544,7 @@ def _collect_real_progress_source_kinds(
 ) -> dict[str, str]:
     """Find conservative monotone Real progress tags.
 
-    This covers finite same-sign strides such as ``calc(R0 + ExtStep, R0)``
+    This covers finite same-sign strides such as ``math(R0 + ExtStep, R0)``
     where ``ExtStep`` has positive-only choices.  The event scheduler still
     uses the concrete per-scan delta observed from the current BFS edge.
     """
@@ -1711,7 +1711,7 @@ def _find_threshold_absorptions(
                     _ThresholdBlocker(
                         acc_name,
                         kind,
-                        (f"{acc_name}: read in data-flow; remove copy/calc reads of accumulator",),
+                        (f"{acc_name}: read in data-flow; remove copy/math reads of accumulator",),
                     )
                 )
                 continue

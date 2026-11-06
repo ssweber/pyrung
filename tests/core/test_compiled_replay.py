@@ -19,11 +19,11 @@ from pyrung.core import (
     TagType,
     Timer,
     blockcopy,
-    calc,
     call,
     copy,
     fill,
     latch,
+    math,
     named_array,
     on_delay,
     out,
@@ -96,7 +96,7 @@ def test_compiled_plc_seeds_explicit_block_pointer_tag() -> None:
 
     with Program(strict=False) as program:
         with Rung(enable):
-            calc(index + 1, index)
+            math(index + 1, index)
         with Rung(enable):
             copy(0, ds[ds[1]])
 

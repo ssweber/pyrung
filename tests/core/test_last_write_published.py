@@ -7,10 +7,10 @@ changed may see them: they compare equal, and these tests say so one reader at a
 
 from __future__ import annotations
 
-import math
+import math as pymath
 from typing import Any
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, calc, fall, latch, out, rise
+from pyrung import PLC, Bool, Int, Program, Real, Rung, fall, latch, math, out, rise
 from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
 from pyrung.core import compiled_run, scan_trace
 
@@ -29,7 +29,7 @@ def _program() -> Program:
         with Rung(Run):
             out(Bounded)
         with Rung():
-            calc(Source * -1.0, Gained)
+            math(Source * -1.0, Gained)
         with Rung(rise(Coiled)):
             latch(Rose)
         with Rung(fall(Coiled)):
@@ -38,7 +38,7 @@ def _program() -> Program:
 
 
 def _is_negative_zero(value: Any) -> bool:
-    return value == 0.0 and math.copysign(1.0, value) == -1.0
+    return value == 0.0 and pymath.copysign(1.0, value) == -1.0
 
 
 def _stepped(scans: int = 5) -> PLC:

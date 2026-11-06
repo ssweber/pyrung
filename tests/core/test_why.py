@@ -15,9 +15,9 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
-    calc,
     copy,
     latch,
+    math,
     out,
     reset,
 )
@@ -483,7 +483,7 @@ class TestBackPropagation:
     def _build():
         """Program with a calc chain: Scaled = Raw + 10.
 
-        Rung 0: (unconditional) calc(Raw + 10, Scaled)
+        Rung 0: (unconditional) math(Raw + 10, Scaled)
         Rung 1: Enable → out(Output)
         """
         Raw = Int("Raw")
@@ -493,7 +493,7 @@ class TestBackPropagation:
 
         with Program() as logic:
             with Rung():
-                calc(Raw + 10, Scaled)
+                math(Raw + 10, Scaled)
             with Rung(Enable):
                 out(Output)
 

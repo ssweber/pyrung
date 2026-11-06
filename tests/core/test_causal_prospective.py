@@ -22,9 +22,9 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
-    calc,
     copy,
     latch,
+    math,
     out,
     reset,
     rise,
@@ -528,7 +528,7 @@ class TestProjectedOraclePinning:
         """A self-referential affine step counter resolves through the
         transition rung, not the parity-gated even-step rung.
 
-        Mirrors the Blower SFC engine: both ``calc(CurStep+1, CurStep)`` writers
+        Mirrors the Blower SFC engine: both ``math(CurStep+1, CurStep)`` writers
         can produce ``CurStep+1``, but the even-step rung (gated
         ``valstepisodd != 1``) is counterfactual for ``CurStep == 2`` — its
         source ``CurStep == 1`` is odd.  The projected oracle pins the affine
@@ -545,11 +545,11 @@ class TestProjectedOraclePinning:
             with Rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
                 copy(1, Trans)
             with Rung():  # parity (derived from CurStep)
-                calc(CurStep % 2, valstepisodd)
+                math(CurStep % 2, valstepisodd)
             with Rung(valstepisodd != 1, xPause == 0):  # even-step advance
-                calc(CurStep + 1, CurStep)
+                math(CurStep + 1, CurStep)
             with Rung(Trans == 1):  # transition advance
-                calc(CurStep + 1, CurStep)
+                math(CurStep + 1, CurStep)
 
         runner = PLC(logic)
         runner.step()  # CurStep == 0
@@ -1691,7 +1691,7 @@ class TestSimulateScan:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + B, Result)
+                math(A + B, Result)
 
         state = SystemState().with_tags({"Enable": True, "A": 10, "B": 20})
         sim = _simulate_scan(logic.rungs, state)
@@ -1810,7 +1810,7 @@ class TestRungProducesValue:
 
         with Program() as logic:
             with Rung(Gate):
-                calc(A + 10, Result)
+                math(A + 10, Result)
 
         state = SystemState().with_tags({"A": 5})
         assert _rung_produces_value(logic.rungs[0], 0, "Result", 15, state) is True
@@ -1875,7 +1875,7 @@ class TestProjectedCauseCopyCalc:
 
         with Program() as logic:
             with Rung(Gate):
-                calc(A + 10, Result)
+                math(A + 10, Result)
 
         runner = PLC(logic)
         runner.patch({"A": 5})
@@ -1957,7 +1957,7 @@ class TestProjectedEffectCopyCalc:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A * 2, Result)
+                math(A * 2, Result)
 
         runner = PLC(logic)
         runner.patch({"A": 5})
@@ -1976,7 +1976,7 @@ class TestProjectedEffectCopyCalc:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A * 2, Result)
+                math(A * 2, Result)
 
         runner = PLC(logic)
         runner.patch({"A": 5})

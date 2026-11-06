@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from pyrung.core import PLC, Int, Program, Rung, calc, randint
+from pyrung.core import PLC, Int, Program, Rung, math, randint
 from tests.conformance import loop_corpus, suite
 from tests.conformance.loop_corpus import FIRST_PARTS, Tally
 
@@ -44,7 +44,7 @@ def test_a_long_run_of_a_wide_rand_equals_stepping() -> None:
     r = Int("R")
     with Program(strict=False) as program:
         with Rung():
-            calc(randint(70000, 90000), r)
+            math(randint(70000, 90000), r)
     plc = PLC(program, dt=loop_corpus.DT)
     loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(30.0))
 

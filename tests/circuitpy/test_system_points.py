@@ -11,7 +11,7 @@ import time
 import pytest
 
 from pyrung.circuitpy import P1AM, RunStopConfig, generate_circuitpy
-from pyrung.core import Block, Bool, Dint, Int, Program, Real, Rung, TagType, calc, copy, out
+from pyrung.core import Block, Bool, Dint, Int, Program, Real, Rung, TagType, copy, math, out
 from pyrung.core.expression import sqrt
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
@@ -63,12 +63,12 @@ Table = Block("Table", TagType.INT, 1, 4, retentive=False)
 
 
 def _divide_by_zero():
-    calc(10 / Zero, Sink)
+    math(10 / Zero, Sink)
 
 
 def _overflow():
     # Two in-range constants: an Int destination cuts a constant past 16 bits.
-    calc(Zero + 32767 + 1, Sink)
+    math(Zero + 32767 + 1, Sink)
 
 
 def _bad_pointer():
@@ -90,11 +90,11 @@ def test_fault_flag_set_by_instruction_and_cleared_at_next_scan_start(monkeypatc
     # after the faulting rung.
     with Program(strict=False) as prog:
         with Rung(flag):
-            calc(SeenAtTop + 1, SeenAtTop)
+            math(SeenAtTop + 1, SeenAtTop)
         with Rung(~Armed):
             fault()
         with Rung(flag):
-            calc(SeenAfter + 1, SeenAfter)
+            math(SeenAfter + 1, SeenAfter)
         with Rung():
             out(Armed)
 
@@ -117,11 +117,11 @@ def test_calc_into_int_cuts_constants_to_16_bits(monkeypatch):
     # (SC40); the same 65536 read from a Dint divides.
     with Program(strict=False) as prog:
         with Rung():
-            calc(Num / 65536, ByConstant)
+            math(Num / 65536, ByConstant)
         with Rung(system.fault.division_error):
             out(DivFlagAfterConstant)
         with Rung():
-            calc(Num / Den, ByTag)
+            math(Num / Den, ByTag)
 
     _code, read = _run(prog, monkeypatch, scans=1)
 
@@ -143,13 +143,13 @@ def test_scan_counter_steps_and_scan_clock_follows_its_parity(monkeypatch):
         with Rung():
             copy(counter, ScanCount)
         with Rung(clock):
-            calc(EvenScans + 1, EvenScans)
+            math(EvenScans + 1, EvenScans)
         with Rung(clock, counter % 2 == 1):
-            calc(ClockMismatch + 1, ClockMismatch)
+            math(ClockMismatch + 1, ClockMismatch)
         with Rung(~clock, counter % 2 == 0):
-            calc(ClockMismatch + 1, ClockMismatch)
+            math(ClockMismatch + 1, ClockMismatch)
         with Rung(system.sys.first_scan):
-            calc(FirstScans + 1, FirstScans)
+            math(FirstScans + 1, FirstScans)
 
     _code, read = _run(prog, monkeypatch, scans=5)
 
@@ -211,7 +211,7 @@ def test_clock_bits_follow_wall_clock_with_named_full_period(
     monkeypatch.setattr(time, "sleep", fake_sleep)
     with Program(strict=False) as prog:
         with Rung(clock):
-            calc(OnScans + 1, OnScans)
+            math(OnScans + 1, OnScans)
 
     _code, read = _run(prog, monkeypatch, scans=scans)
 
@@ -321,14 +321,14 @@ RunScans = Int("RunScans", retentive=True)
 def _math_error_program() -> Program:
     with Program(strict=False) as prog:
         with Rung():
-            calc(RunScans + 1, RunScans)
+            math(RunScans + 1, RunScans)
         with Rung(Faulted == 0):
             copy(1, Faulted)
             copy(-4.0, Operand)
             copy(99.0, Root)
-            calc(sqrt(Operand), Root)
+            math(sqrt(Operand), Root)
         with Rung(system.fault.math_operation_error):
-            calc(SawMathError + 1, SawMathError)
+            math(SawMathError + 1, SawMathError)
         # Reference SC50 and SC11, so the generated code carries them.
         with Rung(system.sys.cmd_mode_stop, system.sys.mode_run):
             copy(0, Sink)
@@ -364,7 +364,7 @@ def test_math_error_does_not_stop_the_code(monkeypatch, runstop):
 def test_a_math_function_emits_no_stop_hold(monkeypatch, runstop):
     with Program(strict=False) as prog:
         with Rung():
-            calc(sqrt(Operand), Root)
+            math(sqrt(Operand), Root)
 
     hw = _hw()
     code = generate_circuitpy(prog, hw, target_scan_ms=1.0, runstop=runstop).code

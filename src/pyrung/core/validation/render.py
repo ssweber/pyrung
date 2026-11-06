@@ -65,7 +65,7 @@ _VERB: dict[str, str] = {
     "CopyInstruction": "copy",
     "BlockCopyInstruction": "blockcopy",
     "FillInstruction": "fill",
-    "CalcInstruction": "calc",
+    "CalcInstruction": "math",
     "OnDelayInstruction": "on_delay",
     "OffDelayInstruction": "off_delay",
     "CountUpInstruction": "count_up",
@@ -277,7 +277,7 @@ def render_instruction(
         code = f"fill({operand_name(instr.value)}, {operand_name(instr.dest)})"
     elif itype == "CalcInstruction":
         written = getattr(instr, "source_expression", instr.expression)
-        code = f"calc({render_expr(written)}, {operand_name(instr.dest)})"
+        code = f"math({render_expr(written)}, {operand_name(instr.dest)})"
     elif itype in (
         "OnDelayInstruction",
         "OffDelayInstruction",

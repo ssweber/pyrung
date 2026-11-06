@@ -66,7 +66,7 @@ with Program(strict=False) as prog:
     with Rung(Enable, ~T2.Done):
         on_delay(T2, preset=1000)
     with Rung(rise(T2.Done)):
-        calc(Count + 1, Count)
+        math(Count + 1, Count)
     with Rung(Enable):
         on_delay(T1, preset=15000)
     with Rung(T1.Done):

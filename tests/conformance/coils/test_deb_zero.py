@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, calc, copy, debounce, off_delay, on_delay, out
+from pyrung.core import Or, Rung, copy, debounce, math, off_delay, on_delay, out
 from tests.conformance.memory import ClickTimer, c, t
 from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
@@ -50,10 +50,10 @@ def prove_off_side_lag(slot: Any) -> None:
     fields = (slot.Result1, slot.Result2, slot.Result3, slot.ErrorCode)
     with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW):
         for field in fields:
-            calc(field * 2, field)
+            math(field * 2, field)
     for bit, field in zip((deb, TON.Done, TOF.Done, rung), fields, strict=True):
         with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW, bit):
-            calc(field + 1, field)
+            math(field + 1, field)
     done(slot, WINDOW)
 
 

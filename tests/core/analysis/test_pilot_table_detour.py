@@ -56,8 +56,8 @@ from pyrung import (
     Program,
     TagType,
     Timer,
-    calc,
     copy,
+    math,
     on_delay,
     rise,
     rung,
@@ -161,7 +161,7 @@ def _packml_table_detour_program() -> tuple[Program, dict[str, object]]:
             copy(CmdUnholdRef, Cmd)
             copy(1, CmdReq)
             copy(1, Phase)
-            calc(RecipeStep + 1, RecipeStep)
+            math(RecipeStep + 1, RecipeStep)
         # A second dwell in Execute makes the program issue Complete on its own.
         with rung(State == EXECUTE, Phase == 1):
             on_delay(CompleteTmr, _DWELL_MS, "ms")
@@ -187,15 +187,15 @@ def _packml_table_detour_program() -> tuple[Program, dict[str, object]]:
 
         # --- enable: constant-table mask predicate (all enabled in Production) ---
         with rung():
-            calc(300 + StateRequested, MaskIdx)
+            math(300 + StateRequested, MaskIdx)
         with rung():
             copy(MT[MaskIdx], StateMask)
         with rung():
-            calc(200 + Mode, CfgIdx)
+            math(200 + Mode, CfgIdx)
         with rung():
             copy(MT[CfgIdx], DisabledStates)
         with rung():
-            calc(StateMask & DisabledStates, MaskResult)
+            math(StateMask & DisabledStates, MaskResult)
         with rung():
             copy(0, EnblYes)
         with rung(MaskResult == 0):
@@ -215,7 +215,7 @@ def _packml_table_detour_program() -> tuple[Program, dict[str, object]]:
         # detect_opaque_loop contains State even though State's own writer below is
         # a plain (stepping-preserving) copy.
         with rung():
-            calc(StateRequested + 150, JumpIdx)
+            math(StateRequested + 150, JumpIdx)
         with rung():
             copy(JT[JumpIdx], JumpTarget)
 

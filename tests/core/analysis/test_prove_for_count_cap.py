@@ -29,10 +29,10 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     call,
     copy,
     forloop,
+    math,
     out,
     subroutine,
 )
@@ -97,7 +97,7 @@ def test_a_count_computed_below_its_declared_bounds_is_refused() -> None:
 
     def write_n(n: object) -> None:
         with Rung():
-            calc(x - 1, n)
+            math(x - 1, n)
 
     logic, prop = _loop_program(lambda: Dint("N", min=0, max=50), write_n)
     _assert_refused(never(logic, prop), 0xFFFFFFFF, ["N"])

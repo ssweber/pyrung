@@ -112,7 +112,7 @@ WORD and non-WORD operands; that is a static finding, not a ladder case.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, system
+from pyrung.core import Rung, copy, fill, math, system
 from pyrung.core.expression import randint
 from tests.conformance.memory import dd, df, dh
 from tests.conformance.scans import count_scans, done, scans_for
@@ -121,8 +121,8 @@ from tests.conformance.scans import count_scans, done, scans_for
 def prove_int_calc_wraps(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(32767, slot.Scratch)
-        calc(slot.Scratch + 1, slot.Result1)
-        calc(slot.Result1 - 1, slot.Result2)
+        math(slot.Scratch + 1, slot.Result1)
+        math(slot.Result1 - 1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Fired == 0, system.fault.out_of_range):
         copy(1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
@@ -134,8 +134,8 @@ def prove_dint_calc_wraps(slot):
         copy(2147483647, dd[101])
         copy(-2147483648, dd[103])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dd[101] + 1, dd[102])
-        calc(dd[103] - 1, dd[104])
+        math(dd[101] + 1, dd[102])
+        math(dd[103] - 1, dd[104])
     with Rung(slot.Cmd != 0, slot.Fired == 0, dd[102] == -2147483648):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, dd[104] == 2147483647):
@@ -153,9 +153,9 @@ def prove_dint_quotient_into_int(slot):
         copy(99, slot.Result2)
         copy(99, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dd[161] / 65536, slot.Result1)
-        calc(dd[161] / dd[162], slot.Result2)
-        calc(dd[163] / 65536, slot.Result3)
+        math(dd[161] / 65536, slot.Result1)
+        math(dd[161] / dd[162], slot.Result2)
+        math(dd[163] / 65536, slot.Result3)
         copy(1, slot.Fired)
 
 
@@ -167,9 +167,9 @@ def prove_int_math_wide_constant(slot):
         copy(99, slot.Result2)
         copy(99, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dd[171] / 40000, slot.Result1)
-        calc(dd[172] * 1.5, slot.Result2)
-        calc(dd[171] / -40000, slot.Result3)
+        math(dd[171] / 40000, slot.Result1)
+        math(dd[172] * 1.5, slot.Result2)
+        math(dd[171] / -40000, slot.Result3)
         copy(1, slot.Fired)
 
 
@@ -177,7 +177,7 @@ def prove_int_math_rand_wide_bounds(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(99, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(randint(70000, 70000) / 2, slot.Result1)
+        math(randint(70000, 70000) / 2, slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -186,7 +186,7 @@ def prove_int_math_real_operand_constant(slot):
         copy(0.25, df[141])
         copy(99, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(df[141] * 100000, slot.Result1)
+        math(df[141] * 100000, slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -197,8 +197,8 @@ def prove_word_calc_wraps(slot):
         copy(0x0001, dh[204])
         copy(0x0002, dh[205])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dh[201] + dh[202], dh[203])
-        calc(dh[204] - dh[205], dh[206])
+        math(dh[201] + dh[202], dh[203])
+        math(dh[204] - dh[205], dh[206])
         copy(dh[203], slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, dh[206] == 0xFFFF):
         copy(1, slot.Result2)
@@ -212,9 +212,9 @@ def prove_copy_clamps_calc_wraps(slot):
         copy(-40000, dd[112])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(dd[111], slot.Result1)
-        calc(dd[111], slot.Result2)
+        math(dd[111], slot.Result2)
         copy(dd[112], slot.Result3)
-        calc(dd[112], slot.Result4)
+        math(dd[112], slot.Result4)
         copy(1, slot.Fired)
 
 
@@ -233,8 +233,8 @@ def prove_real_to_int_truncates(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(df[101], slot.Result1)
         copy(df[102], slot.Result2)
-        calc(df[101], slot.Result3)
-        calc(df[102], slot.Result4)
+        math(df[101], slot.Result3)
+        math(df[102], slot.Result4)
         copy(1, slot.Fired)
 
 
@@ -242,9 +242,9 @@ def prove_int_division_truncates(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(7, slot.Scratch)
         copy(2, slot.Result4)
-        calc(slot.Scratch / slot.Result4, slot.Result1)
-        calc(0 - slot.Scratch, slot.Scratch)
-        calc(slot.Scratch / slot.Result4, slot.Result2)
+        math(slot.Scratch / slot.Result4, slot.Result1)
+        math(0 - slot.Scratch, slot.Scratch)
+        math(slot.Scratch / slot.Result4, slot.Result2)
         copy(1, slot.Fired)
 
 
@@ -255,8 +255,8 @@ def prove_word_math_unsigned(slot):
         copy(0x8000, dh[214])
         copy(0x0004, dh[215])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dh[211] / dh[212], dh[213])
-        calc(dh[214] * dh[212] / dh[215], dh[216])
+        math(dh[211] / dh[212], dh[213])
+        math(dh[214] * dh[212] / dh[215], dh[216])
         copy(dh[213], slot.Result1)
         copy(dh[216], slot.Result2)
         copy(1, slot.Fired)
@@ -266,7 +266,7 @@ def prove_hex_literal_is_decimal(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(0x0001, dh[221])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dh[221] + 10, dh[222])
+        math(dh[221] + 10, dh[222])
         copy(dh[222], slot.Result1)
         copy(1, slot.Fired)
 
@@ -275,7 +275,7 @@ def prove_intermediate_fits_32_bits(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(300, slot.Scratch)
         copy(100, slot.Result4)
-        calc(slot.Scratch * slot.Scratch / slot.Result4, slot.Result1)
+        math(slot.Scratch * slot.Scratch / slot.Result4, slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -284,7 +284,7 @@ def prove_intermediate_exceeds_32_bits(slot):
         copy(100000, dd[131])
         copy(1000000, dd[132])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(dd[131] * dd[131] / dd[132], slot.Result1)
+        math(dd[131] * dd[131] / dd[132], slot.Result1)
         copy(1, slot.Fired)
 
 
@@ -295,10 +295,10 @@ def prove_real_is_64_bit_in_pyrung(slot):
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(dd[122], df[111])
     with Rung(slot.Cmd != 0, slot.Fired == 0):
-        calc(df[111] + 1, df[112])
+        math(df[111] + 1, df[112])
         copy(dd[121], df[113])
-        calc(df[112] - df[111], slot.Result1)
-        calc(df[113] - df[111], slot.Result2)
+        math(df[112] - df[111], slot.Result1)
+        math(df[113] - df[111], slot.Result2)
         copy(1, slot.Fired)
 
 
@@ -319,13 +319,13 @@ def prove_real_overflow_stays_finite(slot):
         copy(1.0, df[122])
         copy(1.0, df[123])
     with Rung(slot.Cmd != 0, on_scan):
-        calc(df[121] * 10, df[122])
-        calc(df[121] * -10, df[123])
+        math(df[121] * 10, df[122])
+        math(df[121] * -10, df[123])
     with Rung(slot.Cmd != 0, on_scan, system.fault.out_of_range):
         copy(1, slot.Result3)
     with Rung(slot.Cmd != 0, on_scan):
-        calc(df[122] / 2, df[124])
-        calc(df[123] / 2, df[125])
+        math(df[122] / 2, df[124])
+        math(df[123] / 2, df[125])
     with Rung(slot.Cmd != 0, on_scan, df[124] >= 3.0e38):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, on_scan, df[125] <= -3.0e38):
@@ -337,7 +337,7 @@ def prove_div_by_zero(slot):
     # Scratch stays 0: it is the divisor.
     with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(99, slot.Result1)
-        calc(100 / slot.Scratch, slot.Result1)
+        math(100 / slot.Scratch, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Fired == 0, system.fault.division_error):
         copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Fired == 0):
@@ -360,9 +360,9 @@ def prove_real_div_by_zero(slot):
         copy(5.5, df[136])
         copy(5.5, df[137])
     with Rung(slot.Cmd != 0, on_scan):
-        calc(df[131] / df[134], df[135])
-        calc(df[132] / df[134], df[136])
-        calc(df[133] / df[134], df[137])
+        math(df[131] / df[134], df[135])
+        math(df[132] / df[134], df[136])
+        math(df[133] / df[134], df[137])
     with Rung(slot.Cmd != 0, on_scan, system.fault.division_error):
         copy(1, slot.Result4)
     with Rung(slot.Cmd != 0, on_scan, df[135] == 0):

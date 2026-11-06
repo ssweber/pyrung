@@ -6,7 +6,7 @@ coast runs next to a stepped twin that must match it after every loop firing.
 
 from __future__ import annotations
 
-import math
+import math as pymath
 import random
 from types import SimpleNamespace
 from typing import Any
@@ -24,11 +24,11 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
-    calc,
     coast_run,
     compiled_run,
     copy,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -85,7 +85,7 @@ def consume_on_read_temp():
     with Rung():
         copy(T.Acc, Tmp)
     with Rung():
-        calc(Tmp + 1, Y)
+        math(Tmp + 1, Y)
     with Rung():
         copy(0, Tmp)
 
@@ -132,7 +132,7 @@ def indirect_moving_pointer():
     with Rung():
         on_delay(T, 30000)
     with Rung():
-        calc((T.Acc // 500) % 8 + 1, Idx)
+        math((T.Acc // 500) % 8 + 1, Idx)
     with Rung():
         copy(7, Bank[Idx])
 
@@ -142,13 +142,13 @@ def bool_copy_of_clock_unguarded():
     with Rung(system.sys.clock_100ms):
         out(BX)
     with Rung(BX):
-        calc(X + 1, X)
+        math(X + 1, X)
 
 
 @case
 def edge_count_on_clock():
     with Rung(rise(system.sys.clock_100ms)):
-        calc(X + 1, X)
+        math(X + 1, X)
 
 
 @case
@@ -164,7 +164,7 @@ def oneshot_on_done():
 @case
 def self_calc_every_scan():
     with Rung():
-        calc(X + 7, X)
+        math(X + 7, X)
     with Rung(X > 100):
         copy(0, X)
 
@@ -172,7 +172,7 @@ def self_calc_every_scan():
 @case
 def real_ramp():
     with Rung():
-        calc(R1 + 0.5, R1)
+        math(R1 + 0.5, R1)
     with Rung(R1 > 700.0):
         latch(Hit)
 
@@ -180,7 +180,7 @@ def real_ramp():
 @case
 def dint_big_delta():
     with Rung():
-        calc(D1 + BigStep, D1)
+        math(D1 + BigStep, D1)
     with Rung(D1 > 100000000):
         latch(Hit)
 
@@ -340,7 +340,7 @@ def _ramp() -> None:
 
 def _count_while_forced() -> None:
     with Rung(A):
-        calc(X + 1, X)
+        math(X + 1, X)
 
 
 InsideT = Timer.clone("InsideT")
@@ -377,7 +377,7 @@ def _random_recording(rng: random.Random) -> _Recording:
         elif kind < 0.4:
             settled[tag] = _UNKNOWN_VALUE
         else:
-            settled[tag] = rng.choice([0, 1, 1.0, True, False, "x", math.nan])
+            settled[tag] = rng.choice([0, 1, 1.0, True, False, "x", pymath.nan])
     return _Recording(settled, tuple(from_ends), varied)
 
 
@@ -538,7 +538,7 @@ def _writes_two_values_a_scan() -> None:
         on_delay(T, 30000)
     with Rung():
         copy(T.Acc, X)
-        calc(T.Acc + 1, X)
+        math(T.Acc + 1, X)
     with Rung(X > 2):
         out(Hit)
 
@@ -548,7 +548,7 @@ def _writes_too_many_values() -> None:
     with Rung():
         on_delay(T, 30000)
     with Rung():
-        calc(T.Acc * T.Acc % 1009, X)
+        math(T.Acc * T.Acc % 1009, X)
     with Rung(X > 2):
         out(Hit)
 
@@ -837,7 +837,7 @@ def _fires_every_other_scan() -> None:
     with Rung(~Toggle):
         out(Toggle)
     with Rung(Toggle):
-        calc(X + 1, X)
+        math(X + 1, X)
     with Rung():
         on_delay(T, 30000)
 

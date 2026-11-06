@@ -54,7 +54,7 @@ B = a branch snapshots where it leaves its parent):
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, branch, calc, copy, latch, out, reset
+from pyrung.core import Rung, branch, copy, latch, math, out, reset
 from tests.conformance.memory import c
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -132,21 +132,21 @@ def prove_last_rung_wins_shared_coil(slot):
     w = LAST_RUNG_WINDOW
     count_scans(slot, w)
     with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1632]):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     with Rung(slot.Cmd != 0):
         out(c[1631])
     with Rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(c[1632])
     with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
-        calc(slot.Result3 + 1, slot.Result3)
+        math(slot.Result3 + 1, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(c[1631])
     with Rung(slot.Cmd != 0):
         out(c[1632])
     with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
-        calc(slot.Result4 + 1, slot.Result4)
+        math(slot.Result4 + 1, slot.Result4)
     done(slot, w)
 
 

@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, latch, out, reset
+from pyrung.core import Rung, latch, math, out, reset
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pool_of, put, track
 from tests.conformance.drum_shift_search.test_drum_settle import (
     acc_hundreds,
@@ -85,7 +85,7 @@ def rig(slot: Any, index: int) -> Rig:
 def _over(slot: Any, s: Side, scan: int, into: Any) -> None:
     """*into* = Acc - 1000 on scan *scan*.  Below the drum."""
     with Rung(slot.Scratch == scan):
-        calc(s.acc - 1000, into)
+        math(s.acc - 1000, into)
 
 
 def prove_return_scan_ticks(slot):

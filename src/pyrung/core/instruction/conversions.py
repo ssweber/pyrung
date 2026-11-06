@@ -294,7 +294,7 @@ def _copy_clamps(value: Any, tag: Tag, source: Any = None) -> bool:
 def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     """Truncate a value to fit the destination tag's type.
 
-    Implements hardware-verified modular wrapping used by calc() result stores:
+    Implements hardware-verified modular wrapping used by math() result stores:
     - INT: 16-bit signed (-32768 to 32767)
     - DINT: 32-bit signed (-2147483648 to 2147483647)
     - WORD: 16-bit unsigned (0 to 65535)

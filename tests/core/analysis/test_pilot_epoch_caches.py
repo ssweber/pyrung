@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import PLC, Int, Program, Rung, calc, copy
+from pyrung import PLC, Int, Program, Rung, copy, math
 from pyrung.core.executor import ConditionViewCapture
 
 _ALL_CACHES = {
@@ -107,7 +107,7 @@ def test_a_seek_after_a_restart_answers_from_the_new_run() -> None:
     step, mode, seen = Int("Step"), Int("Mode"), Int("Seen")
     with Program() as program:
         with Rung():
-            calc(step + 1, step)
+            math(step + 1, step)
         with Rung():
             copy(mode, seen)
     # A small recent-state cache and a far checkpoint, so a seek reaches for a slab.

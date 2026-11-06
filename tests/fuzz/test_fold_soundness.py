@@ -21,7 +21,7 @@ from __future__ import annotations
 import hypothesis.strategies as st
 from hypothesis import example, given, note, settings
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, math, on_delay, out
 from pyrung.core import rise, system
 from pyrung.core.runner import PLC
 
@@ -92,7 +92,7 @@ def _build(spec: dict):
                 count_up(src, spec["preset"]).reset(Reset)
         with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
             if spec["body"] == "calc":
-                calc(A + B, Extent)
+                math(A + B, Extent)
             else:
                 out(Beat)
     return prog, src.Done
@@ -228,7 +228,7 @@ def _build_stable(spec: dict):
 
         # Reads the accumulator: its clock ends every window
         with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
-            calc(src.Acc, AccView)
+            math(src.Acc, AccView)
 
         # Read only external inputs
         for i, body in enumerate(spec["stable_bodies"]):
@@ -236,7 +236,7 @@ def _build_stable(spec: dict):
                 tag = Int(f"Stable{i}")
                 stable_tags.append(f"Stable{i}")
                 with Rung(rise(clock_tag)):
-                    calc(A + B + i, tag)
+                    math(A + B + i, tag)
             else:
                 tag = Bool(f"FBeat{i}")
                 stable_tags.append(f"FBeat{i}")
@@ -301,8 +301,8 @@ _READERS = [
     "cmp_above",  # read before the source moves this scan (flips one scan late)
     "eq",  # flips twice: reaching k and passing it
     "expr",  # (acc // d) == k
-    "display",  # calc(acc // d, Disp), nothing reads Disp
-    "stored",  # calc(acc // d, Q) then Rung(Q == k)
+    "display",  # math(acc // d, Disp), nothing reads Disp
+    "stored",  # math(acc // d, Q) then Rung(Q == k)
     "snapshot",  # Rung(rise(X)): copy(acc, Snap) then Rung(Snap > k)
     "operand",  # acc compared against the other source's acc
 ]
@@ -368,7 +368,7 @@ def _build_composite(spec: dict):
                         rise(system.sys.clock_1s) if pulse else Bool(f"CR{i}")
                     )
                 else:
-                    calc((accs[i] + 3) % 997, accs[i])
+                    math((accs[i] + 3) % 997, accs[i])
         for j, r in enumerate(spec["readers"]):
             acc = accs[r["src"]]
             other = accs[(r["src"] + 1) % len(accs)]
@@ -381,10 +381,10 @@ def _build_composite(spec: dict):
                 _reader_body(j, r, (acc // d) == k)
             elif shape == "display":
                 with Rung():
-                    calc(acc // d, Int(f"Disp{j}"))
+                    math(acc // d, Int(f"Disp{j}"))
             elif shape == "stored":
                 with Rung():
-                    calc(acc // d, Int(f"Q{j}"))
+                    math(acc // d, Int(f"Q{j}"))
                 _reader_body(j, r, Int(f"Q{j}") == k)
             elif shape == "snapshot":
                 with Rung(rise(Bool(f"X{j}"))):
@@ -400,7 +400,7 @@ def _reader_body(j: int, r: dict, cond) -> None:
 
     with Rung(cond):
         if r["count"]:
-            calc(Int(f"N{j}") + 1, Int(f"N{j}"))
+            math(Int(f"N{j}") + 1, Int(f"N{j}"))
         else:
             latch(Bool(f"Hit{j}"))
 

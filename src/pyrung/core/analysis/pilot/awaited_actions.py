@@ -309,7 +309,7 @@ def is_program_constant(name: str, ctx: WalkContext) -> bool:
 def fold_const_copy_source(wv: Any, ctx: WalkContext) -> Literal | None:
     """Fold an identity/scaled copy from a program-constant source to a literal.
 
-    ``copy(src, dest)`` / ``calc(src * k + b, dest)`` where *src* is a program
+    ``copy(src, dest)`` / ``math(src * k + b, dest)`` where *src* is a program
     constant (:func:`is_program_constant`) produces the fixed value
     ``src.default * scale + offset``.  Returns that as a :class:`Literal`, so a
     producer search matching "this writer produces value v" sees the program-owned

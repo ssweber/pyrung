@@ -19,13 +19,13 @@ from pyrung import (
     Program,
     Real,
     Timer,
-    calc,
     call,
     copy,
     count_down,
     count_up,
     event_drum,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -456,14 +456,14 @@ def test_copy_data_flow():
 
 
 def test_calc_affine():
-    """calc(dest = src + 10): trace finds the gate and the Affine source."""
+    """math(dest = src + 10): trace finds the gate and the Affine source."""
     x_Go = Bool("x_Go", external=True)
     Raw = Int("Raw", external=True)
     Scaled = Int("Scaled")
 
     with Program() as logic:
         with rung(x_Go):
-            calc(Raw + 10, Scaled)
+            math(Raw + 10, Scaled)
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, _known(logic), logic)
@@ -481,7 +481,7 @@ def test_reverse_fallthrough_can_use_separate_forward_candidate(monkeypatch) -> 
     Scaled = Int("RegistryOnlyScaled")
     with Program() as logic:
         with rung(x_Go):
-            calc(Raw + 10, Scaled)
+            math(Raw + 10, Scaled)
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, _known(logic), logic)
@@ -503,7 +503,7 @@ def test_calc_real_multiply_uses_forward_candidate() -> None:
     Scaled = Real("RealCalcScaled")
     with Program() as logic:
         with rung(x_Go):
-            calc(Raw * 2.5, Scaled)
+            math(Raw * 2.5, Scaled)
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, _known(logic), logic)
@@ -535,7 +535,7 @@ def test_copy_affine_clamp_rail_uses_registered_reverse() -> None:
 
 
 def test_aggregate_sum_decomposition():
-    """calc(block.sum(), dest): trace decomposes to non-zero elements.
+    """math(block.sum(), dest): trace decomposes to non-zero elements.
 
     Tracing Total=0 when the sum is 2 asks "how do I make the sum zero?"
     — each non-zero element (DS2, DS4) must be cleared.
@@ -551,7 +551,7 @@ def test_aggregate_sum_decomposition():
         with rung(x_Alarm):
             copy(1, blk[4])
         with rung():
-            calc(blk.select(1, 5).sum(), Total)
+            math(blk.select(1, 5).sum(), Total)
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, _known(logic), logic)
@@ -1293,7 +1293,7 @@ def test_indirect_copy_lookup_table():
     """Trace sees through copy(block[ptr], dest) by inverting the table.
 
     Models the PackML jump-table pattern:
-      calc(StateRequested + 10, idx)   -- compute pointer
+      math(StateRequested + 10, idx)   -- compute pointer
       copy(ds[idx], JumpTarget)        -- read lookup table
 
     The table at ds[10+N] holds the next-state for StateRequested=N.
@@ -1311,7 +1311,7 @@ def test_indirect_copy_lookup_table():
         with rung(x_Cmd):
             copy(3, StateRequested)
         with rung():
-            calc(StateRequested + 10, Idx)
+            math(StateRequested + 10, Idx)
         with rung():
             copy(ds[Idx], JumpTarget)
         with rung(JumpTarget == 6):
@@ -1335,7 +1335,7 @@ def test_indirect_copy_lookup_table():
 
     # The trace should have followed:
     # JumpTarget=6 → ds[Idx] inversion → Idx needs value 13
-    # → calc(StateRequested + 10, Idx) → StateRequested=3
+    # → math(StateRequested + 10, Idx) → StateRequested=3
     # → x_Cmd (steerable)
     assert tree.children, "trace should not dead-end at the indirect copy"
     has_lookup = any(c.data_flow == "lookup" for c in tree.children)
@@ -1358,7 +1358,7 @@ def test_reference_constants_via_func_dep_chain():
     that drives a lookup-table pointer through a calc-defined scratch:
 
       copy(STATE_STARTING_REF, StateRequested)   -- REF is the constant
-      calc(StateRequested + 10, Idx)              -- func dep: Idx depends on StateRequested
+      math(StateRequested + 10, Idx)              -- func dep: Idx depends on StateRequested
       copy(ds[Idx], JumpTarget)                   -- Idx is the indirect pointer
 
     STATE_STARTING_REF is never written, used as a copy source into
@@ -1400,13 +1400,13 @@ def test_reference_constants_via_func_dep_chain():
 
         # State jump table: calc pointer, indirect read
         with rung():
-            calc(StateRequested + 10, JumpIdx)
+            math(StateRequested + 10, JumpIdx)
         with rung():
             copy(ds[JumpIdx], JumpTarget)
 
         # Command validation table: calc pointer, indirect read
         with rung():
-            calc(CtrlCmd + 20, CmdIdx)
+            math(CtrlCmd + 20, CmdIdx)
         with rung():
             copy(dh[CmdIdx], CmdValid)
 
@@ -1420,7 +1420,7 @@ def test_reference_constants_via_func_dep_chain():
     ref_consts = compute_reference_constants(pdg, logic)
 
     # STATE_STARTING_REF feeds StateRequested, which is the representative
-    # of JumpIdx (pointer) via calc(StateRequested + 10, JumpIdx).
+    # of JumpIdx (pointer) via math(StateRequested + 10, JumpIdx).
     assert "STATE_STARTING_REF" in ref_consts
 
     # STATE_IDLE_REF and STATE_EXECUTE_REF also feed StateRequested.
@@ -1428,7 +1428,7 @@ def test_reference_constants_via_func_dep_chain():
     assert "STATE_EXECUTE_REF" in ref_consts
 
     # CMD_RESET_REF feeds CtrlCmd, which is the representative of
-    # CmdIdx (pointer) via calc(CtrlCmd + 20, CmdIdx).
+    # CmdIdx (pointer) via math(CtrlCmd + 20, CmdIdx).
     assert "CMD_RESET_REF" in ref_consts
 
     # External inputs are NOT ref constants (they have no copy-source role
@@ -1463,7 +1463,7 @@ def test_reference_constants_via_indirect_read_slots():
         with rung(x_Cmd):
             copy(3, StateReq)
         with rung():
-            calc(StateReq + 10, Idx)
+            math(StateReq + 10, Idx)
         with rung():
             copy(ds[Idx], JumpTarget)  # computed-index read; rows never copy sources
         with rung(JumpTarget == 6):
@@ -1486,7 +1486,7 @@ def test_external_command_indexing_a_table_stays_steerable():
     """Condition 4 preserved: an external command feeding a table pointer is a lever.
 
     ``ToolReqCmd`` (external) is copied into ``ToolReq``, the representative of a
-    lookup-table pointer via ``calc(ToolReq + 20, Idx)``.  The operator chooses
+    lookup-table pointer via ``math(ToolReq + 20, Idx)``.  The operator chooses
     the value, so it must remain steerable and out of the reference-constant set.
     """
     dh = Block("DH", TagType.INT, 1, 40)
@@ -1500,7 +1500,7 @@ def test_external_command_indexing_a_table_stays_steerable():
         with rung(x_Load):
             copy(ToolReqCmd, ToolReq)  # external command feeds the pointer rep
         with rung():
-            calc(ToolReq + 20, Idx)
+            math(ToolReq + 20, Idx)
         with rung():
             copy(dh[Idx], ToolValid)
 
@@ -1521,7 +1521,7 @@ def test_external_command_indexing_a_table_stays_steerable():
 def _curstep_engine():
     """Minimal Blower SFC step engine (blower.py R8/R15/R16/R17).
 
-    Two ``calc(CurStep + 1, CurStep)`` writers produce ``CurStep + 1``:
+    Two ``math(CurStep + 1, CurStep)`` writers produce ``CurStep + 1``:
     R16 is gated on parity (``valstepisodd != 1``, derived from CurStep), R17
     on a transition flag (``Trans == 1``).
     """
@@ -1536,11 +1536,11 @@ def _curstep_engine():
         with rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
             copy(1, Trans)
         with rung():  # parity (derived from CurStep)
-            calc(CurStep % 2, valstepisodd)
+            math(CurStep % 2, valstepisodd)
         with rung(valstepisodd != 1, xPause == 0):  # even-step advance
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
         with rung(Trans == 1):  # transition advance
-            calc(CurStep + 1, CurStep)
+            math(CurStep + 1, CurStep)
 
     return logic
 
@@ -2230,8 +2230,8 @@ def test_sound_reverse_dnf_keeps_mixed_conjuncts_atomic(monkeypatch):
     Other = Int("ReverseOther")
     with Program(strict=False) as logic:
         with rung():
-            calc(A + B, Mid)
-            calc(C + D, Other)
+            math(A + B, Mid)
+            math(C + D, Other)
 
     monkeypatch.setattr(
         crossings,
@@ -2283,8 +2283,8 @@ def test_crossing_proposal_preserves_conjunctive_dnf_branches(monkeypatch):
     Other = Int("ProposalOther")
     with Program(strict=False) as logic:
         with rung():
-            calc(A + B, Mid)
-            calc(C + D, Other)
+            math(A + B, Mid)
+            math(C + D, Other)
 
     pdg = build_program_graph(logic)
     snap = {
@@ -2493,7 +2493,7 @@ def test_crossing_proposal_declines_partial_or_conflicting_branches(monkeypatch)
     Mid = Int("StrictBranchMid")
     with Program(strict=False) as logic:
         with rung():
-            calc(A + B, Mid)
+            math(A + B, Mid)
 
     monkeypatch.setattr(
         crossings,
@@ -2536,7 +2536,7 @@ def test_crossing_conjunct_cartesian_distributes_reactive_levers(monkeypatch):
     Mid = Int("CartesianMid")
     with Program(strict=False) as logic:
         with rung():
-            calc(A + B, Mid)
+            math(A + B, Mid)
 
     monkeypatch.setattr(
         crossings,

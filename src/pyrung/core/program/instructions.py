@@ -352,8 +352,30 @@ def unpack_to_words(source: Any, word_block: Any, *, oneshot: bool = False) -> N
     )
 
 
-def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
-    """Calc instruction.
+# A standard ``math`` name pyrung has its own of, for an expression.
+_PYRUNG_MATH_NAMES = {
+    "pi": "PI",
+    **{
+        name: name
+        for name in (
+            "sqrt",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "radians",
+            "degrees",
+            "log",
+            "log10",
+        )
+    },
+}
+
+
+class _MathInstruction:
+    """Math instruction (CLICK's Math).
 
     Evaluates an expression and stores the result in dest, with
     truncation to the destination tag's bit width (modular wrapping).
@@ -365,8 +387,8 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
 
     Example:
         with Rung(Enable):
-            calc(DS1 * DS2 + DS3, Result)
-            calc(MaskA & MaskB, MaskResult)
+            math(DS1 * DS2 + DS3, Result)
+            math(MaskA & MaskB, MaskResult)
 
     Args:
         expression: Expression, Tag, or literal to evaluate.
@@ -375,7 +397,58 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
 
     Returns:
         The dest tag.
+
+    The name hides the standard ``math`` module in a file that imports
+    both; ``math.<name>`` then says what to use instead.
     """
+
+    __name__ = "math"
+    __qualname__ = "math"
+
+    def __call__(self, expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
+        _add_instruction("math", CalcInstruction, expression, dest, oneshot=oneshot)
+        return dest
+
+    def __repr__(self) -> str:
+        return "<pyrung instruction math>"
+
+    if not TYPE_CHECKING:
+        # At runtime only: a type checker still reports ``math.isclose`` as
+        # an unknown attribute, which is the earlier hint.
+
+        def __getattr__(self, name: str) -> Any:
+            if name.startswith("_"):
+                raise AttributeError(name)
+            own = _PYRUNG_MATH_NAMES.get(name)
+            if own is not None:
+                hint = f"for {name} in an expression, use pyrung's {own}: from pyrung.core import {own}"
+            else:
+                hint = (
+                    "for the standard module, import it under another name: import math as pymath"
+                )
+            raise AttributeError(
+                f"math.{name}: math here is pyrung's math() instruction, which hides the "
+                f"standard math module; {hint}"
+            )
+
+
+math = _MathInstruction()
+"""Math instruction (CLICK's Math): ``math(expression, dest, *, oneshot=False)``.
+
+Evaluates *expression* and stores it in *dest*, truncated to the destination's
+width (modular wrapping).  Division by zero gives 0; decimal or hex mode is
+inferred from the tags read.
+"""
+
+
+def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
+    """Deprecated: use :func:`math`, CLICK's name for the Math instruction."""
+    warnings.warn(
+        "calc() is now math(), CLICK's name for the Math instruction; "
+        "calc() will be removed in a later release",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _add_instruction("calc", CalcInstruction, expression, dest, oneshot=oneshot)
     return dest
 

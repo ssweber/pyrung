@@ -46,7 +46,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, latch, out, reset, system
+from pyrung.core import Rung, copy, fill, latch, math, out, reset, system
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import c, dd, df
 from tests.conformance.probe_kit import between, class_of, finish, flag_bit, once
@@ -65,15 +65,15 @@ def prove_wide_values(slot: Any) -> None:
         copy(100000, scale)
         copy(99, absolute)
         copy(99, quotient)
-        calc(abs(low), absolute)
+        math(abs(low), absolute)
     flag_bit(slot, SC43, slot.Result4, 1)
     with Rung(*once(slot)):
-        calc(3000000000 / thousand, quotient)
+        math(3000000000 / thousand, quotient)
     flag_bit(slot, SC43, slot.Result4, 2)
     class_of(slot, absolute, [-2147483648, 2147483647, 0, 99], slot.Result1)
     class_of(slot, quotient, [3000000, -1294967, 24, 99, 2147483], slot.Result3)
     with Rung(*once(slot)):
-        calc(absolute / scale, slot.Result2)
+        math(absolute / scale, slot.Result2)
         copy(quotient, slot.ErrorCode)
     finish(slot)
 
@@ -104,30 +104,30 @@ def prove_error_terms(slot: Any) -> None:
         copy(99, slot.Result3)
         copy(99, slot.Result4)
     with Rung(slot.Scratch == 2):
-        calc(seven / zero + 5, slot.Result1)
+        math(seven / zero + 5, slot.Result1)
     with Rung(slot.Scratch == 2, SC40):
-        calc(slot.ErrorCode + 1, slot.ErrorCode)
+        math(slot.ErrorCode + 1, slot.ErrorCode)
     with Rung(slot.Scratch == 2):
-        calc((seven / zero + 1) * 5, slot.Result2)
+        math((seven / zero + 1) * 5, slot.Result2)
     with Rung(slot.Scratch == 2, SC40):
-        calc(slot.ErrorCode + 2, slot.ErrorCode)
+        math(slot.ErrorCode + 2, slot.ErrorCode)
     root_now, root_taken, power_now, power_taken, power_sc43 = (c[n] for n in range(181, 186))
     _guarded(slot, root_now, root_taken)
     with Rung(root_now):
-        calc(sqrt(minus) + 5, slot.Result3)
+        math(sqrt(minus) + 5, slot.Result3)
     with Rung(root_now, SC46):
-        calc(slot.ErrorCode + 4, slot.ErrorCode)
+        math(slot.ErrorCode + 4, slot.ErrorCode)
     _guarded(slot, power_now, power_taken)
     with Rung(power_now):
-        calc(zero**zero, slot.Result4)
+        math(zero**zero, slot.Result4)
     with Rung(power_now, SC43):
         out(power_sc43)
     with Rung(power_now, SC40):
-        calc(slot.ErrorCode + 8, slot.ErrorCode)
+        math(slot.ErrorCode + 8, slot.ErrorCode)
     with Rung(power_now, SC46):
-        calc(slot.ErrorCode + 32, slot.ErrorCode)
+        math(slot.ErrorCode + 32, slot.ErrorCode)
     with Rung(power_sc43):
-        calc(slot.ErrorCode + 16, slot.ErrorCode)
+        math(slot.ErrorCode + 16, slot.ErrorCode)
     done(slot, WINDOW)
 
 
@@ -150,9 +150,9 @@ def prove_error_terms_real(slot: Any) -> None:
         copy(-4.0, minus)
         for result in results:
             copy(99.0, result)
-        calc(seven / zero + 5, results[0])
-        calc((seven / zero + 1) * 5, results[1])
-        calc(sqrt(minus) + 5, results[2])
+        math(seven / zero + 5, results[0])
+        math((seven / zero + 1) * 5, results[1])
+        math(sqrt(minus) + 5, results[2])
     fields = (slot.Result1, slot.Result2, slot.Result3)
     for result, field in zip(results, fields, strict=True):
         class_of(slot, result, REAL_READINGS, field)
@@ -161,8 +161,8 @@ def prove_error_terms_real(slot: Any) -> None:
         with Rung(*once(slot), result <= -3.0e38):
             copy(5, field)
     with Rung(*once(slot)):
-        calc(results[0] * 10, slot.Result4)
-        calc(results[2] * 10, slot.ErrorCode)
+        math(results[0] * 10, slot.Result4)
+        math(results[2] * 10, slot.ErrorCode)
     finish(slot)
 
 

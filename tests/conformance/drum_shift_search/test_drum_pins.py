@@ -147,10 +147,10 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
     Rung,
-    calc,
     copy,
     event_drum,
     forloop,
+    math,
     on_delay,
     reset,
     time_drum,
@@ -320,17 +320,17 @@ def event_box(
 
 def snap(slot: Any, top: Side, under: Side, scan: int, into: Any) -> None:
     with Rung(slot.Scratch == scan):
-        calc(top.state * 100 + under.state, into)
+        math(top.state * 100 + under.state, into)
 
 
 def hundreds(slot: Any, s: Side, scan: int, into: Any) -> None:
     with Rung(slot.Scratch == scan):
-        calc(s.acc / 100, into)
+        math(s.acc / 100, into)
 
 
 def over(slot: Any, s: Side, base: int, scan: int, into: Any) -> None:
     with Rung(slot.Scratch == scan):
-        calc(s.acc - base, into)
+        math(s.acc - base, into)
 
 
 #: A case's window past the default, for the drums that first run through their steps.
@@ -813,7 +813,7 @@ def prove_drum_in_loop(slot):
             time_box(slot, jogged, [LONG, LONG, LONG, LONG], jog=jog)
             event_box(slot, evd, [e1, e2, e2, e2])
     with Rung(slot.Cmd != 0, slot.Fired == 0, td[_TDS[-2]] >= 150):
-        calc(inside.acc * 10 / outside.acc, slot.Result2)
+        math(inside.acc * 10 / outside.acc, slot.Result2)
         copy(jogged.step, slot.Result3)
         copy(evd.step, slot.Result4)
         copy(1, slot.Fired)

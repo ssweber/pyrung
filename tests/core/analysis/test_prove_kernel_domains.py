@@ -16,10 +16,10 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
-    calc,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
 )
@@ -96,14 +96,14 @@ class TestKernelDomainDiscovery:
         assert isinstance(result, Proven)
 
     def test_calc_identity_inherits_domain(self):
-        """calc(Step, StoredStep) identity-style assignment becomes tractable."""
+        """math(Step, StoredStep) identity-style assignment becomes tractable."""
         Step = Int("Step", external=True, choices={0: "Off", 1: "On"})
         StoredStep = Int("StoredStep")
         Active = Bool("Active")
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Step, StoredStep)
+                math(Step, StoredStep)
             with Rung(StoredStep == 1):
                 out(Active)
 
@@ -119,7 +119,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(source, stored)
+                math(source, stored)
             with Rung(stored > 150):
                 out(alarm)
 
@@ -170,7 +170,7 @@ class TestKernelDomainDiscovery:
         assert "H2" not in comparison.comparison_tags
 
     def test_self_feeding_calc_is_excluded_from_comparison_only(self):
-        """calc(X + N, X) reads X via _reads — _has_forbidden_data_read excludes it."""
+        """math(X + N, X) reads X via _reads — _has_forbidden_data_read excludes it."""
         from pyrung.core.analysis.pdg import build_program_graph
         from pyrung.core.analysis.prove.absorb import (
             _find_comparison_absorptions,
@@ -186,9 +186,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter + 2, counter)
+                math(counter + 2, counter)
             with Rung(~boost):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(counter > 50):
                 out(flag)
 
@@ -217,9 +217,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter + 3, counter)
+                math(counter + 3, counter)
             with Rung(~boost):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(reset_btn):
                 copy(0, counter)
             with Rung(counter > 50):
@@ -247,9 +247,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(step % 2, odd)
+                math(step % 2, odd)
             with Rung(odd != 1):
-                calc(step + 1, step)
+                math(step + 1, step)
             with Rung(step != stored):
                 copy(step, stored)
             with Rung(step == 3):
@@ -308,9 +308,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter + 2, counter)
+                math(counter + 2, counter)
             with Rung(~boost):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(counter > 20):
                 out(alarm)
 
@@ -341,7 +341,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(source / 10, stored)
+                math(source / 10, stored)
             with Rung(limit > stored):
                 out(alarm)
 
@@ -404,7 +404,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count > threshold):
                 out(flag)
 
@@ -428,7 +428,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(a + 1, b)
+                math(a + 1, b)
             with Rung(trigger):
                 copy(b, a)
             with Rung(a > threshold):
@@ -501,7 +501,7 @@ class TestKernelDomainDiscovery:
         with Program(strict=False) as logic:
             for i, inp in enumerate(inputs):
                 with Rung():
-                    calc(inp + i, dest)
+                    math(inp + i, dest)
             with Rung(dest > 0):
                 out(flag)
 
@@ -589,7 +589,7 @@ class TestValidateDeclaredBounds:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Src + 0, Dest)
+                math(Src + 0, Dest)
             with Rung(Dest > 0):
                 out(Flag)
 
@@ -604,7 +604,7 @@ class TestValidateDeclaredBounds:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Src + 0, Dest)
+                math(Src + 0, Dest)
             with Rung(Dest > 5):
                 out(Flag)
 
@@ -634,7 +634,7 @@ class TestValidateDeclaredBounds:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Src + 0, Dest)
+                math(Src + 0, Dest)
             with Rung(Dest > 3):
                 out(Flag)
 

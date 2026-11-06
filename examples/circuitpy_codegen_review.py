@@ -3,7 +3,7 @@
 This example intentionally exercises a broad instruction surface so reviewers can
 inspect one generated file that includes:
 - inline pointer refs (DS[idx], DD[idx + 1])
-- inline expressions in calc/copy
+- inline expressions in math/copy
 - control-flow (branch, call/subroutine/return_early, forloop)
 - timers/counters
 - event/time drum instructions
@@ -26,7 +26,7 @@ from pyrung import (
     Timer,
     blockcopy,
     branch,
-    calc,
+    math,
     call,
     copy,
     count_down,
@@ -136,7 +136,7 @@ with Program(strict=False) as logic:
     # Inline expressions + inline pointer refs + block range operations.
     with rung(Running, RTon.Done):
         copy(120, Source)
-        calc((Source * 2) + (Idx << 1) - 3, CalcOut)
+        math((Source * 2) + (Idx << 1) - 3, CalcOut)
         copy(DS[Idx], DD[Idx + 1])
         copy(CalcOut // 2, DS[Idx + Span])
         blockcopy(DS.select(1, 4), DS.select(2, 5))

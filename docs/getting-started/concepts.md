@@ -94,7 +94,7 @@ latch(Motor)                  # Set and hold — stays true even if rung goes fa
 reset(Motor)                  # Clear a latched tag
 
 copy("g", State)              # Copy a value into a tag
-calc(Step + 1, Step)          # Evaluate an expression, store the result
+math(Step + 1, Step)          # Evaluate an expression, store the result
 
 on_delay(MyTimer, preset=3000)               # Timer: accumulate while rung is true
 count_up(MyCounter, preset=100)              # Counter: increment each scan
@@ -279,7 +279,7 @@ with rung(system.sys.first_scan):
     copy("g", State)
 ```
 
-**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). `division_error` follows the last `calc()` to run, `out_of_range` and `address_error` the last `calc()` or copy instruction: one clears the flag as it starts and sets it only if it faults, so read it on the next rung. Fault flags are also cleared at the start of each scan.
+**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). `division_error` follows the last `math()` to run, `out_of_range` and `address_error` the last `math()` or copy instruction: one clears the flag as it starts and sets it only if it faults, so read it on the next rung. Fault flags are also cleared at the start of each scan.
 
 ```python
 with rung(system.fault.division_error):

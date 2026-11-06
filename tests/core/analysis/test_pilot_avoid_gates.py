@@ -43,8 +43,8 @@ from pyrung import (
     Program,
     Rung,
     Timer,
-    calc,
     copy,
+    math,
     on_delay,
     out,
     rise,
@@ -159,7 +159,7 @@ def _wink_program() -> tuple[Program, object, object, dict[str, object]]:
         with Rung(Or(Go, Run)):
             out(Run)
         with Rung(Run, Step < 3):
-            calc(Step + 1, Step)
+            math(Step + 1, Step)
         with Rung(Step == 2):
             out(Mid)
         with Rung(Step == 3):
@@ -282,7 +282,7 @@ def test_program_continuation_preserves_its_settle_trajectory(monkeypatch) -> No
     Target = Bool("Target")
     with Program(strict=False) as prog:
         with Rung(Run, Step < 3):
-            calc(Step + 1, Step)
+            math(Step + 1, Step)
         with Rung(Step == 2):
             out(Mid)
         with Rung(Step == 3):

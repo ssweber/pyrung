@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Block, Bool, Int, Program, Rung, TagType, calc, copy
+from pyrung.core import Block, Bool, Int, Program, Rung, TagType, copy, math
 from pyrung.core.validation import CMP_STEPPER_VALUE_NOT_SET, validate
 
 
@@ -140,7 +140,7 @@ def test_dynamic_and_defensive_comparisons_stay_quiet() -> None:
     result = Bool("DynamicResult", external=True)
     with Program(strict=False) as program:
         with Rung(advance):
-            calc(step + 2, step)
+            math(step + 2, step)
         with Rung(step == 99):
             copy(1, result)
         with Rung(step != 101):

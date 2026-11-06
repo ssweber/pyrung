@@ -102,7 +102,7 @@ with rung(Setpoint < DS[Step + 1]):
     out(NextIsHigher)
 ```
 
-An address outside the block, or in a gap of a sparse block, reads as its type's zero value (0, 0.0, False or a blank `Char`) on either side of the comparison: the rung evaluates, no fault flag is set and the scan carries on, in simulation, compiled replay and generated CircuitPython. `copy()` and `calc()` treat a source below the block differently: they set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). This is pyrung's own rule: a CLICK takes a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
+An address outside the block, or in a gap of a sparse block, reads as its type's zero value (0, 0.0, False or a blank `Char`) on either side of the comparison: the rung evaluates, no fault flag is set and the scan carries on, in simulation, compiled replay and generated CircuitPython. `copy()` and `math()` treat a source below the block differently: they set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). This is pyrung's own rule: a CLICK takes a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
 
 ## INT truthiness
 
@@ -123,6 +123,6 @@ with rung((PressureA + PressureB) > 100):
     latch(HighPressureFault)
 ```
 
-Inline expressions work in simulation. The CLICK dialect validator will flag them if targeting CLICK hardware — rewrite as `calc()` instructions instead.
+Inline expressions work in simulation. The CLICK dialect validator will flag them if targeting CLICK hardware — rewrite as `math()` instructions instead.
 
-An inline expression is permissive: an operation that hits a math error (a division by zero, a math function outside its domain, a bitwise operation on Inf or NaN) gives 0 and sets no fault flag. See [Math outside `calc()`](math.md#math-outside-calc).
+An inline expression is permissive: an operation that hits a math error (a division by zero, a math function outside its domain, a bitwise operation on Inf or NaN) gives 0 and sets no fault flag. See [Math outside `math()`](math.md#math-outside-math).

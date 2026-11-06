@@ -28,8 +28,8 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
+    math,
     out,
 )
 from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
@@ -122,7 +122,7 @@ def _build(s_value: int) -> tuple[Program, dict[str, bool], dict[str, Int]]:
             copy(_Q, Q)
             copy(_R, R)
             copy(Tbl[Q + 0], D)
-            calc(Tbl[R + 1], E)
+            math(Tbl[R + 1], E)
             copy(Tbl[Q + 0], Tbl[R + 2])
             copy(Tbl[R + 2], F)
         for condition, coil in coils.values():

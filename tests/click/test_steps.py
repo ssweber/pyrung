@@ -24,12 +24,12 @@ from pyrung.core import (
     Program,
     Rung,
     branch,
-    calc,
     call,
     comment,
     copy,
     fill,
     forloop,
+    math,
     out,
     return_early,
     rise,
@@ -118,12 +118,12 @@ def _fill():
 
 def _long_formula():
     with Rung(x[1]):
-        calc((ds[1] * ds[2] + ds[3]) / ds[4], ds[5])
+        math((ds[1] * ds[2] + ds[3]) / ds[4], ds[5])
 
 
 def _rise_real_formula():
     with Rung(rise(x[1])):
-        calc(df[1] * 1.8 + 32.0, df[5])
+        math(df[1] * 1.8 + 32.0, df[5])
 
 
 def _for_next():

@@ -276,9 +276,9 @@ with Program(strict=False) as prog:
     with Rung(Never):
         out(Coiled)
     with Rung():
-        calc(0.0 * -1.0, Gained)
+        math(0.0 * -1.0, Gained)
     with Rung():
-        calc(Ticks + 1, Ticks)
+        math(Ticks + 1, Ticks)
 
 runner = PLC(prog, dt=0.010)
 """

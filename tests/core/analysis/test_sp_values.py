@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, calc, copy
+from pyrung import Bool, Int, Program, Rung, copy, math
 from pyrung.core.analysis.simplified import And, Atom, Const, Or
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,
@@ -118,12 +118,12 @@ class TestWrittenValueIndirect:
 
 class TestWrittenValueArithmetic:
     def test_calc_increment_detected(self):
-        """calc(Step + 1, Step) returns ('increment', 1)."""
+        """math(Step + 1, Step) returns ('increment', 1)."""
         Step = Int("Step")
         Enable = Bool("Enable", external=True)
         with Program() as prog:
             with Rung(Enable, Step == 0):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
         rung = prog.rungs[0]
 
         wv = _written_value_for_tag(rung, "Step")
@@ -132,12 +132,12 @@ class TestWrittenValueArithmetic:
         assert wv.offset == 1
 
     def test_calc_decrement_detected(self):
-        """calc(Step - 1, Step) returns Affine with negative offset."""
+        """math(Step - 1, Step) returns Affine with negative offset."""
         Step = Int("Step")
         Enable = Bool("Enable", external=True)
         with Program() as prog:
             with Rung(Enable, Step == 5):
-                calc(Step - 1, Step)
+                math(Step - 1, Step)
         rung = prog.rungs[0]
 
         wv = _written_value_for_tag(rung, "Step")

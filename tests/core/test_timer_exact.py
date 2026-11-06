@@ -14,7 +14,7 @@ same first scan the generated code has none for.
 
 from __future__ import annotations
 
-import math
+import math as pymath
 import time
 from fractions import Fraction
 from typing import Any
@@ -30,12 +30,12 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     compiled_run,
     copy,
     debounce,
     flasher,
     latch,
+    math,
     off_delay,
     on_delay,
     scan_trace,
@@ -76,7 +76,7 @@ MAX_SCANS = 6100
 
 
 def want(preset: int, unit: str, dt: str) -> int:
-    return math.ceil(preset * UNIT_SECONDS[unit] / Fraction(dt))
+    return pymath.ceil(preset * UNIT_SECONDS[unit] / Fraction(dt))
 
 
 def want_of(kind: str, preset: int, unit: str, dt: str) -> int:
@@ -105,7 +105,7 @@ def _on_delay_program(preset: int, unit: str) -> Program:
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
         with Rung():
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         with Rung():
             on_delay(Ton, preset=preset, unit=unit)
         with Rung(Ton.Done, ~Seen):
@@ -125,7 +125,7 @@ def _off_delay_program(preset: int, unit: str) -> Program:
         with Rung(~Armed):
             off_delay(Tof, preset=preset, unit=unit)
         with Rung(Armed):
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         with Rung(Armed, ~Tof.Done, ~Seen):
             copy(Scans, First)
             latch(Seen)
@@ -146,7 +146,7 @@ def _drum_program(preset: int, unit: str) -> Program:
     Out2 = Bool("Out2", retentive=False)
     with Program(strict=False) as prog:
         with Rung():
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         with Rung():
             time_drum(
                 outputs=[Out1, Out2],
@@ -512,7 +512,7 @@ def test_a_ratio_dt_leaves_the_loop_when_a_timer_starts(dt: float) -> None:
     Scans = Dint("Scans", retentive=False)
     with Program(strict=False) as prog:
         with Rung():
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         with Rung(Scans > 100):
             on_delay(Ton, preset=3, unit="Ts")
     ran = PLC(prog, dt=dt)
@@ -697,7 +697,7 @@ def _coil_program(build: Any) -> Program:
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
         with Rung():
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         build(Target)
         with Rung(Target, ~Seen):
             copy(Scans, First)
@@ -732,7 +732,7 @@ def test_timed_coil_drops_at_ceil_in_seconds(engine: Any) -> None:
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
         with Rung():
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         with Rung():
             timed(Target, Pulse, 1, unit="Ts")
         with Rung(~Target, ~Seen):
@@ -750,7 +750,7 @@ def test_flasher_changes_phase_at_ceil_in_seconds(engine: Any) -> None:
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
         with Rung():
-            calc(Scans + 1, Scans)
+            math(Scans + 1, Scans)
         with Rung():
             flasher(Target, on=(OnT, 1), off=(OffT, 1), unit="Ts")
         with Rung(~Target, ~Seen):

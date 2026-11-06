@@ -97,7 +97,7 @@ Build a stop-blocks-start test: start the conveyor, then press stop. Verify it s
 
 ---
 
-The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement -- `copy` and `calc`.
+The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement -- `copy` and `math`.
 
 !!! info "Also known as..."
 

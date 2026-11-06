@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Rung, calc, call, copy, return_early, subroutine
+from pyrung import Bool, Int, Rung, call, copy, math, return_early, subroutine
 from pyrung.core import Program
 from pyrung.core.analysis import (
     CallSite,
@@ -20,7 +20,7 @@ def test_affine_api_covers_expression_and_write_instruction() -> None:
     target = Int("AffineTarget")
     with Program() as program:
         with Rung():
-            calc(10 - source, target)
+            math(10 - source, target)
 
     instruction = program.rungs[0]._instructions[0]
 

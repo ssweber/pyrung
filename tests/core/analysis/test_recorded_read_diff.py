@@ -9,7 +9,7 @@ operand values.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Or, Program, Rung, calc, copy, out
+from pyrung import Bool, Int, Or, Program, Rung, copy, math, out
 from pyrung.core import call, subroutine
 from pyrung.core.analysis.causal import recorded as recorded_module
 from pyrung.core.analysis.causal.crossings_recorded import (
@@ -32,7 +32,7 @@ def _sum_program() -> Program:
         with Rung(total != 0):
             out(flag)
         with Rung():
-            calc(blk.select(1, 3).sum(), total)
+            math(blk.select(1, 3).sum(), total)
     return prog
 
 
@@ -202,7 +202,7 @@ def _gated_sum_program() -> Program:
         with Rung(total != 0):
             out(flag)
         with Rung(enable):
-            calc(blk.select(1, 3).sum(), total)
+            math(blk.select(1, 3).sum(), total)
     return prog
 
 
@@ -238,7 +238,7 @@ def test_cause_crosses_subroutine_aggregate_writer() -> None:
     @subroutine("Agg")
     def agg() -> None:
         with rung():
-            calc(blk.select(1, 3).sum(), total)
+            math(blk.select(1, 3).sum(), total)
 
     with Program() as prog:
         with Rung(total != 0):
@@ -309,7 +309,7 @@ def test_cause_crosses_branch_writer() -> None:
             out(flag)
         with Rung():
             with branch(enable):
-                calc(blk.select(1, 3).sum(), total)
+                math(blk.select(1, 3).sum(), total)
 
     runner = PLC(prog, dt=0.010)
     runner.patch({"Enable": True})
@@ -343,9 +343,9 @@ def test_cause_crosses_multi_branch_writer_union() -> None:
             out(flag)
         with Rung():
             with branch(sel_a):
-                calc(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
+                math(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
             with branch(sel_b):
-                calc(blk.select(10, 12).sum(), total)  # footprint DS10..DS12
+                math(blk.select(10, 12).sum(), total)  # footprint DS10..DS12
 
     runner = PLC(prog, dt=0.010)
     runner.patch({"SelB": True})
@@ -380,9 +380,9 @@ def _two_branch_same_tag_program() -> Program:
             out(flag)
         with Rung():
             with branch(sel_a):
-                calc(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
+                math(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
             with branch(sel_b):
-                calc(blk.select(10, 12).sum(), total)  # footprint DS10..DS12
+                math(blk.select(10, 12).sum(), total)  # footprint DS10..DS12
     return prog
 
 
@@ -426,9 +426,9 @@ def test_cause_multi_writer_branches_no_cross_contamination() -> None:
             out(flag)
         with Rung():
             with branch(sel_a):
-                calc(blk.select(1, 3).sum(), x)  # writes X, reads DS1..DS3
+                math(blk.select(1, 3).sum(), x)  # writes X, reads DS1..DS3
             with branch(sel_b):
-                calc(blk.select(10, 12).sum(), y)  # writes Y, reads DS10..DS12
+                math(blk.select(10, 12).sum(), y)  # writes Y, reads DS10..DS12
 
     runner = PLC(prog, dt=0.010)
     runner.patch({"SelA": True, "SelB": True})  # both branches fire

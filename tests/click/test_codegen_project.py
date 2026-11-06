@@ -1102,15 +1102,15 @@ class TestMathFormulaImports:
         ABS is Python's builtin, so no file imports it.
         """
         from pyrung.core.expression import sqrt
-        from pyrung.core.program import calc
+        from pyrung.core.program import math
 
         with Program() as logic:
             with rung(x[1]):
-                calc(ds.select(1, 4).mean() + abs(ds[5]), ds[100])
+                math(ds.select(1, 4).mean() + abs(ds[5]), ds[100])
                 call("calc_sub")
             with subroutine("calc_sub"):
                 with rung(x[2]):
-                    calc(abs(ds[6]) + sqrt(df[1]) + dd.select(1, 3).median(), df[100])
+                    math(abs(ds[6]) + sqrt(df[1]) + dd.select(1, 3).median(), df[100])
         mapping = TagMap({}, include_system=False)
 
         files = _project_from_program(logic, mapping, tmp_path)

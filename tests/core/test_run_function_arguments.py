@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+import math as pymath
 import os
 import subprocess
 import sys
@@ -18,8 +18,8 @@ from pyrung import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
+    math,
     run_enabled_function,
     run_function,
 )
@@ -49,7 +49,7 @@ def _called(fn, *, ins=None, outs=None, enabled=False) -> Program:
     call = run_enabled_function if enabled else run_function
     with Program(strict=False) as program:
         with Rung():
-            calc(A + 1, A)
+            math(A + 1, A)
         with Rung(Run):
             call(fn, ins=ins if ins is not None else {"v": A}, outs=outs or {"out": B})
     return program
@@ -231,7 +231,7 @@ class _Color(Enum):
 
 
 def measures(v, value):
-    if value == math.inf:
+    if value == pymath.inf:
         return {"out": 1}
     return {"out": len(value) if isinstance(value, frozenset) else int(value.imag)}
 
@@ -246,7 +246,7 @@ class TestConstants:
     def test_a_dict_keeps_what_the_function_put_in_it(self, engine, monkeypatch):
         with Program(strict=False) as program:
             with Rung():
-                calc(A + 1, A)
+                math(A + 1, A)
             with Rung():
                 run_function(counts, ins={"v": A, "seen": {}}, outs={"out": B})
         assert _run_on(program, engine, (B,), monkeypatch, scans=3) == (3,)
@@ -315,7 +315,7 @@ class TestConstants:
     @pytest.mark.parametrize(
         "value, expected",
         [
-            pytest.param(math.inf, 1, id="inf"),
+            pytest.param(pymath.inf, 1, id="inf"),
             pytest.param(frozenset({1, 2}), 2, id="frozenset"),
             pytest.param(1 + 2j, 2, id="complex"),
         ],
@@ -333,13 +333,13 @@ class TestConstants:
             pytest.param(_Thing(), id="object"),
             pytest.param(_LooksLikeFive(), id="repr is a number"),
             pytest.param((A, B), id="a tuple holding tags"),
-            pytest.param(math.inf, id="inf"),
-            pytest.param(math.nan, id="nan"),
+            pytest.param(pymath.inf, id="inf"),
+            pytest.param(pymath.nan, id="nan"),
             pytest.param({1, 2}, id="set"),
             pytest.param(frozenset({1}), id="frozenset"),
             pytest.param(1 + 2j, id="complex"),
             pytest.param(_Color.RED, id="enum"),
-            pytest.param([math.inf], id="inf in a list"),
+            pytest.param([pymath.inf], id="inf in a list"),
             pytest.param(DS.select(1, 2), id="a range"),
         ],
     )
@@ -442,13 +442,13 @@ class TestConstants:
     @pytest.mark.parametrize(
         "one, other",
         [
-            pytest.param(math.inf, -math.inf, id="inf and -inf"),
-            pytest.param(math.nan, math.inf, id="nan and inf"),
+            pytest.param(pymath.inf, -pymath.inf, id="inf and -inf"),
+            pytest.param(pymath.nan, pymath.inf, id="nan and inf"),
             pytest.param(frozenset({1}), frozenset({2}), id="frozensets"),
             pytest.param(1j, 2j, id="complex"),
             pytest.param({1}, {2}, id="sets"),
-            pytest.param((math.inf, 1), (math.inf, 2), id="in a tuple"),
-            pytest.param([math.inf], [-math.inf], id="in a list"),
+            pytest.param((pymath.inf, 1), (pymath.inf, 2), id="in a tuple"),
+            pytest.param([pymath.inf], [-pymath.inf], id="in a list"),
             pytest.param((A, B), (A, First), id="tags in a tuple"),
             pytest.param(Decimal("1.5"), Decimal("2.5"), id="decimals"),
             pytest.param({"k": {1}}, {"k": {2}}, id="a set in a dict"),
@@ -513,7 +513,16 @@ class TestConstants:
         assert "_Thing" in kept
 
     def test_analysis_takes_any_constant(self):
-        for value in (_Thing(), _LooksLikeFive(), (A, B), math.inf, {1}, [0], {}, DS.select(1, 2)):
+        for value in (
+            _Thing(),
+            _LooksLikeFive(),
+            (A, B),
+            pymath.inf,
+            {1},
+            [0],
+            {},
+            DS.select(1, 2),
+        ):
             program = _always_called(constant, ins={"v": A, "value": value})
             assert compile_kernel(program, blockless=True, proof_metadata=True).source
             assert program_hash(program)

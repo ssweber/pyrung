@@ -88,13 +88,13 @@ The `Bin[1].Sensor` mapping is the [Lesson 9](structured-tags.md) UDT in action 
 
 !!! tip "The validator is the bridge"
 
-    pyrung lets you write rich expressions because the simulator can handle them. CLICK can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but CLICK requires you to `calc` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run -- the same behavior as the simulator.
+    pyrung lets you write rich expressions because the simulator can handle them. CLICK can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but CLICK requires you to `math` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run -- the same behavior as the simulator.
 
 `pyrung_to_ladder` generates a directory with one CSV per program, a nickname file for the tag table, and a manifest. [ClickNick](https://github.com/ssweber/clicknick)'s Guided Paste reads the manifest and walks you through importing each piece into CLICK Programming Software in the right order.
 
 **What doesn't port cleanly.** Every codegen target has limits. A few things the validator will flag:
 
-- Inline math in conditions (`SizeReading + Offset > Threshold`) -- must be a separate `calc` rung
+- Inline math in conditions (`SizeReading + Offset > Threshold`) -- must be a separate `math` rung
 - Complex nested `Or`/`And` beyond CLICK's branch depth
 - `Real` precision differences -- CLICK uses 32-bit float; pyrung keeps 64-bit precision inside CLICK's range (±3.4028235E+38)
 - Timer/counter presets that exceed CLICK's range limits
@@ -139,7 +139,7 @@ Run `mapping.validate(logic)` on the conveyor program. What does it complain abo
 **Go deeper in pyrung.** The tutorial covered the core -- here's what's left:
 
 - [Data movement](../instructions/copy.md): `copy`, `blockcopy`, `fill`, type conversion
-- [Math](../instructions/math.md): `calc()`, overflow behavior, range sums
+- [Math](../instructions/math.md): `math()`, overflow behavior, range sums
 - [Tag structures](../guides/tag-structures.md): named arrays, cloning, field defaults, hardware mapping
 - [Drum sequencers, shift registers, search](../instructions/drum-shift-search.md): advanced pattern instructions
 - [Subroutines and program control](../instructions/program-control.md): `call`, `forloop`, multi-program structure

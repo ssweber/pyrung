@@ -88,7 +88,7 @@ When tags share upstream structure (common in fault cascades), the walk merges a
 
 ### Confidence
 
-For stateless chains (`out`, `copy`, `calc`) and latches whose trigger is still active, the diagnosis is definitive. For latches where the trigger has cleared and there's only one path through the rung condition, the inference is strong. With OR conditions (multiple paths that could have set the latch), each path is equally plausible and reported separately.
+For stateless chains (`out`, `copy`, `math`) and latches whose trigger is still active, the diagnosis is definitive. For latches where the trigger has cleared and there's only one path through the rung condition, the inference is strong. With OR conditions (multiple paths that could have set the latch), each path is equally plausible and reported separately.
 
 Without history, `why()` can't distinguish triggers from enablers — it reports every contributing contact equally. If you have scan history, prefer [`cause()`](analysis-causal.md#recorded-cause-what-caused-this).
 

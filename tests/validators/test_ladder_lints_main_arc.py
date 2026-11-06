@@ -11,9 +11,9 @@ from pyrung import (
     Real,
     Rung,
     branch,
-    calc,
     call,
     copy,
+    math,
     out,
     return_early,
     subroutine,
@@ -259,7 +259,7 @@ def test_divisor_proved_zero_under_rung_guard() -> None:
     result = Int("Result")
     with Program() as program:
         with Rung(divisor == 0):
-            calc(numerator / divisor, result)
+            math(numerator / divisor, result)
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
 
@@ -269,7 +269,7 @@ def test_divisor_cut_to_zero_in_an_int_math_shows_the_constant_as_written() -> N
     result = Int("Out16")
     with Program() as program:
         with Rung():
-            calc(wide / 65536, result)
+            math(wide / 65536, result)
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
     (message,) = _messages(program, MATH_DIV_ZERO)
@@ -283,7 +283,7 @@ def test_divisor_merely_may_be_zero_punts() -> None:
     numerator = Int("Numerator", external=True)
     with Program() as program:
         with Rung():
-            calc(numerator / divisor, Int("Result"))
+            math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -296,7 +296,7 @@ def test_caller_guards_participate_in_zero_proof() -> None:
             call("divide")
         with subroutine("divide"):
             with Rung():
-                calc(numerator / divisor, Int("Result"))
+                math(numerator / divisor, Int("Result"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
 
@@ -311,7 +311,7 @@ def test_intrascan_divisor_write_invalidates_caller_guard_proof() -> None:
             with Rung():
                 copy(1, divisor)
             with Rung():
-                calc(numerator / divisor, Int("Result"))
+                math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -320,7 +320,7 @@ def test_literal_zero_divisor_is_reported() -> None:
     numerator = Int("Numerator", external=True)
     with Program() as program:
         with Rung():
-            calc(numerator / 0, Int("Result"))
+            math(numerator / 0, Int("Result"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
 
@@ -335,7 +335,7 @@ def test_prior_early_return_prevents_false_div_zero_finding() -> None:
             with Rung(divisor == 0):
                 return_early()
             with Rung():
-                calc(numerator / divisor, Int("Result"))
+                math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -347,7 +347,7 @@ def test_later_early_return_does_not_hide_div_zero_finding() -> None:
             call("divide")
         with subroutine("divide"):
             with Rung():
-                calc(numerator / 0, Int("Result"))
+                math(numerator / 0, Int("Result"))
             with Rung():
                 return_early()
 
@@ -364,7 +364,7 @@ def test_same_rung_branch_return_conservatively_hides_div_zero_finding() -> None
             with Rung():
                 with branch(stop):
                     return_early()
-                calc(numerator / 0, Int("Result"))
+                math(numerator / 0, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -401,7 +401,7 @@ def test_return_sensitive_nonzero_call_path_blocks_guard_only_div_zero_proof() -
                 call("divide")
         with subroutine("divide"):
             with Rung():
-                calc(numerator / divisor, Int("PathResult"))
+                math(numerator / divisor, Int("PathResult"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, Program, Real, Rung, calc, copy, out, system
+from pyrung.core import Bool, Int, Program, Real, Rung, copy, math, out, system
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.expression import (
     MathDomainError,
@@ -52,7 +52,7 @@ def _program(func, dest_type=Real):
     with Program() as program:
         with Rung(go):
             copy(99, dest)
-            calc(func(x), dest)
+            math(func(x), dest)
         with Rung(SC46):
             out(seen)
         with Rung(go):
@@ -136,7 +136,7 @@ def test_non_finite_operand_is_a_division_error_not_a_domain_error(runner_factor
     dest = Real("Dest")
     with Program() as program:
         with Rung():
-            calc(sqrt(x / zero), dest)
+            math(sqrt(x / zero), dest)
     plc = runner_factory(program)
     plc.step()
     tags = plc.current_state.tags
@@ -153,7 +153,7 @@ def test_unrestricted_functions_of_a_non_finite_operand_do_not_stop(runner_facto
     dest = Real("Dest")
     with Program() as program:
         with Rung():
-            calc(func(x / zero), dest)
+            math(func(x / zero), dest)
     plc = runner_factory(program)
     plc.step()
     assert plc.current_state.tags[SC40.name] is True
@@ -176,7 +176,7 @@ def test_pdg_sees_the_calc_write_sc46():
     x, dest, seen = Real("X"), Real("Dest"), Bool("Seen")
     with Program(strict=False) as program:
         with Rung():
-            calc(sqrt(x), dest)
+            math(sqrt(x), dest)
         with Rung(SC46):
             out(seen)
     graph = build_program_graph(program)

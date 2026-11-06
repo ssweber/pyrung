@@ -8,7 +8,7 @@ stores the same.
 
 from __future__ import annotations
 
-import math
+import math as pymath
 
 import pytest
 
@@ -24,9 +24,9 @@ from pyrung.core import (
     TagType,
     Word,
     blockcopy,
-    calc,
     copy,
     fill,
+    math,
     out,
     to_text,
     to_value,
@@ -75,7 +75,7 @@ def test_a_register_into_a_word_clamps_above_and_wraps_below(runner_factory, sou
     assert (tags["Dest"], bool(tags.get(SC43, False))) == (stored, False)
 
 
-@pytest.mark.parametrize(("value", "stored"), [(math.inf, 65535), (-math.inf, 32768)])
+@pytest.mark.parametrize(("value", "stored"), [(pymath.inf, 65535), (-pymath.inf, 32768)])
 def test_an_infinity_into_a_word(runner_factory, value, stored):
     big = Real("Big", default=3.0e38)
     inf = Real("Inf")
@@ -83,7 +83,7 @@ def test_an_infinity_into_a_word(runner_factory, value, stored):
     scale = 10 if value > 0 else -10
     with Program() as logic:
         with Rung():
-            calc(big * scale, inf)
+            math(big * scale, inf)
             copy(inf, dest)
     tags = _one_scan(runner_factory, logic)
     assert (tags["Dest"], bool(tags.get(SC43, False))) == (stored, False)
@@ -228,8 +228,8 @@ def test_a_nan_reads_all_ones(runner_factory):
     big = Real("Big", default=3.0e38)
     with Program() as logic:
         with Rung():
-            calc(big * 10, zero)
-            calc(zero - zero, nan)
+            math(big * 10, zero)
+            math(zero - zero, nan)
             unpack_to_words(nan, words.select(1, 2))
     tags = _one_scan(runner_factory, logic)
     assert (tags["W1"], tags["W2"]) == (0xFFFF, 0xFFFF)

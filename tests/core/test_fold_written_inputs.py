@@ -23,11 +23,11 @@ from pyrung import (
     TagType,
     Timer,
     branch,
-    calc,
     call,
     copy,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -60,7 +60,7 @@ def _program(body: Body) -> Callable[[], Program]:
             body()
             # Counts the scans since the hit: a latch alone hides a late landing.
             with Rung(Hit):
-                calc(Int("Since") + 1, Int("Since"))
+                math(Int("Since") + 1, Int("Since"))
         return prog
 
     return build
@@ -173,7 +173,7 @@ def _time_drum(preset: Any = P) -> None:
             completion_flag=Flag,
         ).reset(Bool("R"))
     with Rung(O2):
-        calc(Int("N") + 1, Int("N"))
+        math(Int("N") + 1, Int("N"))
 
 
 def _time_event_drum() -> None:
@@ -189,7 +189,7 @@ def _time_event_drum() -> None:
             completion_flag=Flag,
         ).reset(Bool("R"))
     with Rung(O2):
-        calc(Int("N") + 1, Int("N"))
+        math(Int("N") + 1, Int("N"))
 
 
 class TestWrittenAroundItsReader:
@@ -341,7 +341,7 @@ class TestWrittenAroundItsReader:
             with Rung():
                 with forloop(2) as loop:
                     call(compare)
-                    calc(loop.idx * 4800 + 200, P)
+                    math(loop.idx * 4800 + 200, P)
 
         _assert_exact(body, patch={"P": 5000})
 
@@ -606,7 +606,7 @@ class TestRebuiltOnTheClock:
         def body() -> None:
             with Rung():
                 if shape == "ticks":
-                    calc(system.rtc.second * 500 + 3000, P)
+                    math(system.rtc.second * 500 + 3000, P)
                 else:
                     copy(system.rtc.second, P)
             with Rung():

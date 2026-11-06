@@ -47,7 +47,7 @@ The survey deliberately does not guess *why* nobody sets a tag. A config registe
 
 It reports the design decision; it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces as the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint, so `logic.check()` picks it up with no extra call.
 
-**Reach.** It recognizes step machines that advance by `calc(Step + 1, Step)` or by stamping a literal in (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read — a `fall()`-gated advance, an `Or` guard, a drum — rather than guessing.
+**Reach.** It recognizes step machines that advance by `math(Step + 1, Step)` or by stamping a literal in (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read — a `fall()`-gated advance, an `Or` guard, a drum — rather than guessing.
 
 ## Coverage reports and merge
 

@@ -104,20 +104,19 @@ CLICK-style constructor aliases as alternatives to IEC names:
 This DSL follows CLICK PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context.
 
 1. **Keep the CLICK name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
-2. **Use a domain synonym** when CLICK's name shadows a Python builtin or standard library module: `set` → `latch`, `math` → `calc`. Both are well-understood PLC terminology.
+2. **Use a domain synonym** when CLICK's name shadows a Python builtin: `set` → `latch`, well-understood PLC terminology. `math` keeps CLICK's name although it hides the standard `math` module in a file that imports it; import that one under another name (`import math as pymath`), and `math.sqrt` on pyrung's `math` says so.
 3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit — and the name should say so.
 
 | CLICK instruction | pyrung DSL | Reason |
 |-------------------|------------|--------|
 | `SET` | `latch` | Shadows Python builtin `set` |
-| `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 | `BREAK` | `break_loop` | `break` is a Python keyword |
 | `CONTINUE` | `continue_loop` | `continue` is a Python keyword |
 
 Math formula functions use the Python name where one exists: `LOG` → `log10`, `LN` → `log`, `ABS` → `abs`, `AVG` → `rng.mean()`, `MDN` → `rng.median()`. See [Range aggregates on CLICK](../instructions/math.md#range-aggregates-on-click).
 
-The CSV ladder export uses CLICK-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, `forloop` as `for(...)` with its body rungs and `next()`, and `break_loop` / `continue_loop` as `break()` / `continue()`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
+The CSV ladder export uses CLICK-facing token names: `return_early` as `return()`, `forloop` as `for(...)` with its body rungs and `next()`, and `break_loop` / `continue_loop` as `break()` / `continue()`. See the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/) for the full token grammar.
 
 ## Writing a CLICK program
 
@@ -397,7 +396,7 @@ Common findings:
 | Issue | pyrung allows | CLICK requires |
 |-------|--------------|----------------|
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
-| Inline expression in condition | `(A + B) > 100` | Must use `calc()` first |
+| Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
 | `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Bit memory only: X, Y, C, T, CT, SC (`CLK_BANK_WRONG_ROLE`); clear a register with `copy()` or `fill()` |
 
 ### Timer preset limits

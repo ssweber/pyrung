@@ -72,7 +72,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, calc, copy, fill, latch, out, reset, system, to_ascii, to_text
+from pyrung.core import Rung, copy, fill, latch, math, out, reset, system, to_ascii, to_text
 from pyrung.core.expression import randint
 from tests.conformance.memory import c, dd, df, dh, ds, txt
 from tests.conformance.scans import count_scans, done, scans_for
@@ -110,7 +110,7 @@ class Probes:
         with Rung(now):
             op()
         with Rung(now, flag):
-            calc(field + bit, field)
+            math(field + bit, field)
 
 
 def _stage(slot, *instructions):
@@ -153,7 +153,7 @@ def prove_rand_int_cuts(slot):
     def op(dest, lo, hi):
         def run_op():
             copy(99, dest)
-            calc(randint(lo, hi), dest)
+            math(randint(lo, hi), dest)
 
         return run_op
 
@@ -175,19 +175,19 @@ def prove_rand_other_stores(slot):
 
     def dint():
         copy(99, wide)
-        calc(randint(70000, 70002), wide)
+        math(randint(70000, 70002), wide)
 
     def word_op():
         copy(99, word)
-        calc(randint(70000, 70002), word)
+        math(randint(70000, 70002), word)
 
     def real_op():
         copy(99.0, real)
-        calc(randint(70000, 70002), real)
+        math(randint(70000, 70002), real)
 
     def equal_op():
         copy(99, equal)
-        calc(randint(70000, 70000), equal)
+        math(randint(70000, 70000), equal)
 
     probe(slot, dint, SC43, slot.ErrorCode, 1)
     probe(slot, word_op, SC43, slot.ErrorCode, 2)
@@ -195,9 +195,9 @@ def prove_rand_other_stores(slot):
     probe(slot, equal_op, SC46, slot.ErrorCode, 8)
     probe(slot, equal_op, SC43, slot.ErrorCode, 16)
     with Rung(*_end(slot)):
-        calc(wide - 70000, slot.Result1)
+        math(wide - 70000, slot.Result1)
         copy(word, slot.Result2)
-        calc(real - 70000, slot.Result3)
+        math(real - 70000, slot.Result3)
         copy(equal, slot.Result4)
     done(slot, WINDOW)
 
@@ -210,15 +210,15 @@ def prove_rand_tag_bounds(slot):
 
     def tags():
         copy(99, slot.Result1)
-        calc(randint(low, high), slot.Result1)
+        math(randint(low, high), slot.Result1)
 
     def real_bounds():
         copy(99, slot.Result2)
-        calc(randint(real, real) + 5, slot.Result2)
+        math(randint(real, real) + 5, slot.Result2)
 
     def constants():
         copy(99, slot.Result3)
-        calc(randint(7, 7) + 5, slot.Result3)
+        math(randint(7, 7) + 5, slot.Result3)
 
     probe(slot, tags, SC46, slot.Result4, 1)
     probe(slot, real_bounds, SC46, slot.Result4, 2)
@@ -230,7 +230,7 @@ def _code_pair(first, second, into, scratch):
     """*into* = 128 * the code of text *first* + the code of text *second*."""
     copy(first, scratch[0], convert=to_ascii)
     copy(second, scratch[1], convert=to_ascii)
-    calc(scratch[0] * 128 + scratch[1], into)
+    math(scratch[0] * 128 + scratch[1], into)
 
 
 def prove_inf_and_nan_to_text(slot):
@@ -240,9 +240,9 @@ def prove_inf_and_nan_to_text(slot):
     _stage(
         slot,
         lambda: copy(3.0e38, plus_inf),
-        lambda: calc(plus_inf * 10, plus_inf),
-        lambda: calc(plus_inf * -1, minus_inf),
-        lambda: calc(plus_inf - plus_inf, nan),
+        lambda: math(plus_inf * 10, plus_inf),
+        lambda: math(plus_inf * -1, minus_inf),
+        lambda: math(plus_inf - plus_inf, nan),
     )
     scratch = (dd[621], dd[622])
     flags, last = dd[626], dd[627]
@@ -267,7 +267,7 @@ def prove_inf_and_nan_to_text(slot):
         _code_pair(txt[533], txt[534], slot.Result4, scratch)
     with Rung(*_end(slot)):
         copy(txt[525], last, convert=to_ascii)
-        calc(flags + last * 4, slot.ErrorCode)
+        math(flags + last * 4, slot.ErrorCode)
     done(slot, WINDOW)
 
 
@@ -288,14 +288,14 @@ def prove_non_finite_into_word(slot):
     _stage(
         slot,
         lambda: copy(3.0e38, plus_inf),
-        lambda: calc(plus_inf * 10, plus_inf),
-        lambda: calc(plus_inf * -1, minus_inf),
-        lambda: calc(plus_inf - plus_inf, nan),
+        lambda: math(plus_inf * 10, plus_inf),
+        lambda: math(plus_inf * -1, minus_inf),
+        lambda: math(plus_inf - plus_inf, nan),
     )
 
     def nan_dint():
         copy(99, dint)
-        calc(nan, dint)
+        math(nan, dint)
 
     def inf_up():
         copy(99, word_up)

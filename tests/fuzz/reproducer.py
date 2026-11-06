@@ -234,7 +234,7 @@ def _instr_code(spec: InstrSpec) -> str:
     elif spec.kind == "calc":
         ops = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%", "pow": "**"}
         op_sym = ops.get(a["op"], a["op"])
-        return f"calc({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
+        return f"math({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
     elif spec.kind == "calc_tag_tag":
         ops = {
             "add": "+",
@@ -247,12 +247,12 @@ def _instr_code(spec: InstrSpec) -> str:
         }
         op_sym = ops.get(a["op"], a["op"])
         return (
-            f"calc({_tag_ref(a['source1'])} {op_sym} {_tag_ref(a['source2'])}, "
+            f"math({_tag_ref(a['source1'])} {op_sym} {_tag_ref(a['source2'])}, "
             f"{_tag_ref(a['dest'])})"
         )
     elif spec.kind == "calc_shift":
         return (
-            f"calc({a['shift_op']}({_tag_ref(a['source'])}, {a['count']!r}), {_tag_ref(a['dest'])})"
+            f"math({a['shift_op']}({_tag_ref(a['source'])}, {a['count']!r}), {_tag_ref(a['dest'])})"
         )
     elif spec.kind == "on_delay":
         unit_kw = _kw_suffix(unit=a.get("unit")) if a.get("unit", "ms") != "ms" else ""
@@ -364,11 +364,11 @@ def _instr_code(spec: InstrSpec) -> str:
         return base
     elif spec.kind == "range_sum_calc":
         return (
-            f"calc({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
+            f"math({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
         )
     elif spec.kind == "range_agg_calc":
         return (
-            f"calc({a['block'].name}.select({a['start']}, {a['end']}).{a['agg']}(), "
+            f"math({a['block'].name}.select({a['start']}, {a['end']}).{a['agg']}(), "
             f"{_tag_ref(a['dest'])})"
         )
     return f"# unknown instruction: {spec.kind}"

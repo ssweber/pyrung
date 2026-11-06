@@ -39,11 +39,11 @@ from pyrung.core import (
 )
 from pyrung.core.program import (
     branch,
-    calc,
     comment,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -1819,11 +1819,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(DS1 + DS2, DS3)
+                    math(DS1 + DS2, DS3)
             """,
             """
             with rung(X001):
-                calc(DS1 + DS2, DS3)
+                math(DS1 + DS2, DS3)
             """,
         )
 
@@ -1833,21 +1833,21 @@ class TestRoundTrip:
             """
             from pyrung.core.expression import sqrt
             with rung(X1):
-                calc(DS1**2, DS3)
+                math(DS1**2, DS3)
             with rung(X1):
-                calc(DS1 % DS2, DS3)
+                math(DS1 % DS2, DS3)
             with rung(X1):
-                calc(sqrt(DS1), DS3)
+                math(sqrt(DS1), DS3)
             """,
             """
             with rung(X001):
-                calc(DS1**2, DS3)
+                math(DS1**2, DS3)
 
             with rung(X001):
-                calc(DS1 % DS2, DS3)
+                math(DS1 % DS2, DS3)
 
             with rung(X001):
-                calc(sqrt(DS1), DS3)
+                math(sqrt(DS1), DS3)
             """,
         )
 
@@ -1857,16 +1857,16 @@ class TestRoundTrip:
             """
             from pyrung.core.expression import lsh
             with rung(X1):
-                calc(DH1 << 3, DH3)
+                math(DH1 << 3, DH3)
             with rung(X1):
-                calc(lsh(DH1, 4), DH3)
+                math(lsh(DH1, 4), DH3)
             """,
             """
             with rung(X001):
-                calc(lsh(DH1, 0x3), DH3)
+                math(lsh(DH1, 0x3), DH3)
 
             with rung(X001):
-                calc(lsh(DH1, 0x4), DH3)
+                math(lsh(DH1, 0x4), DH3)
             """,
         )
 
@@ -1875,21 +1875,21 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with rung(X1):
-                calc(DH1 & DH2, DH3)
+                math(DH1 & DH2, DH3)
             with rung(X1):
-                calc(DH1 | DH2, DH3)
+                math(DH1 | DH2, DH3)
             with rung(X1):
-                calc(DH1 ^ DH2, DH3)
+                math(DH1 ^ DH2, DH3)
             """,
             """
             with rung(X001):
-                calc(DH1 & DH2, DH3)
+                math(DH1 & DH2, DH3)
 
             with rung(X001):
-                calc(DH1 | DH2, DH3)
+                math(DH1 | DH2, DH3)
 
             with rung(X001):
-                calc(DH1 ^ DH2, DH3)
+                math(DH1 ^ DH2, DH3)
             """,
         )
 
@@ -1949,10 +1949,10 @@ class TestRoundTrip:
             textwrap.dedent(
                 """
                 with rung():
-                    calc(DH001 & 0x00FF, DH002)
+                    math(DH001 & 0x00FF, DH002)
 
                 with rung():
-                    calc(DH001 & 0xFFFF, DH003)
+                    math(DH001 & 0xFFFF, DH003)
                 """
             )
         )
@@ -2010,11 +2010,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(dh.select(1, 5).sum(), dh[100])
+                    math(dh.select(1, 5).sum(), dh[100])
             """,
             """
             with rung(X001):
-                calc(dh.select(1, 5).sum(), DH100)
+                math(dh.select(1, 5).sum(), DH100)
             """,
         )
 
@@ -2024,19 +2024,19 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(ds.select(1, 5).max(), ds[100])
-                    calc(ds.select(1, 5).min(), ds[101])
-                    calc(dd.select(1, 4).median(), dd[100])
-                    calc(df.select(1, 4).mean(), df[100])
-                    calc(dh.select(1, 3).max(), dh[100])
+                    math(ds.select(1, 5).max(), ds[100])
+                    math(ds.select(1, 5).min(), ds[101])
+                    math(dd.select(1, 4).median(), dd[100])
+                    math(df.select(1, 4).mean(), df[100])
+                    math(dh.select(1, 3).max(), dh[100])
             """,
             """
             with rung(X001):
-                calc(ds.select(1, 5).max(), DS100)
-                calc(ds.select(1, 5).min(), DS101)
-                calc(dd.select(1, 4).median(), DD100)
-                calc(df.select(1, 4).mean(), DF100)
-                calc(dh.select(1, 3).max(), DH100)
+                math(ds.select(1, 5).max(), DS100)
+                math(ds.select(1, 5).min(), DS101)
+                math(dd.select(1, 4).median(), DD100)
+                math(df.select(1, 4).mean(), DF100)
+                math(dh.select(1, 3).max(), DH100)
             """,
         )
 
@@ -2046,11 +2046,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(ds.select(1, 5).max() + abs(ds[6]) * 2, ds[100])
+                    math(ds.select(1, 5).max() + abs(ds[6]) * 2, ds[100])
             """,
             """
             with rung(X001):
-                calc(ds.select(1, 5).max() + (abs(DS6) * 2), DS100)
+                math(ds.select(1, 5).max() + (abs(DS6) * 2), DS100)
             """,
         )
 
@@ -2060,11 +2060,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(c.select(1, 8).sum(), ds[100])
+                    math(c.select(1, 8).sum(), ds[100])
             """,
             """
             with rung(X001):
-                calc(c.select(1, 8).sum(), DS100)
+                math(c.select(1, 8).sum(), DS100)
             """,
         )
 
@@ -2074,13 +2074,13 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(abs(ds[1]), ds[2])
+                    math(abs(ds[1]), ds[2])
             """
         )
         bundle = pyrung_to_ladder(logic, mapping)
         assert "math(ABS ( DS1 ),DS2,mode=decimal)" in [row[-1] for row in bundle.main_rows]
         code = ladder_to_pyrung(bundle)
-        assert "calc(abs(DS1), DS2)" in code
+        assert "math(abs(DS1), DS2)" in code
         assert "pyrung.core.expression" not in code
         ns: dict = {}
         exec_with_source(code, ns)
@@ -2091,8 +2091,8 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(randint(1, 6), ds[2])
-                    calc(randint(ds[1], 6) + 1, ds[3])
+                    math(randint(1, 6), ds[2])
+                    math(randint(ds[1], 6) + 1, ds[3])
             """
         )
         bundle = pyrung_to_ladder(logic, mapping)
@@ -2100,8 +2100,8 @@ class TestRoundTrip:
         assert "math(RAND ( 1 , 6 ),DS2,mode=decimal)" in rows
         code = ladder_to_pyrung(bundle)
         assert "from pyrung.core.expression import randint" in code
-        assert "calc(randint(1, 6), DS2)" in code
-        assert "calc(randint(DS1, 6) + 1, DS3)" in code
+        assert "math(randint(1, 6), DS2)" in code
+        assert "math(randint(DS1, 6) + 1, DS3)" in code
         ns: dict = {}
         exec_with_source(code, ns)
 
@@ -2111,12 +2111,12 @@ class TestRoundTrip:
 
         with Program() as logic:
             with Rung(x[1]):
-                calc(ds.select(1, 4).max(), ds[100])
-                calc(ds.select(1, 4).min(), ds[101])
-                calc(ds.select(1, 4).median(), ds[102])
-                calc(ds.select(1, 4).mean(), ds[103])
-                calc(c.select(1, 4).sum(), ds[104])
-                calc(abs(ds[5]) + ds.select(1, 4).max(), ds[105])
+                math(ds.select(1, 4).max(), ds[100])
+                math(ds.select(1, 4).min(), ds[101])
+                math(ds.select(1, 4).median(), ds[102])
+                math(ds.select(1, 4).mean(), ds[103])
+                math(c.select(1, 4).sum(), ds[104])
+                math(abs(ds[5]) + ds.select(1, 4).max(), ds[105])
         mapping = TagMap({})
         code, original_rows, reproduced_rows = _round_trip(logic, mapping, tmp_path)
         assert original_rows == reproduced_rows

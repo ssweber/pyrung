@@ -78,11 +78,11 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
     blockcopy,
-    calc,
     copy,
     count_up,
     event_drum,
     fill,
+    math,
     on_delay,
     pack_bits,
     pack_text,
@@ -117,7 +117,7 @@ def _stage(slot, *instructions):
 def _read(slot, scan, flag, field, bit, *, on=True):
     """Add *bit* to *field* on *scan* if *flag* is on (``on``) or off right now."""
     with Rung(slot.Scratch == scan, flag if on else ~flag):
-        calc(field + bit, field)
+        math(field + bit, field)
 
 
 def _raise(kind, *, big, tmp, zero=dd[689], pointer=None):
@@ -127,7 +127,7 @@ def _raise(kind, *, big, tmp, zero=dd[689], pointer=None):
     elif kind == "44":
         copy(dd[pointer], tmp)  # a pointer of -1, below the bank
     else:
-        calc(100 / zero, tmp)
+        math(100 / zero, tmp)
 
 
 def _init(*, bits=None, dds=None, dfs=None, dhs=None, txts=None):
@@ -194,9 +194,9 @@ def prove_oneshot_that_does_not_fire(slot):
     probes = [
         ("43", SC43, lambda dest: copy(1, dest, oneshot=True)),
         ("44", SC44, lambda dest: copy(1, dest, oneshot=True)),
-        ("40", SC40, lambda dest: calc(dest + 1, dest, oneshot=True)),
-        ("43", SC43, lambda dest: calc(dest + 1, dest, oneshot=True)),
-        ("44", SC44, lambda dest: calc(dest + 1, dest, oneshot=True)),
+        ("40", SC40, lambda dest: math(dest + 1, dest, oneshot=True)),
+        ("43", SC43, lambda dest: math(dest + 1, dest, oneshot=True)),
+        ("44", SC44, lambda dest: math(dest + 1, dest, oneshot=True)),
     ]
     for k, (kind, flag, op) in enumerate(probes):
         with Rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
@@ -268,8 +268,8 @@ def prove_source_flag_in_a_math(slot):
     count_scans(slot, WINDOW)
     tmp, zero, number = dd[715], dd[716], dd[717]
     with Rung(slot.Scratch == FIRST_PROBE):
-        calc(100 / zero, tmp)
-        calc(SC40 + 5, number)
+        math(100 / zero, tmp)
+        math(SC40 + 5, number)
     with Rung(slot.Scratch == FIRST_PROBE, ~SC40):
         copy(1, slot.Result2)
     with Rung(slot.Scratch == FIRST_PROBE):

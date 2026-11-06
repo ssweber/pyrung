@@ -21,9 +21,9 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
-    calc,
     copy,
     count_up,
+    math,
     on_delay,
     out,
     time_drum,
@@ -36,7 +36,7 @@ def prove_called_twice(slot):
     # Scratch flips on every call: 1 on the first call of a scan, 0 on the second.
     second = slot.Scratch == 0
     with Rung(slot.Cmd != 0):
-        calc(1 - slot.Scratch, slot.Scratch)
+        math(1 - slot.Scratch, slot.Scratch)
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(249), 30000)
     with Rung(slot.Cmd != 0, second):
@@ -62,14 +62,14 @@ def prove_called_twice(slot):
         ).reset(slot.Cmd == 0)
     ready = (*once(slot), second, td[250] >= 200)
     with Rung(*ready):
-        calc(td[249] - td[250] * 3 / 2, slot.ErrorCode)
+        math(td[249] - td[250] * 3 / 2, slot.ErrorCode)
     with Rung(*ready, slot.ErrorCode > 0):
         copy(1, slot.Result1)
     with Rung(*ready, slot.ErrorCode <= 0):
         copy(2, slot.Result1)
     with Rung(*ready):
         copy(ctd[148], slot.Result2)
-        calc(td[243] - td[250] * 3 / 2, slot.ErrorCode)
+        math(td[243] - td[250] * 3 / 2, slot.ErrorCode)
     with Rung(*ready, ctd[150] > 1):
         copy(1, slot.Result3)
     with Rung(*ready, slot.ErrorCode > 0):

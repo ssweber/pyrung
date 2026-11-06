@@ -123,12 +123,12 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
     Rung,
-    calc,
     copy,
     count_up,
     fall,
     fill,
     latch,
+    math,
     on_delay,
     out,
     rise,
@@ -153,7 +153,7 @@ LONG_SCAN_MS = 40
 def _record(slot, field, *conditions):
     """Append the scan number, as a digit, to *field* on scans 2..8 where *conditions* hold."""
     with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW, *conditions):
-        calc(field * 10 + slot.Scratch, field)
+        math(field * 10 + slot.Scratch, field)
 
 
 def _on_fault_scans(slot):
@@ -191,9 +191,9 @@ def prove_division_flag_clears_each_scan(slot):
         slot,
         system.fault.division_error,
         901,
-        fault=lambda: calc(slot.Scratch / slot.Result4, dd[901]),
-        other_kind=lambda: calc(slot.Scratch + 1, dd[902]),
-        same_kind=lambda: calc(100 / slot.Scratch, dd[903]),
+        fault=lambda: math(slot.Scratch / slot.Result4, dd[901]),
+        other_kind=lambda: math(slot.Scratch + 1, dd[902]),
+        same_kind=lambda: math(100 / slot.Scratch, dd[903]),
     )
 
 
@@ -203,9 +203,9 @@ def prove_out_of_range_flag_clears_each_scan(slot):
         slot,
         system.fault.out_of_range,
         911,
-        fault=lambda: calc(slot.Scratch + 32767, slot.Result4),
-        other_kind=lambda: calc(100 / slot.Scratch, dd[912]),
-        same_kind=lambda: calc(slot.Scratch + 1, slot.Result4),
+        fault=lambda: math(slot.Scratch + 32767, slot.Result4),
+        other_kind=lambda: math(100 / slot.Scratch, dd[912]),
+        same_kind=lambda: math(slot.Scratch + 1, slot.Result4),
     )
 
 
@@ -224,7 +224,7 @@ def prove_address_flag_clears_each_scan(slot):
         system.fault.address_error,
         921,
         fault=fault,
-        other_kind=lambda: calc(slot.Scratch + 1, dd[923]),
+        other_kind=lambda: math(slot.Scratch + 1, dd[923]),
         same_kind=same_kind,
     )
 
@@ -310,7 +310,7 @@ def prove_out_of_range_int_vs_other_instructions(slot):
         slot,
         system.fault.out_of_range,
         961,
-        fault=lambda: calc(slot.Scratch + 32767, slot.Result4),
+        fault=lambda: math(slot.Scratch + 32767, slot.Result4),
         steps=_other_instructions(slot, 961, timer=112, counter=173),
         records=[dd[961 + i] for i in range(len(_REFAULT_FIELDS))],
         fault_scans_only=True,
@@ -330,12 +330,12 @@ def prove_division_flag_vs_hex_math(slot):
         slot,
         system.fault.division_error,
         951,
-        fault=lambda: calc(slot.Scratch / slot.Fired, dd[951]),
+        fault=lambda: math(slot.Scratch / slot.Fired, dd[951]),
         steps=[
             None,
-            step(lambda: calc(dh[401] + 1, dh[402])),
+            step(lambda: math(dh[401] + 1, dh[402])),
             step(lambda: copy(slot.Scratch, dd[952])),
-            step(lambda: calc(slot.Scratch + 1, dd[953])),
+            step(lambda: math(slot.Scratch + 1, dd[953])),
         ],
     )
 
@@ -346,9 +346,9 @@ def prove_scan_counter_steps_by_one(slot):
     counter = system.sys.scan_counter
     count_scans(slot)
     with Rung(*_in_window(slot)):
-        calc(counter - slot.Result2, slot.Result3)
+        math(counter - slot.Result2, slot.Result3)
     with Rung(*_in_window(slot), slot.Scratch >= 2, Or(slot.Result3 == 1, slot.Result3 == -32767)):
-        calc(slot.Result1 + 1, slot.Result1)
+        math(slot.Result1 + 1, slot.Result1)
     with Rung(*_in_window(slot)):
         copy(counter, slot.Result2)
     done(slot)
@@ -361,11 +361,11 @@ def prove_scan_clock_follows_counter(slot):
     edges(rise(clock), slot, slot.Result1)
     edges(fall(clock), slot, slot.Result1)
     with Rung(*_in_window(slot)):
-        calc(system.sys.scan_counter % 2, slot.Result3)
+        math(system.sys.scan_counter % 2, slot.Result3)
     with Rung(*_in_window(slot), clock, slot.Result3 == 0):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     with Rung(*_in_window(slot), ~clock, slot.Result3 == 1):
-        calc(slot.Result2 + 1, slot.Result2)
+        math(slot.Result2 + 1, slot.Result2)
     done(slot)
 
 
@@ -379,7 +379,7 @@ def prove_clock_bits_toggle_at_their_rate(slot):
         on_delay(window, CLOCK_WINDOW_MS)
     for clock, field in zip(CLOCKS, (slot.Result1, slot.Result2), strict=True):
         with Rung(rise(clock), slot.Cmd != 0, ~window.Done):
-            calc(field + 1, field)
+            math(field + 1, field)
     with Rung(slot.Cmd != 0, window.Done):
         copy(1, slot.Fired)
     with Rung(slot.Cmd != 0, slot.Fired == 0, scan_ms > LONG_SCAN_MS):
@@ -408,7 +408,7 @@ def prove_rtc_seconds_advance(slot):
         on_delay(window, RTC_WINDOW_MS)
         copy(second, slot.Result2, oneshot=True)
     with Rung(slot.Cmd != 0, window.Done):
-        calc((second - slot.Result2 + 60) % 60, slot.Result1, oneshot=True)
+        math((second - slot.Result2 + 60) % 60, slot.Result1, oneshot=True)
         copy(1, slot.Fired)
 
 

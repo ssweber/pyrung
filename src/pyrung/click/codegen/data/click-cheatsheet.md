@@ -14,7 +14,7 @@ from pyrung import (
     And, Or, rise, fall, system,             # conditions
     out, latch, reset,                       # coils
     toggle, debounce, flasher, timed,        # Out coil types (CLICK v4)
-    calc,                                    # math
+    math,                                    # Math
     copy, blockcopy, fill,                   # data movement
     to_value, to_ascii, to_text, to_binary,  # copy converters
     pack_bits, pack_words, pack_text,        # pack
@@ -136,19 +136,19 @@ out(ValveB.immediate)         # immediate I/O (bypasses image table)
 ## Math
 
 ```python
-calc(A + B, Result)           # Result = A + B (wraps on overflow)
-calc(A * 2, R, oneshot=True)  # one-shot: execute once per rising edge
-calc(DH[1] | DH[2], DH[3])   # WORD-only → hex mode (unsigned)
-calc(DS.select(1, 10).sum(), Total)  # SUM ( DS1 : DS10 ); Bool ranges count True bits
-calc(DS.select(1, 10).max(), Peak)   # MAX; also .min() MIN, .median() MDN, .mean() AVG
-calc(abs(Error), Magnitude)          # ABS (decimal mode only)
-calc(randint(1, 6), Die)             # RAND ( 1 , 6 ), inclusive, a draw per scan
+math(A + B, Result)           # Result = A + B (wraps on overflow)
+math(A * 2, R, oneshot=True)  # one-shot: execute once per rising edge
+math(DH[1] | DH[2], DH[3])   # WORD-only → hex mode (unsigned)
+math(DS.select(1, 10).sum(), Total)  # SUM ( DS1 : DS10 ); Bool ranges count True bits
+math(DS.select(1, 10).max(), Peak)   # MAX; also .min() MIN, .median() MDN, .mean() AVG
+math(abs(Error), Magnitude)          # ABS (decimal mode only)
+math(randint(1, 6), Die)             # RAND ( 1 , 6 ), inclusive, a draw per scan
 ```
 
-- `calc()` wraps on overflow (modular arithmetic). `copy()` clamps.
+- `math()` wraps on overflow (modular arithmetic). `copy()` clamps.
 - Division by zero → result = 0, fault flag set.
 - Integer division truncates toward zero.
-- Don't mix WORD and non-WORD tags in one `calc()`.
+- Don't mix WORD and non-WORD tags in one `math()`.
 
 ## Data movement
 
@@ -332,7 +332,7 @@ In pyrung:
 
 ```python
 with rung(rise(system.sys.clock_500ms)):
-    calc(Avg + (Raw - Avg) * (FilterFactor / 10), Avg)
+    math(Avg + (Raw - Avg) * (FilterFactor / 10), Avg)
 ```
 
 `FilterFactor` range: `1-9`
@@ -358,7 +358,7 @@ with rung(system.sys.first_scan):
 
 ```python
 with rung(rise(system.sys.clock_1s)):
-    calc(Counter + 1, Counter)
+    math(Counter + 1, Counter)
 ```
 
 ### Timer-driven state machine

@@ -40,9 +40,9 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Rung,
-    calc,
     copy,
     fill,
+    math,
     system,
     to_ascii,
     to_text,
@@ -62,7 +62,7 @@ def _raw(slot, source, first):
 def prove_minus_zero_math(slot):
     with Rung(*once(slot)):
         copy(0.0, df[20])
-        calc(df[20] * -1.0, df[21])
+        math(df[20] * -1.0, df[21])
         copy(df[21], df[22])
     _raw(slot, df[21], 470)
     _raw(slot, df[22], 472)
@@ -84,10 +84,10 @@ def init_minus_zero_math(slot):
 def prove_minus_zero_shapes(slot):
     with Rung(*once(slot)):
         copy(0.0, df[30])
-        calc(-1.0 * df[30], df[31])
-        calc(df[30] / -1.0, df[32])
-        calc(df[31] - df[31], df[33])
-        calc(abs(df[31]), df[34])
+        math(-1.0 * df[30], df[31])
+        math(df[30] / -1.0, df[32])
+        math(df[31] - df[31], df[33])
+        math(abs(df[31]), df[34])
         copy("Z", txt[546])
         copy(df[31], txt[546], convert=to_text())
     _raw(slot, df[31], 474)
@@ -112,9 +112,9 @@ def init_minus_zero_shapes(slot):
 def prove_non_finite_raw_bits(slot):
     with Rung(*once(slot)):
         copy(3.0e38, df[40])
-        calc(df[40] * 10, df[41])
-        calc(df[40] * -10, df[42])
-        calc(df[41] - df[41], df[43])
+        math(df[40] * 10, df[41])
+        math(df[40] * -10, df[42])
+        math(df[41] - df[41], df[43])
     _raw(slot, df[41], 482)
     _raw(slot, df[42], 484)
     _raw(slot, df[43], 486)
@@ -123,7 +123,7 @@ def prove_non_finite_raw_bits(slot):
     # By XOR 0x0080: a constant that reads C0 stops the workspace round trip (DH490).
     with Rung(*once(slot)):
         copy(0x80, dh[491])
-        calc(dh[487] ^ dh[491], dh[490])
+        math(dh[487] ^ dh[491], dh[490])
     class_of(slot, dh[490], [0x7F40, 0xFF40, 0xFF7F], slot.Result3)
     class_of(slot, dh[486], [0, 0xFFFF], slot.Result4)
     with Rung(*once(slot), dh[482] == 0, dh[484] == 0):
@@ -141,10 +141,10 @@ def prove_underflow(slot):
     with Rung(*once(slot)):
         copy(1.0e-20, df[50])
         copy(1.0e-30, df[51])
-        calc(df[50] * df[50], df[52])
+        math(df[50] * df[50], df[52])
     _raw(slot, df[52], 488)
     with Rung(*once(slot)):
-        calc(df[51] * df[51], df[53])
+        math(df[51] * df[51], df[53])
     flag_bit(slot, SC43, slot.Result3, 1)
     with Rung(*once(slot), df[52] == 0):
         copy(1, slot.Result1)
@@ -164,12 +164,12 @@ def prove_float32_equality(slot):
     with Rung(*once(slot)):
         copy(0.1, df[60])
         copy(0.2, df[61])
-        calc(df[60] + df[61], df[62])
+        math(df[60] + df[61], df[62])
         copy(16777217, dd[850])
         copy(16777216.0, df[63])
         copy(0.5, df[64])
         copy(0.25, df[65])
-        calc(df[64] + df[65], df[66])
+        math(df[64] + df[65], df[66])
     with Rung(*once(slot), df[62] == 0.3):
         copy(1, slot.Result1)
     with Rung(*once(slot), dd[850] == df[63]):

@@ -28,13 +28,13 @@ from pyrung import (
     Timer,
     blockcopy,
     branch,
-    calc,
     call,
     copy,
     count_down,
     count_up,
     forloop,
     latch,
+    math,
     on_delay,
     out,
     rise,
@@ -321,7 +321,7 @@ class TestFeedbackStaysInTheLoop:
     def test_an_unread_value_folds(self) -> None:
         def reader(temp: Real) -> None:
             with Rung():
-                calc(temp * 2.0, Shown)
+                math(temp * 2.0, Shown)
 
         make = lambda: _plant(RAMP, reader)  # noqa: E731
         plc = make()
@@ -972,7 +972,7 @@ def _copy_an_accumulator(slots: Any) -> None:
 
 def _count_in_a_slot(slots: Any) -> None:
     with Rung():
-        calc(slots[3] + 1, slots[3])
+        math(slots[3] + 1, slots[3])
 
 
 REBUILT_THROUGH_A_POINTER = [
@@ -1090,7 +1090,7 @@ class TestOutputReadThroughAPointer:
 
 
 def _readout_behind_a_pointer(*, cycle: bool, gated: bool, through_copy: bool) -> Callable[[], PLC]:
-    """``calc(Total - Timer.Acc, Cb[3])`` read as ``Cb[Jx]``: a display of a slow timer."""
+    """``math(Total - Timer.Acc, Cb[3])`` read as ``Cb[Jx]``: a display of a slow timer."""
 
     def make() -> PLC:
         slots = Block("Cb", TagType.INT, 1, 8)
@@ -1106,7 +1106,7 @@ def _readout_behind_a_pointer(*, cycle: bool, gated: bool, through_copy: bool) -
             with Rung():
                 on_delay(timer, 90, "min")
             with Rung(go) if gated else Rung():
-                calc(total - timer.Acc, slots[3])
+                math(total - timer.Acc, slots[3])
             if through_copy:
                 seen = Int("Seen")
                 with Rung():
@@ -1171,7 +1171,7 @@ def _clock_copied(slots: Any, index: Int) -> None:
 
 def _clock_calculated(slots: Any, index: Int) -> None:
     with Rung():
-        calc(SECOND + 1, _mapped_slot(slots))
+        math(SECOND + 1, _mapped_slot(slots))
     _read_by_contact(slots, index)
 
 
@@ -1375,7 +1375,7 @@ class TestBoolFeedbackUnderACoast:
     def _third_rise(fb: Bool) -> None:
         count = Int("Cnt")
         with Rung(rise(fb)):
-            calc(count + 1, count)
+            math(count + 1, count)
         with Rung(count == 3):
             latch(Hit)
 
@@ -1462,7 +1462,7 @@ class TestSlotFirstTouchedInsideTheRun:
         def body(bank: Any, delay: Timer, hit: Bool) -> None:
             with Rung(delay.Done):
                 copy(bank[Ptr], A)
-                calc(A + 1, B)
+                math(A + 1, B)
                 copy(B, bank[Ptr])
                 copy(0, A)
                 copy(0, B)
@@ -1477,7 +1477,7 @@ class TestSlotFirstTouchedInsideTheRun:
         def body(bank: Any, delay: Timer, hit: Bool) -> None:
             with Rung(delay.Done):
                 copy(bank[Ptr], A)
-                calc(A + 2, B)
+                math(A + 2, B)
                 copy(B, bank[Ptr])
                 copy(0, A)
                 copy(0, B)

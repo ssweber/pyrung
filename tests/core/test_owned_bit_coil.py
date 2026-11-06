@@ -11,11 +11,11 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
     count_down,
     count_up,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -107,4 +107,4 @@ def test_legal_forms():
             out(Flag)
         with Rung(Rst):
             copy(0, Acc)
-            calc(Acc + 1, Acc)
+            math(Acc + 1, Acc)

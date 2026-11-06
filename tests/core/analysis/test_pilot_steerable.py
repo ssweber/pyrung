@@ -26,9 +26,9 @@ from pyrung import (
     Int,
     Program,
     Word,
-    calc,
     copy,
     fill,
+    math,
     out,
     reset,
     rung,
@@ -179,7 +179,7 @@ def test_bulk_fill_band_member_not_clear_only():
 
     with Program(strict=False) as logic:
         with rung():  # aggregate reads every band member
-            calc(band.select(1, 10).sum(), Extent)
+            math(band.select(1, 10).sum(), Extent)
         with rung(Extent == 0):  # the abort-style gate the aggregate drives
             out(Gate)
         with rung(ForceClear):  # the band's SOLE writer: a bulk housekeeping clear

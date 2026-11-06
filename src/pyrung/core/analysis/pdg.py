@@ -2113,7 +2113,7 @@ def _build_writer_instrs(program: Program) -> dict[str, list[Any]]:
     """Map each named-``Tag`` destination to the instructions that write it.
 
     Consumed by the indirect-destination region crossing to hop an affine pointer
-    (``calc(root ± k)``) back to its root and read that root's literal-write
+    (``math(root ± k)``) back to its root and read that root's literal-write
     domain.  Whole-program (main + branches + subroutines + ForLoop bodies)."""
     from pyrung.core.validation._common import walk_instructions
 

@@ -15,9 +15,9 @@ from pyrung.core import (
     TagType,
     Timer,
     branch,
-    calc,
     copy,
     immediate,
+    math,
     out,
     run_enabled_function,
     run_function,
@@ -415,7 +415,7 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung():
-                calc(A * 2, Dest)
+                math(A * 2, Dest)
 
         facts = walk_program(prog)
         mode_facts = _facts_at(facts, "instruction.mode")
