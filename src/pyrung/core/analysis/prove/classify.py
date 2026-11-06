@@ -868,7 +868,8 @@ def _tag_compared_names(
     arithmetic).  So does the index of an indirect access whose element is
     compared with a changing value, and what that index is computed from; an
     index that is itself a free input keeps its pointer domain
-    (``index_only``).
+    (``index_only``).  A forloop count needs every value too: how many times
+    the body runs is its value, which no comparison partitions.
 
     *exprs* are the lowered expressions of the search (the property and the
     program): their comparisons count like the program's.
@@ -1031,10 +1032,11 @@ def _tag_compared_names(
     for instr in walk_instructions(program):
         if isinstance(instr, SearchInstruction):
             mark_all((instr.value, instr.search_range))
-        elif isinstance(instr, ForLoopInstruction) and instr.body:
+        elif isinstance(instr, ForLoopInstruction):
             # How many times the body runs is the count's value, not a class of
-            # it: a call guard's ``count != 0`` splits at 0 alone, and a body
-            # that accumulates tells 1 from 2.  An index keeps its pointer domain.
+            # it: a call guard's ``count != 0`` splits at 0 alone, a body that
+            # accumulates tells 1 from 2, and the loop's index ends at count - 1
+            # even with no body.  An index keeps its pointer domain.
             count_index: set[str] = set()
             mark(_compared_value_names(instr.count, graph, count_index), _FOR_COUNT_REASON)
             mark_index(count_index, _FOR_COUNT_REASON)
