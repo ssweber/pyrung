@@ -9,8 +9,8 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
   landing (user, 2026-10-30); never push bob/* branches or main.
 - Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
   (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
-- Current arc doc: `scratchpad/win-back/HANDOFF.md` (untracked, so give builders the absolute
-  main-checkout path).
+- Current arc doc: `scratchpad/conform-readings/arc.md` (untracked, so give builders the absolute
+  main-checkout path). One arc doc: fold rulings and leftovers into it, not side notes.
 
 ## Correctness contract (put in every builder and reviewer brief)
 
