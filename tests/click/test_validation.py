@@ -23,6 +23,7 @@ from pyrung.click.validation import (
     CLK_FORLOOP_COUNT_BANK,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_IMMEDIATE_CONTACT_MUST_BE_X,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
@@ -39,7 +40,20 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Int, Tag, TagType, Timer, forloop, immediate, randint, to_value
+from pyrung.core import (
+    Block,
+    Bool,
+    Int,
+    Or,
+    Tag,
+    TagType,
+    Timer,
+    branch,
+    forloop,
+    immediate,
+    randint,
+    to_value,
+)
 from pyrung.core.expression import lro, lsh, rro, rsh
 from pyrung.core.program import (
     Program,
@@ -1540,6 +1554,102 @@ class TestImmediateValidation:
 
         report = validate_click_program(prog, tag_map, mode="strict")
         assert any(f.code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y for f in report.errors)
+
+    @pytest.mark.parametrize("bank", ["c", "y"])
+    @pytest.mark.parametrize("contact", ["no", "nc"])
+    def test_immediate_contact_outside_x_is_error(self, bank, contact):
+        """CLICK's Immediate checkbox on a contact is for X bit addresses only."""
+        Sensor = Bool("Sensor")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(immediate(Sensor) if contact == "no" else ~immediate(Sensor)):
+                out(Coil)
+
+        prog = _build_program(logic)
+        slot = {"c": c[1], "y": y[1]}[bank]
+        tag_map = TagMap([Sensor.map_to(slot), Coil.map_to(y[2])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
+        assert len(found) == 1
+        assert "an immediate contact must read an input mapped to X" in found[0].message
+
+    def test_immediate_contact_in_a_branch_and_a_group_outside_x_is_error(self):
+        Start = Bool("Start")
+        Sensor = Bool("Sensor")
+        Other = Bool("Other")
+        Coil = Bool("Coil")
+        Lamp = Bool("Lamp")
+
+        def logic():
+            with Rung(Start):
+                out(Coil)
+                with branch(Or(Other, immediate(Sensor))):
+                    out(Lamp)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [
+                Start.map_to(x[1]),
+                Sensor.map_to(c[1]),
+                Other.map_to(x[2]),
+                Coil.map_to(y[1]),
+                Lamp.map_to(y[2]),
+            ],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
+        assert [f.location for f in found] == ["main.rung[0].branch[0].condition"]
+
+    def test_immediate_contact_in_a_nested_loop_body_is_reported_once(self):
+        Start = Bool("Start")
+        Sensor = Bool("Sensor")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(Start):
+                with forloop(2):
+                    with Rung():
+                        with forloop(2):
+                            with Rung(immediate(Sensor)):
+                                out(Coil)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Start.map_to(x[1]), Sensor.map_to(c[1]), Coil.map_to(y[1])], include_system=False
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
+        assert len(found) == 1
+
+    def test_immediate_contact_on_x_has_no_contact_finding(self):
+        Sensor = Bool("Sensor")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(immediate(Sensor), ~immediate(Sensor)):
+                out(Coil)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Sensor.map_to(x[1]), Coil.map_to(y[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert CLK_IMMEDIATE_CONTACT_MUST_BE_X not in _finding_codes(report)
+
+    def test_an_immediate_range_is_not_a_contact(self):
+        """The DSL refuses an immediate range as a contact, so no bank check is needed."""
+        Sensors = Block("Sensors", TagType.BOOL, 1, 2)
+
+        def logic():
+            with Rung(immediate(Sensors.select(1, 2))):
+                out(Bool("Coil"))
+
+        with pytest.raises(TypeError, match="Immediate contact requires a Tag"):
+            _build_program(logic)
 
 
 # ---------------------------------------------------------------------------
