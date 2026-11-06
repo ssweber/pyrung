@@ -363,8 +363,8 @@ flag_halves = Group(
         ),
         case(
             "A oneshot Copy (bit 1) and Math (bit 2) after SC43: a bit per op with SC43 off after "
-            "it, on the scan it fires (Result2) and on the scan it does not fire (Result1); the "
-            "raise alone leaves SC43 on (Result3 = 1)",
+            "it on the scan it fires (Result2), and a bit per op with SC43 still on on the scan "
+            "it does not fire (Result1); the raise alone leaves SC43 on (Result3 = 1)",
             ladder=prove_oneshot_settles_sc43,
             init=init_oneshot_settles_sc43,
             expect={"Result1": between(0, 3), "Result2": between(0, 3), "Result3": 1},

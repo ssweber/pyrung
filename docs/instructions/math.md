@@ -38,7 +38,7 @@ An Inf or NaN operand follows IEEE 754: `Inf / 2` is Inf, `Inf − Inf` and `sin
 Where Inf or NaN meets an integer:
 
 - A `calc()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`; NaN stores 0 with no flag.
-- A `copy()` of ±Inf into an `Int` clamps to its limit and sets `out_of_range`, and into a `Dint` clamps with no flag; NaN stores 0 with no flag. Into a `Word`, +Inf stores 65535 and −Inf 32768, with no flag.
+- A `copy()` of ±Inf into an `Int` clamps to its limit and sets `out_of_range`, and into a `Dint` clamps with no flag (not yet measured on a CLICK); NaN stores 0 with no flag. Into a `Word`, +Inf stores 65535 and −Inf 32768, with no flag.
 - A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `calc()` store 0 and set `out_of_range`.
 - A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
 - `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN is 0xFFFFFFFF, as a CLICK reads it.
