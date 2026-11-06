@@ -124,16 +124,22 @@ _OutputKey = tuple[str, Any, tuple[tuple[str, str, Any], ...]]
 _Placed = tuple[tuple[int, int], _OutputKey]
 
 
-def _tree_key(tree: SPNode | None) -> _TreeKey:
-    """Canonical form of *tree*: each contact by its cell, nested AND/OR flattened."""
+def _tree_key(tree: SPNode | None, *, cells: bool = True) -> _TreeKey:
+    """Canonical form of *tree*, nested AND/OR flattened.
+
+    Each contact is its cell, or with *cells* False its label alone (logic,
+    not drawing: two drawings that read the same contacts give one key).
+    """
     if tree is None:
         return None
     if isinstance(tree, Leaf):
+        if not cells:
+            return str(tree.label)
         return ("cell", str(tree.label), tree.row, tree.col)
     kind = "AND" if isinstance(tree, Series) else "OR"
     children: list[_TreeKey] = []
     for child in tree.children:
-        key = _tree_key(child)
+        key = _tree_key(child, cells=cells)
         if isinstance(key, tuple) and key[0] == kind:
             children.extend(key[1])
         else:
@@ -146,6 +152,8 @@ def _tree_key(tree: SPNode | None) -> _TreeKey:
 def _render_key(key: _TreeKey) -> str:
     if key is None:
         return "(always)"
+    if isinstance(key, str):
+        return key
     if key[0] == "cell":
         return key[1]
     return f"{key[0]}({', '.join(_render_key(child) for child in key[1])})"
