@@ -21,17 +21,17 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 
 ## Workflow: write first, validate later
 
-pyrung is intentionally permissive. Write logic with semantic tag names and native Python expressions — no address mapping required — and simulate freely. Hardware constraints are opt-in.
+pyrung is intentionally permissive. Write logic with semantic tag names and native Python expressions, and simulate freely. No address mapping is required. Hardware constraints are opt-in.
 
 The natural progression:
 
 1. **Write** — define semantic tags (`StartButton`, `MotorRunning`, `Speed`) and express logic in Python
-2. **Simulate** — run tests with a fixed `dt`; set inputs, assert outputs, iterate
+2. **Simulate** — run tests with a fixed `dt` that set inputs and assert outputs
 3. **Map** — create a `TagMap` linking semantic tags to CLICK hardware addresses
 4. **Validate** — `mapping.validate(logic, mode="warn")` surfaces CLICK-incompatible patterns
 5. **Iterate** — fix findings, tighten to `mode="strict"` when the program is clean
 
-The validator tells you exactly what CLICK can't do — inline expressions, unsupported pointer modes, type mismatches — before you discover it at deploy time.
+The validator tells you what CLICK can't do before you discover it at deploy time. It reports inline expressions, unsupported pointer modes and type mismatches.
 
 ## Pre-built blocks
 
@@ -85,7 +85,7 @@ td.slot(1, 5, retentive=False, default=0)
 
 Each call to `ClickBlocks()` returns fresh blocks with no shared state, so multi-project workflows don't need manual cleanup.
 
-Retentive registers ignore their CSV initial value, matching hardware: the CLICK PLC applies the initial value at project download only, and a retentive register keeps its last value afterward. pyrung therefore models retentive slots with the type zero, and codegen omits `default=` for them.
+Retentive registers ignore their CSV initial value, matching hardware. The CLICK PLC applies the initial value at project download only. A retentive register keeps its last value afterward. pyrung therefore models retentive slots with their type's zero value, and codegen omits `default=` for them.
 
 ## Type aliases
 
@@ -104,8 +104,8 @@ CLICK-style constructor aliases as alternatives to IEC names:
 This DSL follows CLICK PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context.
 
 1. **Keep the CLICK name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
-2. **Use a domain synonym** when CLICK's name shadows a Python builtin: `set` → `latch`, well-understood PLC terminology. `math` keeps CLICK's name, although pyrung's `math` hides Python's `math` module in a file that imports it. Import Python's under another name (`import math as pymath`).
-3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit — and the name should say so.
+2. **Use a domain synonym** when CLICK's name shadows a Python builtin. `set` becomes `latch`, which is well-understood PLC terminology. `math` keeps CLICK's name, although pyrung's `math` hides Python's `math` module in a file that imports it. Import Python's under another name (`import math as pymath`).
+3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit. The name says so.
 
 | CLICK instruction | pyrung DSL | Reason |
 |-------------------|------------|--------|
@@ -152,7 +152,7 @@ with PLC(logic, dt=0.1) as plc:
 
 ## TagMap — mapping to hardware
 
-`TagMap` links semantic tags and blocks to CLICK hardware addresses. Mapping is separate from logic — write and simulate first, map when ready.
+`TagMap` links semantic tags and blocks to CLICK hardware addresses. Mapping is separate from logic. Write and simulate first, then map.
 
 ### Dict constructor
 
@@ -212,9 +212,9 @@ on_delay(OvenTimer, preset=100)
 
 The clone is named after the T (done-bit) nickname, or after the TD/CTD nickname if the T has none.
 
-If the nickname already ends with `_Done` or `_Acc`, the suffix is stripped automatically — `"OvenTimer_Done"` becomes `Timer.clone("OvenTimer")`.
+If the nickname already ends with `_Done` or `_Acc`, the suffix is stripped automatically. `"OvenTimer_Done"` becomes `Timer.clone("OvenTimer")`.
 
-The clone takes the retentive setting of its addresses. The built-in `Timer` and `Counter` already match CLICK's bank defaults (T, TD non-retentive; CT, CTD retentive), so only an address set differently gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive.
+The clone takes the retentive setting of its addresses. The built-in `Timer` and `Counter` already match CLICK's bank defaults (T and TD are non-retentive, CT and CTD are retentive). Only an address whose retentive setting differs from its bank default gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive.
 
 Condition references resolve through the clone. A rung conditioned on T1 renders as `OvenTimer.Done`:
 
@@ -225,7 +225,7 @@ with rung(OvenTimer.Done):
 
 ### Input inference
 
-When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder — `always()` and `pyrung lock` will treat it as a nondeterministic input without requiring you to declare `external=True` yourself.
+When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder. `always()` and `pyrung lock` then treat it as a nondeterministic input, so you don't need to declare `external=True` yourself.
 
 ```python
 StartButton = Bool()                       # external=False initially
@@ -233,11 +233,11 @@ mapping = TagMap({StartButton: x[1]})
 assert StartButton.external                # now True — stamped by TagMap
 ```
 
-Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `external`. Tags that are `readonly` are skipped — `readonly` and `external` are mutually exclusive.
+Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `external`. Tags that are `readonly` are skipped, because `readonly` and `external` are mutually exclusive.
 
 ### Output inference
 
-When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. This includes the tag in the default `pyrung lock` projection, so physical outputs are tracked in the lock file without requiring you to declare `lock=True` yourself.
+When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. This adds the tag to what `pyrung lock` tracks by default, so the lock file tracks physical outputs. You don't need to declare `lock=True` yourself.
 
 ```python
 MotorOut = Bool()                              # lock=False initially
@@ -265,7 +265,7 @@ mapping = TagMap.from_nickname_file("project.csv")
 
 The importer reconstructs blocks, structures, and standalone tags from CSV comment markers and nickname patterns. Standalone nicknames become individual `Tag` objects. Non-marker address-comment text is preserved on standalone tags and block slots for CSV round-trip export.
 
-For strict grouping validation, pass `mode="strict"` — this fails fast on structure grouping mismatches instead of falling back to plain blocks with a warning.
+For strict grouping validation, pass `mode="strict"`. A structure grouping mismatch then fails immediately (it would otherwise fall back to plain blocks with a warning).
 
 ```python
 mapping = TagMap.from_nickname_file("project.csv", mode="strict")
@@ -283,13 +283,13 @@ The comment field on CSV rows carries block and structure boundaries. Three mark
 | Closing | `</Alarms:block>` | End of a semantic plain block |
 | Self-closing | `<Config.timeout:udt />` | Single-row semantic marker |
 
-Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, and `<Base.field />` do not reconstruct pyrung semantics. They simply group rows visually, and any inner nicknames import as ordinary standalone tags.
+Bare tags such as `<Alarms>`, `</Alarms>`, `<Base.field>` and `<Base.field />` are grouping-only comments. They do not reconstruct pyrung semantics. They only group rows visually. Any inner nicknames import as ordinary standalone tags.
 
 Bracket metadata can appear alongside markers or ordinary comments. It preserves tag flags, choices, range bounds, units, and physical annotations through nickname CSV import/export. For int-backed boolean values in register memory, use the built-in shorthand `[choices=Bool]` instead of spelling out `[choices=False:0|True:1]`.
 
 **Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`.
 
-**Named arrays** use `:named_array` markers. Count and stride are optional — the importer infers them from the row span between open/close tags:
+**Named arrays** use `:named_array` markers. Count and stride are optional. The importer infers them from the row span between the open and close tags:
 
 ```
 <Task:named_array>            count=1, stride from row count
@@ -299,7 +299,7 @@ Bracket metadata can appear alongside markers or ordinary comments. It preserves
 
 When both count and stride are given, the row span must equal `count × stride`. When stride is omitted, the row count must be divisible by count.
 
-**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_Id` → field `Id`).
+**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. The field name is what follows the `{Base}{instance}_` prefix (`Channel1_Id` → field `Id`).
 
 For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_Call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
 
@@ -308,11 +308,11 @@ For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no inst
 </Task:named_array(1,2,always_number)>
 ```
 
-The `always_number` flag only matters for singletons — `count > 1` is always numbered regardless.
+The `always_number` flag only matters for singletons. A named array with `count > 1` is always numbered.
 
-**Instance rules.** Instance 1 defines the field template — all its fields must be explicitly named. Instance 2+ fields must match instance 1's pattern (correct field name and instance number). Unnamed slots in instance 2+ are fine (silently skipped). A field name in instance 2+ that wasn't defined in instance 1 is an error.
+**Instance rules.** Instance 1 defines the field template, so all its fields must be explicitly named. Instance 2+ fields must match instance 1's pattern (correct field name and instance number). Unnamed slots in instance 2+ are fine (silently skipped). A field name in instance 2+ that wasn't defined in instance 1 is an error.
 
-Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
+Example: `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
@@ -360,7 +360,7 @@ The importer collects all `Base.Field:udt` ranges that share the same base name 
 
 Bare dotted tags such as `<Motor.Speed>` are grouping-only and do not reconstruct a UDT.
 
-Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
+Nesting is not supported. A UDT field cannot itself be a named array (for example, `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead, as `StsRecipes:named_array(20,50)`.
 
 **Conflict rules.** The same base name cannot be used across different marker kinds. These combinations are all errors:
 
@@ -401,7 +401,7 @@ Common findings:
 
 ### Timer preset limits
 
-CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets — use a larger time unit instead.
+CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets. Use a larger time unit instead.
 
 | Unit | Max preset | Max duration |
 |------|-----------|--------------|
@@ -421,11 +421,11 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### Out coil variants
 
-`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number, and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. CLICK's Out dialog offers fewer units than its timers. `debounce` and `flasher` take `ms` or `sec`, and `timed` takes `ms`, `sec` or `min`. Any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`.
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number, and a register preset to `DS`. Validation reports `CLK_TIMER_PAIR_MISMATCH` for any timer or counter whose Done and Acc map to different numbers. This includes `on_delay` and the counters. CLICK's Out dialog offers fewer units than its timers. `debounce` and `flasher` take `ms` or `sec`, and `timed` takes `ms`, `sec` or `min`. Any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`.
 
 ### For/Next
 
-A `forloop` exports as its For rung, one rung per body item, and `next()`. A bare instruction is a wire-only rung, a `with rung(...)` inside the loop keeps its contacts, and a nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`.
+A `forloop` exports as its For rung, one rung per body item, and `next()`. A bare instruction is a wire-only rung. A `with rung(...)` inside the loop keeps its contacts. A nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`.
 
 CLICK allows:
 
@@ -458,7 +458,7 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 
 To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen](click-codegen.md).
 
-A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing, and CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL, and imports back as the blank.
+A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing. CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL. `$00` imports back as the blank.
 
 ### Empty and comment-only rungs
 
@@ -482,7 +482,7 @@ with rung():
 
 Both forms produce identical CSV output.
 
-A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK will not hold: an empty rung with conditions (`with Rung(C1): pass`) and an empty rung next to a `.continued()` rung.
+A NOP has to sit alone on a bare wire. The exporter therefore refuses two shapes that CLICK will not hold. One is an empty rung with conditions (`with Rung(C1): pass`). The other is an empty rung next to a `.continued()` rung.
 
 ### Boxes with pins
 
@@ -516,9 +516,9 @@ runner = PLC(logic, initial_state=SystemState().with_tags(tags))
 
 `read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
 
-`skip_default=True` omits zero/false/empty values — useful since PLC dumps are exhaustive and most addresses are at their default.
+`skip_default=True` omits zero, false and empty values. A PLC dump lists every address, and most sit at their default, so this keeps the result small.
 
-Programs that use Click bank slots directly — `x.slot(1, name="Button")` or a bare `ds[5]`, as generated projects do for plain nicknames — have no TagMap entry for those addresses. Pass the bank set as `blocks` to seed them too:
+Some programs use CLICK bank slots directly, such as `x.slot(1, name="Button")` or a bare `ds[5]`. Generated projects do this for plain nicknames. These addresses have no TagMap entry. Pass the bank set as `blocks` to seed them too:
 
 ```python
 tags = mapping.tags_from_plc_data(data, blocks=blocks)
@@ -546,7 +546,7 @@ server = ClickServer(provider, port=502)
 
 Reads return the current committed state. Writes queue a `runner.patch()` for the next scan.
 
-If another device on the LAN can't reach the soft PLC, check the Windows Firewall: both the TCP port (default 502) and the Python interpreter need to be allowed through.
+If another device on the LAN can't reach the soft PLC, check the Windows Firewall. It must allow both the TCP port (default 502) and the Python interpreter.
 
 ### Word-image (XD / YD) addressing
 
@@ -589,7 +589,7 @@ receive(
 )
 ```
 
-CLICK handles word swap and character order natively — no configuration needed on the pyrung side.
+CLICK handles word swap and character order natively. Nothing needs configuring on the pyrung side.
 
 ### Raw Modbus addresses (any device)
 
@@ -626,7 +626,7 @@ receive(
 
 `ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous.
 
-`word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit CLICK types (DD, DF, etc.).
+`word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (the default) puts the high word first. `True` puts the low word first. This matters only for 32-bit CLICK types (DD, DF, etc.).
 
 `RegisterType` selects the Modbus function code: `HOLDING` (FC 3/6/16, default), `INPUT` (FC 4, read-only), `COIL` (FC 1/5/15), `DISCRETE_INPUT` (FC 2, read-only). Sending to `INPUT` or `DISCRETE_INPUT` raises `ValueError`.
 
@@ -638,4 +638,4 @@ receive(
 | `ModbusRtuTarget` | Serial | Yes (pymodbus) | Not yet |
 | `str` (name only) | — | No (inert) | Yes (resolved via `ModbusClientConfig`) |
 
-When `target` is a `ModbusTcpTarget` or `ModbusRtuTarget`, communication runs asynchronously in a background worker pool — the scan loop stays synchronous. When `target` is a plain string, the instruction is inert during simulation and exists only for CircuitPython code generation.
+When `target` is a `ModbusTcpTarget` or `ModbusRtuTarget`, communication runs asynchronously in a background worker pool. The scan loop stays synchronous. When `target` is a plain string, the instruction is inert during simulation and exists only for CircuitPython code generation.

@@ -61,11 +61,11 @@ with PLC(logic) as plc:
 
 ## Key concept: `out` is not assignment
 
-`ConveyorMotor = True` in Python sets a value once. `out(ConveyorMotor)` means "the motor follows this rung's power state, every single scan." Take your finger off the button, the conveyor stops. That's why `out` works this way -- in a factory, releasing the button *should* stop the machine.
+`ConveyorMotor = True` in Python sets a value once. `out(ConveyorMotor)` means "the motor follows this rung's power state, every single scan." Take your finger off the button and the conveyor stops. That's why `out` works this way. In a factory, releasing the button *should* stop the machine.
 
 !!! tip "Last one wins"
 
-    If two rungs both `out` the same tag, the last one to execute wins — because the scan walks top to bottom and each `out` overwrites the previous value:
+    If two rungs both `out` the same tag, the last one to execute wins. That's because the scan walks top to bottom and each `out` overwrites the previous value:
 
     ```python
     with rung(SensorA):

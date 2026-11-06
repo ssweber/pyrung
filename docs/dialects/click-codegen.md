@@ -1,8 +1,8 @@
 # CLICK Python Codegen
 
-`ladder_to_pyrung()` and `ladder_to_pyrung_project()` convert CLICK ladder data back into executable pyrung Python source. This is the reverse of [`pyrung_to_ladder()`](click.md#ladder-csv-export) — import from CLICK instead of export to CLICK.
+`ladder_to_pyrung()` and `ladder_to_pyrung_project()` convert CLICK ladder data back into executable pyrung Python source. This is the reverse of [`pyrung_to_ladder()`](click.md#ladder-csv-export), which exports to CLICK.
 
-CSV operands accept supported CLICK expressions, not arbitrary Python calls. Unsupported syntax raises `ValueError` during generation. Imported names, comments, and string values are rendered as data. An editable Python workspace is different: running its files intentionally executes Python with your account's permissions.
+CSV operands accept supported CLICK expressions, not arbitrary Python calls. Unsupported syntax raises `ValueError` during generation. Imported names, comments, and string values are rendered as data. An editable Python workspace is different. Running its files intentionally executes Python with your account's permissions.
 
 ## Single-file codegen
 
@@ -30,11 +30,11 @@ code = ladder_to_pyrung(bundle)          # no CSV files needed
 
 Three ways to provide nicknames for readable variable names:
 
-1. `nickname_csv=` — path to a CLICK nickname CSV (Address.csv). Recommended, because it also enables structured type inference (see below).
-2. `nicknames=` — pre-parsed `{operand: nickname}` dict (e.g. `{"X001": "start_button"}`).
-3. Neither — raw operand names used as-is (`X001`, `DS1`, etc.).
+1. `nickname_csv=` is the path to a CLICK nickname CSV (Address.csv). It is recommended, because it also enables structured type inference (see below).
+2. `nicknames=` is a pre-parsed `{operand: nickname}` dict (for example, `{"X001": "start_button"}`).
+3. With neither, codegen uses the raw operand names as they are (`X001`, `DS1`, and so on).
 
-Cannot provide both `nickname_csv` and `nicknames`.
+You can't pass both `nickname_csv` and `nicknames`.
 
 ```python
 code = ladder_to_pyrung("main.csv", nickname_csv="Address.csv")
@@ -89,7 +89,7 @@ blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
 fill(0, RecipeProfile.instance_select(1, 2))
 ```
 
-This works for both dense and sparse layouts — the range length must be an exact multiple of the stride and start at an instance boundary.
+This works for both dense and sparse layouts. The range length must be an exact multiple of the stride, and the range must start at an instance boundary.
 
 For UDTs (fields spanning different memory banks), per-field `map_to` is emitted:
 
@@ -105,13 +105,21 @@ mapping = TagMap([
 ], include_system=False)
 ```
 
-Singleton structures (count=1) use dotted access without indexing: `Config.Timeout`, not `Config[1].Timeout`. If the CSV uses numbered names for a singleton (e.g. `Config1_Timeout`), the importer infers `always_number=True` and emits `@named_array(Int, always_number=True)`.
+Singleton structures (count=1) use dotted access without indexing, as `Config.Timeout` and not `Config[1].Timeout`. If the CSV uses numbered names for a singleton (for example, `Config1_Timeout`), the importer infers `always_number=True` and emits `@named_array(Int, always_number=True)`.
 
 For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md). For the CSV marker format, see [CSV marker format](click.md#csv-marker-format).
 
 ### What codegen infers
 
-Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `Or()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
+Codegen infers these from the ladder:
+
+- tag types from operand prefixes (`X`→Bool, `DS`→Int, and so on)
+- block ranges from `DS100..DS102` notation
+- OR expansion via `Or()`
+- branch conditions
+- timer and counter pin chains
+- `for`/`next` loops
+- comments
 
 For the CSV format that codegen reads, see the [laddercodec CSV format guide](https://pyrung.com/laddercodec/guides/csv-format/).
 
@@ -125,7 +133,7 @@ Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nic
 
 ## Multi-file project codegen
 
-`ladder_to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator, tags and the TagMap live in `tags.py`, and `main.py` ties everything together.
+`ladder_to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator. Tags and the TagMap live in `tags.py`. `main.py` ties everything together.
 
 ```python
 from pyrung.click import ladder_to_pyrung_project
@@ -136,11 +144,11 @@ files = ladder_to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
 ```
 
 Guidance comes in two pairs. `README.pyrung.md` and `AGENTS.pyrung.md` belong
-to pyrung: setup, the ClickNick workflow, and the program's shape, rewritten on
-every generation. `README.md` and `AGENTS.md` belong to the user: they are
-written once, as a line pointing at pyrung's file (starting
-`<!-- pyrung:guidance -->`) and an empty notes section, and skipped after that
-unless `overwrite=True`.
+to pyrung. They hold setup, the ClickNick workflow and the program's shape, and
+pyrung rewrites them on every generation. `README.md` and `AGENTS.md` belong to
+the user. pyrung writes each once, as a line pointing at pyrung's file (starting
+`<!-- pyrung:guidance -->`) and an empty notes section. pyrung skips them after
+that unless `overwrite=True`.
 
 The guidance describes a temporary CLICK workspace by default. When an
 integration stores the project in a durable location, pass
@@ -186,8 +194,8 @@ The decorator keeps the CLICK subroutine name. The `_sub_` prefix stops the func
 
 ### Per-file imports
 
-Each generated file imports only what it uses. A subroutine that touches `X001` and `Y001` won't import `X002` or `DS1`. `tags.py` is the single source of truth for all tag declarations; other files import from it.
+Each generated file imports only what it uses. A subroutine that touches `X001` and `Y001` won't import `X002` or `DS1`. `tags.py` is the single source of truth for all tag declarations. Other files import from it.
 
 ### Nickname and structure support
 
-Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict.
+This works as it does for `ladder_to_pyrung()`. Pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference. Pass `nicknames=` for a pre-parsed dict.

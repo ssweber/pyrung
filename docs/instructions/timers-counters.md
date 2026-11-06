@@ -19,7 +19,7 @@ t = Timer[1]
 c = Counter[1]
 ```
 
-Use `Timer.clone("Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
+Use `Timer.clone("Name")` for production code. `OvenTimer_Done` in a fault log tells you everything, and `Timer1_Done` tells you nothing.
 
 Use `nicknames=` when the two field tags must keep an existing naming scheme:
 
@@ -32,7 +32,7 @@ HeatTimer = Timer.clone(
 
 Unspecified fields retain the normal `{name}_Done` or `{name}_Acc` name. Nickname overrides are supported on single-instance Timer and Counter clones.
 
-A timer's `Done` and `Acc` reset on STOP->RUN; a counter's survive, as on a CLICK (its T and TD banks are non-retentive, CT and CTD retentive). Override either field with `retentive=`, for example a retentive timer whose elapsed time must survive a restart:
+A timer's `Done` and `Acc` reset on STOP->RUN. A counter's survive, as on a CLICK (the T and TD banks are non-retentive, CT and CTD retentive). Override either field with `retentive=`. This example makes a timer whose elapsed time survives a restart:
 
 ```python
 CureTimer = Timer.clone("CureTimer", retentive={"Acc": True})
@@ -46,7 +46,7 @@ CureTimer = Timer.clone("CureTimer", comments={"Acc": "Elapsed cure time"})
 
 ### Status bits
 
-Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()` — CLICK PLCs manage these bits internally.
+Timers and counters also have status bits that reflect instruction state each scan. These are available in the runner API (`.when()`, `.monitor()`, `.value`) but cannot be used in `with rung()`. CLICK PLCs manage these bits internally.
 
 | Type | Bit | Meaning |
 |------|-----|---------|
@@ -64,7 +64,7 @@ runner.run_until(OvenTimer.TT == False)  # wait for stall or done
 
 ### Custom types
 
-Timer and counter instructions use a structural contract: any `@udt()` with a `Done: Bool` field and an `Acc: Int` or `Acc: Dint` field works with `on_delay`, `off_delay`, `count_up`, and `count_down`.
+Timer and counter instructions use a structural contract. Any `@udt()` with a `Done: Bool` field and an `Acc: Int` or `Acc: Dint` field works with `on_delay`, `off_delay`, `count_up`, and `count_down`.
 
 ```python
 from pyrung import udt, Bool, Dint
@@ -78,7 +78,7 @@ class MyCounter:
 
 ### Presets
 
-A preset is an int or an `Int`, `Dint` or `Word` tag. A `Real` preset raises `TypeError` — copy it into an `Int` first, as CLICK requires.
+A preset is an int or an `Int`, `Dint` or `Word` tag. A `Real` preset raises `TypeError`. Copy it into an `Int` first, as CLICK requires.
 
 ## Timers
 
@@ -102,7 +102,7 @@ on_delay(OvenTimer, preset=100) \
 - rung False → holds acc and done (does not reset)
 - `.reset(tag)` → resets acc and done regardless of rung state
 
-`on_delay(...).reset(...)` (RTON) ends its rung: no other instruction or branch shares the rung.
+`on_delay(...).reset(...)` (RTON) ends its rung. No other instruction or branch shares the rung.
 
 ### Off-delay timer (TOF)
 
@@ -126,11 +126,11 @@ TOF can share its rung with other instructions.
 | `"hour"` | `"h"`, `"hr"`, `"hours"` | Hours |
 | `"day"` | `"d"`, `"days"` | Days |
 
-Also accepted: `Tms`/`Ts`/`Tm`/`Th`/`Td` — great for tag names (`FillTimeTm` stays short, and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`).
+Also accepted: `Tms`/`Ts`/`Tm`/`Th`/`Td`. These suit tag names, because `FillTimeTm` stays short and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`.
 
 The accumulator stores integer ticks in the selected unit. The time unit controls how `dt` is converted to accumulator ticks.
 
-Every timed instruction sums time exactly, in every unit: at a fixed `dt`, with the rung's first scan counting a whole `dt`, a timer is Done on scan `ceil(delay / dt)`, though a CLICK's own count can differ by a scan.
+Every timed instruction sums time exactly, in every unit. At a fixed `dt`, with the rung's first scan counting a whole `dt`, a timer is Done on scan `ceil(delay / dt)`. A CLICK's own count can differ by a scan.
 
 ### Example: traffic light
 
@@ -151,11 +151,11 @@ See [Structured Tags](../learn/structured-tags.md) for the full UDT pattern.
 
 Counters use a `.Done` bit (Bool) and a `.Acc` accumulator (Dint).
 
-Counters count **rising edges**, as on a CLICK: one count each time the rung goes from False to True, however long it then stays True. Each counter keeps its own memory of each count input (the input as that counter last saw it), updated on every scan the counter runs, reset scans included. So:
+Counters count **rising edges**, as on a CLICK. A counter counts once each time the rung goes from False to True, however long it then stays True. Each counter keeps its own memory of each count input, which is the input as that counter last saw it. The memory updates on every scan the counter runs, reset scans included. So:
 
-- an input held True through a reset does not count again once the reset releases;
-- an input already True on the first scan counts once;
-- a counter inside a `for` loop sees each iteration's input, so it counts the edges between iterations.
+- An input held True through a reset does not count again once the reset releases.
+- An input already True on the first scan counts once.
+- A counter inside a `for` loop sees each iteration's input, so it counts the edges between iterations.
 
 ### Count up (CTU)
 
@@ -165,7 +165,7 @@ count_up(PartCounter, preset=100) \
 ```
 
 - rung goes True → accumulator increments by one; done = True when acc ≥ preset
-- `.reset(tag)` → resets acc and done while that tag is True (a level: it wins over a count on the same scan)
+- `.reset(tag)` → resets acc and done while that tag is True (a level, so it wins over a count on the same scan)
 
 `count_up(...).reset(...)` ends its rung.
 
@@ -189,10 +189,10 @@ count_up(ZoneCounter, preset=100) \
     .reset(ResetButton)
 ```
 
-Each input counts its own rising edges; an up edge and a down edge on the same scan cancel.
+Each input counts its own rising edges. An up edge and a down edge on the same scan cancel.
 
 ### Counting a held condition
 
-A counter never counts a held condition more than once. To count scans or time while something is on, use a timer, or `math()` (`math(N + 1, N)` adds one every scan its rung is True). `rise()` on the rung is allowed but redundant: the counter already counts edges.
+A counter never counts a held condition more than once. To count scans or time while something is on, use a timer, or `math()` (`math(N + 1, N)` adds one every scan its rung is True). `rise()` on the rung is allowed but redundant, because the counter already counts edges.
 
 For chained builders (counters, shift registers, drums), complete the full chain (`.down(...)`, `.clock(...)`, `.reset(...)`) before any later DSL statement.

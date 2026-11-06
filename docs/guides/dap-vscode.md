@@ -18,7 +18,7 @@ pyrung includes a Debug Adapter Protocol (DAP) server that exposes PLC scan exec
 
 - VS Code with the Python extension
 - `pyrung` installed: `pip install pyrung`
-- The pyrung VS Code extension — download `pyrung-debug-0.12.0.vsix` from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install:
+- The pyrung VS Code extension. Download `pyrung-debug-0.12.0.vsix` from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install it:
 
 ```bash
 code --install-extension pyrung-debug-0.12.0.vsix
@@ -189,7 +189,7 @@ pause                      # stop a running continue
 
 `step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `m`, `min`, `h`, and `d`, including compact compound durations such as `1h30min`.
 
-Long-running `how` and `prove` requests hold the Debug Console's state lock. Cancel them from another terminal with `pyrung live stop`; entering `stop` in the same Debug Console cannot preempt its active request.
+Long-running `how` and `prove` requests hold the Debug Console's state lock. Cancel them from another terminal with `pyrung live stop`. Entering `stop` in the same Debug Console cannot preempt its active request.
 
 ### Causal queries
 
@@ -253,7 +253,7 @@ log                             # show last 20 scans of activity
 log 50                          # show last 50 scans
 ```
 
-`log` shows patches, force changes, tag transitions, and notes — everything that happened in the scan window.
+`log` shows everything that happened in the scan window. That covers patches, force changes, tag transitions and notes.
 
 ### Session capture
 
@@ -268,7 +268,7 @@ step 1
 record stop                # stop recording, print transcript
 ```
 
-On stop, the transcript is printed as plain text — one command per line with a `# action:` comment header. The transcript is the session file format: paste it back into the console or save it to a file for replay.
+On stop, the transcript is printed as plain text, with one command per line and a `# action:` comment header. The transcript is the session file format. Paste it back into the console, or save it to a file for replay.
 
 ```text
 replay session.txt                            # use the current program harness
@@ -309,7 +309,7 @@ If a session recording is active, Bool feedback transitions are captured as `har
 
 ### Bench links
 
-Bench links change the feedback wiring for this session without editing the program: add a link, replace one the program declares, or cut it to simulate a failed sensor or a stuck contactor. They use the comment keys, and tags may be names or CLICK addresses:
+Bench links change the feedback wiring for this session without editing the program. You can add a link, replace one the program declares, or cut one to simulate a failed sensor or a stuck contactor. They take the same keys as a link in a nickname comment. Tags may be names or CLICK addresses:
 
 ```text
 link X002 Y001 on_delay=2s off_delay=500ms     # Y001 drives X002 after 2 s, drops 500 ms after
@@ -322,7 +322,7 @@ links bench off    # set every bench change aside without forgetting it; `links 
 links disable X002 # set one aside; `links enable X002` again
 ```
 
-A link added while its enable is already on starts cold, so the feedback follows after its on-delay.
+A link added while its enable is already on starts its on-delay from zero, so the feedback follows only after the on-delay.
 
 Bench links live in the debug session, not the runner, so `reload` keeps them. A recording captures the link verbs, and replay runs them only with `--harness current`.
 
@@ -351,7 +351,7 @@ pyrung live "force Button true; step 5; cause Light"  # chain commands with ;
 pyrung live -h                             # show all available commands
 ```
 
-Commands chained with `;` run sequentially over one connection, halting on first error. Exit code is 0 on success, 1 on error.
+Commands chained with `;` run in order over one connection and halt on the first error. The exit code is 0 on success and 1 on error.
 
 ### Python library
 
@@ -365,7 +365,7 @@ print(text)                         # "Stepped 5 scan(s), now at scan 10"
 
 ### Pair commissioning
 
-One person drives VS Code (breakpoints, Data View, Graph View), another runs `pyrung live` from a terminal. Both hit the same PLC state. Commands from the live client show `(live)` in the `log` output so you can tell who did what:
+One person drives VS Code (breakpoints, Data View, Graph View). Another person runs `pyrung live` from a terminal. Both work on the same PLC state. Commands from the live client show `(live)` in the `log` output, so you can tell who did what:
 
 ```text
 scan 10:
@@ -376,11 +376,11 @@ scan 11:  (live)
   State: 0 -> 1
 ```
 
-The live client can do everything the Debug Console can — forces, patches, causal queries, recording. Stepping from either side advances the same scan counter.
+The live client can do everything the Debug Console can, including forces, patches, causal queries and recording. Stepping from either side advances the same scan counter.
 
 ## Hot-reload
 
-Re-execute the program file while preserving PLC state — tags, memory, timer accumulators, counter values, and forces all carry over. History clears. Same experience as downloading a new program to a running PLC.
+Hot-reload re-executes the program file and preserves PLC state. Tags, memory, timer accumulators, counter values and forces all carry over. History clears. This is the same experience as downloading a new program to a running PLC.
 
 ### Manual reload
 
@@ -414,7 +414,7 @@ If the program file has a syntax error or the runner can't be discovered, the re
 
 ## Simulator controls
 
-A debug session can stand in for a CLICK PLC: other tools read and write it over Modbus TCP and drive it through a few custom DAP requests. All of it is off unless asked for.
+A debug session can stand in for a CLICK PLC. Other tools read and write it over Modbus TCP and drive it through a few custom DAP requests. All of it is off unless asked for.
 
 Launch arguments (all optional):
 
@@ -430,8 +430,8 @@ Launch arguments (all optional):
 }
 ```
 
-- `modbus` starts a Modbus TCP server inside the session. Reads return the current tag values; writes are one-scan patches, so a value sticks until logic writes it, as on a real PLC. X inputs are read-only over Modbus, as on a real CLICK; drive them with `pyrungPatch` or `pyrungForce`. Addresses map through the program's TagMap: a `mapping` in the launched file, or the `mapping` and `blocks` that generated projects keep in `plc/tags.py`. If the port cannot be bound the launch still succeeds; the reason is printed to the Debug Console and reported by `pyrungModbusInfo`.
-- `speed` paces Continue so simulation time runs at wall time x `speed` (the scan period itself never changes). `0`, the default, runs unpaced. When the program cannot keep up, pacing does not burst to catch up. Stepping and `run N` / `run <duration>` are never paced.
+- `modbus` starts a Modbus TCP server inside the session. Reads return the current tag values. Writes are one-scan patches, so a value sticks until logic writes it, as on a real PLC. X inputs are read-only over Modbus, as on a real CLICK. Drive them with `pyrungPatch` or `pyrungForce`. Addresses map through the program's TagMap. The TagMap is either a `mapping` in the launched file or the `mapping` and `blocks` that generated projects keep in `plc/tags.py`. If the port cannot be bound, the launch still succeeds. The Debug Console prints the reason, and `pyrungModbusInfo` reports it.
+- `speed` paces Continue so simulation time runs at wall time x `speed`. The scan period itself never changes. `0`, the default, runs unpaced. When the program cannot keep up, pacing does not burst to catch up. Stepping and `run N` / `run <duration>` are never paced.
 - `startMode` puts the PLC in `"stop"` or `"run"` mode at launch. Without it the runner keeps the mode it was built with.
 - `keepForcesOnRun` sets `PLC.keep_forces_on_run`, so forces survive STOP -> RUN. Without it the program's own setting is kept (off by default). Reloads keep it.
 
@@ -448,19 +448,21 @@ Custom requests:
 | `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
 | `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, onDelay, offDelay, profile, physical, system, source, active, pending, cut?, enabled?}]}` |
 
-`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition (non-retentive tags reset, patches cleared, forces cleared unless `keepForcesOnRun`) without executing a scan, then applies the given forces and patches, so the first scan sees them; execution stays paused until the client continues or steps. `stop` enters STOP mode; the next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
+`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
 
-The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change; `active` says whether it runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. It also carries `linksPending`: for each bool feedback whose on- or off-delay is counting, the simulated milliseconds left before it flips.
+The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
 
-Anyone can drive and the last command wins: a step or `run` from VS Code or `pyrung live` while Continue runs pauses it first, then executes.
+Anyone can drive, and the last command wins. While Continue runs, a step or `run` from VS Code or `pyrung live` pauses Continue first and then executes.
 
 The Debug Console verbs `mode [run|stop]` and `speed [N|max]` mirror the requests.
 
 ### State frames
 
-`pyrungScanFrame` is sent while Continue runs and also after any state change: a step, run, force, patch, mode or speed change, or reload, whether it came from a DAP request, a `pyrung live` command, a Modbus write, or auto-reload. Besides `trace` (whose `forces` always holds the full force map), `changes`, `monitors`, `snapshots`, and `outputs`, each frame carries:
+`pyrungScanFrame` is sent while Continue runs. It is also sent after any state change, whether the change came from a DAP request, a `pyrung live` command, a Modbus write, or auto-reload. A state change is a step, run, force, patch, mode change, speed change or reload.
+
+Each frame carries `trace` (whose `forces` always holds the full force map), `changes`, `monitors`, `snapshots` and `outputs`. It also carries these fields:
 
 | Field | Meaning |
 |---|---|
@@ -498,20 +500,20 @@ Right-click a tag name in the editor and select **Add to Data View**. Structured
 ### Editing values
 
 - **Bool tags**: click True/False buttons to stage, double-click to write immediately.
-- **Choice tags**: selecting from the dropdown writes immediately — no "Write Values" click needed.
+- **Choice tags**: selecting from the dropdown writes immediately, with no "Write Values" click needed.
 - **Other types**: type a value, then click **Write Values** to patch all pending values in one scan.
-- **Force**: click the Force button to lock a tag to its staged value across scans. CLICK again to unforce.
+- **Force**: click the Force button to lock a tag to its staged value across scans. Click again to unforce.
 
 ### Tag flag badges
 
 Badges appear next to the tag name when flags are set:
 
-- **RO** — read-only tag. Editing controls are locked by default. CLICK the lock icon to unlock for debugging; click again to re-lock.
-- **P** — public tag. Part of the intended API surface (setpoints, mode commands, status bits).
+- **RO** — read-only tag. Editing controls are locked by default. Click the lock icon to unlock them for debugging. Click it again to lock them.
+- **P** — public tag. It is part of the intended API surface (setpoints, mode commands, status bits).
 
 ### Public filter
 
-A **Public** checkbox sits above the tag table. It starts disabled and greyed out ("Start debugger to enable"). Once the debugger sends tag metadata, it enables. When checked, only tags declared `public=True` are shown — plumbing tags are hidden. Group headers hide when none of their members are public. Unchecking restores all rows. The filter resets when the debug session ends.
+A **Public** checkbox sits above the tag table. It starts disabled and greyed out ("Start debugger to enable"). Once the debugger sends tag metadata, the checkbox becomes active. When it is checked, only tags declared `public=True` are shown. Group headers hide when none of their members are public. Unchecking restores all rows. The filter resets when the debug session ends.
 
 ## History
 
@@ -519,9 +521,9 @@ The History panel (in the debug sidebar) has two tabs: **Tags** and **Chain**.
 
 ### Tags tab
 
-Shows tag values at each retained scan. The slider scrubs through the scan cache; tag values update live as you drag. Values update automatically during `continue` runs. Right-click a tag to add it from the Data View or Graph View.
+Shows tag values at each retained scan. The slider scrubs through the scan cache, and tag values update live as you drag. Values update automatically during `continue` runs. Right-click a tag in the Data View or Graph View to add it here.
 
-Each entry is the scan a tag changed on. A long `run_for()` leaves scans with no record of that, so the panel steps them again when you open it, for up to about 3 seconds a request, newest first. What it hasn't read yet shows as a range with the net change across it, which claims no scan for that change; **Load older** reads on.
+Each entry is the scan a tag changed on. A long `run_for()` leaves scans with no record of that. The panel therefore steps those scans again when you open it, newest first, for up to about 3 seconds a request. What it hasn't read yet shows as a range with the net change across it. The range does not say which scan made the change. **Load older** reads further back.
 
 ### Chain tab
 
@@ -534,7 +536,7 @@ recovers:FaultLatch
 cause:Running:True
 ```
 
-The result renders inline — chain steps with triggers, enablers, and fidelity indicators. The query dispatches to the `pyrungCausal` DAP handler, which calls the same `plc.cause()`/`plc.effect()`/`plc.recovers()` methods available in tests.
+The result renders inline as chain steps with triggers, enablers and fidelity indicators. The query dispatches to the `pyrungCausal` DAP handler, which calls the same `plc.cause()`/`plc.effect()`/`plc.recovers()` methods available in tests.
 
 ## Graph View
 
@@ -542,18 +544,25 @@ The result renders inline — chain steps with triggers, enablers, and fidelity 
 
 ### Node roles
 
-Tags are colored by role: blue for inputs (nothing writes them), amber for pivots (read and written), green for terminals (written, nothing reads them), grey for isolated (no connections). rung nodes show the rung index and source location.
+Tags are colored by role.
+
+- Blue is for inputs (nothing writes them).
+- Amber is for pivots (read and written).
+- Green is for terminals (written, nothing reads them).
+- Grey is for isolated tags (no connections).
+
+Rung nodes show the rung index and source location.
 
 ### Interactions
 
-- **CLICK** a tag to highlight its direct neighbors.
+- **Click** a tag to highlight its direct neighbors.
 - **Double-click** a tag to slice the graph to its upstream and downstream dependencies.
-- **Right-click** a tag for a context menu: slice upstream, slice downstream, add to Data View, add to History, copy name, hide.
+- **Right-click** a tag for a context menu with these entries: slice upstream, slice downstream, add to Data View, add to History, copy name, hide.
 - **Right-click** a rung to go to source or copy rung info.
 - **Drag** a node to pin its position (persisted in workspace state).
 - **Search** filters tags by name with abbreviation matching (typing `btn` finds `StartButton`).
 - **Role toggles** (I/P/T/X buttons) show or hide nodes by role.
-- **rung Order** sorts the layout vertically by execution order for a ladder-like top-down view.
+- **Rung Order** sorts the layout vertically by execution order for a ladder-like top-down view.
 - **Reset** clears all pins, hidden nodes, filters, and slices.
 
 During debugging, live value badges appear on tag nodes. The graph rescopes automatically when you switch editor tabs, showing only the rungs and tags from the active file.

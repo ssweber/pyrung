@@ -4,13 +4,13 @@ How the engine works under the hood. For the DSL vocabulary (tags, rungs, instru
 
 ## The Redux model
 
-pyrung is architected like Redux: state is immutable, logic is a pure function, and execution is consumer-driven.
+pyrung is architected like Redux. State is immutable, logic is a pure function, and execution is consumer-driven.
 
 ```
 Logic(CurrentState) → NextState
 ```
 
-Every `step()` call takes the current `SystemState`, evaluates all rungs as pure functions, and produces a new `SystemState`. The old state is still accessible. This makes programs deterministic, testable, and debuggable — the same state plus the same inputs always produce the same next state.
+Every `step()` call takes the current `SystemState`, evaluates all rungs as pure functions, and produces a new `SystemState`. The old state is still accessible. This makes programs deterministic, testable, and debuggable. The same state plus the same inputs always produce the same next state.
 
 ## SystemState
 
@@ -22,9 +22,9 @@ class SystemState(Mapping[str, Any]):
     memory    : PMap   # engine-internal state (edge detection, timer fractionals)
 ```
 
-`tags` is everything user code touches. `memory` is internal engine bookkeeping — the bit each `rise()`/`fall()` contact last saw (`_edge:e{N}`, one per contact), each counter's input memory, timer fractional accumulators, etc.
+`tags` is everything user code touches. `memory` is internal engine bookkeeping. It holds the bit each `rise()`/`fall()` contact last saw (`_edge:e{N}`, one per contact), each counter's input memory, timer fractional accumulators, and so on.
 
-`SystemState` is a small immutable class with one slot per field: assigning to a field raises, and `set()` and `with_tags()` return a new state. `tags` and `memory` are [`PMap`](https://pyrsistent.readthedocs.io/)s from the pyrsistent library, persistent maps that share structure between versions for memory efficiency. Each scan produces a new `SystemState` without modifying the previous one.
+`SystemState` is a small immutable class with one slot per field. Assigning to a field raises. `set()` and `with_tags()` return a new state. `tags` and `memory` are [`PMap`](https://pyrsistent.readthedocs.io/)s from the pyrsistent library. A `PMap` is a persistent map that shares structure between versions to save memory. Each scan produces a new `SystemState` without modifying the previous one.
 
 ## Scan cycle
 
@@ -42,11 +42,11 @@ Phase 7  ADVANCE CLOCK  scan_id += 1, timestamp updated per time mode
 Phase 8  SNAPSHOT       New SystemState committed
 ```
 
-All writes within a scan are batched and committed atomically at phase 8. Rungs see each other's writes immediately — a write in rung 3 is visible to rung 4 in the same scan.
+All writes within a scan are batched and committed atomically at phase 8. Rungs see each other's writes immediately. A write in rung 3 is visible to rung 4 in the same scan.
 
 ## Batched writes
 
-Inside a scan, tag writes and memory updates accumulate in a mutable working space. The engine creates this space at scan start, instructions write into it throughout execution, and phase 8 commits everything at once to produce the next immutable `SystemState`.
+Inside a scan, tag writes and memory updates accumulate in a mutable working space. The engine creates this space at scan start. Instructions write into it throughout execution. Phase 8 commits everything at once to produce the next immutable `SystemState`.
 
 User code never interacts with this layer directly. Inside a `with PLC(...) as plc:` block, tag reads and writes are routed through the runner's pending scan state and committed atomically when the scan completes.
 
@@ -70,11 +70,11 @@ During the DSL build phase (`rung`, `rise()`, `out()`, operators, builder-style 
 Captured metadata per element:
 - `source_file: str | None`
 - `source_line: int | None`
-- `end_line: int | None` (for block contexts like `rung` and `branch`; best-effort via AST `end_lineno`)
+- `end_line: int | None` (set for block contexts like `rung` and `branch`, best-effort from AST `end_lineno`)
 
 Builder flows (`shift(...).clock(...).reset(...)`, `count_up(...).reset(...)`, etc.) preserve the original callsite metadata through the chain.
 
-If rungs are built in a loop, multiple rung objects may share source lines. The mapping is best-effort in this case; explicit DSL declarations maintain a clean one-to-one mapping.
+If rungs are built in a loop, multiple rung objects may share source lines. The mapping is best-effort in this case. Explicit DSL declarations keep a clean one-to-one mapping.
 
 ## Debug stepping APIs
 
@@ -97,11 +97,11 @@ for step in runner.scan_steps_debug():
     print(step.rung_index, step.kind, step.source_line, step.enabled_state)
 ```
 
-Yields `ScanStep` objects at rung, branch, subroutine, and instruction boundaries. This is the API the DAP adapter uses to drive execution with source location information. Same commit semantics as `scan_steps()`.
+Yields `ScanStep` objects at rung, branch, subroutine, and instruction boundaries. This is the API the DAP adapter uses to drive execution with source location information. It commits the same way as `scan_steps()`.
 
 ## rung inspection
 
-`runner.debug.rung_trace()` and `runner.debug.last_event()` return debug trace data for the most recently committed debug scan. Only one scan's worth of trace is retained — a non-debug commit (`step()`/`run()`) wipes the slot.
+`runner.debug.rung_trace()` and `runner.debug.last_event()` return debug trace data for the most recently committed debug scan. Only one scan's worth of trace is retained. A non-debug commit (`step()`/`run()`) wipes it.
 
 ### `runner.debug.rung_trace(rung_id)`
 
@@ -113,11 +113,11 @@ Returns a `RungTrace` for one rung in the current scan:
 
 Each `RungTraceEvent` captures one debug boundary:
 
-- `kind`: `"rung"` | `"branch"` | `"subroutine"` | `"instruction"`
+- `kind` is one of `"rung"`, `"branch"`, `"subroutine"` or `"instruction"`
 - `source_file`, `source_line`, `end_line`
 - `subroutine_name`, `depth`, `call_stack`
 - `enabled_state`, `instruction_kind`
-- `trace`: `TraceEvent | None`
+- `trace` is a `TraceEvent | None`
 
 Raises `KeyError(rung_id)` when no debug trace exists for the current scan.
 

@@ -21,7 +21,7 @@ Optional keyword arguments:
 - `initial_state` — a `SystemState` to start from instead of the default
 - `history` — retention window for the scan log and checkpoints. Duration string (`"1h"`, `"30m"`), scan count (int), or `None` (unlimited, default). Prevents unbounded memory growth on long runs.
 - `cache` — instant-lookup window for full `SystemState` snapshots. Same formats as `history`. `None` (default) uses byte-budget-only eviction.
-- `history_budget` — byte ceiling for the recent-state cache (default: 100 MB; minimum 1 MB). Acts as a safety net when duration-based policies aren't enough.
+- `history_budget` — byte ceiling for the recent-state cache (default 100 MB, minimum 1 MB). Acts as a safety net when duration-based policies aren't enough.
 
 ## Time modes
 
@@ -35,7 +35,7 @@ runner = PLC(logic, realtime=True)   # wall-clock
 | `dt=0.010` | `timestamp += dt` each scan | Tests, offline simulation |
 | `realtime=True` | `timestamp` = actual elapsed time | Live hardware, integration tests |
 
-`dt=` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `realtime=True` is intentionally non-deterministic — scan `dt` follows host elapsed time.
+`dt=` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `realtime=True` is intentionally non-deterministic. Scan `dt` follows host elapsed time.
 
 ## Real-time clock
 
@@ -91,7 +91,7 @@ runner.run_until(Temp > 150.0)
 runner.run_until(Or(AlarmA, AlarmB, AlarmC))
 ```
 
-Stops when the condition is true, a pause breakpoint fires, or `max_cycles` is reached — whichever comes first.
+Stops at whichever comes first: the condition is true, a pause breakpoint fires, or `max_cycles` is reached.
 
 ### `run_until_fn(predicate)` — callable predicate
 
@@ -114,13 +114,13 @@ runner.run_for(10, jit=False)   # every scan interpreted, recording as it goes
 ```
 
 `run_for()` and `run_until()` are a tracing JIT for scans.  Past the first 1,000 scans of
-a run, every scan executes in the compiled kernel, and scans that repeat the one before
-run in a guarded loop.  No scan is skipped: the run lands on the same state and scan count
+a run, every scan executes in the compiled kernel. Scans that repeat the one before
+run in a guarded loop.  No scan is skipped. The run lands on the same state and scan count
 as stepping.
 
-A callable predicate, a monitor, a breakpoint or a `when()` watches every scan, so the run
-stays interpreted, as it does for a program with no kernel.  A stop written as a tag or a
-condition stays in the kernel: prefer `run_until(Tmr.Done)` over
+A callable predicate, a monitor, a breakpoint or a `when()` watches every scan. Any of
+them keeps the run interpreted, as for a program with no kernel.  A stop written as a tag
+or a condition stays in the kernel. Prefer `run_until(Tmr.Done)` over
 `run_until(lambda s: s.tags["Tmr_Done"])` for a long wait.
 
 ## Injecting inputs
@@ -131,7 +131,7 @@ condition stays in the kernel: prefer `run_until(Tmr.Done)` over
 runner.patch({Button: True, Step: 5})
 ```
 
-Values are applied at the start of the next `step()` and then discarded. Multiple patches before a step merge — last write per tag wins.
+Values are applied at the start of the next `step()` and then discarded. Multiple patches before a step merge. The last write per tag wins.
 
 ### `.value` via context manager
 
@@ -201,7 +201,7 @@ runner = PLC(logic, keep_forces_on_run=True)
 # or later: runner.keep_forces_on_run = True
 ```
 
-Off by default. When on, the STOP→RUN transition keeps active forces; tags and pending patches still reset. `reboot()` clears forces either way. Forks inherit the setting.
+Off by default. When on, the STOP→RUN transition keeps active forces. Tags and pending patches still reset. `reboot()` clears forces either way. Forks inherit the setting.
 
 ### `reboot()` — power-cycle
 
@@ -221,7 +221,7 @@ runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
 
-Test a reboot with `battery_present = False` too, because a CLICK with a dead battery and a discharged capacitor comes back with every tag reset. `sys.battery_present` (SC203) won't warn you, because it reports the project's Battery Backup Setup setting, not the battery itself.
+Test a reboot with `battery_present = False` too. A CLICK with a dead battery and a discharged capacitor comes back with every tag reset. `sys.battery_present` (SC203) won't warn you of that, because it reports the project's Battery Backup Setup setting, not the battery itself.
 
 ## Inspecting state
 
@@ -265,17 +265,17 @@ runner.history.latest(10)     # up to 10 most recent (oldest → newest)
 ```
 
 Every scan from 0 to the current tip is addressable.  Recent scans are served
-from an in-memory state cache (byte-bounded, default 100 MB); older scans are
+from an in-memory state cache (byte-bounded, default 100 MB).  Older scans are
 reconstructed on demand from the scan log and checkpoints.
 
 A long `run_until()` or `run_for()` runs compiled and records no rung firings.
-History still serves each of those scans, replaying them on demand, and the
-first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
-them again for their records, so the answer is the one stepping gives.  A question
+History still serves each of those scans by replaying them on demand.
+The first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
+them again to get their records. The answer is therefore the one stepping gives.  A question
 that would step more than 250,000 scans raises `UnrecordedScansError` and names
-the range. What a question steps stays read, so ask first about a scan nearer the
+the range. Scans a question has stepped keep their records, so ask first about a scan nearer the
 start of that range for `cause`, or nearer its end for `effect`, then ask again,
-from Python or the debugger. From Python, `cause()` also takes `since=`, and
+from Python or the debugger. From Python, `cause()` also takes `since=`.
 `jit=False` records the run as it goes.
 
 `previous_transition()` returns the latest matching recorded transition, or
@@ -293,7 +293,7 @@ runner = PLC(logic, history_budget=20 * 1024 * 1024)  # 20 MB byte ceiling
 
 ## Time-travel playhead
 
-The playhead is a read-only cursor into history. It doesn't affect execution — `step()` always appends at the history tip.
+The playhead is a read-only cursor into history. It doesn't affect execution. `step()` always appends at the history tip.
 
 ```python
 runner.playhead              # current inspection scan_id
@@ -314,7 +314,7 @@ changes = runner.diff(scan_a=5, scan_b=10)
 # {"Motor": (True, False), "Step": (3, 7)}
 ```
 
-Returns string-keyed dicts — only tags whose values differ. Missing tags appear as `None`.
+Returns string-keyed dicts that hold only the tags whose values differ. Missing tags appear as `None`.
 
 ## Fork
 
@@ -326,7 +326,7 @@ alt = runner.fork(scan_id=10)    # from a retained historical scan
 alt = runner.fork_from(scan_id=10)  # alias
 ```
 
-The fork starts with the snapshot's state and the same time mode. It has clean runtime state — no forces, patches, breakpoints, or monitors carry over. Only the fork snapshot is in its initial history.
+The fork starts with the snapshot's state and the same time mode. It has clean runtime state, so no forces, patches, breakpoints, or monitors carry over. Only the fork snapshot is in its initial history.
 
 See [Testing — Forking](testing.md#forking-test-alternate-outcomes) for the alternate-outcomes pattern.
 
@@ -341,6 +341,6 @@ runner.when(~Sensor).do(lambda state: runner.patch({Sensor: True}))  # run a cal
 runner.monitor(Motor, lambda curr, prev: print(f"{prev} → {curr}"))
 ```
 
-`.do()` runs a callback every scan its condition holds and lets the run continue — the hook for reactive inputs. Paired with `patch`, it re-asserts an input whenever the program drifts it: `when(~Sensor).do(...)` patches `Sensor` back True each time it falls (use `patch`, not `force` — a force would *pin* the tag, so the program could never drift it and the reaction would be moot).
+`.do()` runs a callback every scan its condition holds and lets the run continue. It is the hook for reactive inputs. Paired with `patch`, it re-asserts an input whenever the program drifts it. `when(~Sensor).do(...)` patches `Sensor` back True each time it falls. Use `patch`, not `force`. A force would *pin* the tag, so the program could never drift it and the reaction would be moot.
 
 See [Testing — Monitoring changes](testing.md#monitoring-changes) and [Testing — Predicate breakpoints](testing.md#predicate-breakpoints-and-snapshots) for usage patterns.
