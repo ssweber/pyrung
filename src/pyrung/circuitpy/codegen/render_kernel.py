@@ -313,7 +313,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_calc_math_isfinite" in ctx.used_helpers
         or "_math_func" in ctx.used_helpers
         or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
-        or bool(ctx.used_helpers & {"_store_word_clamped", "_store_bit"})
+        or "_store_word_clamped" in ctx.used_helpers
     )
     needs_struct = (
         "_int_to_float_bits" in ctx.used_helpers

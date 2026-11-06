@@ -131,8 +131,10 @@ def test_a_word_into_a_dint_or_a_real_is_its_value(runner_factory):
     assert (tags["D"], tags["R"]) == (65535, 65535.0)
 
 
-@pytest.mark.parametrize(("value", "on"), [(2, False), (3, True), (1, True), (0, False)])
-def test_a_number_into_a_bit_takes_its_low_bit(runner_factory, value, on):
+@pytest.mark.parametrize(("value", "on"), [(2, True), (3, True), (1, True), (-1, True), (0, False)])
+def test_a_number_into_a_bit_is_on_when_nonzero(runner_factory, value, on):
+    # CLICK's editor refuses a constant into a bit (CLK_COPY_CONSTANT_INTO_BIT), so no
+    # reading of an accepted form backs the low-bit store a pasted one showed.
     src = Int("Src", default=value)
     bit, bit2 = Bool("Bit"), Bool("Bit2")
     bits = Block("B", TagType.BOOL, 1, 2)
@@ -143,6 +145,57 @@ def test_a_number_into_a_bit_takes_its_low_bit(runner_factory, value, on):
             fill(value, bits.select(1, 2))
     tags = _one_scan(runner_factory, logic)
     assert (tags["Bit"], tags["Bit2"], tags["B1"], tags["B2"]) == (on, on, on, on)
+
+
+@pytest.mark.parametrize(
+    ("value", "on"),
+    [(0.5, True), (-0.5, True), (0.0, False), (pymath.nan, False), (pymath.inf, False),
+     (-pymath.inf, False)],
+    ids=["half", "minus-half", "zero", "nan", "inf", "minus-inf"],
+)  # fmt: skip
+def test_a_real_into_a_bit_is_on_when_nonzero_and_finite(runner_factory, value, on):
+    # pyrung's rule: CLICK's Copy and Fill dialogs take no number into a bit.
+    src = Real("Src")
+    bit = Bool("Bit")
+    bits = Block("B", TagType.BOOL, 1, 2)
+    with Program() as logic:
+        with Rung():
+            copy(src, bit)
+            fill(src, bits.select(1, 2))
+    tags = _one_scan(runner_factory, logic, {"Src": value})
+    assert (tags["Bit"], tags["B1"], tags["B2"]) == (on, on, on)
+    assert not tags.get(SC43, False)
+
+
+@pytest.mark.parametrize(
+    ("value", "on"),
+    [(0.5, True), (0.0, False), (pymath.nan, False), (pymath.inf, False), (-pymath.inf, False)],
+    ids=["half", "zero", "nan", "inf", "minus-inf"],
+)
+def test_a_math_result_into_a_bit_follows_the_copy_rule(runner_factory, value, on):
+    # pyrung's rule, as for a Copy: CLICK's Math takes no bit Result (CLK_MATH_DEST_BANK).
+    src = Real("Src")
+    bit = Bool("Bit")
+    with Program() as logic:
+        with Rung():
+            math(src * 1, bit)
+    tags = _one_scan(runner_factory, logic, {"Src": value})
+    assert tags["Bit"] is on
+
+
+def test_a_real_copied_or_filled_into_an_int_truncates(runner_factory):
+    """Read on a CLICK: copy(2.7, DS) is 2, and a Fill of a DF holding 2.7 is 2
+    (copy_more/across_types, block_more/block_forms)."""
+    src = Real("Src", default=2.7)
+    dest = Int("Dest", default=7)
+    ints = Block("I", TagType.INT, 1, 2)
+    with Program() as logic:
+        with Rung():
+            copy(2.7, dest)
+            fill(src, ints.select(1, 2))
+    tags = _one_scan(runner_factory, logic)
+    assert (tags["Dest"], tags["I1"], tags["I2"]) == (2, 2, 2)
+    assert not tags.get(SC43, False)
 
 
 def test_a_block_to_value_skips_a_bad_character(runner_factory):

@@ -52,13 +52,14 @@ def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | 
     """Destination conversion used by copy, blockcopy, and fill.
 
     *source* is :func:`copy_source_kind` of the source.  ``None`` (not known, or not a
-    Copy: a patch, a receive) keeps the plain store: a Word wraps, a bit is truthy.
-    From a known source, CLICK's rules:
+    Copy: a patch, a receive) keeps the plain store: a Word wraps.  From a known
+    source, CLICK's rules:
 
     - Into a Word, a constant keeps its low 16 bits (70000 is 4464).  From a DINT or
       a REAL, past 65535 it clamps and below 0 keeps the low 16 bits (``"word"``).
     - Into an Int, a Word keeps its bits (0xFFFF is -1); anything else clamps.
-    - Into a bit, a number's low bit (``"bit"``: 2 is off).
+
+    A bit is truthy from any source (CLICK's editor refuses a number into a bit).
     """
     from pyrung.core.tag import TagType
 
@@ -75,7 +76,7 @@ def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | 
     if tag_type is TagType.REAL:
         return StoreTransform("real")
     if tag_type is TagType.BOOL:
-        return StoreTransform("bool" if source is None else "bit")
+        return StoreTransform("bool")
     if tag_type is TagType.CHAR:
         return StoreTransform("char")
     return None

@@ -25,14 +25,19 @@ from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
+    CLK_MATH_DEST_BANK,
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
+    CLK_SEARCH_RANGE_BANK,
+    CLK_SEARCH_RESULT_NOT_DS,
     CLK_TEXT_PAST_BANK,
     CLK_TEXT_PAST_BLOCK,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
+    CLK_TIMER_PRESET_TOO_LOW,
     ClickFinding,
     ValidationMode,
     _build_suggestion,
@@ -283,6 +288,45 @@ def _evaluate_coil_targets(
     ]
 
 
+_BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
+# The copy operations whose source may be a constant, with the CLICK instruction's name.
+_CONSTANT_COPY_VERBS = {"single": ("copy", "Copy"), "fill": ("fill", "Fill")}
+
+
+def _constant_into_bit(
+    operation: str,
+    value: Any,
+    dest_memory_types: tuple[str, ...],
+    dest_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """CLK_COPY_CONSTANT_INTO_BIT: CLICK's Copy and Fill dialogs refuse a constant
+    into bit memory (checked in the v4 editor, 2026-11-06)."""
+    bits = [memory_type for memory_type in dest_memory_types if memory_type in _BIT_BANKS]
+    if not bits:
+        return []
+    verb, box = _CONSTANT_COPY_VERBS[operation]
+    if isinstance(value, ImmediateRef):
+        value = value.value
+    location_text = _format_location(dest_location)
+    return [
+        ClickFinding(
+            code=CLK_COPY_CONSTANT_INTO_BIT,
+            severity=_route_severity(CLK_COPY_CONSTANT_INTO_BIT, mode),
+            message=(
+                f"{verb}({value!r}, ...) into {', '.join(bits)} at {location_text}: CLICK's "
+                f"{box} takes no constant into bit memory."
+            ),
+            location=location_text,
+            suggestion=(
+                "Set or clear the bit with out(), latch() or reset(), or copy a bit into it."
+                if operation == "single"
+                else "Set or clear the bits with latch() or reset() on the range."
+            ),
+        )
+    ]
+
+
 def _evaluate_copy_compatibility(
     instruction: Any,
     base_location: ProgramLocation,
@@ -311,11 +355,17 @@ def _evaluate_copy_compatibility(
     if source_resolution.unresolved or dest_resolution.unresolved:
         return findings
 
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
+    source = getattr(instruction, source_field)
+    if operation in _CONSTANT_COPY_VERBS and copy_source_kind(source) == LITERAL:
+        findings.extend(
+            _constant_into_bit(operation, source, dest_memory_types, dest_location, mode)
+        )
+
     if not source_resolution.slots or not dest_resolution.slots:
         return findings
 
     source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
-    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
 
     for source_memory_type in source_memory_types:
         for dest_memory_type in dest_memory_types:
@@ -429,6 +479,100 @@ def _evaluate_pack_text(
             )
 
     return findings
+
+
+# What CLICK v4's Search dialog takes (checked in the editor, 2026-11-06).
+_SEARCH_RANGE_BANKS = ("DS", "DD", "DH", "DF", "TD", "CTD", "TXT")
+_SEARCH_RESULT_BANKS = ("DS",)
+
+
+def _evaluate_search_banks(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """CLK_SEARCH_RANGE_BANK and CLK_SEARCH_RESULT_NOT_DS: a Search range in a bank
+    CLICK's Search does not take, or a Result that is not a DS.  An unresolved
+    operand is reported by the write-target and bank checks."""
+    if type(instruction).__name__ != "SearchInstruction":
+        return []
+    findings: list[ClickFinding] = []
+    checks = (
+        ("search_range", _SEARCH_RANGE_BANKS, CLK_SEARCH_RANGE_BANK),
+        ("result", _SEARCH_RESULT_BANKS, CLK_SEARCH_RESULT_NOT_DS),
+    )
+    for field_name, allowed, code in checks:
+        resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
+        banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+        bad = [bank for bank in banks if bank not in allowed]
+        if not bad:
+            continue
+        location_text = _format_location(
+            _instruction_location(base_location, f"instruction.{field_name}")
+        )
+        if code == CLK_SEARCH_RANGE_BANK:
+            message = (
+                f"search() range in {', '.join(bad)} at {location_text}; CLICK's Search "
+                f"takes a range in {', '.join(allowed)} only."
+            )
+            suggestion = "Copy the values into a range in one of those banks and search that."
+        else:
+            message = (
+                f"search() result in {', '.join(bad)} at {location_text}; CLICK's Search "
+                "takes a DS Result only."
+            )
+            suggestion = "Map the result to a DS address, and copy it on from there if needed."
+        findings.append(
+            ClickFinding(
+                code=code,
+                severity=_route_severity(code, mode),
+                message=message,
+                location=location_text,
+                suggestion=suggestion,
+            )
+        )
+    return findings
+
+
+# The banks CLICK v4's Math dialog takes as its Result (checked in the editor,
+# 2026-11-06): DS, DD, DF, TD, CTD, and DH in a hex Math.  DH is allowed in a
+# decimal Math too: whether the dialog takes it there is unread.
+_MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "DH")
+
+
+def _evaluate_math_dest_bank(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """CLK_MATH_DEST_BANK: a math() into a bank CLICK's Math Result does not take
+    (a bit, XD, YD, SD, TXT).  An unresolved destination is reported by the
+    write-target check."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    resolution = resolver.resolve_operand_slots(instruction.dest)
+    banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+    bad = [bank for bank in banks if bank not in _MATH_DEST_BANKS]
+    if not bad:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.dest"))
+    return [
+        ClickFinding(
+            code=CLK_MATH_DEST_BANK,
+            severity=_route_severity(CLK_MATH_DEST_BANK, mode),
+            message=(
+                f"math() into {', '.join(bad)} at {location_text}; CLICK's Math takes a "
+                "Result in DS, DD, DF, TD or CTD, or DH in a hex Math."
+            ),
+            location=location_text,
+            suggestion=(
+                "Store the result in a register of one of those banks, and test or copy "
+                "it on from there."
+            ),
+        )
+    ]
 
 
 # The fewest characters ``to_text()`` writes of a tag of each type, and whether that
@@ -771,6 +915,59 @@ def _evaluate_timer_preset_overflow(
                 ),
                 location=location_text,
                 suggestion=_build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map),
+            )
+        )
+    return findings
+
+
+# The least constant preset CLICK v4's dialogs take (checked in the editor, 2026-11-06):
+# a flasher or a timed coil refuses 0, a debounce and a drum step take 0 and refuse
+# a negative one.  A register preset takes any value.
+_CONSTANT_PRESET_FLOORS: dict[str, tuple[str, int, tuple[str, ...]]] = {
+    "DebounceInstruction": ("debounce", 0, ("on_preset", "off_preset")),
+    "FlasherInstruction": ("flasher", 1, ("on_preset", "off_preset")),
+    "TimedInstruction": ("timed", 1, ("on_preset",)),
+    "TimeDrumInstruction": ("time_drum", 0, ()),
+    "TimeEventDrumInstruction": ("time_event_drum", 0, ()),
+}
+
+
+def _evaluate_timer_preset_floor(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """CLK_TIMER_PRESET_TOO_LOW: a constant preset below what CLICK's dialog takes."""
+    spec = _CONSTANT_PRESET_FLOORS.get(type(instruction).__name__)
+    if spec is None:
+        return []
+    verb, floor, fields = spec
+    presets = (
+        [(field, getattr(instruction, field)) for field in fields]
+        if fields
+        else [(f"presets[{index}]", p) for index, p in enumerate(instruction.presets)]
+    )
+    least = "1 or more" if floor == 1 else "0 or more"
+    findings: list[ClickFinding] = []
+    for field_name, preset in presets:
+        if not isinstance(preset, int) or isinstance(preset, bool) or preset >= floor:
+            continue
+        location_text = _format_location(
+            _instruction_location(base_location, f"instruction.{field_name}")
+        )
+        findings.append(
+            ClickFinding(
+                code=CLK_TIMER_PRESET_TOO_LOW,
+                severity=_route_severity(CLK_TIMER_PRESET_TOO_LOW, mode),
+                message=(
+                    f"{verb}() preset {preset} at {location_text}: CLICK's editor takes a "
+                    f"constant preset of {least} there."
+                ),
+                location=location_text,
+                suggestion=(
+                    f"Use a constant of {least}, or a DS tag holding the value: a register "
+                    "preset takes any value."
+                ),
             )
         )
     return findings

@@ -6,7 +6,8 @@ so 6197 is "15" (49, 53); a NUL reads 0.
 ``copy_more``:
 
 - ``across_types``: a Copy of a constant into a C bit: 2 (Result1), 1 where any nonzero is on, 0
-  where the low bit is taken (CLICK: 0).  2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
+  where the low bit is taken (CLICK: 0; pyrung reads 1, pending BIT: CLICK's editor
+  refuses the form, so the export takes it only as a paste).  2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
   refuses a DS or DF into a C and a C into a DS or DF (``CLK_COPY_BANK_INCOMPATIBLE``), so those
   are not asked.
 - ``pointer_limits``: ``faults/pointer_past_bank`` reads a DD past its bank.  The others, by
@@ -34,7 +35,8 @@ so 6197 is "15" (49, 53); a NUL reads 0.
   17).  Leaving the whole range on a bad character: 1089, 2.  Stopping at it: 109, 2.  Going
   past it: 12 with 1 or 3; CLICK skips it and leaves its slot, 12 and 2.  Fill: DF 2.7 into a
   DS range: 2 truncated, 3 rounded (Result3).  Fill of 2 into a C range: on, by any nonzero
-  (Result4 = 1), off by the low bit (CLICK: 0).
+  (Result4 = 1), off by the low bit (CLICK: 0;
+  pyrung reads 1, pending BIT, as for ``across_types``).
 
 The cases own what ``memory.OWNED`` lists under these groups.
 """
@@ -249,6 +251,7 @@ group = Group(
             init=init_across_types,
             expect={"Result1": 0, "ErrorCode": 2},
             probe="what a Copy does across bits and numbers",
+            pending="BIT",
         ),
         case(
             "A Copy from a pointer past the bank leaves the destination, with no flag: DS4501 "
@@ -309,6 +312,7 @@ block_group = Group(
             init=init_block_forms,
             expect={"Result1": 12, "Result2": 2, "Result3": 2, "Result4": 0},
             probe="a block copy's converter; a Fill across types",
+            pending="BIT",
         ),
     ],
 )

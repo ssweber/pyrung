@@ -2553,9 +2553,9 @@ def _through_the_store(
     inverse = tuple(raw for raw in raws if _is_number(raw))
     answered = len(inverse) == len(raws)
 
-    # A Word's store from a DINT or REAL clamps above and wraps below, and a bit takes a
-    # number's low bit: more than one way to a value, not worked out.
-    if store is not None and store.kind in ("word", "bit") and source_tag.type != TagType.BOOL:
+    # A Word's store from a DINT or REAL clamps above and wraps below, and a bit is on for
+    # every nonzero number: more than one way to a value, not worked out.
+    if store is not None and store.kind in ("word", "bool") and source_tag.type != TagType.BOOL:
         return _Hop(inverse, False)
     if store is None or store.kind != "wrap":
         if source_tag.type != TagType.REAL:

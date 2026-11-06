@@ -96,8 +96,7 @@ class CopyInstruction(OneShotMixin, Instruction):
     yet measured).  This differs from `CalcInstruction`, which wraps.  A WORD
     into an INT keeps its bits (0xFFFF is -1); into a WORD a constant keeps its
     low 16 bits, and a DINT or REAL clamps past 65535 and below 0 keeps its low
-    16 bits, with no flag (see ``copy_store_transform``).  Into a BOOL, a number
-    stores its low bit.
+    16 bits, with no flag (see ``copy_store_transform``).
 
     **Pointer errors:** A pointer below its bank sets the address-error fault
     flag and skips the copy. A pointer past its bank raises no flag: a

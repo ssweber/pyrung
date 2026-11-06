@@ -250,18 +250,6 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return value & 0xFFFF",
         "",
     ],
-    # A Copy into a bit takes a number's low bit (storage.py's "bit").
-    "_store_bit": [
-        "def _store_bit(value):",
-        "    if type(value) is bool:",
-        "        return value",
-        "    if type(value) is float and not math.isfinite(value):",
-        "        return False",
-        "    if type(value) is int or type(value) is float:",
-        "        return bool(int(value) & 1)",
-        "    return bool(value)",
-        "",
-    ],
     "_store_real": [
         "def _store_real(value):",
         "    if type(value) is not float:",
