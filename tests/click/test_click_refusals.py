@@ -17,6 +17,7 @@ from pyrung.click.validation import (
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_MATH_BIT_OPERAND,
     CLK_MATH_DEST_BANK,
+    CLK_MATH_MODE_MIXED,
     CLK_SEARCH_RANGE_BANK,
     CLK_SEARCH_RESULT_NOT_DS,
     CLK_TIMER_PRESET_TOO_LOW,
@@ -201,10 +202,22 @@ def test_a_math_result_in_each_bank_the_dialog_takes_passes():
             math(ds[1] + 1, td[2])
             math(ds[1] + 1, ctd[2])
             math(dh[1] + 1, dh[2])
-            # A decimal Math into DH: unread in the dialog, so allowed.
+
+    assert _found(body, CLK_MATH_DEST_BANK) == []
+
+
+def test_a_decimal_math_into_dh_is_refused_as_a_mixed_math():
+    # The dialog refuses a decimal Math into DH (2026-11-06).  A Word destination makes the
+    # Math decimal only through a non-Word operand, which CLK_MATH_MODE_MIXED flags, so the
+    # destination check has nothing of its own to add.
+    def body():
+        with Rung(x[1]):
             math(ds[1] + 1, dh[3])
 
     assert _found(body, CLK_MATH_DEST_BANK) == []
+    (finding,) = _found(body, CLK_MATH_MODE_MIXED)
+    assert "mixes WORD" in finding.message
+    _export_refuses(body, CLK_MATH_MODE_MIXED)
 
 
 # --- Search banks -------------------------------------------------------------------

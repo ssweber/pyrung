@@ -40,9 +40,8 @@ and DF411..DF420.
   contacts (the Scratch contact is written by an earlier body rung, so the
   second copy re-reads nothing the calc wrote).  The count input is on in
   iterations 1, 2 and 4 of 4 (``loop/counter_inside_loop``, F8), the calc runs
-  on those three.  Adopted: the two body rungs read like one rung holding
-  both, Result1 = 2 (counter edges) and Result2 = 3 (the calc).  A CLICK that
-  refuses the loop never fires the case.
+  on those three: Result1 = 2 (counter edges) and Result2 = 3 (the calc).  A
+  CLICK that refuses the loop never fires the case.
 """
 
 from __future__ import annotations
@@ -183,10 +182,9 @@ group = Group(
             probe="RAND with a DF bound, finite and +Inf",
         ),
         case(
-            "A For body rung with an instruction above a counter is two body rungs on "
-            "a CLICK, and reads like the one rung: the count input is on in iterations "
-            "1, 2 and 4 of 4, the counter counts 2 edges (Result1) and the calc above "
-            "it runs 3 times (Result2)",
+            "A counter in a For body is a body rung of its own, below a body rung with the "
+            "calc and the same contacts: the count input is on in iterations 1, 2 and 4 of "
+            "4, the counter counts 2 edges (Result1) and the calc runs 3 times (Result2)",
             ladder=prove_loop_body_split,
             expect={"Result1": 2, "Result2": 3},
             probe="S5 #4: a For body split into separate body rungs",

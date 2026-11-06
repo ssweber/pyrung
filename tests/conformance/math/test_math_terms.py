@@ -50,7 +50,7 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, fill, latch, math, out, reset, system
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import c, dd, df
-from tests.conformance.probe_kit import between, class_of, finish, flag_bit, once
+from tests.conformance.probe_kit import class_of, finish, flag_bit, once
 from tests.conformance.scans import count_scans, done, scans_for
 
 SC40 = system.fault.division_error
@@ -181,11 +181,11 @@ group = Group(
             ladder=prove_wide_values,
             init=init_wide_values,
             expect={
-                "Result1": between(0, 4),
-                "Result2": between(-21475, 21475),
-                "Result3": between(0, 5),
-                "Result4": between(0, 3),
-                "ErrorCode": between(-32768, 32767),
+                "Result1": 3,
+                "Result2": 0,
+                "Result3": 3,
+                "Result4": 1,
+                "ErrorCode": 24,
             },
             probe="ABS of the least DD; a constant past 32 bits over a DD (2)",
         ),

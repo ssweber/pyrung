@@ -11,6 +11,7 @@ An expectation is pyrung's reading today; a CLICK that reads otherwise prints wh
   takes one bit.  A search above 0x8000 over a DH holding 5, 0xFFFF, 7 (Result4): 73 for an
   unsigned compare, -1 for a signed one, where ``search`` read no Word table.  A one-shot search, its
   table moved after the first scan, its rung held: ErrorCode = 1 kept the first hit, 2 searched again.
+  Its result is a DS (a Search into a DD is refused; the first round read one, and nothing stored).
 
 The cases own what ``memory.OWNED`` lists under this group.
 """
@@ -28,7 +29,7 @@ from pyrung.core import (
     reset,
     search,
 )
-from tests.conformance.memory import c, dd, dh
+from tests.conformance.memory import c, dh, ds
 from tests.conformance.scans import count_scans, done, scans_for
 
 
@@ -63,22 +64,22 @@ def prove_ranges_and_search(slot):
         search(dh.select(72, 74) > 0x8000, result=slot.Result4, found=c[1630])
     # The table moves after the search's first scan, its rung still true.
     with Rung(slot.Cmd != 0, slot.Scratch >= 2):
-        search(dh.select(75, 76) == 9, result=dd[77], found=c[1633], oneshot=True)
+        search(dh.select(75, 76) == 9, result=ds[4322], found=c[1633], oneshot=True)
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(0, dh[75])
         copy(9, dh[76])
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, dd[77] == 75):
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, ds[4322] == 75):
         copy(1, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, dd[77] == 76):
+    with Rung(slot.Cmd != 0, slot.Scratch == 6, ds[4322] == 76):
         copy(2, slot.ErrorCode)
     done(slot)
 
 
 def init_ranges_and_search(slot):
-    fill(False, c.select(1627, 1630))
+    reset(c.select(1627, 1630))
     reset(c[1633])
     fill(0, dh.select(72, 76))
-    copy(0, dd[77])
+    copy(0, ds[4322])
 
 
 group = Group(
