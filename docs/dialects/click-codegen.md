@@ -2,7 +2,7 @@
 
 `ladder_to_pyrung()` and `ladder_to_pyrung_project()` convert CLICK ladder data back into executable pyrung Python source. This is the reverse of [`pyrung_to_ladder()`](click.md#ladder-csv-export), which exports to CLICK.
 
-CSV operands accept supported CLICK expressions, not arbitrary Python calls. Unsupported syntax raises `ValueError` during generation. Imported names, comments, and string values are rendered as data. An editable Python workspace is different. Running its files intentionally executes Python with your account's permissions.
+CSV operands accept supported CLICK expressions, not arbitrary Python calls. Unsupported syntax raises `ValueError` during generation. Imported names, comments, and string values are rendered as data. The generated project itself is still Python. Running its files runs that code with your account's permissions, as any Python script does.
 
 ## Single-file codegen
 

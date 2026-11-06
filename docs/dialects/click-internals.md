@@ -45,6 +45,6 @@ Each cost below excludes the rung's contacts unless noted.
 
 A rung with two or more output legs pays extra. The extra is 1, plus 1 for each leg without a contact of its own (the first leg is included). Two coils on one rung cost 6 with their contact, not 3.
 
-The `math` row matches all six measured formulas. It counts operands and operators but not parentheses. `DS30 + DS31` is 5 and `(DS33 * DS34 + DS35) / DS36` is 9.
+The `math` row counts operands and operators but not parentheses. `DS30 + DS31` is 5 and `(DS33 * DS34 + DS35) / DS36` is 9.
 
-A drum is estimated as 8 plus its pattern cells (outputs times steps), plus its contacts. Only a 2-output, 3-step drum has been checked on a CLICK.
+A drum is estimated as 8 plus its pattern cells (outputs times steps), plus its contacts.

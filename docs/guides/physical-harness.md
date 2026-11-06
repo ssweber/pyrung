@@ -4,7 +4,7 @@ Once you have a working program with UDTs, you can annotate the physical behavio
 
 ## The problem
 
-A typical device-heavy test file is 80% feedback toggling:
+Much of a device-heavy test file is feedback toggling:
 
 ```python
 def test_gripper_cycle():

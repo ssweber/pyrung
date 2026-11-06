@@ -2,7 +2,7 @@
 
 `pyrung.circuitpy` generates a self-contained CircuitPython scan loop from the same program you already tested in simulation. The same pyrung logic runs in Python *and* on real hardware. Write once, simulate, deploy.
 
-It targets the [ProductivityOpen P1AM-200](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html). This is tinkerer-friendly PLC hardware with a CircuitPython runtime. It is currently the only PLC-class controller where this kind of codegen is this straightforward. The hardware model (35 modules), code generator, and validation are fully implemented and tested.
+It targets the [ProductivityOpen P1AM-200](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html). This is tinkerer-friendly PLC hardware with a CircuitPython runtime.
 
 ## Installation
 
@@ -54,9 +54,9 @@ The built-in `MODULE_CATALOG` includes 35 modules from the [Productivity1000 ser
 
 Discrete modules map to `Bool`, analog modules to `Int`, and temperature modules to `Real`.
 
-### Excluded modules (v2)
+### Unsupported modules
 
-[`P1-04PWM`](https://facts-engineering.github.io/modules/P1-04PWM/P1-04PWM.html) (PWM) and [`P1-02HSC`](https://facts-engineering.github.io/modules/P1-02HSC/P1-02HSC.html) (high-speed counter) require a multi-tag channel model and are deferred to v2.
+pyrung doesn't support the [`P1-04PWM`](https://facts-engineering.github.io/modules/P1-04PWM/P1-04PWM.html) (PWM) or the [`P1-02HSC`](https://facts-engineering.github.io/modules/P1-02HSC/P1-02HSC.html) (high-speed counter).
 
 ## Writing a CircuitPython program
 
@@ -126,12 +126,12 @@ The generator runs strict validation internally and checks the generated source 
 
 ### Generated output
 
-Code generation produces two files:
+Code generation writes `code.py`, plus `pyrung_rt.py` when the program needs the runtime library:
 
 - **`code.py`** — your program. Tags, ladder logic, I/O, scan loop. Regenerated every time you change your logic.
-- **`pyrung_rt.mpy`** — the pyrung runtime library (pre-compiled). Helper functions, Modbus TCP server/client state machine. It is the same for every project, so install it once.
+- **`pyrung_rt.py`** — the pyrung runtime library. Helper functions, Modbus TCP server/client state machine. It is the same for every project, so install it once.
 
-`code.py` imports from `pyrung_rt` at runtime. The `.mpy` format loads faster and uses less memory than `.py` on CircuitPython.
+`code.py` imports from `pyrung_rt` at runtime. For faster boot and lower memory use, install the pre-compiled `pyrung_rt.mpy` from the [releases page](https://github.com/ssweber/pyrung/releases) in place of `pyrung_rt.py`.
 
 ### code.py structure
 
