@@ -212,13 +212,16 @@ def test_continued_rung_reads_its_chain():
 
 
 def test_box_leg_below_a_write_is_flagged():
+    # A box with pins ends its rung: the write sits on the wire above it.
     with Program() as program:
         with Rung(Go):
             latch(P)
+        with Rung(Go).continued():
             count_up(Ct, preset=10).reset(P)
     (finding,) = _findings(program)
     assert finding.reader == "box"
     assert finding.tags == ("P",)
+    assert finding.target_name == "Main:R2"
     assert ".reset(P)" in finding.message
 
 
@@ -282,16 +285,17 @@ def test_for_body_rungs_read_their_own_contacts_live():
     assert _findings(program) == ()
 
 
-def test_box_leg_in_a_for_body_rung_below_a_write_is_flagged():
+def test_box_leg_in_a_for_body_rung_reads_the_body_rung_above_live():
+    # A box with pins ends its body rung, so a write before it is a body rung of
+    # its own, read live in both models.
     with Program() as program:
         with Rung():
             with forloop(1):
                 with Rung(Go):
                     latch(P)
+                with Rung(Go):
                     count_up(Ct, preset=10).reset(P)
-    (finding,) = _findings(program)
-    assert finding.reader == "box"
-    assert "For body rung 1" in finding.message
+    assert _findings(program) == ()
 
 
 def test_branch_below_a_for_loop_sees_its_body_writes():
@@ -387,6 +391,7 @@ def test_indexed_read_inside_an_expression_or_a_leg_is_flagged():
                 out(Y1)
         with Rung(Go):
             copy(1, ds[3])
+        with Rung(Go).continued():
             count_up(Ct, preset=10).reset(ds[p] == 2)
     branch_finding, box_finding = _findings(program)
     assert branch_finding.tags == box_finding.tags == ("DS[...]",)
@@ -426,8 +431,9 @@ def test_carets_find_a_bank_member_and_an_indexed_access():
             copy(1, ds[pb])
             with branch(ds[3] == 1):
                 out(Y1)
-        with Rung(Go):  # named write, bounded read in a box leg
+        with Rung(Go):  # named write, bounded read in a box leg on the wire below
             copy(1, ds[3])
+        with Rung(Go).continued():
             count_up(Ct, preset=10).reset(ds[pb] == 2)
     findings = _findings(program)
     assert [f.tags for f in findings] == [("DS[...]",), ("DS3",), ("DS3",), ("DS3",)]
