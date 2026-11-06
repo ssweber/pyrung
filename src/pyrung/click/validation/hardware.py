@@ -460,9 +460,14 @@ class _Written:
         return f"{self.count} {what} or more{finite}"
 
     def dropped(self, room: int) -> str:
+        """What a store with *room* elements left drops."""
         if self.exact:
-            return f"the last {self.count - room}"
-        return f"all but the first {room}"
+            lost = self.count - room
+            return "the last one" if lost == 1 else f"the last {lost}"
+        return "all but the first" if room == 1 else f"all but the first {room}"
+
+    def dropped_verb(self, room: int) -> str:
+        return "is" if self.exact and self.count - room == 1 else "are"
 
     def kept(self) -> str:
         return "every one" if self.exact else f"the first {self.count}"
@@ -561,8 +566,7 @@ def _evaluate_text_past_bank(
                 ),
                 location=location_text,
                 suggestion=(
-                    f"Start it at {_element_name(block, lowest)} or lower to keep "
-                    f"{written.kept()}."
+                    f"Start it at {_element_name(block, lowest)} or lower to keep {written.kept()}."
                     if lowest >= block.start
                     else f"Map {block.name} onto more of {memory_type} to keep {written.kept()}."
                 ),
@@ -578,7 +582,7 @@ def _evaluate_text_past_bank(
             message=(
                 f"copy() into {start} at {location_text} writes {written.describe(what)}, "
                 f"past {memory_type}{bank.max_addr} at the end of the bank: "
-                f"{written.dropped(bank_room)} are dropped."
+                f"{written.dropped(bank_room)} {written.dropped_verb(bank_room)} dropped."
             ),
             location=location_text,
             suggestion=(

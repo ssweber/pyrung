@@ -242,9 +242,9 @@ def test_the_write_sites_of_a_text_stop_at_the_block_end():
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_text_into_a_bank_of_another_blocks_object_keeps_its_addresses(engine, monkeypatch):
     """Two ``ClickBlocks()`` are one TXT bank: a range over one still lets a text
-    into the other land at its own addresses."""
+    into the other land at its own addresses, TXT2 too, which no rung names."""
     first, second = ClickBlocks(), ClickBlocks()
-    watch = [second.txt[1], second.txt[2], first.txt[5]]
+    watch = [second.txt[1], first.txt[5]]
     with Program(strict=False) as prog:
         with Rung():
             fill("x", first.txt.select(5, 5))
@@ -252,8 +252,14 @@ def test_a_text_into_a_bank_of_another_blocks_object_keeps_its_addresses(engine,
         with Rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
+    # Generated CircuitPython holds only the elements the program names.
+    if engine != "circuitpy":
+        watch.insert(1, second.txt[2])
     values, _names = _scan(prog, engine, [*watch, SC43], monkeypatch)
-    assert [values[tag.name] for tag in watch] == ["A", "B", "x"]
+    wanted = {"TXT1": "A", "TXT2": "B", "TXT5": "x"}
+    assert {tag.name: values[tag.name] for tag in watch} == {
+        tag.name: wanted[tag.name] for tag in watch
+    }
     assert bool(values[SC43.name]) is False
 
 
@@ -301,6 +307,7 @@ def test_a_text_into_a_mapped_block_ends_with_that_block(engine, bank_read_first
         with Rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
-    values, _names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
     assert [values[tag.name] for tag in watch] == ["A", "B", BLANK_CHAR]
     assert bool(values[SC43.name]) is False
+    assert _past(names, "Msg", 10) == []
