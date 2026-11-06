@@ -162,7 +162,8 @@ class TestValueDomainExtraction:
     @pytest.mark.xfail(
         strict=True,
         reason="a Real input with whole-number min/max is searched at its whole numbers "
-        "(_declared_domain), so R = 2.5 is never tried",
+        "(_declared_domain), so R = 2.5 is never tried: the search answers Intractable, and "
+        "a Counterexample needs a Real's fractions modelled through %",
     )
     def test_a_mod_of_a_real_reaches_its_fraction(self):
         logic, hi = self._real_mod_program()
@@ -582,3 +583,51 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
     domains = _collect_literal_write_domains(logic, graph.tags, graph.indirect_reach)
 
     assert "DS7" not in domains
+
+
+# A REAL past 2**53 has no value one away: ``1e20 + 1 == 1e20``.
+LARGE_REALS = [
+    pytest.param(lambda r: r > 1e20, id="above 1e20"),
+    pytest.param(lambda r: r > 1e16, id="above 1e16"),
+    pytest.param(lambda r: r < -1e30, id="below -1e30"),
+    pytest.param(lambda r: r > 3.4e38, id="above 3.4e38"),
+]
+
+
+def _fires(logic: Program, trace: list[TraceStep], name: str) -> bool:
+    return bool(_replay_trace(logic, trace).current_state.tags[name])
+
+
+@pytest.mark.parametrize("compare", LARGE_REALS)
+def test_a_large_real_compared_with_a_literal_has_values_past_it(compare) -> None:
+    level, hit = Real("BigR", external=True), Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(compare(level)):
+            out(hit)
+    result = always(logic, ~hit)
+    assert isinstance(result, Counterexample), result
+    assert _fires(logic, result.trace, "Hit")
+
+
+@pytest.mark.parametrize("compare", LARGE_REALS)
+def test_a_large_real_carried_back_through_a_copy_has_values_past_it(compare) -> None:
+    level, copied, hit = Real("BigR", external=True), Real("BigCopy"), Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(level, copied)
+        with Rung(compare(copied)):
+            out(hit)
+    result = always(logic, ~hit)
+    assert isinstance(result, Counterexample), result
+    assert _fires(logic, result.trace, "Hit")
+
+
+def test_two_large_reals_compared_with_each_other_past_a_literal() -> None:
+    """Both above 1e20 and one above the other: two floats past the point."""
+    pv, sp, hit = Real("BigPV", external=True), Real("BigSP", external=True), Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(sp > 1e20, pv > 1e20, pv > sp):
+            out(hit)
+    result = always(logic, ~hit)
+    assert isinstance(result, Counterexample), result
+    assert _fires(logic, result.trace, "Hit")

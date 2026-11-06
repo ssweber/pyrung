@@ -810,16 +810,8 @@ def test_input_equal_to_written_external(config, ext_max) -> None:
         _assert_counterexample(logic, bad, config)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "review N3 (base too): an index through calc (math(Ptr + 0, P2); "
-        "copy(Tbl[P2], D); D == 370) keeps Ptr's own partition (1, 2, 49, 50): "
-        "the literal is not carried back through the table and the calc, so "
-        "Ptr = 37 is never tried: false Proven"
-    ),
-)
 def test_index_through_calc_of_element_compared_with_literal() -> None:
+    """``math(Ptr + 0, P2)`` reaches a table index: Ptr takes every value of 1..50."""
     table = Block("KTbl", TagType.INT, 1, 50)
     pointer = Int("KPtr", external=True, min=1, max=50, default=1)
     index, loaded = Int("KP2"), Int("KD")

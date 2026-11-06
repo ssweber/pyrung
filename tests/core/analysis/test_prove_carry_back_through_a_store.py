@@ -325,12 +325,6 @@ def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit, o
         assert _witness_fires(program, verdict, hit)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a declared REAL feeding a calc no edge covers gets the whole numbers of its range "
-    "(classify.py, the _declared_domain fallback after _unsupported_reverse_sources), "
-    "so 0.5 is never tried",
-)
 @pytest.mark.parametrize(
     ("dest_type", "build", "compare"),
     [
@@ -341,7 +335,7 @@ def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit, o
 def test_a_declared_real_into_a_calc_with_no_way_back_is_not_proven(
     dest_type, build, compare
 ) -> None:
-    """Both fire at 0.5, inside the declared range, and the verifier says Proven."""
+    """Both fire at 0.5, inside the declared range: the whole numbers of it are not enough."""
     source = Real("S", external=True, min=0.0, max=10.0)
     dest = dest_type("D")
     hit = Bool("Hit")
@@ -600,9 +594,9 @@ def _a_pointer_too() -> Program:
     )
 
 
-# False Provens for the prover sweep: a carried source's other way to the comparison goes
-# through something the carried set does not look at.
-STILL_FALSE_PROVEN = pytest.mark.parametrize(
+# A carried source's other way to the comparison goes through something the carried set
+# does not look at: the source reaches more than its own comparisons with a literal.
+ANOTHER_WAY_THERE = pytest.mark.parametrize(
     ("build", "value"),
     [
         pytest.param(_a_square_squared, 7, id="a-calc-of-a-calc"),
@@ -612,17 +606,12 @@ STILL_FALSE_PROVEN = pytest.mark.parametrize(
 )
 
 
-@STILL_FALSE_PROVEN
-def test_the_scans_the_open_false_provens_miss_do_fire(build, value) -> None:
+@ANOTHER_WAY_THERE
+def test_the_scans_another_way_there_reaches_do_fire(build, value) -> None:
     assert _fires_at(build(), "I", value, _HIT)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="the carried set misses this source's other way to the comparison: a false Proven",
-)
-@STILL_FALSE_PROVEN
+@ANOTHER_WAY_THERE
 def test_a_carried_source_with_another_way_to_the_comparison_is_not_proven(build, value) -> None:
     verdict = never(build(), _HIT, max_states=3000, depth_budget=6)
     assert not isinstance(verdict, Proven)

@@ -31,6 +31,7 @@ from .absorb import (
     _ThresholdAbsorptions,
 )
 from .classify import (
+    _CarryBack,
     _classify_dimensions_from_graph,
     _classify_profile_emit,
     _classify_profile_enabled,
@@ -201,6 +202,9 @@ class _PipelineCache:
     unclassified_written: frozenset[str]
     threshold_absorptions: _ThresholdAbsorptions | None
     stepping_tags: frozenset[str]
+    # Inputs a search that finds no scan answers nothing for (see
+    # classify._answer_for_inputs).
+    unanswered_inputs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -277,11 +281,14 @@ class _PassContext:
     _init_constant_projections: dict[str, tuple[str, Any]] | None = None
     _exclusions: dict[str, str] | None = None
     _unclassified_written: frozenset[str] = frozenset()
+    # Inputs whose values tried may not be all the program tells apart, with what
+    # each one's value reaches (classify._answer_for_inputs).
+    _unanswered_inputs: dict[str, str] = field(default_factory=dict)
     # (domains, blockers) fixpoint shared by find_threshold_absorptions and
     # classify_dimensions — computed once per pipeline run (see
     # _get_structural_domain_info).
     _structural_domain_info: (
-        tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]] | None
+        tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack] | None
     ) = None
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     _pending_infeasible_hints: list[str] = field(default_factory=list)
@@ -304,6 +311,7 @@ class _PassContext:
             unclassified_written=self._unclassified_written,
             threshold_absorptions=self.threshold_absorptions,
             stepping_tags=self._stepping_tags or frozenset(),
+            unanswered_inputs=dict(self._unanswered_inputs),
         )
 
     def _inputs_a_callable_may_read(self) -> tuple[str, ...]:
@@ -541,7 +549,7 @@ class _PassContext:
             nondeterministic_dims=self.nondeterministic_dims,
             unanswered_inputs={
                 name: target
-                for name, target in _get_structural_domain_info(self)[2].items()
+                for name, target in self._unanswered_inputs.items()
                 if name in self.nondeterministic_dims
             },
             inputs_a_callable_may_read=self._inputs_a_callable_may_read(),
@@ -892,6 +900,7 @@ def _apply_classification_cache(ctx: _PassContext) -> None:
     ctx._consumed_accs = cache.consumed_accs
     ctx._stepping_tags = cache.stepping_tags
     ctx._unclassified_written = cache.unclassified_written
+    ctx._unanswered_inputs = dict(cache.unanswered_inputs)
     logger.info(
         "classify_dimensions: using cached results (%d stateful, %d ND)",
         len(ctx.stateful_dims),
@@ -911,6 +920,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     unclassified: set[str] = set()
     stepping: set[str] = set()
     threshold_absorptions: list[_ThresholdAbsorptions] = []
+    unanswered: dict[str, str] = {}
     structural_domain_info = _get_structural_domain_info(ctx)
     if profile:
         profile_last = _classify_profile_mark(timings, "structural_domain_info", profile_last)
@@ -926,6 +936,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         unclassified=unclassified,
         stepping_tags_out=stepping,
         threshold_absorptions_out=threshold_absorptions,
+        unanswered_out=unanswered,
         model_system_points=not ctx.domains_only,
         exhaust_tag_compared_inputs=not ctx.domains_only,
         # REAL gap points cover the search; how()'s prior keeps whole-number
@@ -943,6 +954,7 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     if threshold_absorptions:
         ctx.threshold_absorptions = threshold_absorptions[-1]
     ctx._stepping_tags = frozenset(stepping)
+    ctx._unanswered_inputs = unanswered
     if isinstance(result, Intractable):
         ctx._pending_infeasible_tags.extend(result.tags)
         ctx._pending_infeasible_hints.extend(result.hints)
@@ -1933,7 +1945,7 @@ def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
 
 def _get_structural_domain_info(
     ctx: _PassContext,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], dict[str, str]]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack]:
     """Structural domains + reverse blockers, computed once per pipeline run.
 
     The fixpoint over ``(program, graph, all_exprs)`` dominates context-build
