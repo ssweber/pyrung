@@ -1,28 +1,28 @@
-"""A box with pins gets a CLICK rung of its own (CLICK C000A).
+"""A box with pins ends its rung, in pyrung as on a CLICK (C000A).
 
 CLICK takes all inputs (pins) of a box instruction from the same branch, the
 rail: "All inputs of the box instruction must originate from the same branch."
 A counter, retentive timer, shift register or drum whose input splits off a
 node another output also hangs from can be drawn but does not compile.  So the
-exporter splits a pyrung rung at each such box: the outputs above it stay on
-the first CLICK rung, the box starts a rung of its own, and the outputs below
-it follow as continued rungs.  Every CLICK rung the split makes repeats the
-contacts in front of its outputs, and CLICK solves row by row, as pyrung does,
-so a repeated contact is read again where the new rung stands.  The export is
-refused only where that second read could see another value: a write on the
-same rung, in between, of a tag the contact reads.  A box with no pins (a TON)
-may share the wire.
+program build refuses a box with pins beside any other output or branch of its
+rung; what comes before it goes in a rung above, what follows it in a
+``.continued()`` rung (a further wire of the CLICK rung) or a rung of its own.
+
+A pyrung rung and its CLICK rung are then the same drawing, row for row, both
+ways: export writes each rung as it stands, and import gives each wire of a
+CLICK box rung back as a rung of its own.  A box with no pins (a TON) may share
+the wire.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import random
 from collections.abc import Callable
 
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.click.ladder.types import LadderExportError
 from pyrung.core import PLC, Counter, Or, Program, Rung, Timer
 from pyrung.core.program import (
     branch,
@@ -42,13 +42,16 @@ from tests.click.helpers import exec_with_source
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
-C000A = r"all inputs \(pins\) of a box instruction must start from the same branch"
+ENDS_ITS_RUNG = "has pins, so it ends its rung"
 
 
 def _drum() -> None:
     event_drum(
         outputs=[c[3]], events=[c[2]], pattern=[[1]], current_step=ds[1], completion_flag=c[1]
     ).reset(c[4])
+
+
+# --- Shapes the build refuses: a box with pins shares its rung --------------
 
 
 def _coil_before_drum() -> None:
@@ -81,76 +84,134 @@ def _shift_in_nested_branch() -> None:
 
 def _outputs_below_box() -> None:
     with Rung(x[1]):
-        out(y[1])
         with branch(x[6]):
             count_up(Counter[1], preset=3).reset(x[4])
         out(y[2])
-        with branch(Counter[1].Done):
-            out(y[3])
 
 
-def _no_trunk_contact() -> None:
-    with Rung():
-        out(y[1])
-        with branch(x[5]):
-            count_up(Counter[1], preset=3).reset(x[4])
-        out(y[2])
-
-
-def _box_in_continued_rung() -> None:
+def _box_in_continued_rung_beside_coil() -> None:
     with Rung(x[1]):
         out(y[1])
     with Rung(x[2]).continued():
         latch(c[9])
         with branch(x[7]):
             count_up(Counter[1], preset=3).reset(x[4])
-        out(y[2])
 
 
-def _branch_reads_live() -> None:
-    # The branches read C5 where they stand (after the reset and the latch);
-    # the trunk contact X001 is written by nothing, so repeating it is safe.
-    with Rung(x[1]):
-        reset(c[5])
-        with branch(c[5]):
-            count_up(Counter[1], preset=3).reset(x[4])
-        with branch(x[2]):
-            latch(c[5])
-        with branch(c[5]):
-            out(y[3])
-
-
-def _write_after_the_box() -> None:
-    # The rung after the box re-reads C5 there; nothing between wrote it.
+def _trunk_written_before_box() -> None:
     with Rung(c[5]):
-        with branch(x[2]):
-            count_up(Counter[1], preset=3).reset(x[4])
         reset(c[5])
-        out(y[1])
-
-
-def _two_boxes() -> None:
-    with Rung(x[1]):
         with branch(x[2]):
-            count_up(Counter[1], preset=3).reset(x[4])
-        out(y[1])
-        with branch(x[3]):
-            shift(c.select(11, 18)).clock(x[4]).reset(x[5])
-        out(y[2])
+            count_up(Counter[1], preset=10).reset(x[4])
 
 
-SPLIT: dict[str, Callable[[], None]] = {
+def _box_in_forloop_body_rung_beside_coil() -> None:
+    with Rung(x[3]):
+        with forloop(3):
+            with Rung(x[1]):
+                out(y[1])
+                shift(c.select(11, 18)).clock(x[4]).reset(x[5])
+
+
+REFUSED: dict[str, Callable[[], None]] = {
     "coil_before_drum": _coil_before_drum,
     "coil_before_rton": _coil_before_rton,
     "counter_in_branch_beside_coil": _counter_in_branch_beside_coil,
     "shift_in_nested_branch": _shift_in_nested_branch,
     "outputs_below_box": _outputs_below_box,
-    "no_trunk_contact": _no_trunk_contact,
-    "box_in_continued_rung": _box_in_continued_rung,
-    "branch_reads_live": _branch_reads_live,
-    "write_after_the_box": _write_after_the_box,
-    "two_boxes": _two_boxes,
+    "box_in_continued_rung_beside_coil": _box_in_continued_rung_beside_coil,
+    "trunk_written_before_box": _trunk_written_before_box,
+    "box_in_forloop_body_rung_beside_coil": _box_in_forloop_body_rung_beside_coil,
 }
+
+
+# --- The same programs written as CLICK draws them ---------------------------
+
+
+def _drum_below_coil() -> None:
+    with Rung(x[1]):
+        latch(c[3])
+    with Rung(x[1]).continued():
+        _drum()
+
+
+def _rton_below_coil() -> None:
+    with Rung(x[1]):
+        out(y[1])
+    with Rung(x[1]).continued():
+        on_delay(Timer[1], preset=100, unit="Tms").reset(x[2])
+
+
+def _counter_below_coil() -> None:
+    with Rung(x[1], x[2]):
+        latch(c[1])
+    with Rung(x[1], x[3]).continued():
+        count_up(Counter[1], preset=10).reset(x[4])
+
+
+def _shift_below_coil() -> None:
+    with Rung(x[1]):
+        out(y[1])
+    with Rung(x[1], x[2], x[3]).continued():
+        shift(c.select(11, 18)).clock(x[4]).reset(x[5])
+
+
+def _wires_below_box() -> None:
+    with Rung(x[1], x[6]):
+        count_up(Counter[1], preset=3).reset(x[4])
+    with Rung(x[1]).continued():
+        out(y[2])
+        with branch(Counter[1].Done):
+            out(y[3])
+
+
+def _box_on_a_continued_wire() -> None:
+    with Rung(x[1]):
+        out(y[1])
+    with Rung(x[2]).continued():
+        latch(c[9])
+    with Rung(x[2], x[7]).continued():
+        count_up(Counter[1], preset=3).reset(x[4])
+    with Rung(x[2]).continued():
+        out(y[2])
+
+
+def _box_reads_the_wire_above() -> None:
+    # The box's wire reads C5 where it stands, after the reset above.
+    with Rung(c[5]):
+        reset(c[5])
+    with Rung(c[5], x[2]).continued():
+        count_up(Counter[1], preset=10).reset(x[4])
+
+
+def _two_boxes() -> None:
+    with Rung(x[1], x[2]):
+        count_up(Counter[1], preset=3).reset(x[4])
+    with Rung(x[1]).continued():
+        out(y[1])
+    with Rung(x[1], x[3]).continued():
+        shift(c.select(11, 18)).clock(x[4]).reset(x[5])
+    with Rung(x[1]).continued():
+        out(y[2])
+
+
+def _no_trunk_contact() -> None:
+    with Rung():
+        out(y[1])
+    with Rung(x[5]).continued():
+        count_up(Counter[1], preset=3).reset(x[4])
+    with Rung().continued():
+        out(y[2])
+
+
+def _box_in_a_subroutine() -> None:
+    with Rung():
+        call("Sub")
+    with subroutine("Sub"):
+        with Rung(c[5]):
+            reset(c[5])
+        with Rung(c[5], x[2]).continued():
+            count_up(Counter[1], preset=10).reset(x[4])
 
 
 def _box_alone_then_continued() -> None:
@@ -166,56 +227,26 @@ def _ton_beside_coil() -> None:
         on_delay(Timer[1], preset=100, unit="Tms")
 
 
+WRITTEN: dict[str, Callable[[], None]] = {
+    "drum_below_coil": _drum_below_coil,
+    "rton_below_coil": _rton_below_coil,
+    "counter_below_coil": _counter_below_coil,
+    "shift_below_coil": _shift_below_coil,
+    "wires_below_box": _wires_below_box,
+    "box_on_a_continued_wire": _box_on_a_continued_wire,
+    "box_reads_the_wire_above": _box_reads_the_wire_above,
+    "two_boxes": _two_boxes,
+    "no_trunk_contact": _no_trunk_contact,
+    "box_in_a_subroutine": _box_in_a_subroutine,
+    "box_alone_then_continued": _box_alone_then_continued,
+    "ton_beside_coil": _ton_beside_coil,
+}
+
+
 def _box_in_its_only_branch() -> None:
     with Rung(x[1]):
         with branch(x[2]):
             count_up(Counter[1], preset=10).reset(x[4])
-
-
-ACCEPTED: dict[str, Callable[[], None]] = {
-    "box_alone_then_continued": _box_alone_then_continued,
-    "ton_beside_coil": _ton_beside_coil,
-    "box_in_its_only_branch": _box_in_its_only_branch,
-}
-
-
-def _trunk_written_before_box() -> None:
-    with Rung(c[5]):
-        reset(c[5])
-        with branch(x[2]):
-            count_up(Counter[1], preset=10).reset(x[4])
-
-
-def _box_writes_trunk_contact() -> None:
-    with Rung(~Counter[1].Done):
-        with branch(x[2]):
-            count_up(Counter[1], preset=1).reset(x[4])
-        out(y[1])
-
-
-def _comparison_written_before_box() -> None:
-    with Rung(ds[1] == 0):
-        copy(1, ds[1])
-        with branch(x[2]):
-            count_up(Counter[1], preset=10).reset(x[4])
-
-
-def _refused_in_subroutine() -> None:
-    with Rung():
-        call("Sub")
-    with subroutine("Sub"):
-        with Rung(c[5]):
-            reset(c[5])
-            with branch(x[2]):
-                count_up(Counter[1], preset=10).reset(x[4])
-
-
-REFUSED: dict[str, tuple[Callable[[], None], str]] = {
-    "trunk_written_before_box": (_trunk_written_before_box, "C5"),
-    "box_writes_trunk_contact": (_box_writes_trunk_contact, "Counter_Done (CT1)"),
-    "comparison_written_before_box": (_comparison_written_before_box, "DS1"),
-    "refused_in_subroutine": (_refused_in_subroutine, "C5"),
-}
 
 
 def _tag_map() -> TagMap:
@@ -246,6 +277,28 @@ def _rungs(rows: tuple[tuple[str, ...], ...]) -> list[list[tuple[str, ...]]]:
     return rungs[:-1]
 
 
+def _reimport(program: Program, tag_map: TagMap) -> tuple[Program, TagMap]:
+    code = ladder_to_pyrung(pyrung_to_ladder(program, tag_map))
+    ns = exec_with_source(code, {})
+    reimported, mapping = ns["logic"], ns["mapping"]
+    assert isinstance(reimported, Program) and isinstance(mapping, TagMap)
+    return reimported, mapping
+
+
+def _shape(rungs: list) -> list[tuple]:
+    """Each rung's drawing: continued or not, its contact count, and its items."""
+
+    def items(rung) -> tuple:
+        return tuple(
+            ("branch", len(item._conditions) - item._branch_condition_start, items(item))
+            if isinstance(item, type(rung))
+            else type(item).__name__
+            for item in rung._execution_items
+        )
+
+    return [(rung._use_prior_snapshot, len(rung._conditions), items(rung)) for rung in rungs]
+
+
 _BOXES = ("count_up(", "on_delay(", "shift(", "event_drum(")
 
 
@@ -263,15 +316,24 @@ def _readings(program: Program, tag_map: TagMap, seed: int) -> list[dict[str, ob
     return seen
 
 
-@pytest.mark.parametrize("name", list(SPLIT))
-def test_box_starts_its_own_click_rung(name: str):
-    """The box is the first output of a CLICK rung; rows below it are wires of their own."""
-    bundle = pyrung_to_ladder(_build(SPLIT[name]), _tag_map())
-    rows = bundle.main_rows[1:-1]
+@pytest.mark.parametrize("name", list(REFUSED))
+def test_build_refuses_a_box_that_shares_its_rung(name: str):
+    with pytest.raises(RuntimeError, match=ENDS_ITS_RUNG) as info:
+        _build(REFUSED[name])
+    message = str(info.value)
+    assert "`with Rung(...).continued():`" in message
+    assert message.isascii()
+
+
+@pytest.mark.parametrize("name", [n for n in WRITTEN if n != "ton_beside_coil"])
+def test_box_starts_its_own_click_wire(name: str):
+    """The box is the first output of its wire; the next row with an output starts a wire."""
+    bundle = pyrung_to_ladder(_build(WRITTEN[name]), _tag_map())
+    scopes = [bundle.main_rows, *(rows for _name, rows in bundle.subroutine_rows)]
+    rows = [row for scope in scopes for row in scope[1:]]
     boxes = [index for index, row in enumerate(rows) if row[-1].startswith(_BOXES)]
     assert boxes
     for index in boxes:
-        assert rows[index][0].startswith("R"), rows[index]
         after = index + 1
         while after < len(rows) and rows[after][-1].startswith("."):
             after += 1
@@ -282,15 +344,12 @@ def test_box_starts_its_own_click_rung(name: str):
     assert all(row[1] not in {"T", "|"} and not row[1].startswith("T:") for row in rows)
 
 
-@pytest.mark.parametrize("name", list(SPLIT) + list(ACCEPTED))
-def test_split_round_trips_with_the_same_readings(name: str):
-    shape = SPLIT.get(name) or ACCEPTED[name]
+@pytest.mark.parametrize("name", list(WRITTEN) + ["box_in_its_only_branch"])
+def test_round_trip_keeps_the_readings(name: str):
+    shape = WRITTEN.get(name) or _box_in_its_only_branch
     program = _build(shape)
     tag_map = _tag_map()
-    code = ladder_to_pyrung(pyrung_to_ladder(program, tag_map))
-    ns = exec_with_source(code, {})
-    reimported, mapping = ns["logic"], ns["mapping"]
-    assert isinstance(reimported, Program) and isinstance(mapping, TagMap)
+    reimported, mapping = _reimport(program, tag_map)
     for seed in range(3):
         before = _readings(program, tag_map, seed)
         after = _readings(reimported, mapping, seed)
@@ -300,21 +359,36 @@ def test_split_round_trips_with_the_same_readings(name: str):
             assert {k: left[k] for k in shared} == {k: right[k] for k in shared}, (seed, scan)
 
 
-def test_rton_beside_coil_exports_as_two_rungs():
-    bundle = pyrung_to_ladder(_build(_coil_before_rton), _tag_map())
+@pytest.mark.parametrize("name", list(WRITTEN))
+def test_round_trip_gives_back_the_rungs_written(name: str):
+    """pyrung -> CLICK -> pyrung gives back each rung as written, and the rows
+    it exports to are the rows it came from."""
+    program = _build(WRITTEN[name])
+    tag_map = _tag_map()
+    bundle = pyrung_to_ladder(program, tag_map)
+    reimported, mapping = _reimport(program, tag_map)
+    assert _shape(reimported.rungs) == _shape(program.rungs)
+    for sub, rungs in program.subroutines.items():
+        assert _shape(reimported.subroutines[sub]) == _shape(rungs)
+    again = pyrung_to_ladder(reimported, mapping)
+    assert again.main_rows == bundle.main_rows
+    assert again.subroutine_rows == bundle.subroutine_rows
+
+
+def test_rton_below_coil_exports_as_one_rung_of_two_wires():
+    bundle = pyrung_to_ladder(_build(_rton_below_coil), _tag_map())
     trimmed = [(row[0], row[1], row[-1]) for rung in _rungs(bundle.main_rows) for row in rung]
     assert trimmed == [
         ("R", "X001", "out(Y001)"),
-        ("R", "X001", "on_delay(T1,TD1,preset=100,unit=Tms)"),
+        ("", "X001", "on_delay(T1,TD1,preset=100,unit=Tms)"),
         ("", "X002", ".reset()"),
     ]
 
 
-def test_outputs_below_the_box_continue_its_rung():
-    bundle = pyrung_to_ladder(_build(_outputs_below_box), _tag_map())
+def test_wires_below_the_box_continue_its_rung():
+    bundle = pyrung_to_ladder(_build(_wires_below_box), _tag_map())
     markers = [(row[0], row[-1]) for row in bundle.main_rows[1:-1] if row[-1]]
     assert markers == [
-        ("R", "out(Y001)"),
         ("R", "count_up(CT1,CTD1,preset=3)"),
         ("", ".reset()"),
         ("", "out(Y002)"),
@@ -322,12 +396,13 @@ def test_outputs_below_the_box_continue_its_rung():
     ]
 
 
-def test_box_in_forloop_body_gets_a_body_rung_of_its_own():
+def test_box_in_forloop_body_is_a_body_rung_of_its_own():
     def shape() -> None:
         with Rung(x[3]):
             with forloop(3):
                 with Rung(x[1]):
                     out(y[1])
+                with Rung(x[1]):
                     shift(c.select(11, 18)).clock(x[4]).reset(x[5])
 
     bundle = pyrung_to_ladder(_build(shape), _tag_map())
@@ -341,16 +416,30 @@ def test_box_in_forloop_body_gets_a_body_rung_of_its_own():
     ]
 
 
-@pytest.mark.parametrize("name", list(ACCEPTED))
-def test_export_accepts(name: str):
-    pyrung_to_ladder(_build(ACCEPTED[name]), _tag_map())
+def test_import_gives_each_wire_of_a_box_rung_a_rung_of_its_own():
+    """CLICK -> pyrung -> CLICK: a box rung whose wires share their first contact
+    comes back as the box's rung and one continued() rung per other wire."""
+    header = ("marker", *[f"col{i}" for i in range(31)], "AF")
 
+    def row(marker: str, *cells: str, af: str) -> tuple[str, ...]:
+        filled = list(cells) + ["-"] * (31 - len(cells))
+        return (marker, *filled, af)
 
-@pytest.mark.parametrize("validate", [True, False])
-@pytest.mark.parametrize("name", list(REFUSED))
-def test_export_refuses_a_split_that_rereads_a_written_tag(name: str, validate: bool):
-    shape, tag = REFUSED[name]
-    with pytest.raises(LadderExportError, match=C000A) as info:
-        pyrung_to_ladder(_build(shape), _tag_map(), validate=validate)
-    assert f"writes {tag}" in str(info.value)
-    assert str(info.value).isascii()
+    rows = (
+        header,
+        row("R", "X001", af="latch(C1)"),
+        row("", "X001", af="count_up(CT1,CTD1,preset=3)"),
+        row("", "X004", af=".reset()"),
+        row("", "X001", af="out(Y001)"),
+        row("R", "-", af="end()"),
+    )
+    bundle = pyrung_to_ladder(_build(_ton_beside_coil), _tag_map())
+    assert len(bundle.main_rows[0]) == len(header)
+    code = ladder_to_pyrung(dataclasses.replace(bundle, main_rows=rows))
+    body = code[code.index("with Program") :]
+    assert "with rung(X001):\n        latch(C1)" in body
+    assert "with rung(X001).continued():\n        count_up(" in body
+    assert body.count(".continued()") == 2
+    ns = exec_with_source(code, {})
+    again = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    assert again.main_rows[1:] == rows[1:]

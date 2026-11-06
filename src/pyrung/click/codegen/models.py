@@ -65,6 +65,9 @@ class _InstructionInfo:
     # Place in the raw CSV rung's solve order (row order), for the read-order
     # guard; None where unknown.
     position: int | None = field(default=None, compare=False)
+    # The wire of the raw CSV rung it sits on (0 for the first), a wire being
+    # rows joined by verticals; None where unknown.
+    wire: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

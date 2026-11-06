@@ -709,16 +709,90 @@ def _has_wire_trunk(raw: _RawRung | None) -> bool:
     return row[2] in {"T", "|"} or row[2].startswith("T:")
 
 
-# Instructions pyrung runs last in their flow (``Instruction.is_terminal``):
-# nothing may follow one at the same level of a rung.
-_TERMINAL_NAMES = frozenset(
+# Boxes whose CLICK drawing always has pins (``Instruction.has_pins``).
+_PIN_BOX_NAMES = frozenset(
     {"count_up", "count_down", "shift", "event_drum", "time_drum", "time_event_drum"}
 )
 
 
-def _ends_flow(instr: _InstructionInfo) -> bool:
+def _is_pin_box(instr: _InstructionInfo) -> bool:
     match = _FUNC_RE.match(instr.af_token)
-    return bool(instr.pins) or (match is not None and match.group(2) in _TERMINAL_NAMES)
+    return bool(instr.pins) or (match is not None and match.group(2) in _PIN_BOX_NAMES)
+
+
+def _row_wires(rows: Sequence[Sequence[str]]) -> list[int]:
+    """The wire each row of a CLICK rung sits on: 0, 1, ... from the top.
+
+    A wire is rows joined by verticals (a ``T``, ``|`` or ``T:`` cell reaching
+    the row below); a row no vertical reaches from the row above starts the
+    next wire at the rail.
+    """
+    wires: list[int] = []
+    for index, row in enumerate(rows):
+        if index == 0:
+            wires.append(0)
+            continue
+        above = rows[index - 1]
+        linked = False
+        for col in range(_CONDITION_COLS):
+            cell = above[col + 1] if col + 1 < len(above) else ""
+            if cell not in {"T", "|"} and not cell.startswith("T:"):
+                continue
+            below = row[col + 1] if col + 1 < len(row) else ""
+            diagonal = row[col] if col > 0 and col < len(row) else ""
+            if below or diagonal:
+                linked = True
+                break
+        wires.append(wires[-1] if linked else wires[-1] + 1)
+    return wires
+
+
+def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
+    """A CLICK rung holding a box with pins: one pyrung rung per wire.
+
+    A box with pins ends its pyrung rung, so each other wire of the CLICK rung
+    comes back as a ``.continued()`` rung of its own, row for row, never
+    folded onto the box's wire.  ``None`` where the rung has no box with pins
+    beside other wires.
+    """
+    instructions = rung.instructions
+    if len(instructions) < 2 or not any(_is_pin_box(instr) for instr in instructions):
+        return None
+    if any(instr.wire is None for instr in instructions) or rung.source_outputs is None:
+        return None
+    groups: list[list[int]] = []
+    for index, instr in enumerate(instructions):
+        if groups and instructions[groups[-1][-1]].wire == instr.wire:
+            groups[-1].append(index)
+        else:
+            groups.append([index])
+    if len(groups) < 2:
+        # The box shares its wire (CLICK refuses it, C000A): kept as drawn.
+        return None
+    order = rung.read_order
+    pieces: list[_AnalyzedRung] = []
+    for number, group in enumerate(groups):
+        trees = [
+            (rung.source_outputs[index].tree, instructions[index].af_token, index)
+            for index in group
+        ]
+        cond_tree, grouped, _ = _group_outputs(
+            trees, order=order, positions=[instructions[index].position for index in group]
+        )
+        for info, index in zip(grouped, group, strict=True):
+            info.pins = instructions[index].pins
+            info.wire = instructions[index].wire
+        pieces.append(
+            _AnalyzedRung(
+                comment=rung.comment if number == 0 else None,
+                condition_tree=cond_tree,
+                instructions=grouped,
+                role=rung.role,
+                is_continued=rung.is_continued if number == 0 else True,
+                read_order=order,
+            )
+        )
+    return pieces
 
 
 def _shares_prefix(group: Sequence[_InstructionInfo], order: ReadOrder | None) -> bool:
@@ -735,8 +809,7 @@ def _output_runs(
 
     A run grows while its outputs still share a prefix the read order lets
     them read as one, so outputs teed off one cell stay together (that cell
-    is read once, at the first of them).  A run ends at an instruction that
-    must be last in its flow.
+    is read once, at the first of them).
     """
     runs: list[list[_InstructionInfo]] = []
     start = 0
@@ -744,7 +817,6 @@ def _output_runs(
         stop = start + 1
         while (
             stop < len(instructions)
-            and not _ends_flow(instructions[stop - 1])
             and _shares_prefix(instructions[start : stop + 1], order)
         ):
             stop += 1
@@ -756,12 +828,7 @@ def _output_runs(
 def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_AnalyzedRung]:
     """Split a rung with continued-style wires into primary + continued rungs.
 
-    The motivating Click-only shape is a shared wire that feeds a terminal
-    instruction pin and also drives a sibling output. In pyrung, counters and
-    RTON-style ``on_delay(...).reset(...)`` are terminal in-flow, and their
-    reset conditions render inside the call rather than as peer rows, so that
-    layout cannot live in one DSL rung. Splitting off the sibling as
-    ``.continued()`` keeps every output's contacts and stays expressible; a
+    A rung with a box with pins is split by :func:`_split_wires` instead.  A
     continued rung reads its contacts where it stands, as the CLICK rows do.
 
     The rung splits into runs of outputs that share a leading contact (see
@@ -772,8 +839,8 @@ def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_
 
     The current trigger is still a structural proxy: no shared
     ``condition_tree`` and every instruction carries its own ``branch_tree``.
-    That matches exporter-produced continued rows and the terminal-pin case,
-    but hand-authored CSV can still over- or under-trigger it.
+    That matches exporter-produced continued rows, but hand-authored CSV can
+    still over- or under-trigger it.
     """
     if rung.condition_tree is not None:
         return [rung]
@@ -869,7 +936,7 @@ def _analyze_rungs(
         else:
             whole = analyze_one(i)
             source_outputs = whole.source_outputs
-            pieces = _split_continued(whole, raw_rungs[i])
+            pieces = _split_wires(whole) or _split_continued(whole, raw_rungs[i])
             for piece in pieces:
                 piece.source_outputs = None
             pieces[0].source_outputs = source_outputs
@@ -1027,6 +1094,9 @@ def _analyze_single_rung(
         [tree for tree, _af, _row in output_trees], [af for _tree, af, _row in output_trees]
     )
     condition_tree, instructions, af_rows = _group_outputs(output_trees, order=read_order)
+    wires = _row_wires(rows)
+    for instr, af_row in zip(instructions, af_rows, strict=True):
+        instr.wire = wires[af_row]
 
     if validate:
         retained_instruction_rows = set(af_rows)

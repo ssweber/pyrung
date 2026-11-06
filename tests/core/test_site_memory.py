@@ -1061,6 +1061,7 @@ class TestEdgeFrames:
                     out(H)
                     with branch(rise(C)):
                         out(G)
+            with Rung().continued():
                 count_up(cnt, preset=3).reset(rise(D))
             with Rung():
                 with forloop(2):
@@ -1082,8 +1083,10 @@ class TestEdgeFrames:
 
         outer = rung._branches[0]
         inner = outer._branches[0]
-        box = rung._instructions[1]
-        loop_rung = logic.rungs[1]
+        box_rung = logic.rungs[1]
+        box = box_rung._instructions[0]
+        rows.update(edge_rows(box_rung))
+        loop_rung = logic.rungs[2]
         rows.update(edge_rows(loop_rung))
         loop = loop_rung._instructions[0]
         assert isinstance(loop, ForLoopInstruction)
@@ -1091,6 +1094,7 @@ class TestEdgeFrames:
         assert tags(rung) == ["A"]
         assert tags(outer) == ["B"]
         assert tags(inner) == ["C"]
+        assert tags(box_rung) == []
         assert tags(box) == ["D"]
         assert tags(loop) == []
         assert tags(body_rung) == ["E", "F"]
@@ -1102,20 +1106,22 @@ class TestEdgeFrames:
         from pyrung.core.site_memory import build_edge_frames, edge_rows
 
         logic = self._program()
-        rung, loop_rung = logic.rungs
+        rung, box_rung, loop_rung = logic.rungs
         loop = loop_rung._instructions[0]
         body_rung, body_box = loop.body
         # The trunk's own frame holds only its contacts; the rows below scan
         # their own frames as the solve reaches them.
         assert [name for _key, name in build_edge_frames(rung)] == ["A"]
         rows = edge_rows(rung)
-        # The trunk, the nested branches, then the box.
+        # The trunk, then the nested branches.
         assert [edge._resolved_tag.name for row in rows.values() for _k, edge in row] == [
             "A",
             "B",
             "C",
-            "D",
         ]
+        # The box's pin is scanned at the box, on its own rung.
+        assert build_edge_frames(box_rung) == ()
+        assert [edge._resolved_tag.name for row in edge_rows(box_rung).values() for _k, edge in row] == ["D"]
         assert build_edge_frames(loop_rung) == ()
         assert body_rung._edge_frame is not None
         assert [name for _key, name in body_rung._edge_frame] == ["E", "F"]
@@ -1129,7 +1135,12 @@ class TestEdgeFrames:
         rung = logic.rungs[0]
         from pyrung.core.site_memory import edge_rows
 
-        keys = [key for row in edge_rows(rung).values() for key, _edge in row]
+        keys = [
+            key
+            for scanned in (rung, logic.rungs[1])
+            for row in edge_rows(scanned).values()
+            for key, _edge in row
+        ]
         assert keys == ["_edge:e1", "_edge:e2", "_edge:e3", "_edge:e4"]
         assert edge_memory_seeding(logic, {"A": True}) == {"_edge:e1": True, "_edge:e7": True}
         assert edge_memory_seeding(list(logic.rungs), {"A": True}) == {

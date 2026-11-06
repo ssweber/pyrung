@@ -13,6 +13,8 @@ from pyrung.core import (
     count_down,
     count_up,
     event_drum,
+    forloop,
+    latch,
     off_delay,
     on_delay,
     out,
@@ -130,7 +132,7 @@ def test_parent_flow_terminal_blocks_following_instruction() -> None:
     reset = Bool("Reset")
     light = Bool("Light")
 
-    with pytest.raises(RuntimeError, match="terminal"):
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
             with Rung(enable):
                 count_up(Counter5, preset=5).reset(reset)
@@ -143,7 +145,7 @@ def test_parent_flow_terminal_blocks_following_branch() -> None:
     reset = Bool("Reset")
     light = Bool("Light")
 
-    with pytest.raises(RuntimeError, match="terminal"):
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
             with Rung(enable):
                 count_down(Counter6, preset=5).reset(reset)
@@ -157,7 +159,7 @@ def test_branch_flow_terminal_blocks_following_branch_local_instruction() -> Non
     reset = Bool("Reset")
     light = Bool("Light")
 
-    with pytest.raises(RuntimeError, match="terminal"):
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
             with Rung(enable):
                 with branch(mode):
@@ -165,19 +167,96 @@ def test_branch_flow_terminal_blocks_following_branch_local_instruction() -> Non
                     out(light)
 
 
-def test_terminal_inside_branch_does_not_block_sibling_branch() -> None:
+def test_box_with_pins_in_a_branch_ends_the_whole_rung() -> None:
+    """A box with pins ends its rung, not just its branch: CLICK draws its pins
+    from the box's own wire, so a sibling branch goes in a continued() rung."""
     enable = Bool("Enable")
     mode_a = Bool("ModeA")
     mode_b = Bool("ModeB")
     reset = Bool("Reset")
     light = Bool("Light")
 
+    with pytest.raises(RuntimeError, match=r"Move out\(\) \(line \d+\) off this rung") as info:
+        with Program():
+            with Rung(enable):
+                with branch(mode_a):
+                    count_up(Counter8, preset=5).reset(reset)
+                with branch(mode_b):
+                    out(light)
+    message = str(info.value)
+    assert message.startswith("count_up() (line ")
+    assert "`with Rung(...).continued():`" in message
+    assert message.isascii()
+
+
+def test_box_with_pins_refuses_an_output_above_it() -> None:
+    enable = Bool("Enable")
+    seen = Bool("Seen")
+    mode = Bool("Mode")
+    reset = Bool("Reset")
+
+    with pytest.raises(RuntimeError, match=r"count_up\(\) .* Move latch\(\) .* a rung above"):
+        with Program():
+            with Rung(enable):
+                latch(seen)
+                with branch(mode):
+                    count_up(Counter8, preset=5).reset(reset)
+
+
+def test_box_with_pins_alone_in_a_branch_is_accepted() -> None:
+    enable = Bool("Enable")
+    mode = Bool("Mode")
+    reset = Bool("Reset")
+
     with Program():
         with Rung(enable):
-            with branch(mode_a):
+            with branch(mode):
                 count_up(Counter8, preset=5).reset(reset)
-            with branch(mode_b):
-                out(light)
+
+
+def test_box_with_pins_splits_into_continued_rungs() -> None:
+    enable = Bool("Enable")
+    seen = Bool("Seen")
+    auto = Bool("Auto")
+    reset = Bool("Reset")
+    lamp = Bool("Lamp")
+
+    with Program() as logic:
+        with Rung(enable):
+            latch(seen)
+        with Rung(enable, auto).continued():
+            count_up(Counter8, preset=10).reset(reset)
+        with Rung(enable).continued():
+            out(lamp)
+    assert len(logic.rungs) == 3
+
+
+def test_box_with_pins_beside_bare_body_rows_in_a_forloop_is_accepted() -> None:
+    """A forloop body's bare instructions are each a body rung of their own."""
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    lamp = Bool("Lamp")
+
+    with Program():
+        with Rung(enable):
+            with forloop(2):
+                out(lamp)
+                count_up(Counter8, preset=5).reset(reset)
+
+
+def test_box_with_pins_beside_an_output_in_a_forloop_body_rung_is_refused() -> None:
+    enable = Bool("Enable")
+    mode = Bool("Mode")
+    reset = Bool("Reset")
+    lamp = Bool("Lamp")
+
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
+        with Program():
+            with Rung(enable):
+                with forloop(2):
+                    with Rung(mode):
+                        out(lamp)
+                        count_up(Counter8, preset=5).reset(reset)
 
 
 def test_ton_allows_following_instruction_and_branch() -> None:
@@ -213,7 +292,7 @@ def test_rton_is_terminal_in_same_flow() -> None:
     reset = Bool("Reset")
     light = Bool("Light")
 
-    with pytest.raises(RuntimeError, match="terminal"):
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
             with Rung(enable):
                 on_delay(Timer3, preset=5).reset(reset)

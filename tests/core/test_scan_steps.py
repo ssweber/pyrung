@@ -396,6 +396,7 @@ def test_scan_steps_debug_instruction_helper_trace_reads_at_box_entry():
     with Program(strict=False) as logic:
         with Rung(enable):
             latch(reset)
+        with Rung(enable).continued():
             on_delay(Timer[1], preset=50).reset(reset)
 
     runner = PLC(logic, dt=0.010)
@@ -409,7 +410,7 @@ def test_scan_steps_debug_instruction_helper_trace_reads_at_box_entry():
     assert len(reset_steps) == 1
     reset_step = reset_steps[0]
     assert reset_step.trace is not None
-    # The reset pin reads at box entry, after the latch above it.
+    # The reset pin reads at box entry, after the latch on the wire above.
     condition = reset_step.trace.regions[0].conditions[0]
     assert condition.status == "true"
     assert condition.value is True
