@@ -361,7 +361,12 @@ def _condition_children(cond: Condition) -> list[tuple[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def walk_rung_operands(rungs: Iterable[Rung], visit: Callable[[Any], None]) -> None:
+def walk_rung_operands(
+    rungs: Iterable[Rung],
+    visit: Callable[[Any], None],
+    *,
+    on_instruction: Callable[[Any], None] | None = None,
+) -> None:
     """Call *visit* on each operand the *rungs* run, in a fixed order, once each.
 
     The walk the compiled kernel takes its tags from: rung conditions, each
@@ -372,6 +377,9 @@ def walk_rung_operands(rungs: Iterable[Rung], visit: Callable[[Any], None]) -> N
     pointer's or an indirect range's own operands are visited after it, and a static
     range is left to *visit*.  A calc's ``source_expression`` is no declared field:
     what it names runs only where something else runs it.
+
+    *on_instruction*, when given, is called on each instruction the walk enters, a
+    branch's and a nested one included, before its operands.
     """
     from pyrung.core.rung import Rung as LogicRung
 
@@ -387,6 +395,8 @@ def walk_rung_operands(rungs: Iterable[Rung], visit: Callable[[Any], None]) -> N
                 walk_instruction(item)
 
     def walk_instruction(instr: Any) -> None:
+        if on_instruction is not None:
+            on_instruction(instr)
         fields = _instruction_fields(instr)
         if fields is None:
             for key in sorted(vars(instr)):

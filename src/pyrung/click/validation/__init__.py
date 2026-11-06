@@ -55,6 +55,8 @@ from .findings import (
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_STEP_LIMIT,
     CLK_TEXT_ORDER_COMPARE,
+    CLK_TEXT_PAST_BANK,
+    CLK_TEXT_PAST_BLOCK,
     CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PAIR_MISMATCH,
@@ -73,6 +75,7 @@ from .hardware import (
     _evaluate_out_variant_unit,
     _evaluate_pack_text,
     _evaluate_role_assignments,
+    _evaluate_text_past_bank,
     _evaluate_timer_pairs,
     _evaluate_timer_preset_overflow,
     _evaluate_write_targets,
@@ -242,6 +245,7 @@ def validate_click_program(
         findings.extend(_evaluate_forloop_count(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_rand_bounds(instruction, base_location, mode))
         findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
+        findings.extend(_evaluate_text_past_bank(instruction, base_location, mode, resolver))
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -352,6 +356,8 @@ __all__ = [
     "CLK_CALC_ARG_NOT_PLAIN",
     "CLK_CALC_WIDE_CONSTANT",
     "CLK_TEXT_ORDER_COMPARE",
+    "CLK_TEXT_PAST_BANK",
+    "CLK_TEXT_PAST_BLOCK",
     "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
     "ClickFinding",
     "ClickValidationReport",

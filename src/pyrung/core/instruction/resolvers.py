@@ -233,10 +233,21 @@ def _set_fault_address_error(ctx: ScanContext) -> None:
 
 
 def _sequential_tags(start_tag: Tag, count: int) -> list[Tag]:
+    """*start_tag* and the tags after it, *count* in all, but none past its block's end.
+
+    In a block they are the tags that hold the addresses (``elements_after``); a tag
+    in no block counts on by name.
+    """
+    from pyrung.core.memory_block import elements_after, elements_that_fit
+
+    count = elements_that_fit(start_tag, count)
     if count <= 0:
         return []
     if count == 1:
         return [start_tag]
+    following = elements_after(start_tag, count)
+    if following is not None:
+        return [start_tag, *following]
 
     match = _TAG_SUFFIX_RE.match(start_tag.name)
     if match is None:
