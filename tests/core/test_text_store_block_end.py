@@ -18,12 +18,14 @@ import pytest
 
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.circuitpy.codegen import compile_kernel
-from pyrung.click import ClickBlocks
+from pyrung.click import ClickBlocks, TagMap
 from pyrung.core import (
     PLC,
     Block,
     Bool,
+    Char,
     CompiledPLC,
+    Int,
     Program,
     Rung,
     TagType,
@@ -311,3 +313,59 @@ def test_a_text_into_a_mapped_block_ends_with_that_block(engine, bank_read_first
     assert [values[tag.name] for tag in watch] == ["A", "B", BLANK_CHAR]
     assert bool(values[SC43.name]) is False
     assert _past(names, "Msg", 10) == []
+
+
+_BEFORE = ["fresh", "bank_read", "legacy_compiled"]
+
+
+def _mapped_scalar_program(kind: str, before: str):
+    """A scalar tag mapped by a TagMap onto a bank slot, then a store of several
+    elements from it: a text into ``Name`` on TXT3, or digits into ``Count`` on
+    DS4499.  *before* reads the bank's address, or compiles a legacy kernel (which
+    reads every bank address), before the scan."""
+    blocks = ClickBlocks()
+    txt, ds = blocks.txt, blocks.ds
+    if kind == "text":
+        target, slot = Char("Name"), txt[3]
+        after, store = [txt[4], txt[5]], lambda: copy("ABC", target)
+        sentinel: Any = "#"
+    else:
+        target, slot = Int("Count"), ds[4499]
+        after, store = [ds[4500]], lambda: copy("1234", target, convert=to_value)
+        sentinel = 9
+    TagMap({target: slot}, include_system=False)
+    if before == "bank_read":
+        bank = txt if kind == "text" else ds
+        assert bank[slot._pyrung_block_addr] is target
+    watch = [target, *after]
+    with Program(strict=False) as prog:
+        with Rung():
+            store()
+        with Rung(*(tag == sentinel for tag in watch)):
+            out(Bool("Seen"))
+    if before == "legacy_compiled":
+        compile_kernel(prog, blockless=False)
+    return prog, watch
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("before", _BEFORE)
+def test_a_text_into_a_tag_mapped_onto_the_bank_writes_the_next_slots(engine, before, monkeypatch):
+    """``TagMap({Name: txt[3]})``: "ABC" into Name writes TXT3..TXT5, as a CLICK
+    does, however the bank was read before."""
+    prog, watch = _mapped_scalar_program("text", before)
+    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    assert [values[tag.name] for tag in watch] == ["A", "B", "C"]
+    assert bool(values[SC43.name]) is False
+    assert "TXT3" not in names
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("before", _BEFORE)
+def test_digits_into_a_tag_mapped_onto_the_bank_write_what_fits(engine, before, monkeypatch):
+    """``Count`` on DS4499: "1234" writes 1 there and 2 in DS4500, and drops the rest."""
+    prog, watch = _mapped_scalar_program("digits", before)
+    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    assert [values[tag.name] for tag in watch] == [1, 2]
+    assert bool(values[SC43.name]) is False
+    assert _past(names, "DS", 4500) == []

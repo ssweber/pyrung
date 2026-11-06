@@ -619,39 +619,62 @@ def _compute_sequential_reloads(
     return sorted(reloads) if reloads else None
 
 
-def _kernel_following_store_lines(
-    values_var: str, target_name: str | None, following_names: list[str]
-) -> list[str]:
-    """The kernel's stores of the elements after a static target, by their names."""
+def _counted_names(following_names: list[str]) -> tuple[str, int, int] | None:
+    """The ``prefix``, base and width most of *following_names* count on from.
+
+    Offset 1 is ``f"{prefix}{base + 1:0{width}d}"``.  Tried from the first, middle
+    and last name, as one of them may be a named slot or a mapped tag.
+    """
+    best: tuple[int, tuple[str, int, int]] | None = None
+    for offset in sorted({1, (len(following_names) + 1) // 2, len(following_names)}):
+        seq = _parse_sequential_tag_name(following_names[offset - 1])
+        if seq is None:
+            continue
+        prefix, number, digits = seq
+        suffix = following_names[offset - 1][len(prefix) :]
+        width = digits if suffix.startswith("0") and digits > 1 else 1
+        counted = (prefix, number - offset, width)
+        misses = sum(
+            name != f"{prefix}{counted[1] + i:0{width}d}"
+            for i, name in enumerate(following_names, start=1)
+        )
+        if best is None or misses < best[0]:
+            best = (misses, counted)
+    return None if best is None else best[1]
+
+
+def _kernel_following_store_lines(values_var: str, following_names: list[str]) -> list[str]:
+    """The kernel's stores of the elements after a static target, by their names.
+
+    Most of them count on by address; the rest (a named slot, a tag mapped onto
+    the address) are listed.
+    """
     if not following_names:
         return []
     stop = f"min(len({values_var}), {len(following_names) + 1})"
-    seq = _parse_sequential_tag_name(target_name) if target_name else None
-    if seq is None:
-        names = tuple(following_names)
+    counted = _counted_names(following_names)
+    if counted is None:
         return [
-            f"    _seq_names = {names!r}",
+            f"    _seq_names = {tuple(following_names)!r}",
             f"    for _seq_i in range(1, {stop}):",
             f"        tags[_seq_names[_seq_i - 1]] = {values_var}[_seq_i]",
         ]
-    prefix, base, width = seq
-    # Most elements carry the name the target's counts on to; the rest (a named
-    # slot, a tag mapped onto the address) are listed.
+    prefix, base, width = counted
     renamed = {
         offset: name
         for offset, name in enumerate(following_names, start=1)
         if name != f"{prefix}{base + offset:0{width}d}"
     }
-    counted = f'f"{prefix}{{{base} + _seq_i:0{width}d}}"'
+    name_expr = f'f"{prefix}{{{base} + _seq_i:0{width}d}}"'
     if not renamed:
         return [
             f"    for _seq_i in range(1, {stop}):",
-            f"        tags[{counted}] = {values_var}[_seq_i]",
+            f"        tags[{name_expr}] = {values_var}[_seq_i]",
         ]
     return [
         f"    _seq_names = {renamed!r}",
         f"    for _seq_i in range(1, {stop}):",
-        f"        tags[_seq_names.get(_seq_i) or {counted}] = {values_var}[_seq_i]",
+        f"        tags[_seq_names.get(_seq_i) or {name_expr}] = {values_var}[_seq_i]",
     ]
 
 
@@ -687,7 +710,7 @@ def _copy_converter_write_lines(
             if kernel:
                 # The kernel keeps every tag in ``tags``; generated board code has
                 # no such dict and stores only the registers it references (below).
-                lines += _kernel_following_store_lines(values_var, target_name, following_names)
+                lines += _kernel_following_store_lines(values_var, following_names)
             for offset, symbol in reloads:
                 if offset <= len(following_names):
                     lines.append(f"    if len({values_var}) > {offset}:")

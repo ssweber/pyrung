@@ -410,10 +410,10 @@ class Tag:
             block._mapped_tags[addr] = self
             block._slot_names_changed += 1
             block._tag_cache.pop(addr, None)
-            if self.type is TagType.CHAR:
-                # The slot, for a text compare's window (`text_window_condition`);
-                # weak, so the mapping alone does not keep the bank alive.
-                object.__setattr__(self, "_pyrung_hw_slot", (weakref.ref(block), addr))
+            # The slot, for a text compare's window (`text_window_condition`) and a
+            # store of several elements (`_store_block`); weak, so the mapping alone
+            # does not keep the bank alive.
+            object.__setattr__(self, "_pyrung_hw_slot", (weakref.ref(block), addr))
         return MappingEntry(source=self, target=target)
 
     # =========================================================================

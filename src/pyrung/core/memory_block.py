@@ -276,17 +276,23 @@ class PastBankError(IndexError):
 def _store_block(tag: Tag) -> tuple[Block, int] | None:
     """The block and address a store of several elements from *tag* counts in.
 
-    A tag's own block, or for a slot of a block mapped onto a bank (``map_to``) the
-    mapped block, though reading the bank's address stamps the slot with the bank.
-    ``None`` for a tag in no block, and for a field of a UDT or named array, whose
-    block is the field's own and not the memory the structure lies in.
+    In order: the block that made the tag (``_pyrung_home_block``, which a bank
+    reading it as a mapped slot does not move); else the bank slot a tag was mapped
+    onto (``_pyrung_hw_slot``, from ``Tag.map_to`` or a TagMap); else the block it
+    is stamped with.  So how the bank was read before does not matter.  ``None``
+    for a tag in no block, and for a field of a UDT or named array, whose block is
+    the field's own and not the memory the structure lies in.
     """
-    home = getattr(tag, "_pyrung_mapped_home", None)
-    if home is not None:
-        block, addr = home
-    else:
-        block = getattr(tag, "_pyrung_block", None)
-        addr = getattr(tag, "_pyrung_block_addr", None)
+    block = getattr(tag, "_pyrung_home_block", None)
+    addr = getattr(tag, "_pyrung_home_addr", None)
+    if block is None:
+        hw_slot = getattr(tag, "_pyrung_hw_slot", None)
+        # Held weakly: once the bank is gone, nothing maps the tag there.
+        if hw_slot is not None and hw_slot[0]() is not None:
+            block, addr = hw_slot[0](), hw_slot[1]
+        else:
+            block = getattr(tag, "_pyrung_block", None)
+            addr = getattr(tag, "_pyrung_block_addr", None)
     if not isinstance(block, Block) or not isinstance(addr, int):
         return None
     if block._pyrung_structure_kind is not None:
@@ -318,9 +324,10 @@ def elements_that_fit(tag: Tag, count: int) -> int:
 
 
 def _element_at(block: Block, addr: int) -> Tag:
-    # The tag mapped onto the address first, as ``block[addr]`` gives it, but
-    # without stamping it with this block (``_get_tag``), which would change the
-    # block a later store from that tag counts in.
+    # The tag mapped onto the address, as ``block[addr]`` gives it, is returned as
+    # it is: ``_get_tag`` would stamp it with this block (``_annotate_tag``).  An
+    # address nothing is mapped onto gets this block's own tag, made and cached as
+    # ``block[addr]`` makes it.
     mapped = block._mapped_tags.get(addr)
     return mapped if mapped is not None else block._get_tag(addr)
 
@@ -1064,18 +1071,13 @@ class Block:
                     # TagMap report it as a hardware address conflict.
                     continue
                 hw_block._mapped_tags[hw_addr] = slot_tag
-                # A store of several elements from the slot counts in this block,
-                # though the bank stamps the slot as its own (``_annotate_tag``).
-                object.__setattr__(slot_tag, "_pyrung_mapped_home", (self, logical_addr))
                 hw_block._slot_names_changed += 1
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)
-                if self.type is TagType.CHAR:
-                    # The slot, for a text compare's window (`text_window_condition`);
-                    # weak, so the mapping alone does not keep the bank alive.
-                    object.__setattr__(
-                        slot_tag, "_pyrung_hw_slot", (weakref.ref(hw_block), hw_addr)
-                    )
+                # The slot, for a text compare's window (`text_window_condition`)
+                # and a store of several elements (`_store_block`); weak, so the
+                # mapping alone does not keep the bank alive.
+                object.__setattr__(slot_tag, "_pyrung_hw_slot", (weakref.ref(hw_block), hw_addr))
 
         return MappingEntry(source=self, target=target)
 
