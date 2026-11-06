@@ -2,26 +2,42 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, calc, latch, on_delay, out, reset
+from pyrung import PLC, Bool, Int, Physical, Program, Rung, Timer, calc, latch, on_delay, out, reset
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
 
 
-def test_an_input_past_the_depth_of_the_trace_is_a_stated_move() -> None:
-    """Twenty coils in a row: the trace stops before it reaches Go."""
+def _coil_chain(length: int, *, plant: bool = False) -> tuple[PLC, Bool]:
+    """Go starts *length* coils in a row, directly or through a linked valve's feedback."""
     go = Bool("Go", external=True)
-    links = [Bool(f"L{i}") for i in range(20)]
+    links = [Bool(f"L{i}") for i in range(length)]
     with Program(strict=False) as logic:
-        with Rung(go):
-            out(links[0])
+        if plant:
+            enable = Bool("En")
+            feedback = Bool(
+                "Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En"
+            )
+            with Rung(go):
+                out(enable)
+            with Rung(feedback):
+                out(links[0])
+        else:
+            with Rung(go):
+                out(links[0])
         for before, after in zip(links, links[1:], strict=False):
             with Rung(before):
                 out(after)
     plc = PLC(logic, dt=0.01)
     plc.step()
+    return plc, links[-1]
+
+
+def test_an_input_past_the_depth_of_the_trace_is_a_stated_move() -> None:
+    """Seventy coils in a row: the trace stops before it reaches Go."""
+    plc, goal = _coil_chain(70)
     scan = plc.state.scan_id
 
-    plan = plc.how(links[-1], max_scans=3000)
+    plan = plc.how(goal, max_scans=3000)
 
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.last_resort.tag == "Go"
@@ -29,11 +45,23 @@ def test_an_input_past_the_depth_of_the_trace_is_a_stated_move() -> None:
     assert plan.last_resort.tries == 1
     assert plan.anchor_scan == scan
     assert plan.changes["Go"] is True
-    assert plan.replay().state.tags["L19"] is True
+    assert plan.replay().state.tags["L69"] is True
     text = str(plan)
     assert "1. Set Go=True before the next scan." in text
     assert "Nothing in the trace pointed to this." in text
     assert plc.state.scan_id == scan
+
+
+def test_a_long_chain_of_coils_is_traced_to_its_input() -> None:
+    """Forty coils, and the same behind a valve's feedback: past the old depth of 15."""
+    for plant in (False, True):
+        plc, goal = _coil_chain(40, plant=plant)
+
+        plan = plc.how(goal, max_scans=3000)
+
+        assert plan.status is PlanStatus.REACHED, (plant, plan.reason)
+        assert plan.last_resort is None, plant
+        assert plan.replay().state.tags["L39"] is True
 
 
 def test_a_count_the_program_runs_every_other_scan_is_waited_for_without_the_last_resort() -> None:

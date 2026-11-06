@@ -282,6 +282,10 @@ def _expr_route_key(expr: Any) -> str:
 # so Compass can learn the transition from action observations.
 _SAME_TAG_VALUE_BUDGET = 1
 
+# How deep a trace goes through tags it has not yet met on its path.  Past
+# ``max_depth`` only these continue; see ``_trace_back``.
+_CHAIN_DEPTH = 60
+
 
 def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
     """Whether *expr* is definitely satisfied in *snapshot*.
@@ -2022,8 +2026,12 @@ def _trace_back(
     # base writer can otherwise invert forever (107 <- 105 <- 103 <- ...), so
     # the ordinary ``(tag, value)`` cycle guard never fires.  Returning an
     # unresolved leaf preserves the honest frontier; recursion exhaustion is
-    # never a valid analysis result.
-    if _depth >= env.max_depth:
+    # never a valid analysis result.  A chain of distinct tags cannot do that:
+    # the visited keys end it.  It goes on to ``_CHAIN_DEPTH``, which only keeps
+    # the recursion inside Python's own limit.
+    if _depth >= env.max_depth and (
+        _depth >= _CHAIN_DEPTH or any(seen == tag for seen, _ in _ancestry)
+    ):
         return TraceNode(tag=tag, value=value)
 
     # Feedback-loop guard: a jump-table state register (``opaque_loop``) that
