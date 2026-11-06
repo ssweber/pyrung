@@ -375,7 +375,9 @@ _ODD_NAMES = ["Q{0}", "Q{", r"Q\x", 'Q"x', "Q'x"]
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
-@pytest.mark.parametrize("name", _ODD_NAMES, ids=["braces", "brace", "backslash", "dquote", "squote"])
+@pytest.mark.parametrize(
+    "name", _ODD_NAMES, ids=["braces", "brace", "backslash", "dquote", "squote"]
+)
 def test_a_text_into_a_block_of_any_name_writes_its_elements(engine, name, monkeypatch):
     """The kernel names the elements after the target from the block's name, which
     may hold a brace, a backslash or a quote: each stays as written."""
