@@ -1015,11 +1015,8 @@ class TestIntegerOverflowWraparound:
             pytest.skip("Dint wraparound needs more scans than test budget")
 
         result = always(logic, ~wrapped, depth_budget=500)
-        assert not isinstance(result, Counterexample)
-        if isinstance(result, Proven):
-            assert any("depth_budget=500" in caveat for caveat in result.caveats), (
-                "a Proven short of the wrap must carry the depth caveat"
-            )
+        assert isinstance(result, Intractable), "a search short of the wrap proves nothing"
+        assert "depth_budget=500" in result.reason
 
 
 class TestCompiledKernelOverflowParity:
