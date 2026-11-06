@@ -408,20 +408,39 @@ def _collect_write_sites(
 _EXACT_COUNT_TYPES = frozenset({"BOOL", "INT", "WORD"})
 
 
+def _dint_count_is_small(tag: Tag) -> bool:
+    """Whether the Dint count *tag* is declared to hold only ``0..PROVE_FOR_ITERATION_CAP``.
+
+    Its declared ``choices`` all lie there, or its declared ``min`` and ``max``
+    both do; a lone ``min`` or ``max`` says nothing.  What the program writes
+    into it is not read.  A negative value is not small: how CLICK reads one
+    is unread.
+    """
+    from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
+
+    def small(value: Any) -> bool:
+        return isinstance(value, int) and 0 <= value <= PROVE_FOR_ITERATION_CAP
+
+    choices = tag.choices
+    if choices and all(small(value) for value in choices):
+        return True
+    return small(tag.min) and small(tag.max)
+
+
 def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | None:
     """What a forloop's count says about its body running, or None if it never does.
 
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
     no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
-    body item needs ``count != 0``.  That is exact for a 16-bit count.  A Dint,
-    read whole, is 0 exactly when it is too, so ``count != 0`` would be exact
-    for it as well; it stays inexact (``exact`` False) only because marking it
-    exact changes what :func:`_inexact_entry_subroutines` feeds (simplified
-    forms, the stuck-bit validator, pilot's corrections), which a later step
-    takes on.  A REAL (0.5 truncates to 0) and an expression are inexact on
-    their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every
-    count runs the body.  A constant count that runs no iteration never runs it
-    (None).
+    body item needs ``count != 0``.  That is exact for a 16-bit count, and for a
+    Dint tag or element (read whole) declared to hold only
+    ``0..PROVE_FOR_ITERATION_CAP`` (:func:`_dint_count_is_small`).  Any other
+    Dint, and an indirect Dint element, stays inexact (``exact`` False): a
+    negative count's reading on CLICK is unread, and past the cap the verifier
+    refuses the loop.  A REAL (0.5 truncates to 0) and an expression are
+    inexact on their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is
+    nonzero every count runs the body.  A constant count that runs no
+    iteration never runs it (None).
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations
@@ -433,7 +452,11 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     if FOR_ZERO_COUNT_ITERATIONS:
         return ((), True)
     if isinstance(count, Tag):
-        return (CompareNe(count, 0),), count.type.name in _EXACT_COUNT_TYPES
+        type_name = count.type.name
+        exact = type_name in _EXACT_COUNT_TYPES or (
+            type_name == "DINT" and _dint_count_is_small(count)
+        )
+        return (CompareNe(count, 0),), exact
     if isinstance(count, (IndirectRef, IndirectExprRef)):
         block_type = getattr(count.block, "type", None)
         exact = block_type is not None and block_type.name in _EXACT_COUNT_TYPES
@@ -682,7 +705,8 @@ def _iter_rung_calls(
     write (it is read after that write, not with the rung's own contacts), a
     ``break_loop()`` or ``continue_loop()`` in an enclosing loop can skip it,
     an enclosing loop is a oneshot (it runs on its rung's rising edge only), or
-    a count is wider than 16 bits.  The rung's branches are not visited.
+    a count's ``count != 0`` does not decide its body
+    (:func:`_loop_count_conditions`).  The rung's branches are not visited.
     """
     from pyrung.core.instruction.control import (
         BreakInstruction,

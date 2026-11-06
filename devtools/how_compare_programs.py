@@ -27,6 +27,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
     composite  several targets, And(), relational targets
     rescue     programs that reach only through the last resort today; a fix to the pilot
                shows as the same answer with no last_resort on the row
+    forloop    a For calling a subroutine over Int and Dint counts (declared 0..5, choices, a
+               body-rung contact the body writes), and a producer in a subroutine the For calls
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -57,14 +59,17 @@ from pyrung import (  # noqa: E402
     TagType,
     Timer,
     calc,
+    call,
     copy,
     fill,
+    forloop,
     latch,
     off_delay,
     on_delay,
     out,
     reset,
     rung,
+    subroutine,
     system,
     time_drum,
 )
@@ -1471,3 +1476,100 @@ _add("rescue", "rescue/wait on a bit a timer drops", _rescue_wait_on_a_bit)
 _add("rescue", "rescue/at the rung, Go not pressed", _rescue_at_the_rung)
 _add("rescue", "rescue/field-order reconnect cut", _rescue_reconnect(cut=True))
 _add("rescue", "rescue/field-order reconnect full", _rescue_reconnect(cut=False))
+
+
+# --------------------------------------------------------------------------- forloop
+# A For calling a subroutine.  Its count != 0 decides the call for an Int count and for a Dint
+# declared within 0..1,000,000 (min and max, or choices); a call under a body rung whose contact
+# an iteration writes stays undecided.
+
+
+def _forloop_counts():
+    return {
+        "dint 0..5": lambda: Dint("Dc", external=True, min=0, max=5),
+        "dint choices 0,2": lambda: Dint("Dc", external=True, choices={0: "off", 2: "two"}),
+        "int 0..5": lambda: Int("Dc", external=True, min=0, max=5),
+        "dint 0..5 body-written contact": lambda: Dint("Dc", external=True, min=0, max=5),
+    }
+
+
+def _forloop_call(kind, target, avoid_alarm):
+    def build():
+        count = _forloop_counts()[kind]()
+        btn, clr = Bool("Btn", external=True), Bool("Clr", external=True)
+        y, alarm, lamp = Bool("Y"), Bool("Alarm"), Bool("Lamp")
+        with Program(strict=False) as prog:
+            with Rung():
+                with forloop(count):
+                    if kind.endswith("contact"):
+                        # The control's body rung reads Y, which an iteration of work latches.
+                        with Rung(~y):
+                            call("work")
+                    else:
+                        call("work")
+            with Rung(y):
+                out(lamp)
+            with Rung(clr):
+                reset(y)
+            with subroutine("work"):
+                with Rung(btn):
+                    latch(y)
+                with Rung(~btn):
+                    out(alarm)
+        plc = PLC(prog, dt=0.01)
+        plc.step()
+        hit = {"Y": y, "Lamp": lamp}[target]
+        return dict(
+            plc=plc, targets=(hit,), goal=_tag_goal(hit), avoid=alarm if avoid_alarm else None
+        )
+
+    return build
+
+
+for _kind in _forloop_counts():
+    _add("forloop", f"forloop/{_kind} how(Y)", _forloop_call(_kind, "Y", False))
+    _add("forloop", f"forloop/{_kind} how(Lamp)", _forloop_call(_kind, "Lamp", False))
+    _add("forloop", f"forloop/{_kind} how(Y) avoid Alarm", _forloop_call(_kind, "Y", True))
+
+
+def _forloop_producer_envelope(make_count):
+    """Run drops when the fault subroutine, called from the For, latches Alarm with the door
+    open: reaching Done holds the door shut while that producer's caller guard is live."""
+
+    def build():
+        count = make_count()
+        start, door = Bool("Start", external=True), Bool("Door", external=True)
+        run, alarm, done = Bool("Run"), Bool("Alarm"), Bool("Done")
+        timer = Timer.clone("Tr")
+        with Program(strict=False) as prog:
+            with Rung():
+                with forloop(count):
+                    call("faults")
+            with Rung(start, ~alarm):
+                latch(run)
+            with Rung(alarm):
+                reset(run)
+            with Rung(run):
+                on_delay(timer, 500)
+            with Rung(timer.Done):
+                latch(done)
+            with subroutine("faults"):
+                with Rung(run, ~door):
+                    latch(alarm)
+        plc = PLC(prog, dt=0.01)
+        plc.step()
+        return dict(plc=plc, targets=(done,), goal=_tag_goal(done), kwargs=dict(max_scans=1000))
+
+    return build
+
+
+_add(
+    "forloop",
+    "forloop/producer in a sub under dint 1..5",
+    _forloop_producer_envelope(lambda: Dint("Dc", external=True, min=1, max=5, default=1)),
+)
+_add(
+    "forloop",
+    "forloop/producer in a sub under int 1..5",
+    _forloop_producer_envelope(lambda: Int("Dc", external=True, min=1, max=5, default=1)),
+)
