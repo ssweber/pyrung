@@ -8,6 +8,10 @@ search names the loop and its count; the slice elision's interpreter scans
 skip a program with such a count.  A count the cap allows still answers, and a
 negative one runs none.
 
+How many times the body runs is the count's value, so the search explores every
+value a free count can hold (``classify._tag_compared_names``): a count with no
+declared domain, or one too wide to list, is an unbounded domain.
+
 Every shape: ``work`` copies ``Btn`` to ``Y2`` once per iteration, so ``Y3``
 follows ``Btn`` unless a scan runs the loop no times (a count of 0), when
 ``Y2`` holds and ``And(Y3, ~Btn)`` is reached.
@@ -135,9 +139,20 @@ def test_an_indexed_dint_count_names_its_pointer() -> None:
     assert result.tags == ["P"]
 
 
-def test_a_bounded_dint_count_past_65535_still_answers() -> None:
-    logic, prop = _loop_program(lambda: Dint("N", external=True, min=0, max=70000))
-    assert isinstance(never(logic, prop), Counterexample)
+def _assert_unbounded(result: object) -> None:
+    assert isinstance(result, Intractable), result
+    assert result.reason == "unbounded domain on N"
+    assert any("read as a forloop count" in hint for hint in result.hints), result.hints
+
+
+def test_a_count_too_wide_to_list_is_an_unbounded_domain() -> None:
+    # 70001 values: more than the search lists for a value it needs whole.
+    _assert_unbounded(never(*_loop_program(lambda: Dint("N", external=True, min=0, max=70000))))
+
+
+def test_a_count_with_no_declared_domain_is_an_unbounded_domain() -> None:
+    for kind in (Int, Dint):
+        _assert_unbounded(never(*_loop_program(lambda kind=kind: kind("N", external=True))))
 
 
 def test_a_count_at_the_cap_answers_and_one_past_it_is_refused() -> None:
@@ -151,7 +166,8 @@ def test_a_count_at_the_cap_answers_and_one_past_it_is_refused() -> None:
 
 
 def test_a_16_bit_count_is_never_capped() -> None:
-    logic, prop = _loop_program(lambda: Int("N", external=True))
+    # -1 runs 65535 iterations, under the cap.
+    logic, prop = _loop_program(lambda: Int("N", external=True, min=-1, max=1))
     assert isinstance(never(logic, prop), Counterexample)
     assert "_ForIterationsBeyondCap" not in compile_kernel(logic, proof_metadata=True).source
 
@@ -186,17 +202,27 @@ def test_a_capped_loops_place_stays_out_of_the_lock_hash() -> None:
     assert _hash_of_a_loop(0) == _hash_of_a_loop(1)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "prover hole: a count read only by a call gate's N != 0 gets a domain of -1, 0 and 1,"
-        " though how many iterations it runs matters (base 1ece662 has it for an Int; a Dint"
-        " answered Intractable only because -1 ran past the cap)"
-    ),
-)
 @pytest.mark.parametrize("kind", [Int, Dint], ids=["int", "dint"])
 def test_a_called_body_that_counts_its_iterations_is_not_proven(kind: type) -> None:
-    n = kind("N", external=True)
+    # A call guard's N != 0 split N at 0 alone, and the search took -1, 0 and 1
+    # for every value: never(X == 2) came back Proven.
+    logic, x = _counting_program(lambda: kind("N", external=True))
+    _assert_unbounded(never(logic, x == 2))
+
+
+@pytest.mark.parametrize("kind", [Int, Dint], ids=["int", "dint"])
+def test_a_counting_body_with_a_declared_count_is_exact(kind: type) -> None:
+    logic, x = _counting_program(lambda: kind("N", external=True, min=0, max=5))
+    result = never(logic, x == 2)
+    assert isinstance(result, Counterexample), result
+    assert result.trace[-1].inputs["N"] == 2
+    # A negative Int runs 65533..65535 iterations and a negative Dint none: never 2.
+    logic, x = _counting_program(lambda: kind("N", external=True, min=-3, max=1))
+    assert isinstance(never(logic, x == 2), Proven)
+
+
+def _counting_program(count: Callable[[], object]) -> tuple[Program, Dint]:
+    n = count()
     x = Dint("X")
     with Program(strict=False) as logic:
         with Rung():
@@ -207,5 +233,4 @@ def test_a_called_body_that_counts_its_iterations_is_not_proven(kind: type) -> N
         with subroutine("work"):
             with Rung():
                 math(x + 1, x)
-    # N = 2 makes X 2.
-    assert not isinstance(never(logic, x == 2), Proven)
+    return logic, x

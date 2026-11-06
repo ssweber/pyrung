@@ -819,6 +819,10 @@ def _exact_value_sets(
     return exact
 
 
+#: Why ``_tag_compared_names`` gives a forloop count every value it can hold.
+_FOR_COUNT_REASON = "a forloop count"
+
+
 class _ComparedInputs(NamedTuple):
     """What ``_tag_compared_names`` found; see there."""
 
@@ -889,6 +893,7 @@ def _tag_compared_names(
         RisingEdgeCondition,
     )
     from pyrung.core.instruction.advanced import SearchInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.tag import ImmediateRef, Tag
     from pyrung.core.validation._common import walk_instructions
     from pyrung.core.validation.walker import _condition_children
@@ -1026,6 +1031,13 @@ def _tag_compared_names(
     for instr in walk_instructions(program):
         if isinstance(instr, SearchInstruction):
             mark_all((instr.value, instr.search_range))
+        elif isinstance(instr, ForLoopInstruction) and instr.body:
+            # How many times the body runs is the count's value, not a class of
+            # it: a call guard's ``count != 0`` splits at 0 alone, and a body
+            # that accumulates tells 1 from 2.  An index keeps its pointer domain.
+            count_index: set[str] = set()
+            mark(_compared_value_names(instr.count, graph, count_index), _FOR_COUNT_REASON)
+            mark_index(count_index, _FOR_COUNT_REASON)
 
     # Back through data flow: whatever such a tag is computed from.  The
     # index of an indirect read or write is a source too: it picks the
@@ -3400,10 +3412,13 @@ def _build_infeasible_hints(
             continue
         tag = graph.tags.get(name)
         if name in compared:
-            why = (
-                f"compared with a changing value ({compared[name]}), so every value it"
-                f" can hold is explored"
-            )
+            if compared[name].startswith(_FOR_COUNT_REASON):
+                why = f"read as {compared[name]}, so every value it can hold is explored"
+            else:
+                why = (
+                    f"compared with a changing value ({compared[name]}), so every value it"
+                    f" can hold is explored"
+                )
             cap = _TAG_COMPARED_DOMAIN_CAP
             if tag is not None and tag.type == TagType.REAL:
                 hints.append(f"  {name}: REAL {why}, and a REAL's values cannot be listed")
