@@ -6,6 +6,7 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
@@ -412,6 +413,10 @@ class Tag:
             block._mapped_tags[addr] = self
             block._slot_names_changed += 1
             block._tag_cache.pop(addr, None)
+            if self.type is TagType.CHAR:
+                # The slot, for a text compare's window (`text_window_condition`);
+                # weak, so the mapping alone does not keep the bank alive.
+                object.__setattr__(self, "_pyrung_hw_slot", (weakref.ref(block), addr))
         return MappingEntry(source=self, target=target)
 
     # =========================================================================

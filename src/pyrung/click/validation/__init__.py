@@ -55,6 +55,7 @@ from .findings import (
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_STEP_LIMIT,
     CLK_TEXT_ORDER_COMPARE,
+    CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
@@ -92,6 +93,7 @@ from .portability import (
     _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
     _evaluate_text_order_compares,
+    _evaluate_text_windows,
     _evaluate_wide_constants,
 )
 from .resolve import _ResolutionCache
@@ -227,6 +229,7 @@ def validate_click_program(
     )
     findings.extend(_evaluate_status_bit_usage(program, mode))
     findings.extend(_evaluate_text_order_compares(program, mode))
+    findings.extend(_evaluate_text_windows(program, mode, resolver))
     findings.extend(_evaluate_forloop_structure(program, mode))
     findings.extend(_evaluate_nested_calls(program, mode))
     findings.extend(_evaluate_step_limit(program, tag_map, mode))
@@ -349,6 +352,7 @@ __all__ = [
     "CLK_CALC_ARG_NOT_PLAIN",
     "CLK_CALC_WIDE_CONSTANT",
     "CLK_TEXT_ORDER_COMPARE",
+    "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
     "ClickFinding",
     "ClickValidationReport",
 ]

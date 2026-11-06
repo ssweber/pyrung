@@ -465,6 +465,10 @@ class Block:
                     configured_default is not UNSET or self.default_factory is not None
                 )
                 object.__setattr__(tag, "_default_explicit", default_explicit)
+                # The block that made the tag; ``_pyrung_block`` moves to a bank
+                # that reads it as a mapped slot, this does not.
+                object.__setattr__(tag, "_pyrung_home_block", self)
+                object.__setattr__(tag, "_pyrung_home_addr", addr)
                 self._tag_cache[addr] = tag
         # _tag_cache is typed dict[int, LiveTag]; both assignment sites store a
         # LiveTag, so no runtime cast is needed here (this runs on every access).
@@ -984,6 +988,12 @@ class Block:
                 hw_block._slot_names_changed += 1
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)
+                if self.type is TagType.CHAR:
+                    # The slot, for a text compare's window (`text_window_condition`);
+                    # weak, so the mapping alone does not keep the bank alive.
+                    object.__setattr__(
+                        slot_tag, "_pyrung_hw_slot", (weakref.ref(hw_block), hw_addr)
+                    )
 
         return MappingEntry(source=self, target=target)
 
