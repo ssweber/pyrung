@@ -33,9 +33,9 @@ def prove_effective_preset_key(done_name: str) -> str:
 
 
 #: The most iterations the verifier's kernel runs one For for in one scan.  A
-#: 16-bit count runs at most 65535, under it; a Dint count is read whole
-#: (``control.for_count_mask``), so a negative one would run about 4.29 billion
-#: and the search would not return.
+#: 16-bit count runs at most 65535, under it; a Dint count is read whole and
+#: signed (``control.for_loop_iterations``), so a positive one can run up to
+#: 2147483647 and the search would not return.
 PROVE_FOR_ITERATION_CAP = 1_000_000
 
 

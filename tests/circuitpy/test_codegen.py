@@ -2239,6 +2239,26 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (wide_hits, narrow_hits), scans=1)
         assert results == {name: (65537, 32768) for name in results}
 
+    def test_forloop_dint_count_of_zero_or_below_runs_none_on_every_backend(self, monkeypatch):
+        """A DD count is read signed: -1 runs none (hardware 2026-11-06), and so do the
+        most negative Dint and a DD element of -1, on all three backends; 3 still runs 3."""
+        minus_one = Dint("MinusOne", default=-1)
+        lowest = Dint("Lowest", default=-2147483648)
+        longs = Block("Longs", TagType.DINT, 1, 2)
+        pointer = Int("Pointer", default=1)
+        three = Dint("Three", default=3)
+        hits = Dint("Hits")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                copy(-1, longs[1])
+            for count in (minus_one, lowest, longs[pointer], three):
+                with Rung(system.sys.first_scan):
+                    with forloop(count):
+                        math(hits + 1, hits)
+
+        results = _on_every_backend(prog, monkeypatch, (hits,), scans=1)
+        assert results == {name: (3,) for name in results}
+
     _FAULTS = (
         system.fault.division_error,
         system.fault.out_of_range,
