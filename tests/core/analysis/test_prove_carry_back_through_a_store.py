@@ -278,6 +278,65 @@ def test_a_declared_real_is_not_all_its_whole_numbers() -> None:
     assert not isinstance(never(program, hit), Proven)
 
 
+@pytest.mark.parametrize(
+    "into_the_bit",
+    [
+        pytest.param(copy, id="copy"),
+        pytest.param(lambda s, d: math(s + 0, d), id="math"),
+    ],
+)
+def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit) -> None:
+    """A bit is on for every nonzero number, so ``D > 0.5`` past it has no one way back:
+    the inverse gives the source -0.5, 0.5 and 1.5, none of them an Int, and 1 fires."""
+    source = Int("S", external=True)
+    bit = Bool("Bit")
+    last = Real("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            into_the_bit(source, bit)
+        with Rung():
+            copy(bit, last)
+        with Rung(last > 0.5):
+            out(hit)
+    assert _fires_at(program, "S", 1, hit)
+    assert _fires_at(program, "S", -7, hit)
+    assert not _fires_at(program, "S", 0, hit)
+
+    verdict = never(program, hit)
+    assert not isinstance(verdict, Proven)
+    if isinstance(verdict, Counterexample):
+        assert _witness_fires(program, verdict, hit)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a declared REAL feeding a calc no edge covers gets the whole numbers of its range "
+    "(classify.py, _unsupported_reverse_sources -> _declared_domain), so 0.5 is never tried",
+)
+@pytest.mark.parametrize(
+    ("dest_type", "build", "compare"),
+    [
+        pytest.param(Bool, lambda s, d: math(s - 0.5, d), lambda d: ~d, id="math into a bit"),
+        pytest.param(Int, lambda s, d: math(s * s * 4 - 1, d), lambda d: d == 0, id="square"),
+    ],
+)
+def test_a_declared_real_into_a_calc_with_no_way_back_is_not_proven(
+    dest_type, build, compare
+) -> None:
+    """Both fire at 0.5, inside the declared range, and the verifier says Proven."""
+    source = Real("S", external=True, min=0.0, max=10.0)
+    dest = dest_type("D")
+    hit = Bool("Hit")
+    with Program(strict=False) as program:
+        with Rung():
+            build(source, dest)
+        with Rung(compare(dest)):
+            out(hit)
+    assert _fires_at(program, "S", 0.5, hit)
+    assert not isinstance(never(program, hit), Proven)
+
+
 def test_a_multiply_the_inverse_has_no_answer_for_is_not_proven_where_a_scan_fires() -> None:
     """``S * 3`` wraps to 1 at -21845, and the inverse of 1 has no whole answer."""
     source = Int("S", external=True)
