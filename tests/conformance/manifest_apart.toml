@@ -171,3 +171,90 @@ slots = 1
 
 [groups.txt_end.cases]
 by_pointer = 1
+
+[groups.flag_steps]
+base = 1161 # Conf_FlagSteps: DS1161..DS1210
+slots = 4
+
+[groups.flag_steps.cases]
+sc44_steps = 1
+sc43_steps = 2
+sc40_steps = 3
+
+[groups.flag_reads]
+base = 1211 # Conf_FlagReads: DS1211..DS1270
+slots = 5
+
+[groups.flag_reads.cases]
+unpowered_division = 1
+oneshot_held = 2
+pointer_minus_one = 3
+math_after_sqrt = 4
+
+[groups.flag_carry]
+base = 1271 # Conf_FlagCarry: DS1271..DS1300
+slots = 2
+
+[groups.flag_carry.cases]
+math_flags_carry = 1
+
+[groups.drum_ds]
+base = 1301 # Conf_DrumDs: DS1301..DS1330
+slots = 2
+
+[groups.drum_ds.cases]
+ds_preset_ends = 1
+
+[groups.jump_return]
+base = 1331 # Conf_JumpReturn: DS1331..DS1360
+slots = 2
+
+[groups.jump_return.cases]
+bad_jump_on_return = 1
+
+[groups.deb_fall]
+base = 1361 # Conf_DebFall: DS1361..DS1390
+slots = 2
+
+[groups.deb_fall.cases]
+off_td_at_fall = 1
+
+[groups.flash_zero]
+base = 1391 # Conf_FlashZero: DS1391..DS1450
+slots = 5
+
+[groups.flash_zero.cases]
+off_zero_first_phase = 1
+on_zero_tds = 2
+lowered_to_zero = 3
+short_first_phase = 4
+
+[groups.tof_rewrite]
+base = 1451 # Conf_TofRewrite: DS1451..DS1480
+slots = 2
+
+[groups.tof_rewrite.cases]
+done_after_td_zeroed = 1
+
+[groups.term_zero]
+base = 1481 # Conf_TermZero: DS1481..DS1530
+slots = 4
+
+[groups.term_zero.cases]
+quiet_terms = 1
+abs_int_min = 2
+real_quiet_terms = 3
+
+[groups.for_signed]
+base = 1531 # Conf_ForSigned: DS1531..DS1550
+slots = 1
+
+[groups.for_signed.cases]
+minus_counts = 1
+
+[groups.pack_point]
+base = 1551 # Conf_PackPoint: DS1551..DS1570
+slots = 1
+
+[groups.pack_point.cases]
+point_into_dd = 1
