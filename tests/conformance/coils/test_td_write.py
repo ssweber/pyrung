@@ -1,11 +1,12 @@
 """A TD written by the ladder into a running Out coil variant: the ``td_write`` group (part
-``follow_timing``).
+``follow_extra``).
 
 A CLICK's debounce and flasher keep their state in their TDs: they never set T (probe O6) and
 their TDs freeze while the rung is false.  A TON counts on from a TD the ladder writes
-(``timers/acc_clamps_at_32767``).  Does a debounce or a flasher, whose coil reads its phase from
-its TDs alone in pyrung, move with a TD written while it runs?  A clock (a TON from ``Cmd``, its TD
-in ms) times each write, once the side is timing and not on its first scan.
+(``timers/acc_clamps_at_32767``).  Does a debounce, which counts its sides in its TDs, or a
+flasher, whose coil reads its phase from its TDs alone in pyrung, move with a TD written while it
+runs?  A clock (a TON from ``Cmd``, its TD in ms) times each write, once the side is timing and
+not on its first scan.
 
 ``debounce_on_td_write``: a debounce of 500 ms on, 50 ms off, its rung on.  At 100 ms the ladder
 writes its on TD to 500, the preset, once.
