@@ -25,8 +25,10 @@ MIN_LOOP_SHARE = 0.4
 LOW_LOOP_SHARE = {
     "follow_extra": (
         0.25,
-        "txt_end copies a Real to text through a DS pointer and reads dd[ZERO]: the loop "
-        "declines 'iteration over an unknown value'",
+        "adding txt_end (a Copy to text through a DS pointer, a read through a DD pointer "
+        "of 0) took the share from 58% to 30%: the loop declines 16 scans for 'iteration "
+        "over an unknown value' and 2 for 'call with keyword or starred arguments'; the "
+        "rungs are not isolated",
     ),
 }
 

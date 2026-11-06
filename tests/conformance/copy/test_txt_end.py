@@ -19,7 +19,9 @@ ErrorCode is the code of TXT994, 90 where nothing before the start was written. 
 (bit 1) and SC44 (bit 2) on the rung right after the Copy, and the controls on scan 3: SC43 from
 a Copy of DD 40000 into a DS (bit 4, ``faults/copy_clamp_out_of_range``) and SC44 from a Copy
 through a DD pointer of 0 (bit 8), so 12 is two raises that took and the flags read as they
-should.  pyrung reads 6318, 6832, 6192, 12, 90.
+should.  The expectation takes any of 0..15, since a CLICK may latch a flag across scans or not
+raise SC44 for a pointer of 0: the bits are the reading (1 SC43 and 2 SC44 after the Copy, 4 and 8
+the controls).  pyrung reads 6318, 6832, 6192, 12, 90.
 
 No Copy into a TXT by pointer has been pasted (``to_text_real`` pasted the form by address): if
 CLICK's editor refuses it, delete the group's call rung.  A case by address would need the same
@@ -117,7 +119,7 @@ group = Group(
                 "Result1": between(0, 16383),
                 "Result2": between(0, 16383),
                 "Result3": between(0, 16383),
-                "Result4": range(12, 16),
+                "Result4": between(0, 15),
                 "ErrorCode": between(0, 127),
             },
             scans=scans_for(WINDOW),
