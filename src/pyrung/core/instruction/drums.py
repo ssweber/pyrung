@@ -286,35 +286,36 @@ class _DrumBaseInstruction(Instruction):
             }
         )
 
-    def _jump_lands(self, jump_edge: bool, jump_target: int | None) -> bool:
-        return jump_edge and jump_target is not None and self._step_is_valid(jump_target)
+    def _flag_on(self, ctx: ScanContext) -> bool:
+        return bool(ctx.get_tag(self.completion_flag.name, self.completion_flag.default))
 
     def _move(self, ctx: ScanContext, step: int) -> None:
         ctx.set_tag(self.current_step.name, step)
         self._clear_time(ctx)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        """One scan, for every kind of drum, as a CLICK runs it.
+        """One scan, for every kind of drum, as a CLICK runs it: one action, by priority.
 
-        Pins act with the rung true or not, read before the drum writes
-        anything: reset (a level, it wins, and its scan's jump and jog are
-        dropped), then a jog and a jump on their edges, the jump last.
+        The pins are read first, before the drum writes anything, and act with
+        the rung true or not.  The first that applies takes the scan:
 
-        The guard: a bad step corrects to 1 on an enabled drum, with no output
-        write and Acc kept.  A jog edge on a bad step freezes the scan, unless a
-        reset or a jump to a valid step acts on it, and never moves the drum.
+        1. reset, a level: step 1, the completion flag and every output off;
+        2. a jump edge: to its step if the drum has it, and a step it does not
+           have does nothing at all (no jog, no correction, no own logic);
+        3. a jog edge: one step forward, or complete on the last step; on a bad
+           step it does nothing;
+        4. own logic, with the rung true: a bad step corrects to 1 (no row, Acc
+           and the latched preset kept), and that is not an action, so with the
+           completion flag off the drum then runs its time or event.  On the
+           return scan (the rung came back, a reset ended, or the first scan) it
+           writes the row and no more; otherwise it ticks Acc if the step has a
+           time and moves if the step's end is met.
 
-        Own logic runs only with the rung true and the completion flag tag off.
-        A move by a pin leaves it nothing to do but write the row.  On the
-        return scan (the rung came back, a reset ended, or the first scan) it
-        writes the row, ticks nothing and ends nothing; otherwise it ticks Acc if
-        the step has a time and moves if the step's end is met.
-
-        The flag tag is the state: set or cleared from outside, it stops or
-        frees the drum.  With it on a jog forward still writes the row, and a
-        jump moves the step and leaves the outputs alone.  A drum writes its
-        outputs only on these scans, so another writer's value stays between
-        them, and a write to the step register is not a move.
+        A move writes the row with the rung true, except a jump with the flag
+        on.  The flag tag is the state: set or cleared from outside, it stops or
+        frees the drum.  A drum writes its outputs only on these scans, so
+        another writer's value stays between them, and a write to the step
+        register is not a move.
         """
         condition_view = instruction_condition_view(ctx, self)
         register = _read_step_tag_value(ctx, self.current_step)
@@ -322,14 +323,22 @@ class _DrumBaseInstruction(Instruction):
         jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target = self._read_pins(
             ctx, condition_view
         )
-        landing = jump_target if self._jump_lands(jump_edge, jump_target) else None
 
         step = register if valid else 1
         if reset_active:
             self._apply_reset(ctx)
             step = 1
-        elif valid or landing is not None or not jog_edge:
-            step = self._take_scan(ctx, condition_view, enabled, register, step, jog_edge, landing)
+        elif jump_edge:
+            if jump_target is not None and self._step_is_valid(jump_target):
+                step = jump_target
+                self._move(ctx, step)
+                if enabled and not self._flag_on(ctx):
+                    self._apply_outputs(ctx, step)
+        elif jog_edge:
+            if valid:
+                step = self._jog(ctx, enabled, step)
+        else:
+            step = self._own_scan(ctx, condition_view, enabled, register, step)
 
         self._finish_scan(ctx, condition_view, step)
         # A reset ending under a true rung counts as the rung coming back.
@@ -339,51 +348,43 @@ class _DrumBaseInstruction(Instruction):
         if self.jog_condition is not None:
             ctx.set_memory(self.memory_key("_drum_jog_prev"), jog_curr)
 
-    def _take_scan(
+    def _jog(self, ctx: ScanContext, enabled: bool, step: int) -> int:
+        """A jog edge on a valid step: forward with its row, or complete on the last step."""
+        if step < self.step_count:
+            step += 1
+            self._move(ctx, step)
+            if enabled:
+                self._apply_outputs(ctx, step)
+        elif not self._flag_on(ctx):
+            self._complete(ctx)
+        return step
+
+    def _own_scan(
         self,
         ctx: ScanContext,
         condition_view: Any,
         enabled: bool,
         register: int,
         step: int,
-        jog_edge: bool,
-        landing: int | None,
     ) -> int:
-        """A scan no reset took and no jog froze: the pins, the guard, then own logic."""
-        flag = bool(ctx.get_tag(self.completion_flag.name, self.completion_flag.default))
-        moved = False
-        write_row = False
-        if landing is not None:
-            step = landing
-            moved = True
-            write_row = not flag
-        elif jog_edge:
+        """A scan no pin took: the correction, then the drum's own time or event."""
+        if not enabled:
+            return step
+        if step != register:
+            ctx.set_tag(self.current_step.name, step)
+        if self._flag_on(ctx):
+            return step
+        if not bool(ctx.get_memory(self.memory_key("_drum_rung_prev"), False)):
+            self._apply_outputs(ctx, step)
+            return step
+        acc = self._tick(ctx, step)
+        if self._step_end_met(ctx, condition_view, step, register, acc):
             if step < self.step_count:
                 step += 1
-                moved = True
-                write_row = True
-            elif not flag:
+                self._move(ctx, step)
+                self._apply_outputs(ctx, step)
+            else:
                 self._complete(ctx)
-                flag = True
-        elif enabled and step != register:
-            ctx.set_tag(self.current_step.name, step)
-        if moved:
-            self._move(ctx, step)
-
-        if enabled and not flag:
-            if not bool(ctx.get_memory(self.memory_key("_drum_rung_prev"), False)):
-                write_row = True
-            elif not moved:
-                acc = self._tick(ctx, step)
-                if self._step_end_met(ctx, condition_view, step, register, acc):
-                    if step < self.step_count:
-                        step += 1
-                        self._move(ctx, step)
-                        write_row = True
-                    else:
-                        self._complete(ctx)
-        if enabled and write_row:
-            self._apply_outputs(ctx, step)
         return step
 
     @abstractmethod
@@ -449,6 +450,18 @@ PRESET_MEMORY = "_drum_preset"
 """The preset a drum read for that step."""
 
 
+def time_is_up(spec: Tag | int, preset: int, acc: int) -> bool:
+    """A timed step's end: *preset* is the value the step holds, *spec* where it came from.
+
+    A tag preset of 0 or less never ends its step (``drum_limits/preset_from_ds``);
+    a constant one ends it at once (``drum_preset/literal_zero``).  The compiled
+    kernel's ``_time_up_expr`` is the same test.
+    """
+    if not isinstance(spec, Tag) and spec <= 0:
+        return acc >= preset
+    return 0 < preset <= acc
+
+
 def latches_presets(instr: Any) -> bool:
     """Whether *instr* is a drum with a tag preset, which it reads once a step."""
     presets = getattr(instr, "presets", ())
@@ -459,9 +472,12 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     """A drum with an accumulator: its time ticks and clears here, for the routine.
 
     A step's preset is read on the first scan the step times, and held until
-    the step changes (``PRESET_STEP_MEMORY``), as a CLICK reads a DS preset:
-    lowered under Acc mid-step it does not end the step.  A drum with literal
-    presets keeps no such memory.  A preset of 0 or less never ends its step.
+    the drum moves (``PRESET_STEP_MEMORY``), as a CLICK reads a DS preset:
+    lowered under Acc mid-step it does not end the step, and a step the
+    register reaches without a move (a correction, a write) keeps the preset
+    held.  A drum with literal presets keeps no such memory.  A tag preset of
+    0 or less never ends its step; a constant one ends it on its first timing
+    scan (:func:`time_is_up`).
     """
 
     accumulator: Tag
@@ -469,10 +485,10 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     presets: tuple[Any, ...]  # each kind narrows it: a time & event step may have none
 
     def _step_preset(self, ctx: ScanContext, step: int, preset: Tag | int) -> int:
-        """*step*'s preset as the step read it when it started timing."""
+        """The preset held since the drum last moved, or *step*'s, read now and held."""
         if not latches_presets(self):
             return _resolve_preset_value(preset, ctx)
-        if int(ctx.get_memory(self.memory_key(PRESET_STEP_MEMORY), 0)) == step:
+        if int(ctx.get_memory(self.memory_key(PRESET_STEP_MEMORY), 0)) != 0:
             return int(ctx.get_memory(self.memory_key(PRESET_MEMORY), 0))
         value = _resolve_preset_value(preset, ctx)
         ctx.set_memory(self.memory_key(PRESET_STEP_MEMORY), step)
@@ -506,14 +522,14 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
             ctx.set_memory(self.memory_key(PRESET_MEMORY), 0)
 
     def _never_ends(self, step: int, snapshot: Snapshot) -> bool:
-        """Whether *step* has a preset of 0 or less, so it never ends on its own.
+        """Whether *step* has a tag preset of 0 or less, so it never ends on its own.
 
         Its Acc still counts; only a jog, a jump or a reset moves the drum off
-        it.  A tag preset is read from *snapshot*, the value the step reads when
-        it starts timing.
+        it.  The preset is read from *snapshot*, the value the step reads when
+        it starts timing.  A constant preset of 0 or less ends its step at once.
         """
         spec = self.presets[step - 1]
-        if spec is None:
+        if not isinstance(spec, Tag):
             return False
         try:
             return int(resolve_snapshot_value(spec, snapshot)) <= 0
@@ -702,9 +718,9 @@ class TimeDrumInstruction(_TimedDrumInstruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """The step's time is up: a preset above 0, read when the step started timing."""
-        preset = self._step_preset(ctx, step, self.presets[step - 1])
-        return 0 < preset <= acc
+        """The step's time is up, against the preset read when the step started timing."""
+        spec = self.presets[step - 1]
+        return time_is_up(spec, self._step_preset(ctx, step, spec), acc)
 
     def advance_profile(self) -> AdvanceProfile:
         def _auto(until: Eq | Cmp) -> AdvanceStep:
@@ -773,7 +789,7 @@ class TimeDrumInstruction(_TimedDrumInstruction):
             except (TypeError, ValueError):
                 return None
 
-            if preset <= 0 and target >= acc:
+            if self._never_ends(current, snapshot) and target >= acc:
                 # The step never ends, and its Acc keeps counting.
                 return _auto(constraint)
             # A non-final step clears Acc as it crosses its preset. Treat that
@@ -878,7 +894,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
     ) -> bool:
         """The step's time is up, if it has one, and its event is on, if it has one."""
         preset = self.presets[step - 1]
-        if preset is not None and not 0 < self._step_preset(ctx, step, preset) <= acc:
+        if preset is not None and not time_is_up(preset, self._step_preset(ctx, step, preset), acc):
             return False
         event = self.events[step - 1]
         return event is None or bool(event.evaluate(condition_view))
@@ -973,9 +989,9 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
                 preset = int(resolve_snapshot_value(preset_spec, snapshot))
             except (TypeError, ValueError):
                 return None
-            if target < preset or preset <= 0:
+            if target < preset or self._never_ends(current, snapshot):
                 # Acc counts whatever the event does, and on for good in a step
-                # its preset never ends.
+                # its tag preset never ends.
                 return _condition_step(constraint, self.auto_condition, reports_progress=True)
             if current < self.step_count and self.events[current - 1] is None:
                 # A time-only step clears Acc as it crosses its preset.

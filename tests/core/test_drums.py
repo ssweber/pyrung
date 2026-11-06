@@ -939,7 +939,7 @@ DRUM_KINDS = ["event", "time", "time_event"]
 BACKENDS = [PLC, CompiledPLC]
 
 
-def _two_step_drum(kind: str) -> Program:
+def _two_step_drum(kind: str, jump_step: Any = 1) -> Program:
     """A 2-step drum (A on step 1, B on step 2) under ``Enable``, whose outputs a
     rung above can reset; its steps end only by a jog here (or a jump, or E1/E2)."""
     args = {
@@ -965,12 +965,12 @@ def _two_step_drum(kind: str) -> Program:
                     accumulator=Int("Acc"),
                     **args,
                 )
-            drum.reset(Bool("Reset")).jump(Bool("Go"), step=1).jog(Bool("Jog"))
+            drum.reset(Bool("Reset")).jump(Bool("Go"), step=jump_step).jog(Bool("Jog"))
     return logic
 
 
-def _on_step_two(kind: str, backend: type) -> PLC | CompiledPLC:
-    plc = backend(_two_step_drum(kind), dt=0.01)
+def _on_step_two(kind: str, backend: type, jump_step: Any = 1) -> PLC | CompiledPLC:
+    plc = backend(_two_step_drum(kind, jump_step), dt=0.01)
     plc.patch({"Enable": True})
     plc.step()
     assert _snapshot(plc)[:3] == (1, True, False)
@@ -1091,6 +1091,50 @@ def test_jump_acts_on_a_bad_step_under_a_jog(kind: str, backend: type) -> None:
     assert _snapshot(plc) == (1, True, False, False)
 
 
+# -- a jump to a step the drum does not have takes the scan ----------------------
+#
+# Read on a CLICK (``bad_jump/bad_target_takes_the_scan``, 2026-11-06, and
+# ``drum_branch/jump_to_bad_step`` Result3): no jog, no correction, no own time or
+# event that scan; the next scan runs as if nothing happened.
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+@pytest.mark.parametrize("target", [0, 9])
+def test_a_jump_to_a_bad_step_drops_the_scans_jog(kind: str, backend: type, target: int) -> None:
+    plc = _on_step_two(kind, backend, jump_step=target)
+    plc.patch({"Jog": True, "Go": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    # The jog's edge is spent.
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_a_jump_to_a_bad_step_drops_the_scans_time(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend, jump_step=9)
+    plc.patch({"Acc": 30_000, "Go": True})
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    assert plc.current_state.tags["Acc"] == 30_000
+    # The next scan the time is up: the last step completes.
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, True)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", DRUM_KINDS)
+def test_a_jump_to_a_bad_step_on_a_bad_step_waits_to_correct(kind: str, backend: type) -> None:
+    plc = _on_step_two(kind, backend, jump_step=9)
+    plc.patch({"Step": 5, "Go": True})
+    plc.step()
+    assert _snapshot(plc) == (5, False, True, False)
+    plc.step()
+    assert _snapshot(plc) == (1, False, True, False)
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", DRUM_KINDS)
 def test_jog_on_the_last_step_completes(kind: str, backend: type) -> None:
@@ -1197,8 +1241,9 @@ def test_a_tag_preset_is_read_when_its_step_starts_timing(kind: str, backend: ty
 
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
-def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend: type) -> None:
-    """A write to the step register is not a move, but the step it lands on reads its preset."""
+def test_a_step_written_to_the_register_keeps_the_held_preset(kind: str, backend: type) -> None:
+    """A write to the step register is not a move: the preset held stays, as a correction's
+    does (``drum_preset/entry_or_first_timing_scan`` Result3)."""
     plc = backend(_preset_drum(kind, [Int("P"), Int("P")]), dt=0.01)
     plc.patch({"Enable": True, "P": 1000})
     for _ in range(4):
@@ -1206,24 +1251,60 @@ def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend:
     plc.patch({"P": 20, "Step": 2})
     plc.step()
     tags = plc.current_state.tags
-    assert (tags["Step"], tags["Acc"], tags["Done"]) == (2, 40, True)
+    assert (tags["Step"], tags["Acc"], tags["Done"]) == (2, 40, False)
+    # A move reads the preset afresh: a jump to step 1 ends on its second tick.
+    plc.patch({"Go": True})
+    plc.step()
+    plc.step()
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
-@pytest.mark.parametrize("preset", [0, -5, "tag 0", "tag -5"])
-def test_a_preset_of_zero_or_below_never_ends_its_step(
-    kind: str, backend: type, preset: int | str
+def test_a_corrected_step_keeps_the_held_preset(kind: str, backend: type) -> None:
+    """A bad step goes back to step 1 without reading step 1's preset again."""
+    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
+    plc.patch({"Enable": True, "P": 30_000})
+    for _ in range(4):
+        plc.step()
+    plc.patch({"P": 10, "Step": 5})
+    for _ in range(5):
+        plc.step()
+    tags = plc.current_state.tags
+    assert (tags["Step"], tags["Acc"], tags["Done"]) == (1, 80, False)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+@pytest.mark.parametrize("preset", [0, -5])
+def test_a_tag_preset_of_zero_or_below_never_ends_its_step(
+    kind: str, backend: type, preset: int
 ) -> None:
-    first = preset if isinstance(preset, int) else Int("P")
-    plc = backend(_preset_drum(kind, [first, 30_000]), dt=0.01)
-    plc.patch({"Enable": True})
-    if isinstance(preset, str):
-        plc.patch({"P": int(preset.split()[1])})
+    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
+    plc.patch({"Enable": True, "P": preset})
     for _ in range(20):
         plc.step()
     assert _snapshot(plc) == (1, True, False, False)
     assert plc.current_state.tags["Acc"] == 190
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+@pytest.mark.parametrize("latching", [False, True], ids=["literal", "beside_a_tag"])
+@pytest.mark.parametrize("preset", [0, -5])
+def test_a_constant_preset_of_zero_or_below_ends_its_step_at_once(
+    kind: str, backend: type, latching: bool, preset: int
+) -> None:
+    """``drum_preset/literal_zero``: the first scan the step times ends it."""
+    second = Int("P") if latching else 30_000
+    plc = backend(_preset_drum(kind, [preset, second]), dt=0.01)
+    plc.patch({"Enable": True, "P": 30_000})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    assert plc.current_state.tags["Acc"] == 0
 
 
 # -- a pin and the step's own end on one scan ------------------------------------
@@ -1288,8 +1369,11 @@ def test_a_jump_and_a_last_step_event_on_one_scan_do_not_complete(kind: str, bac
 # -- the same routine on both backends and in the guarded loop -------------------
 
 
-def _busy_drum(kind: str) -> Program:
-    """A 3-step drum with every pin and short times, so its own ends come often."""
+def _busy_drum(kind: str, zero: bool = False) -> Program:
+    """A 3-step drum with every pin and short times, so its own ends come often.
+
+    *zero*: step 2 of a timed drum has the constant preset 0, which ends it at once.
+    """
     args = {
         "outputs": [Bool("A"), Bool("B")],
         "pattern": [[1, 0], [0, 1], [1, 1]],
@@ -1304,13 +1388,13 @@ def _busy_drum(kind: str) -> Program:
                 drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **args)
             elif kind == "time":
                 drum = time_drum(
-                    presets=[30, 50, Int("Preset", default=40)],
+                    presets=[30, 0 if zero else 50, Int("Preset", default=40)],
                     accumulator=Int("Acc"),
                     **args,
                 )
             else:
                 drum = time_event_drum(
-                    presets=[30, None, Int("Preset", default=40)],
+                    presets=[30, 0 if zero else None, Int("Preset", default=40)],
                     events=[None, Bool("E2"), Bool("E3")],
                     accumulator=Int("Acc"),
                     **args,
@@ -1369,12 +1453,13 @@ def _drum_view(plc: PLC | CompiledPLC) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("seed", range(6))
-@pytest.mark.parametrize("kind", DRUM_KINDS)
+@pytest.mark.parametrize("kind", [*DRUM_KINDS, "time zero", "time_event zero"])
 def test_backends_agree_scan_by_scan(kind: str, seed: int) -> None:
     """Whatever a scan finds, both backends end it the same, down to the drum's memory."""
     rng = random.Random(f"{kind}{seed}")
-    interpreted = PLC(_busy_drum(kind), dt=0.01)
-    compiled = CompiledPLC(_busy_drum(kind), dt=0.01)
+    base, _, zero = kind.partition(" ")
+    interpreted = PLC(_busy_drum(base, bool(zero)), dt=0.01)
+    compiled = CompiledPLC(_busy_drum(base, bool(zero)), dt=0.01)
     for scan in range(300):
         patch = _random_patch(rng)
         interpreted.patch(patch)
