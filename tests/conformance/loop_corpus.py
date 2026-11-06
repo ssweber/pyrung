@@ -14,7 +14,6 @@ loop, stepping and recorded all agree.
 
 from __future__ import annotations
 
-import re
 import warnings
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -35,16 +34,6 @@ from pyrung.core.scan_trace import DECLINING_SYSTEM_TAGS
 from pyrung.core.tag import TagType
 from tests import fold_check
 from tests.conformance import suite
-
-UNCUT_DRAW = "uncut draw"
-
-#: The whole-state differences found, by the case that shows each.  Such a case stays out of the
-#: corpus and in ``test_loop_corpus.py``'s ``test_a_hole_still_shows``, which fails the day it
-#: closes.
-HOLES = {
-    "faults/rand_unequal_bounds": UNCUT_DRAW,
-    "store_probe/rand_int_cuts": UNCUT_DRAW,
-}
 
 CaseFilter = Callable[[Group, Case], bool]
 
@@ -127,7 +116,7 @@ def case_alone(group: Group, case: Case) -> Subject:
 
 def on_hardware(group: Group, case: Case) -> bool:
     """A case a part as built holds, and whose program the corpus runs."""
-    return not case.in_process_only and case_label(group.name, case) not in HOLES
+    return not case.in_process_only
 
 
 def picks(part: str, keep: CaseFilter) -> list[tuple[Group, list[Case]]]:
@@ -257,12 +246,7 @@ FIRST_PARTS = ("coils", "math", "control", "system")
 
 
 def cases_of(part: str) -> list[tuple[Group, Case]]:
-    return [
-        (group, case)
-        for group in suite.groups(part)
-        for case in group.cases
-        if case_label(group.name, case) not in HOLES
-    ]
+    return [(group, case) for group in suite.groups(part) for case in group.cases]
 
 
 def check_each_case_alone(part: str) -> None:
@@ -475,32 +459,13 @@ def every_drill(subject: Subject, tally: Tally) -> None:
         tally.add(subject, lambda d: d.long_wait(2500))
 
 
-def not_checked_by_the_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Under ``--fold-check``, leave this test's runs to it: a hole's own test says what differs.
-
-    A mismatch in the session's twin would fail the session, xfail or no xfail.
-    """
-    monkeypatch.setattr(fold_check, "_depth", 1)
-
-
-class OnlyUncutDrawsDiffer(AssertionError):
-    """A run differs from stepping in ``_rand.N`` tags and in nothing else: the hole, as known."""
-
-
-_UNCUT_DRAW_TAG = re.compile(r"_rand\.\d+")
-
-
 def assert_equals_stepping(plc: PLC, run: Callable[[], Any], times: int = 1) -> None:
-    """*run*, *times* over, on *plc* against the same scans stepped on a twin.
+    """*run*, *times* over, on *plc* against the same scans stepped on a twin, in whole state.
 
     A compiled run is compared where it lands, and a draw over few values can land on what it
     should be by chance: *times* is what keeps such a difference from passing.
-
-    Any difference but an uncut draw's is a plain failure, at the landing that shows it.  Those
-    wait for the last landing, so a draw that differs early does not hide what differs later.
     """
     twin = fold_check._twin(plc)
-    draws = ""
     for _ in range(times):
         start = plc.current_state.scan_id
         run()
@@ -509,11 +474,5 @@ def assert_equals_stepping(plc: PLC, run: Callable[[], Any], times: int = 1) -> 
         ours, stepped = fold_check._image(plc.current_state), fold_check._image(twin.current_state)
         differs = {k: (ours.get(k), stepped.get(k)) for k in ours.keys() | stepped.keys()}
         differs = {k: v for k, v in differs.items() if v[0] != v[1]}
-        at_scan = f"at scan {plc.current_state.scan_id}, (run, stepped)"
-        others = {k: v for k, v in differs.items() if not _UNCUT_DRAW_TAG.fullmatch(k)}
-        assert not others, f"{at_scan}: {differs}"
+        assert not differs, f"at scan {plc.current_state.scan_id}, (run, stepped): {differs}"
         assert plc.current_state.timestamp == twin.current_state.timestamp
-        if differs and not draws:
-            draws = f"{at_scan}: {differs}"
-    if draws:
-        raise OnlyUncutDrawsDiffer(draws)

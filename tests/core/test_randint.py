@@ -353,6 +353,66 @@ class TestBoundsAsCLICKReadsThem:
         small = randint(1, 6)
         assert small.cut_tag is small.tag
 
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    @pytest.mark.parametrize(
+        "dests, drawn",
+        [
+            pytest.param((Int,), ("cut",), id="int"),
+            pytest.param((Dint,), ("uncut",), id="dint"),
+            pytest.param((Int, Dint), ("cut", "uncut"), id="both"),
+        ],
+    )
+    def test_only_the_draws_a_math_runs_are_drawn(self, factory, dests, drawn):
+        """One draw per RAND a Math runs, as on a CLICK: each its own site's, as if alone."""
+        roll = randint(70000, 90000)
+        with Program(strict=False) as logic:
+            with Rung():
+                for index, dest in enumerate(dests):
+                    calc(roll, dest(f"Die{index}"))
+        sites = {
+            "uncut": (roll.tag.name, roll.site, 70000, 90000),
+            "cut": (f"{roll.tag.name}.cut", ~roll.site, 4464, 24464),
+        }
+        plc = factory(logic, dt=0.01)
+        for _ in range(20):
+            state = plc.step()
+            for which, (name, site, lo, hi) in sites.items():
+                held = state.tags.get(name, roll.tag.default if which == "uncut" else lo)
+                if which in drawn:
+                    # Drawn as the scan runs, before its id moves on.
+                    assert held == randint_draw(site, state.scan_id - 1, lo, hi)
+                else:
+                    assert held == (roll.tag.default if which == "uncut" else lo)
+
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_a_patch_or_force_of_a_draw_no_math_runs_moves_nothing(self, factory):
+        """The uncut tag of an Int's cut draw holds what is put there, as a tag nothing writes."""
+        roll = randint(70000, 90000)
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(roll, Int("Die"))
+        natural = _draws(factory(logic, dt=0.01), "Die", 9)
+        plc = factory(logic, dt=0.01)
+        dice = []
+        held = []
+        plc.patch({roll.tag: 80000})
+        for _ in range(3):
+            state = plc.step()
+            dice.append(state.tags["Die"])
+            held.append(state.tags[roll.tag.name])
+        plc.force(roll.tag, 85000)
+        for _ in range(3):
+            state = plc.step()
+            dice.append(state.tags["Die"])
+            held.append(state.tags[roll.tag.name])
+        plc.unforce(roll.tag)
+        for _ in range(3):
+            state = plc.step()
+            dice.append(state.tags["Die"])
+            held.append(state.tags[roll.tag.name])
+        assert dice == natural
+        assert held == [80000] * 3 + [85000] * 6
+
 
 class TestBoundsAsWritten:
     """Only a bare ``Real`` tag as a bound reads 0; every other bound still draws."""

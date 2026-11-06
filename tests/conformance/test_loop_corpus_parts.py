@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.conformance._ladder import case_label
 from tests.conformance import loop_corpus, suite
-from tests.conformance.loop_corpus import HOLES, Subject, Tally
+from tests.conformance.loop_corpus import Subject, Tally
 
 #: Why the loop refuses every run of a part as built, for a case or two in it.  Each case that
 #: does runs alone, and ``test_loop_corpus_less.py`` runs its part without it.
@@ -29,12 +28,8 @@ _EVERY_PART = [*suite.PARTS, *suite.APART_PARTS]
 
 
 def _part_as_built(part: str) -> Subject:
-    """``suite.build(part)``, unless a case in it shows a hole: then the same, less that case."""
-    label = f"part {part}"
-    groups = suite.groups(part)
-    if any(case_label(g.name, c) in HOLES for g in groups for c in g.cases):
-        return loop_corpus.subject_of(loop_corpus.picks(part, loop_corpus.on_hardware), label)
-    return loop_corpus.subject_of_build(suite.build(part), label)
+    """``suite.build(part)``."""
+    return loop_corpus.subject_of_build(suite.build(part), f"part {part}")
 
 
 @pytest.mark.parametrize("part", _EVERY_PART)
