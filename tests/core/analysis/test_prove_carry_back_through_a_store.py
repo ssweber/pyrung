@@ -286,8 +286,8 @@ def test_a_declared_real_is_not_all_its_whole_numbers() -> None:
     ],
 )
 def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit) -> None:
-    """A bit is on for every nonzero number, so ``D > 0.5`` past it has no one way back:
-    the inverse gives the source -0.5, 0.5 and 1.5, none of them an Int, and 1 fires."""
+    """A bit is on for every nonzero number, so ``D > 0.5`` past it has no one way back to
+    the source: any nonzero source fires."""
     source = Int("S", external=True)
     bit = Bool("Bit")
     last = Real("D")
@@ -312,7 +312,8 @@ def test_a_number_through_a_bit_is_not_proven_where_a_scan_fires(into_the_bit) -
 @pytest.mark.xfail(
     strict=True,
     reason="a declared REAL feeding a calc no edge covers gets the whole numbers of its range "
-    "(classify.py, _unsupported_reverse_sources -> _declared_domain), so 0.5 is never tried",
+    "(classify.py, the _declared_domain fallback after _unsupported_reverse_sources), "
+    "so 0.5 is never tried",
 )
 @pytest.mark.parametrize(
     ("dest_type", "build", "compare"),
