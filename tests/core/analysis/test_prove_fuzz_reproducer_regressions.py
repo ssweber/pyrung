@@ -672,6 +672,7 @@ def test_nd_timer_preset_live_input_pruning():
                 out(B0)
         with Rung(~In0):
             out(B0)
+        with Rung(~In0).continued():
             on_delay(T0, ExtN0, unit="sec").reset(B0)
 
     projection = ["B0", "T0_Done"]

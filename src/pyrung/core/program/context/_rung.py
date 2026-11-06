@@ -87,6 +87,7 @@ class Rung:
             inherited = list(self._loop._capture_rung._conditions)
             self._rung._conditions = inherited + self._rung._conditions
             self._rung._branch_condition_start = len(inherited)
+            self._rung._in_loop_body = True
 
     def continued(self) -> Rung:
         """Mark this rung as a continuation of the previous rung.

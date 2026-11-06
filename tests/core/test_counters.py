@@ -229,13 +229,14 @@ class TestCountUpInstruction:
         assert runner.current_state.tags["Counter_Acc"] == 0
 
     def test_count_up_reset_reads_at_box_entry(self, runner_factory):
-        """reset() reads at box entry, so it sees a write a row above on the same scan."""
+        """reset() reads at box entry, so it sees a write on the wire above on the same scan."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
             with Rung(Enable):
                 latch(ResetBtn)
+            with Rung(Enable).continued():
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -247,7 +248,7 @@ class TestCountUpInstruction:
         assert runner.current_state.tags["Counter_Done"] is False
 
     def test_count_up_down_reads_at_box_entry(self, runner_factory):
-        """down() reads at box entry, so it sees a write a row above on the same scan."""
+        """down() reads at box entry, so it sees a write on the wire above on the same scan."""
         Enable = Bool("Enable")
         Down = Bool("Down")
         ResetBtn = Bool("ResetBtn")
@@ -255,6 +256,7 @@ class TestCountUpInstruction:
         with Program() as logic:
             with Rung(Enable):
                 latch(Down)
+            with Rung(Enable).continued():
                 count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
 
         runner = runner_factory(logic)

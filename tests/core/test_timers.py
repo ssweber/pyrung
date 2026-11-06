@@ -302,13 +302,14 @@ class TestOnDelayRTON:
         assert runner.current_state.tags["Timer_Done"] is False
 
     def test_rton_reset_reads_at_box_entry(self, runner_factory):
-        """reset() reads at box entry, so it sees a write a row above on the same scan."""
+        """reset() reads at box entry, so it sees a write on the wire above on the same scan."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
             with Rung(Enable):
                 latch(ResetBtn)
+            with Rung(Enable).continued():
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)

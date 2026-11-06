@@ -76,7 +76,7 @@ def test_drum_is_terminal_in_flow() -> None:
     e1 = Bool("E1")
     light = Bool("Light")
 
-    with pytest.raises(RuntimeError, match="terminal"):
+    with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
             with Rung(enable):
                 event_drum(
@@ -203,7 +203,7 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry(runner_facto
 
 
 def test_event_drum_events_read_at_box_entry(runner_factory) -> None:
-    """An event latched a row above the drum steps it on the same scan."""
+    """An event latched on the wire above the drum steps it on the same scan."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     go = Bool("Go")
@@ -217,6 +217,7 @@ def test_event_drum_events_read_at_box_entry(runner_factory) -> None:
         with Rung(enable):
             with branch(go):
                 latch(event)
+        with Rung(enable).continued():
             event_drum(
                 outputs=[y1, y2],
                 events=[event, event],
@@ -382,7 +383,7 @@ def test_event_drum_own_end_does_nothing_under_the_flag(runner_factory) -> None:
 
 
 def test_time_drum_jump_reads_at_box_entry(runner_factory) -> None:
-    """A jump latched a row above the drum takes it on the same scan."""
+    """A jump latched on the wire above the drum takes it on the same scan."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -395,6 +396,7 @@ def test_time_drum_jump_reads_at_box_entry(runner_factory) -> None:
     with Program() as logic:
         with Rung(enable):
             latch(jump)
+        with Rung(enable).continued():
             time_drum(
                 outputs=[y1, y2],
                 presets=[1000, 1000],
@@ -540,10 +542,14 @@ def _time_event_drum_program(
 ) -> Program:
     pattern = [[step == row for step in range(len(presets))] for row in range(len(presets))]
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
-            if latch_event is not None:
+        if latch_event is not None:
+            with Rung(Bool("Enable")):
                 with branch(Bool("Go")):
                     latch(latch_event)
+        drum_rung = Rung(Bool("Enable"))
+        if latch_event is not None:
+            drum_rung.continued()
+        with drum_rung:
             time_event_drum(
                 outputs=[Bool(f"Y{i + 1}") for i in range(len(presets))],
                 presets=presets,
@@ -713,7 +719,7 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
 
 
 def test_time_event_drum_events_read_at_box_entry(runner_factory) -> None:
-    """An event latched a row above the drum steps it on the same scan."""
+    """An event latched on the wire above the drum steps it on the same scan."""
     event = Bool("E1")
     runner = runner_factory(
         _time_event_drum_program([None, 100], [event, None], latch_event=event), dt=0.010

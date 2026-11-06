@@ -221,6 +221,7 @@ class TestNoHardware:
             with Rung(Bool("Enable")):
                 out(remote_light)
                 run_function(fn)
+            with Rung(Bool("Enable")).continued():
                 on_delay(Timer4, preset=10, unit="Tms").reset(Bool("Reset"))
 
         prog = _build_program(logic)
@@ -415,6 +416,7 @@ class TestStrictMode:
             with Rung(external_input):
                 out(light)
                 run_function(fn)
+            with Rung(external_input).continued():
                 on_delay(Timer6, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="strict")
@@ -440,6 +442,7 @@ class TestWarnMode:
             with Rung(external_input):
                 out(light)
                 run_function(fn)
+            with Rung(external_input).continued():
                 on_delay(Timer7, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
