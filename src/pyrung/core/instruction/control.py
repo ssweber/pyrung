@@ -157,8 +157,8 @@ def for_loop_iterations(count_value: Any, mask: int = FOR_COUNT_MASK_16) -> int:
     """How many times a For runs its body for a resolved count, as on CLICK.
 
     The count is read through *mask* (:func:`for_count_mask`): a 16-bit one as
-    unsigned, ``count & 0xFFFF``, and a Dint whole and signed, so one of 0 or
-    below runs none.  A count of 0 runs :data:`FOR_ZERO_COUNT_ITERATIONS`
+    unsigned, ``count & 0xFFFF``, and a Dint whole and signed, so a negative
+    one runs none.  A count of 0 runs :data:`FOR_ZERO_COUNT_ITERATIONS`
     iterations.  A REAL count holding Inf or NaN runs none (pyrung's choice:
     CLICK's editor refuses a REAL count, and a pasted one stops the PLC on its
     watchdog; :meth:`ForLoopInstruction.iterations` also sets SC43 for it).
