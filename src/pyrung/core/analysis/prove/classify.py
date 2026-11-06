@@ -3199,6 +3199,7 @@ def _extract_value_domain(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    split_neighbours: bool = False,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded.
 
@@ -3208,6 +3209,10 @@ def _extract_value_domain(
     and it keeps its whole-number picks (131, not 130.5).  A midpoint copied
     into an INT truncates (-0.5 lands at 0), so the prior would steer with a
     value the copy never stores.
+
+    *split_neighbours* (the search) gives a domain merged into written or carried
+    values the neighbours of each split point too, as a partition has: the values
+    of an exact partner (``copy(4000, Y)``, ``X > Y``) need 4001 as much as 4000.
     """
     if tag.type == TagType.BOOL:
         return (False, True)
@@ -3285,6 +3290,10 @@ def _extract_value_domain(
         # Merge comparison literals into the write domain — if the program
         # tests for a value, it belongs in the domain even if never written.
         merged = set(literals)
+        if split_neighbours:
+            for lit in literals:
+                if isinstance(lit, (int, float)) and not isinstance(lit, bool):
+                    merged.update(_neighbours(lit, tag.type))
         if real_gap_points and tag.type == TagType.REAL:
             merged |= _real_gap_points(literals)
         return tuple(sorted(set(base_domain) | held_candidates(tag, merged)))
@@ -3379,11 +3388,14 @@ def _char_cuts(literal: str) -> set[str]:
 def _neighbours(value: Any, tag_type: TagType | None) -> tuple[Any, ...]:
     """A value just below *value* and one just above, standing for the cells beside it.
 
-    ``value - 1`` and ``value + 1``.  On a REAL past 2**53 those round back to *value*
+    ``value - 1`` and ``value + 1``, in *value*'s own type (an int literal on a REAL
+    keeps int neighbours).  On a REAL past 2**53 those round back to *value*
     (``1e20 + 1 == 1e20``), so there the next float either way stands in.
     """
-    if tag_type != TagType.REAL and not isinstance(value, float):
-        return (value - 1, value + 1)
+    if not isinstance(value, float):
+        exact = (value - 1, value + 1)
+        if tag_type != TagType.REAL or float(value - 1) != float(value) != float(value + 1):
+            return exact
     number = float(value)
     if math.isnan(number):
         return ()
@@ -4295,6 +4307,7 @@ def _classify_dimensions_from_graph(
                     graph,
                     atom_idx,
                     real_gap_points=real_gap_points,
+                    split_neighbours=exhaust_tag_compared_inputs,
                 )
             if not domain:
                 declared = _declared_domain(tag)
@@ -4576,6 +4589,7 @@ def _classify_dimensions_from_graph(
             for partner in partners:
                 paired.setdefault(name, set()).add(partner)
                 paired.setdefault(partner, set()).add(name)
+        before = dict(nondeterministic)
         unanswered = _answer_for_inputs(
             program,
             graph,
@@ -4588,6 +4602,14 @@ def _classify_dimensions_from_graph(
             constant_storage=constant_storage,
             carry=carry_back,
         )
+        for group in compared_groups:
+            # A member widened above (every value, or its partition) is new split points
+            # for the rest: the representatives grouping gave them are stale.
+            members = sorted(name for name in group if name in nondeterministic)
+            if len(members) > 1 and any(
+                nondeterministic[name] != before.get(name) for name in members
+            ):
+                _group_domains(members, nondeterministic, graph.tags)
         if unanswered_out is not None:
             unanswered_out.update(unanswered)
     if profile:
