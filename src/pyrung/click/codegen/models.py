@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pyrung.click.codegen.read_order import ReadOrder
 
 # ---------------------------------------------------------------------------
 # Phase 1: Parse CSV → Raw Rungs
@@ -62,9 +58,6 @@ class _InstructionInfo:
     af_token: str
     branch_tree: SPNode | None  # branch-local conditions (SP tree)
     pins: list[_PinInfo]
-    # Place in the raw CSV rung's solve order (row order), for the read-order
-    # guard; None where unknown.
-    position: int | None = field(default=None, compare=False)
     # The wire of the raw CSV rung it sits on (0 for the first), a wire being
     # rows joined by verticals; None where unknown.
     wire: int | None = field(default=None, compare=False)
@@ -77,6 +70,7 @@ class _SourceOutput:
     af_token: str
     tree: SPNode | None  # full condition from the power rail to this output
     pins: tuple[_PinInfo, ...]
+    wire: int = 0  # the wire of the raw CSV rung it sits on (0 for the first)
 
 
 @dataclass
@@ -91,9 +85,6 @@ class _AnalyzedRung:
     # Per-output source wiring of the raw CSV rung this rung starts; None on
     # pieces split off a raw rung (they share the first piece's entry).
     source_outputs: tuple[_SourceOutput, ...] | None = None
-    # Where the raw CSV rung reads each contact cell (codegen.read_order), shared
-    # by the pieces split off it; None where unknown.
-    read_order: ReadOrder | None = field(default=None, compare=False, repr=False)
 
 
 # ---------------------------------------------------------------------------

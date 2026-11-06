@@ -51,7 +51,6 @@ from pyrung.click.codegen.models import (
     _RawRung,
     _SourceOutput,
 )
-from pyrung.click.codegen.read_order import ReadOrder, shared_limit
 from pyrung.click.codegen.shaping import NOP
 
 # ---------------------------------------------------------------------------
@@ -648,76 +647,45 @@ _trees_equal = trees_equal
 
 def _group_outputs(
     trees: list[tuple[SPNode | None, str, int]],
-    *,
-    order: ReadOrder | None = None,
-    positions: Sequence[int | None] | None = None,
 ) -> tuple[SPNode | None, list[_InstructionInfo], list[int]]:
     """Group per-output SP trees into top-level condition_tree + instructions.
 
-    *positions* are the outputs' places in the raw rung (row order; their
-    indices when omitted).  With *order*, a contact stays out of the shared
-    condition where reading it once, at the first output, would read it
-    across a write (see :mod:`~pyrung.click.codegen.read_order`).
+    Outputs share a leading contact only where the drawing has one cell for it,
+    teed off to each (:func:`factor_outputs` by cell): that cell is read once,
+    at the first of them, in pyrung as on a CLICK.  Two cells with the same
+    label stay two contacts.
     """
     if not trees:
         return None, [], []
-    places = list(range(len(trees))) if positions is None else list(positions)
 
     if len(trees) == 1:
         tree, af, af_row = trees[0]
-        return tree, [_InstructionInfo(af, None, [], position=places[0])], [af_row]
+        return tree, [_InstructionInfo(af, None, [])], [af_row]
 
-    result = factor_outputs([t[0] for t in trees])
-    count = shared_limit(order, [t[0] for t in trees], places, len(result.shared))
+    result = factor_outputs([t[0] for t in trees], cells=True)
+    count = len(result.shared)
 
     if count:
-        cond_tree = make_compound(result.shared[:count], Series)
+        cond_tree = make_compound(result.shared, Series)
         instructions: list[_InstructionInfo] = []
         af_rows: list[int] = []
-        for idx, (tree, af, af_row) in enumerate(trees):
+        for tree, af, af_row in trees:
             remaining = as_series_children(tree)[count:]
             branch_tree = make_compound(remaining, Series) if remaining else None
-            instructions.append(_InstructionInfo(af, branch_tree, [], position=places[idx]))
+            instructions.append(_InstructionInfo(af, branch_tree, []))
             af_rows.append(af_row)
         return cond_tree, instructions, af_rows
 
     # No shared prefix — each output gets its full tree as branch_tree.
     instructions = []
     af_rows = []
-    for idx, (tree, af, af_row) in enumerate(trees):
-        instructions.append(_InstructionInfo(af, tree, [], position=places[idx]))
+    for tree, af, af_row in trees:
+        instructions.append(_InstructionInfo(af, tree, []))
         af_rows.append(af_row)
     return None, instructions, af_rows
 
 
 # --- Analyzer entry points --------------------------------------------------
-
-
-def _has_wire_trunk(raw: _RawRung | None) -> bool:
-    """Whether the rung's first row is a wire in column A feeding a bus in column B.
-
-    That is the unconditional-trunk drawing (``R,-,T`` / ``R,-,T:C2``): a trunk
-    with no contact on it, then a split.  It reads as one rung with branches, as a
-    trunk contact would.  A row that starts from the rail in column B (nothing in
-    column A) is a separate rung wired to the rail, so it is not this.
-    """
-    if raw is None or not raw.rows:
-        return False
-    row = raw.rows[0]
-    if len(row) < 3 or row[1] != "-":
-        return False
-    return row[2] in {"T", "|"} or row[2].startswith("T:")
-
-
-# Boxes whose CLICK drawing always has pins (``Instruction.has_pins``).
-_PIN_BOX_NAMES = frozenset(
-    {"count_up", "count_down", "shift", "event_drum", "time_drum", "time_event_drum"}
-)
-
-
-def _is_pin_box(instr: _InstructionInfo) -> bool:
-    match = _FUNC_RE.match(instr.af_token)
-    return bool(instr.pins) or (match is not None and match.group(2) in _PIN_BOX_NAMES)
 
 
 def _row_wires(rows: Sequence[Sequence[str]]) -> list[int]:
@@ -748,15 +716,15 @@ def _row_wires(rows: Sequence[Sequence[str]]) -> list[int]:
 
 
 def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
-    """A CLICK rung holding a box with pins: one pyrung rung per wire.
+    """A CLICK rung of several wires: one pyrung rung per wire, row for row.
 
-    A box with pins ends its pyrung rung, so each other wire of the CLICK rung
-    comes back as a ``.continued()`` rung of its own, row for row, never
-    folded onto the box's wire.  ``None`` where the rung has no box with pins
-    beside other wires.
+    The first wire is the rung, each later wire a ``.continued()`` rung of its
+    own, never folded onto another: a continued rung reads its contacts where
+    it stands, as the wire's rows do, and the pyrung code draws as the CLICK
+    rung does.  ``None`` where the rung is one wire.
     """
     instructions = rung.instructions
-    if len(instructions) < 2 or not any(_is_pin_box(instr) for instr in instructions):
+    if len(instructions) < 2:
         return None
     if any(instr.wire is None for instr in instructions) or rung.source_outputs is None:
         return None
@@ -767,18 +735,14 @@ def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
         else:
             groups.append([index])
     if len(groups) < 2:
-        # The box shares its wire (CLICK refuses it, C000A): kept as drawn.
         return None
-    order = rung.read_order
     pieces: list[_AnalyzedRung] = []
     for number, group in enumerate(groups):
         trees = [
             (rung.source_outputs[index].tree, instructions[index].af_token, index)
             for index in group
         ]
-        cond_tree, grouped, _ = _group_outputs(
-            trees, order=order, positions=[instructions[index].position for index in group]
-        )
+        cond_tree, grouped, _ = _group_outputs(trees)
         for info, index in zip(grouped, group, strict=True):
             info.pins = instructions[index].pins
             info.wire = instructions[index].wire
@@ -789,84 +753,9 @@ def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
                 instructions=grouped,
                 role=rung.role,
                 is_continued=rung.is_continued if number == 0 else True,
-                read_order=order,
             )
         )
     return pieces
-
-
-def _shares_prefix(group: Sequence[_InstructionInfo], order: ReadOrder | None) -> bool:
-    """Whether *group*'s branch trees have a leading contact one read can serve."""
-    trees = [instr.branch_tree for instr in group]
-    shared = len(factor_outputs(trees).shared)
-    return bool(shared_limit(order, trees, [instr.position for instr in group], shared))
-
-
-def _output_runs(
-    instructions: Sequence[_InstructionInfo], order: ReadOrder | None
-) -> list[list[_InstructionInfo]]:
-    """Consecutive outputs that share a leading contact, read once at the first.
-
-    A run grows while its outputs still share a prefix the read order lets
-    them read as one, so outputs teed off one cell stay together (that cell
-    is read once, at the first of them).
-    """
-    runs: list[list[_InstructionInfo]] = []
-    start = 0
-    while start < len(instructions):
-        stop = start + 1
-        while stop < len(instructions) and _shares_prefix(instructions[start : stop + 1], order):
-            stop += 1
-        runs.append(list(instructions[start:stop]))
-        start = stop
-    return runs
-
-
-def _split_continued(rung: _AnalyzedRung, raw: _RawRung | None = None) -> list[_AnalyzedRung]:
-    """Split a rung with continued-style wires into primary + continued rungs.
-
-    A rung with a box with pins is split by :func:`_split_wires` instead.  A
-    continued rung reads its contacts where it stands, as the CLICK rows do.
-
-    The rung splits into runs of outputs that share a leading contact (see
-    :func:`_output_runs`): the first run is the primary rung, each later run a
-    continued rung, each grouped with its shared prefix.  Outputs teed off
-    one cell are never split apart, since a continued rung would read the
-    cell again, after the outputs before it.
-
-    The current trigger is still a structural proxy: no shared
-    ``condition_tree`` and every instruction carries its own ``branch_tree``.
-    That matches exporter-produced continued rows, but hand-authored CSV can
-    still over- or under-trigger it.
-    """
-    if rung.condition_tree is not None:
-        return [rung]
-    if len(rung.instructions) < 2:
-        return [rung]
-    if not all(instr.branch_tree is not None for instr in rung.instructions):
-        return [rung]
-    if _has_wire_trunk(raw):
-        return [rung]
-
-    order = rung.read_order
-    result: list[_AnalyzedRung] = []
-    for index, run in enumerate(_output_runs(rung.instructions, order)):
-        trees = [(instr.branch_tree, instr.af_token, i) for i, instr in enumerate(run)]
-        cond_tree, grouped, _ = _group_outputs(
-            trees, order=order, positions=[instr.position for instr in run]
-        )
-        for gi, orig in zip(grouped, run, strict=True):
-            gi.pins = orig.pins
-        result.append(
-            _AnalyzedRung(
-                comment=rung.comment if index == 0 else None,
-                condition_tree=cond_tree,
-                instructions=grouped,
-                is_continued=rung.is_continued if index == 0 else True,
-                read_order=order,
-            )
-        )
-    return result
 
 
 def _analyze_rungs(
@@ -933,7 +822,7 @@ def _analyze_rungs(
         else:
             whole = analyze_one(i)
             source_outputs = whole.source_outputs
-            pieces = _split_wires(whole) or _split_continued(whole, raw_rungs[i])
+            pieces = _split_wires(whole) or [whole]
             for piece in pieces:
                 piece.source_outputs = None
             pieces[0].source_outputs = source_outputs
@@ -1087,10 +976,7 @@ def _analyze_single_rung(
         output_trees.append((tree, af_token, af_row))
 
     # Output Grouping
-    read_order = ReadOrder(
-        [tree for tree, _af, _row in output_trees], [af for _tree, af, _row in output_trees]
-    )
-    condition_tree, instructions, af_rows = _group_outputs(output_trees, order=read_order)
+    condition_tree, instructions, af_rows = _group_outputs(output_trees)
     wires = _row_wires(rows)
     for instr, af_row in zip(instructions, af_rows, strict=True):
         instr.wire = wires[af_row]
@@ -1122,10 +1008,8 @@ def _analyze_single_rung(
         _attach_pins(rows, pin_row_set, pin_trees, instructions, af_rows)
 
     # Dropped-condition detection: every content edge's Leaf should reach at
-    # least one output or pin tree before output grouping. Grouping may safely
-    # merge equal conditions from different source positions, so checking its
-    # factored trees would mistake that merge for a dropped source occurrence.
-    # Positions absent from every pre-group tree were pruned as dead-end edges
+    # least one output or pin tree before output grouping (the pre-group trees
+    # hold every cell each output reads).  Positions absent from every pre-group tree were pruned as dead-end edges
     # (unwired conditions) and silently omitted from the logic.  This only sees
     # drops made here; a contact lost later (splitting, emission) is caught by
     # shaping.emitted_logic_mismatch against source_outputs.
@@ -1164,6 +1048,7 @@ def _analyze_single_rung(
             tuple(replace(pin) for pin in instructions[instruction_index_by_row[af_row]].pins)
             if af_row in instruction_index_by_row
             else (),
+            wires[af_row],
         )
         for tree, af_token, af_row in output_trees
     )
@@ -1180,5 +1065,4 @@ def _analyze_single_rung(
         instructions=instructions,
         role=role,
         source_outputs=source_outputs,
-        read_order=read_order,
     )

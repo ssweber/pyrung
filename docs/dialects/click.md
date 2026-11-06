@@ -486,7 +486,7 @@ with Rung(Start).continued():
 
 A box with no pins, such as a TON, can share the wire.
 
-On import, each wire of a CLICK rung that holds a box with pins comes back as a rung of its own, `.continued()` after the first. Elsewhere, outputs that share a contact by label are grouped under one `with rung(...)` or `with branch(...)` only when no output between them writes what the contact reads, so the generated code reads each contact where the CLICK rung does.
+On import, each wire of a CLICK rung comes back as a rung of its own, `.continued()` after the first, and outputs share a `with rung(...)` or `with branch(...)` only where the rows tee them off one contact, so the generated code draws and reads as the CLICK rung does. Two contacts with the same label stay two contacts.
 
 ## Loading PLC state
 

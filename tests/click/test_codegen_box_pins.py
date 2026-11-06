@@ -243,6 +243,9 @@ WRITTEN: dict[str, Callable[[], None]] = {
 
 
 def _box_in_its_only_branch() -> None:
+    # Draws as X1 then X2 in series on one row, the cells of Rung(x[1], x[2]):
+    # the rows cannot say where the rung ends and the branch begins, so it
+    # reads back as that rung (same drawing, same readings).
     with Rung(x[1]):
         with branch(x[2]):
             count_up(Counter[1], preset=10).reset(x[4])
@@ -375,6 +378,15 @@ def test_round_trip_gives_back_the_rungs_written(name: str):
     again = pyrung_to_ladder(reimported, mapping)
     assert again.main_rows == bundle.main_rows
     assert again.subroutine_rows == bundle.subroutine_rows
+
+
+def test_a_box_alone_in_its_branch_reads_back_as_the_plain_rung():
+    program = _build(_box_in_its_only_branch)
+    reimported, mapping = _reimport(program, _tag_map())
+    ((_continued, contacts, items),) = _shape(reimported.rungs)
+    assert (contacts, items) == (2, ("CountUpInstruction",))
+    again = pyrung_to_ladder(reimported, mapping)
+    assert again.main_rows == pyrung_to_ladder(program, _tag_map()).main_rows
 
 
 def test_rton_below_coil_exports_as_one_rung_of_two_wires():
