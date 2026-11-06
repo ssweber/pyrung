@@ -45,3 +45,113 @@ slots = 1
 
 [groups.flasher_td.cases]
 frozen_off_td_at_lowered_preset = 1
+
+[groups.flag_boxes]
+base = 481 # Conf_FlagBoxes: DS481..DS530
+slots = 4
+
+[groups.flag_boxes.cases]
+boxes_by_pointer = 1
+ton_ctu_by_pointer = 2
+
+[groups.flag_halves]
+base = 531 # Conf_FlagHalves: DS531..DS600
+slots = 6
+
+[groups.flag_halves.cases]
+bulk_ops_settle_sc43 = 1
+oneshot_settles_sc43 = 2
+source_sc43 = 3
+df_into_dd = 4
+
+[groups.math_terms]
+base = 601 # Conf_MathTerms: DS601..DS650
+slots = 4
+
+[groups.math_terms.cases]
+wide_values = 1
+error_terms = 2
+error_terms_real = 3
+
+[groups.search_more]
+base = 651 # Conf_SearchMore: DS651..DS680
+slots = 2
+
+[groups.search_more.cases]
+oneshot_against_dd_result = 1
+
+[groups.bad_jump]
+base = 681 # Conf_BadJump: DS681..DS710
+slots = 2
+
+[groups.bad_jump.cases]
+bad_target_takes_the_scan = 1
+
+[groups.real_text]
+base = 711 # Conf_RealText: DS711..DS840
+slots = 12
+
+[groups.real_text.cases]
+one_and_a_half_first = 1
+one_and_a_half_past = 2
+minus_quarter_first = 3
+minus_quarter_past = 4
+zero_first = 5
+six_digits_first = 6
+six_digits_past = 7
+ten_billion_first = 8
+ten_billion_past = 9
+round_value_past = 10
+
+[groups.deb_zero]
+base = 841 # Conf_DebZero: DS841..DS870
+slots = 2
+
+[groups.deb_zero.cases]
+off_side_lag = 1
+
+[groups.past_clean]
+base = 871 # Conf_PastClean: DS871..DS900
+slots = 2
+
+[groups.past_clean.cases]
+clear_then_write = 1
+
+[groups.for_dd_minus]
+base = 901 # Conf_ForDdMinus: DS901..DS930
+slots = 2
+
+[groups.for_dd_minus.cases]
+minus_one_count = 1
+
+[groups.drum_preset]
+base = 931 # Conf_DrumPreset: DS931..DS970
+slots = 3
+
+[groups.drum_preset.cases]
+literal_zero = 1
+entry_or_first_timing_scan = 2
+
+[groups.coil_timing]
+base = 971 # Conf_CoilTiming: DS971..DS1020
+slots = 4
+
+[groups.coil_timing.cases]
+off_td_held = 1
+flasher_on_zero = 2
+deb_off_against_tof = 3
+
+[groups.word_floor]
+base = 1021 # Conf_WordFloor: DS1021..DS1050
+slots = 2
+
+[groups.word_floor.cases]
+below_int_and_nan = 1
+
+[groups.flasher_off]
+base = 1051 # Conf_FlasherOff: DS1051..DS1090
+slots = 3
+
+[groups.flasher_off.cases]
+ds_zero = 1
+ds_minus_five = 2
