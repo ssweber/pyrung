@@ -111,8 +111,8 @@ class _Kernel:
 
 class TestMemoryDefaults:
     def test_unwritten_key_equals_its_default(self):
-        names = ("_flash_idle:i1", "_oneshot:i2")
-        defaults = (True, False)
+        names = ("_flash_phase:i1", "_oneshot:i2")
+        defaults = (0, False)
 
         def key(memory: dict) -> tuple:
             return _extract_state_key(
@@ -123,9 +123,10 @@ class TestMemoryDefaults:
                 memory_key_defaults=defaults,
             )
 
-        assert key({}) == key({"_flash_idle:i1": True, "_oneshot:i2": False})
-        # A flasher's idle latch defaults on: an off value is a different state.
-        assert key({}) != key({"_flash_idle:i1": False})
+        assert key({}) == key({"_flash_phase:i1": 0, "_oneshot:i2": False})
+        # A flasher's phase defaults to idle: a running phase is a different state.
+        assert key({}) != key({"_flash_phase:i1": 1})
+        assert key({"_flash_phase:i1": 1}) != key({"_flash_phase:i1": 2})
         assert key({}) != key({"_oneshot:i2": True})
 
 

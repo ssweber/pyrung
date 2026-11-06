@@ -1,7 +1,7 @@
 """The v4 Out family, past what ``out`` reads.
 
-Every expectation is what a CLICK read (hardware round of 2026-11-05), save one field a scan
-count may move (``zero_and_below`` Result2).  Clock windows hold for any scan up to 50 ms, as in
+Every expectation is what a CLICK read (hardware round of 2026-11-05), save one field that also
+takes the scan pyrung read then (``zero_and_below`` Result2).  Clock windows hold for any scan up to 50 ms, as in
 ``out``.
 
 ``out_more``:
@@ -26,9 +26,9 @@ count may move (``zero_and_below`` Result2).  Clock windows hold for any scan up
   once 1.  A timed coil of 0: scans on (Result4), 1 a one-scan pulse, 0 none.  A timed coil from a DS
   holding -5: scans on (ErrorCode), 1 as a preset of 0, 3 (the rung's) where -5 reads as unsigned,
   65531 ms.  A CLICK reads 3, 7, 0, 0, 0: no pulse from a preset of 0 or below, and -5 is signed.
-  Its debounce turns off a scan after the rung falls, where pyrung's does on the rung's scan (6):
-  a wait of 0 ms that a CLICK takes a scan longer over, the timer-count rule (pyrung finishes a
-  timer on the exact count), so Result2 takes either.
+  Its debounce turns off a scan after the rung falls, as pyrung's has since 2026-11-06
+  (``deb_zero/off_side_lag``: the off side always takes a scan more).  Result2 still takes 6 as
+  well, so that the case keeps its confirmed hash until its part is pasted again.
 - ``preset_mid_phase``: a preset in a DS moved mid-phase, read live or at the phase's start.  A
   flasher's on side from 1000 down to 100 ms at 300 ms: at 420-600 ms the coil is off (Result1 =
   0) where it reads live, on (1) where it took the preset at the start.  A debounce's on side
@@ -279,3 +279,10 @@ def test_preset_mid_phase_holds_wherever_the_last_run_stopped(scans):
     """One flasher cycle (1100 ms) in 100 ms steps: where the reset cuts the off phase."""
     mid_phase = next(c for c in group.cases if c.id == "preset_mid_phase")
     assert_all_passed(run(Group("out_more", [replace(mid_phase, scans=scans)])))
+
+
+def test_debounce_of_zero_goes_off_a_scan_after_its_rung():
+    """``zero_and_below`` Result2 takes 6 or 7; pyrung reads CLICK's 7."""
+    zero = next(c for c in group.cases if c.id == "zero_and_below")
+    (result,) = run(Group("out_more", [zero]))
+    assert result.actual["Result2"] == 7

@@ -121,5 +121,5 @@ src/pyrung/
 
 - `copy()` clamps out-of-range; `math()` wraps (modular arithmetic)
 - Counters count rising edges (CLICK semantics, per-counter input memory `_cu:i{N}`/`_cd:i{N}`); a held input counts once. Down counter Done is `Acc <= preset` from Acc 0 (a negative preset counts down to it; a positive one is done at once unless Acc is staged above it)
-- Division by zero → result = 0, fault flag set
+- Division by zero → that division = 0 (the rest of the formula runs), fault flag set
 - Comma inside `Rung(...)` is implicit AND; use `Or()` for OR logic

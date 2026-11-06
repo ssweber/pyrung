@@ -472,7 +472,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "td_write": {"C": range(261, 264), "T": range(150, 159)},
     # DS4226 is past_write's pointer, on its choices.
     "past_clean": {"C": range(231, 233), "DS": range(4226, 4227)},
-    "for_dd_minus": {"C": range(401, 403), "DD": range(81, 83)},
+    "for_dd_minus": {"DD": range(81, 83)},
     "word_floor": {"DD": range(91, 94), "DF": range(31, 33), "DH": range(21, 24)},
     "flasher_off": {"C": range(251, 259), "T": range(131, 141), "DS": range(4405, 4409)},
     # DS3941..3944: the pointer, a code, a clamp's Int, the pointer of 0.
@@ -481,6 +481,47 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(95, 97),
         "DF": range(41, 42),
         "TXT": range(994, 1001),
+    },
+    # The 2026-11-06 round's follow-up (the follow2_* parts).
+    "flag_steps": {
+        "C": range(501, 564),
+        "DS": range(3951, 3979),
+        "DD": range(101, 111),
+        "T": range(251, 253),
+        "CT": range(3, 5),
+    },
+    "flag_reads": {
+        "C": range(571, 604),
+        "DS": range(3979, 3994),
+        "DD": range(111, 120),
+        "DF": range(51, 54),
+        "T": range(253, 254),
+        "CT": range(5, 6),
+    },
+    "flag_carry": {"DS": range(4001, 4002), "DF": range(61, 63)},
+    "term_zero": {
+        "C": range(681, 686),
+        "DS": range(4041, 4045),
+        "DD": range(131, 132),
+        "DF": range(71, 76),
+    },
+    "pack_point": {"C": range(691, 694), "DD": range(151, 154), "TXT": range(301, 323)},
+    "drum_ds": {"C": range(611, 623), "DS": range(4011, 4018), "T": range(261, 265)},
+    "jump_return": {
+        "C": range(631, 652),
+        "DS": range(4021, 4026),
+        "T": range(265, 269),
+        "DD": range(121, 125),
+    },
+    "deb_fall": {"C": range(661, 663), "T": range(271, 273)},
+    "flash_zero": {"C": range(671, 678), "DS": range(4031, 4037), "T": range(273, 283)},
+    "tof_rewrite": {"T": range(291, 292)},
+    # C411 is set by hand, as for_dd_minus has C401.
+    "for_signed": {
+        "C": range(411, 413),
+        "DS": range(4051, 4053),
+        "DD": range(141, 148),
+        "CT": range(6, 7),
     },
 }
 

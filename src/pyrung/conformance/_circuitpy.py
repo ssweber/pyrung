@@ -9,6 +9,7 @@ own generated server.  The harness talks to it exactly as it talks to a CLICK.
 
 from __future__ import annotations
 
+import shutil
 import socket
 import subprocess
 import sys
@@ -29,8 +30,25 @@ from pyrung.conformance._modbus import (
 _START_TIMEOUT_S = 60.0
 #: Seconds the child gets to exit once told to.
 _STOP_TIMEOUT_S = 5.0
+#: Cleanup attempts (about 2 s in all) before the temp directory is left behind.
+_CLEANUP_TRIES = 10
+_CLEANUP_PAUSE_S = 0.2
 #: Characters of the child's output quoted when it dies.
 _LOG_TAIL = 4000
+
+
+def _cleanup(directory: tempfile.TemporaryDirectory[str]) -> None:
+    """Remove *directory*, retrying briefly: Windows can hold ``host.log`` a moment after exit.
+
+    After the retries the directory is left behind rather than failing the run.
+    """
+    for _ in range(_CLEANUP_TRIES):
+        try:
+            directory.cleanup()
+            return
+        except OSError:
+            time.sleep(_CLEANUP_PAUSE_S)
+    shutil.rmtree(directory.name, ignore_errors=True)
 
 
 def generate(build: ConformanceProgram, *, ip: str = "127.0.0.1", port: int = 502) -> Any:
@@ -126,8 +144,8 @@ class CircuitPySim:
             self._log.close()
             self._log = None
         if self._dir is not None:
-            self._dir.cleanup()
-            self._dir = None
+            directory, self._dir = self._dir, None
+            _cleanup(directory)
 
     def raise_if_failed(self) -> None:
         """Raise if ``code.py`` has exited: on a board it never returns."""

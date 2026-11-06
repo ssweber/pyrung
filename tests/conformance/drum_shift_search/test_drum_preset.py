@@ -1,29 +1,40 @@
 """When a time drum reads a step's preset: the ``drum_preset`` group (part ``follow_timing``).
 
-``drum_limits/preset_from_ds`` read on a CLICK that a step's preset from a DS is read on entering
-the step, not live, and that a DS preset of 0 or -5 never ends the step.  Two things it does not
-say, which the fix step ``drum-click`` (6 in the ``conform-fix`` arc, built as "read on the first
-timing scan; 0 or below never ends, literals included") waits on.  Each field is a drum's step,
-read on scan 20, so that a 1 ms step has ended even on short scans; every drum has 3 steps, step 1
-and 3 30 s long.
+``drum_limits/preset_from_ds`` read on a CLICK that a DS preset lowered under Acc mid-step does
+not end the step, and that a DS 0 or -5 on step 1 after a reset never ends it.  This group asks
+when a DS preset is read, and what a constant 0 does.  Each field is a drum's step, read on scan
+20, so that a 1 ms step has ended even on short scans; every drum has 3 steps, step 1 and 3 30 s
+long.  The case's init zeroes the DS presets while the drums are reset.
 
 ``literal_zero``: a step preset written as the constant 0, not from a DS.  Result1, presets
 0 / 30 s / 30 s: 1 where 0 never ends the step (as from a DS), 2 where it ends at once.  Result2,
-the control, presets 1 ms / 30 s / 30 s: 2.  If CLICK's editor refuses the constant 0, delete this
-case's rows: it is the group's last case, so the other case still runs.  pyrung on dev 42dd614
-reads 2, 2: the constant 0 ends the step at once.
+the control, presets 1 ms / 30 s / 30 s: 2.  The CLICK read 2, 2 (2026-11-06): a constant 0 ends
+its step at once, unlike a DS holding 0.  The rows were pasted; whether the editor's dialog
+takes a typed 0 is unread.
 
 ``entry_or_first_timing_scan``: drums jogged from step 1 to step 2 on scan 3, step 2's preset from
 a DS.
 - Result1: the DS holds 1 ms up to scan 3 (the jog's scan) and 30 s from scan 4: 3 where the
-  preset is read at the move, 2 where it is read on the first scan the step times (scan 4).
-- Result2: the DS holds 30 s up to scan 3, 1 ms on scan 4 only, then 30 s: 2 read at the move, 3
-  read on the first timing scan.
+  preset is read at the move, 2 where it is read later.  The CLICK read 2.
+- Result2: the DS holds 30 s up to scan 3, 1 ms on scan 4 only, then 30 s: 3 where the preset is
+  read on the first scan step 2 times (scan 4), 2 otherwise.  The CLICK read 2.
 - Result3: a correction.  Step 1's preset from a DS of 30 s, jogged to step 2 on scan 2; on scan
   4 the step is written 5 and the DS 1 ms from then on.  The bad step goes back to step 1: 2
-  where step 1's preset is read again there (1 ms ends it), 1 where it is not.
+  where step 1's preset is read again there (1 ms ends it), 1 where it is not.  The CLICK read 1.
 
-pyrung reads 2, 3, 2.
+What the readings leave (2/2/1 here, 1111/1/1 in ``preset_from_ds``):
+- (a) the preset read on the first scan its step times: refuted by Result2 (it reads 3).
+- (a') read on the first scan its step's time moves: refuted by Result2 too, since this part's
+  scans run 2.5 to 5 ms and scan 4 adds time.
+- (b) open: the DS read while the drum is reset (the init zeroes it then, so it reads 0), not
+  read again on a move, and a held 0 never ends the step.
+- (c) open: a DS preset as pasted never ends its step.
+Both open models meet all five DS readings, Result3 with no rule for a correction.  The probes
+that split them: P1, a DS preset set to 1 ms (not 0) and held through the reset, no jog (ends:
+a DS preset works; never: (c)); P2, a DS of 1 ms during the reset and 30 s from scan 1 (ends:
+(b); never: read later); P3, a step-2 DS of 0 entered by a move (never ends: a DS 0 never ends
+off step 1 too).  pyrung reads on the first scan the step times, (a), so this case is pending
+(``test_pyrung_reads_the_preset_on_the_first_timing_scan`` pins what it reads).
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -37,7 +48,6 @@ from pyrung.core import Rung, copy, fill
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put
 from tests.conformance.drum_shift_search.test_drum_pins import time_box
 from tests.conformance.memory import ds, td
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 WINDOW = 22
@@ -105,26 +115,21 @@ group = Group(
     "drum_preset",
     [
         case(
-            "A time drum reads a step's DS preset on the first scan the step times, not at the "
-            "jog: 1 ms only at the jog stays (Result1 = 2), 1 ms only the scan after ends "
-            "(Result2 = 3); a bad step corrected to step 1 reads its preset again (Result3 = 2)",
+            "A time drum's step 2 on a DS preset of 1 ms only at the jog stays (Result1 = 2), "
+            "and of 1 ms only on the scan after stays too (Result2 = 2); a bad step corrected "
+            "to step 1, its DS lowered to 1 ms, stays (Result3 = 1)",
             ladder=prove_entry_or_first_timing_scan,
             init=init_entry_or_first_timing_scan,
-            expect={
-                "Result1": between(2, 3),
-                "Result2": between(2, 3),
-                "Result3": between(1, 2),
-            },
+            expect={"Result1": 2, "Result2": 2, "Result3": 1},
+            pending="PRESET",
             scans=scans_for(WINDOW),
-            probe="a drum step's DS preset: read at the move or the first timing scan (6)",
         ),
         case(
-            "A time drum step with the constant preset 0 never ends, as one from a DS does "
-            "(Result1 = 1, 2 if it ends at once); a constant 1 ms step ends (Result2 = 2)",
+            "A time drum step with the constant preset 0 ends at once, unlike one from a DS "
+            "(Result1 = 2); a constant 1 ms step ends (Result2 = 2)",
             ladder=prove_literal_zero,
-            expect={"Result1": between(1, 2), "Result2": 2},
+            expect={"Result1": 2, "Result2": 2},
             scans=scans_for(WINDOW),
-            probe="a drum step's constant preset of 0: ends at once or never (6)",
         ),
     ],
 )
@@ -132,3 +137,11 @@ group = Group(
 
 def test_drum_preset():
     assert_all_passed(run(group))
+
+
+def test_pyrung_reads_the_preset_on_the_first_timing_scan():
+    """What pyrung reads, not the CLICK: the 1 ms held on scan 4 alone ends step 2 (Result2 3,
+    the CLICK 2), and the corrected step reads step 1's 1 ms afresh (Result3 2, the CLICK 1)."""
+    read = {r.case.id: r.actual for r in run(group)}
+    case_read = read["entry_or_first_timing_scan"]
+    assert (case_read["Result1"], case_read["Result2"], case_read["Result3"]) == (2, 3, 2)

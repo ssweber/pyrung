@@ -30,7 +30,7 @@ from pyrung.core.instruction import (
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.drums import PRESET_MEMORY, PRESET_STEP_MEMORY, latches_presets
 from pyrung.core.kernel import prove_effective_preset_key
-from pyrung.core.tag import TagType
+from pyrung.core.tag import Tag, TagType
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
@@ -455,10 +455,9 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jump_curr = bool({jump_expr})",
-                f"_jump_lands = _jump_curr and (not bool(_mem.get({jump_prev_key!r}, False)))",
-                "if _jump_lands:",
+                f"_jump_edge = _jump_curr and (not bool(_mem.get({jump_prev_key!r}, False)))",
+                "if _jump_edge:",
                 f"    _jump_target = int({_compile_value(instr.jump_step, ctx)})",
-                f"    _jump_lands = 1 <= _jump_target <= {step_count}",
             ]
         )
     if has_jog:
@@ -477,70 +476,14 @@ def _compile_drum_instruction(
     )
     lines.append(f"_reset_active = bool({reset_expr})")
 
-    # A pin acts; the guard corrects a bad step unless a jog edge froze the scan.
-    pin_branches: list[str] = []
-    if has_jump:
-        pin_branches.extend(
-            [
-                "if _jump_lands:",
-                "    _step = _jump_target",
-                "    _moved = True",
-                "    _write_row = not _flag",
-            ]
-        )
-    if has_jog:
-        pin_branches.extend(
-            [
-                "elif _jog_edge:" if pin_branches else "if _jog_edge:",
-                f"    if _step < {step_count}:",
-                "        _step += 1",
-                "        _moved = True",
-                "        _write_row = True",
-                "    elif not _flag:",
-                *_indent_body(complete, 8),
-                "        _flag = True",
-            ]
-        )
-    pin_branches.extend(
-        [
-            "elif _invalid and _enabled:" if pin_branches else "if _invalid and _enabled:",
-            f"    {step_write} = 1",
-        ]
-    )
-
-    taken: list[str] = [
-        f"_flag = bool({_compile_value(instr.completion_flag, ctx)})",
-        "_write_row = False",
+    flag_on = f"bool({_compile_value(instr.completion_flag, ctx)})"
+    write_row = [
+        f"_row = {pattern_literal}[_step - 1]",
+        *(f"{symbol} = bool(_row[{idx}])" for idx, symbol in enumerate(output_symbols)),
     ]
-    if has_jump or has_jog:
-        taken.append("_moved = False")
-    taken.extend(pin_branches)
-    if has_jump or has_jog:
-        taken.extend(["if _moved:", f"    {step_write} = _step", *_indent_body(clear_time, 4)])
+    move = [f"{step_write} = _step", *clear_time]
 
-    # Own logic: rung true and the flag off.  A return scan writes the row and no more.
-    taken.extend(
-        [
-            "if _enabled and (not _flag):",
-            f"    if not bool(_mem.get({rung_prev_key!r}, False)):",
-            "        _write_row = True",
-            "    elif not _moved:" if has_jump or has_jog else "    else:",
-            *_indent_body(_drum_end_lines(instr, ctx), 8),
-            "        if _end_met:",
-            f"            if _step < {step_count}:",
-            "                _step += 1",
-            f"                {step_write} = _step",
-            *_indent_body(clear_time, 16),
-            "                _write_row = True",
-            "            else:",
-            *_indent_body(complete, 16),
-            "if _enabled and _write_row:",
-            f"    _row = {pattern_literal}[_step - 1]",
-            *(f"    {symbol} = bool(_row[{idx}])" for idx, symbol in enumerate(output_symbols)),
-        ]
-    )
-
-    # Reset is a level and wins.
+    # One action a scan, by priority: reset (a level), a jump edge, a jog edge, own logic.
     lines.extend(
         [
             "if _reset_active:",
@@ -551,13 +494,54 @@ def _compile_drum_instruction(
             *_indent_body(clear_time, 4),
         ]
     )
-    if not has_jog:
-        lines.append("else:")
-    elif has_jump:
-        lines.append("elif _jump_lands or not (_invalid and _jog_edge):")
-    else:
-        lines.append("elif not (_invalid and _jog_edge):")
-    lines.extend(_indent_body(taken, 4))
+    if has_jump:
+        # A step the drum does not have: nothing at all, and the scan is taken.
+        lines.extend(
+            [
+                "elif _jump_edge:",
+                f"    if 1 <= _jump_target <= {step_count}:",
+                "        _step = _jump_target",
+                *_indent_body(move, 8),
+                f"        if _enabled and (not {flag_on}):",
+                *_indent_body(write_row, 12),
+            ]
+        )
+    if has_jog:
+        # A jog on a bad step does nothing.
+        lines.extend(
+            [
+                "elif _jog_edge:",
+                "    if not _invalid:",
+                f"        if _step < {step_count}:",
+                "            _step += 1",
+                *_indent_body(move, 12),
+                "            if _enabled:",
+                *_indent_body(write_row, 16),
+                f"        elif not {flag_on}:",
+                *_indent_body(complete, 12),
+            ]
+        )
+    # Own logic, rung true: a correction (no row; it takes no scan), then with the
+    # flag off the return scan's row, or the step's time or event.
+    lines.extend(
+        [
+            "elif _enabled:",
+            "    if _invalid:",
+            f"        {step_write} = 1",
+            f"    if not {flag_on}:",
+            f"        if not bool(_mem.get({rung_prev_key!r}, False)):",
+            *_indent_body(write_row, 12),
+            "        else:",
+            *_indent_body(_drum_end_lines(instr, ctx), 12),
+            "            if _end_met:",
+            f"                if _step < {step_count}:",
+            "                    _step += 1",
+            *_indent_body(move, 20),
+            *_indent_body(write_row, 20),
+            "                else:",
+            *_indent_body(complete, 20),
+        ]
+    )
 
     if isinstance(instr, EventDrumInstruction):
         lines.extend(
@@ -615,7 +599,15 @@ def _drum_end_lines(
         if ctx.proof_metadata:
             preset_key = prove_effective_preset_key(instr.completion_flag.name)
             lines.append(f"_mem[{preset_key!r}] = _limit")
-        lines.append(f"_end_met = {_TIME_UP}")
+        ends = [_time_up_expr(preset) for preset in instr.presets]
+        if len(set(ends)) == 1:
+            lines.append(f"_end_met = {ends[0]}")
+        else:
+            lines.extend(
+                _compile_step_selector_lines(
+                    step_var="_step", target_var="_end_met", value_exprs=ends
+                )
+            )
         return lines
 
     lines = []
@@ -646,14 +638,21 @@ def _drum_end_lines(
         _compile_step_selector_lines(
             step_var="_step",
             target_var="_end_met",
-            value_exprs=_time_event_end_exprs(instr, preset_exprs, ctx),
+            value_exprs=_time_event_end_exprs(instr, ctx),
         )
     )
     return lines
 
 
-#: A timed step's end: a preset of 0 or less never ends it.
+#: A timed step's end (``drums.time_is_up``): a tag preset of 0 or less never ends it.
 _TIME_UP = "(_limit > 0) and (_acc >= _limit)"
+
+
+def _time_up_expr(preset: Tag | int) -> str:
+    """A step's end on its time: a constant preset of 0 or less ends it at once."""
+    if not isinstance(preset, Tag) and preset <= 0:
+        return "(_acc >= _limit)"
+    return _TIME_UP
 
 
 def _drum_latch_lines(
@@ -706,7 +705,6 @@ def _event_drum_event_exprs(instr: EventDrumInstruction, ctx: CodegenContext) ->
 
 def _time_event_end_exprs(
     instr: TimeEventDrumInstruction,
-    preset_exprs: list[str | None],
     ctx: CodegenContext,
 ) -> list[str]:
     """Per step: its time is up (if it has a preset) and its event is on (if it has one)."""
@@ -714,10 +712,10 @@ def _time_event_end_exprs(
     # Snapshots exist for the steps that have an event, in step order.
     snapshots = iter(snap_events) if isinstance(snap_events, list) else None
     exprs: list[str] = []
-    for preset_expr, event in zip(preset_exprs, instr.events, strict=True):
+    for preset, event in zip(instr.presets, instr.events, strict=True):
         parts: list[str] = []
-        if preset_expr is not None:
-            parts.append(f"({_TIME_UP})")
+        if preset is not None:
+            parts.append(f"({_time_up_expr(preset)})")
         if event is not None:
             if snapshots is not None:
                 parts.append(f"bool({next(snapshots)})")

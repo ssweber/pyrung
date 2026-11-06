@@ -7,17 +7,15 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.expression import (
     ABS_OF_TYPE,
+    CALC_FAULTS,
     CALC_OPS,
     DOMAIN_LIMITED_MATH_FUNCS,
-    STRICT_DIVISION,
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
     Expression,
     LiteralExpr,
-    MathDomainError,
     MathFuncExpr,
-    QuietMathError,
     RandIntExpr,
     ShiftFuncExpr,
     TagExpr,
@@ -35,9 +33,8 @@ from .conversions import (
     _truncate_to_tag_type,
 )
 from .resolvers import (
+    _raise_fault,
     _set_fault_address_error,
-    _set_fault_division_error,
-    _set_fault_math_operation_error,
     _set_fault_out_of_range,
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
@@ -113,12 +110,12 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
 
 def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
-    """True when *value* (a calc expression) can raise
-    :class:`~pyrung.core.expression.MathDomainError`: a math function with a
-    domain (``sqrt``, ``log``, ...), a ``**`` whose exponent may be fractional
-    (``(-8.0) ** 0.5`` has no real value), either of those in a ``randint``
-    bound, or a ``randint`` whose bounds can be equal (equal constants, or
-    any tag bound)."""
+    """True when a calc of *value* can set SC46 (``fault.math_operation_error``),
+    a :class:`~pyrung.core.expression.MathDomainError` of one of its operations:
+    a math function with a domain (``sqrt``, ``log``, ...), a ``**`` whose
+    exponent may be fractional (``(-8.0) ** 0.5`` has no real value), either of
+    those in a ``randint`` bound, or a ``randint`` whose bounds can be equal
+    (equal constants, or any tag bound)."""
     if seen is None:
         seen = set()
     if id(value) in seen:
@@ -127,7 +124,7 @@ def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
     if isinstance(value, RandIntExpr):
         # A bare Real tag as a bound leaves both bounds unread.  Equal bounds are
         # the error themselves, and tag bounds may hold one value.  A computed
-        # bound is read in the calc too, where sqrt(N) can raise.
+        # bound is read in the calc too, where sqrt(N) can fail.
         if value.real_bounds:
             return False
         return (
@@ -283,12 +280,13 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
     - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
     - ``%`` truncates and ``**`` takes ``0 ^ 0`` and ``0 ^ -1`` for an error that
-      stores 0 with no flag (:data:`~pyrung.core.expression.CALC_OPS`); outside
+      is 0 with no flag (:data:`~pyrung.core.expression.CALC_OPS`); outside
       ``calc`` they stay Python's.
     - ``abs()`` of an Int or Dint tag cannot take the bottom of its range:
-      ``abs(DS1)`` with DS1 = -32768 into an Int stores 0 and sets SC43 (read).
-      Keyed on the operand's type, so into a wider destination too, and the
-      same for a Dint at -2147483648: pyrung's choice, not yet read.
+      ``abs(DS1)`` with DS1 = -32768 into an Int stores 0 and sets SC43, and so
+      does ``abs(DD1)`` with DD1 = -2147483648 into a Dint (both read).  Keyed
+      on the operand's type, so into a wider destination too: that half is
+      unread (``abs(DS1)`` into a Dint could be 32768 on a CLICK).
     - In hex mode a left shift keeps 16 bits: the bits shifted out are gone, so
       ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
@@ -340,8 +338,11 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Wrapping semantics:** Overflow wraps — e.g. storing 32 768 into an INT
     tag produces −32 768. This differs from `CopyInstruction`, which clamps.
 
-    **Division by zero:** Result is forced to 0 and the division-error fault
-    flag is set. The instruction completes normally.
+    **Math errors are the failing operation's:** it is 0, its flag is set, and
+    the formula carries on, as a CLICK's Math does (``DD1 / DD2 + 5`` with DD2 =
+    0 stores 5, into a REAL 5.0).  A division by zero sets the division-error
+    flag (``system.fault.division_error``, CLICK's SC40).  The instruction
+    completes normally.
 
     **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
     the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
@@ -349,20 +350,21 @@ class CalcInstruction(OneShotMixin, Instruction):
     Inf, ``Inf - Inf`` is NaN); a REAL result of +/-Inf sets the flag too, and
     NaN is stored with no flag.  Into an INT, DINT or WORD, a result of +/-Inf
     stores 0 and sets the flag, and NaN stores 0 with no flag.  A bitwise or
-    shift operation on an Inf or NaN operand stores 0 and sets the flag,
-    whatever the destination.  The range is checked on the stored
+    shift operation on an Inf or NaN operand is 0 and sets the flag, whatever
+    the destination.  The range is checked on the stored
     result only: a step of the formula is a double, as on a CLICK (an integer
     step past 2 ** 53 is rounded to one, and ``**`` past the double range is
     +/-Inf).
 
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1, a negative base to a fractional
-    power): Result is forced to 0 and the math-operation error flag
+    power): the function is 0 and the math-operation error flag
     (``system.fault.math_operation_error``, CLICK's SC46) is set for the rest of
     the scan; the next scan starts with it off.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
-    hardware does not).  ``0 ** 0``, ``0 ** -1`` and a MOD by 0 store 0 and set
-    no flag.  MOD truncates: the result has the dividend's sign.
+    hardware does not).  ``0 ** 0``, ``0 ** -1`` and a MOD by 0 are 0 and set
+    no flag (into a REAL 0.0: unread, the reading went through an Int).
+    MOD truncates: the result has the dividend's sign.
 
     **Constants:** each integer constant in `expression` is cut to 16 bits, as
     a CLICK Math stores it, whatever the destination: ``math(DD1 / 65536, DD2)``
@@ -422,30 +424,25 @@ class CalcInstruction(OneShotMixin, Instruction):
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         # Evaluate expression (handles Tag, Expression, IndirectRef, literal).
-        # A division by zero raises here (STRICT_DIVISION), so a result that is
-        # not finite comes from an Inf or NaN operand, or an overflow.
-        token = STRICT_DIVISION.set(True)
+        # A failing operation is 0 and notes its flag in *faults* (CALC_FAULTS):
+        # the formula carries on, and a division by zero is 0, not Inf, so a
+        # result that is not finite comes from an Inf or NaN operand, or an overflow.
+        faults: list[str] = []
+        token = CALC_FAULTS.set(faults)
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)
-        except ZeroDivisionError:
-            _set_fault_division_error(ctx)
-            value = 0
-        except OverflowError:
-            _set_fault_out_of_range(ctx)
-            value = 0
-        except MathDomainError:
-            _set_fault_math_operation_error(ctx)
-            value = 0
-        except QuietMathError:
-            # 0 ** 0, 0 ** -1, a MOD by 0: 0, and a CLICK sets no flag.
-            value = 0
         except IndexError:
             # An indexed source below its block: the address-error flag,
-            # nothing written (as copy(), the kernel and CircuitPython do).
+            # nothing written (as copy(), the kernel and CircuitPython do),
+            # after the flags of its address's failing operations.
+            value = None
+        finally:
+            CALC_FAULTS.reset(token)
+        for name in faults:
+            _raise_fault(ctx, name)
+        if value is None:
             _set_fault_address_error(ctx)
             return
-        finally:
-            STRICT_DIVISION.reset(token)
 
         if _math_out_of_range_for_dest(value, self.dest, self.mode):
             _set_fault_out_of_range(ctx)

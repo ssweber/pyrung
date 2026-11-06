@@ -44,7 +44,22 @@ LAYOUT_VERSION = 3
 
 #: Findings the export lets through: the suite pastes RAND with DF and equal
 #: bounds, and Math constants past 16 bits, and measures what CLICK does with them.
-PASTE_PROBE_FINDINGS = ("CLK_RAND_BOUND_TYPE", "CLK_RAND_EQUAL_BOUNDS", "CLK_MATH_WIDE_CONSTANT")
+#: It also pastes forms CLICK's editor refuses and that an earlier round read: a
+#: constant copied or filled into bits (``copy_more``, ``block_more``, and the resets
+#: of ``block_more`` and ``coil_range``), a bit in a Math formula (``flag_probe``),
+#: a Search into a DD (``search_more``, ``coil_range``, ``flag_probe``,
+#: ``flag_boxes``), an Out-coil preset of 0 or below (``coil_timing``, ``out_more``)
+#: and a Math into SD (``rtc_set``'s new hour).
+PASTE_PROBE_FINDINGS = (
+    "CLK_RAND_BOUND_TYPE",
+    "CLK_RAND_EQUAL_BOUNDS",
+    "CLK_MATH_WIDE_CONSTANT",
+    "CLK_COPY_CONSTANT_INTO_BIT",
+    "CLK_MATH_BIT_OPERAND",
+    "CLK_SEARCH_RESULT_NOT_DS",
+    "CLK_TIMER_PRESET_TOO_LOW",
+    "CLK_MATH_DEST_BANK",
+)
 
 
 @dataclass(frozen=True)

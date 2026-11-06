@@ -60,8 +60,8 @@ def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: Codegen
     """*source_expr* as a Copy, Block copy or Fill stores it into *dest_type*.
 
     *source* is the store's ``copy_source_kind`` (``copy_store_transform``): a Word
-    from a register clamps past 65535, a Word into an Int keeps its bits, a bit takes
-    the low bit.  Any other store is :func:`_store_coerce_expr`'s.
+    from a register clamps past 65535, a Word into an Int keeps its bits.  Any other
+    store is :func:`_store_coerce_expr`'s.
     """
     store = copy_store_transform(TagType[dest_type], source)
     kind = None if store is None else store.kind
@@ -71,9 +71,6 @@ def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: Codegen
     if dest_type == "INT" and kind == "wrap":
         ctx.mark_helper("_wrap_int")
         return f"_wrap_int({source_expr}, 16, True)"
-    if dest_type == "BOOL" and kind == "bit":
-        ctx.mark_helper("_store_bit")
-        return f"_store_bit({source_expr})"
     return _store_coerce_expr(source_expr, dest_type, ctx)
 
 

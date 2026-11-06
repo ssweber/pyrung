@@ -146,7 +146,7 @@ math(randint(1, 6), Die)             # RAND ( 1 , 6 ), inclusive, a draw per sca
 ```
 
 - `math()` wraps on overflow (modular arithmetic). `copy()` clamps.
-- Division by zero → result = 0, fault flag set.
+- Division by zero → that division = 0 (the rest of the formula runs), fault flag set.
 - Integer division truncates toward zero.
 - Don't mix WORD and non-WORD tags in one `math()`.
 

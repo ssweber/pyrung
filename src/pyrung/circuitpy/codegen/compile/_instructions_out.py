@@ -15,6 +15,7 @@ from pyrung.core.instruction import (
     TimedInstruction,
     ToggleInstruction,
 )
+from pyrung.core.instruction.out_variants import _FLASH_IDLE, _FLASH_OFF, _FLASH_ON
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
@@ -80,33 +81,6 @@ def _compile_toggle_instruction(
     return lines
 
 
-def _compile_debounce_side(
-    instr: DebounceInstruction,
-    enabled: bool,
-    ctx: CodegenContext,
-    sp: str,
-) -> list[str]:
-    """The side the rung is on: from 0 if the rung just changed to it, then one tick."""
-    sp4 = sp + "    "
-    if enabled:
-        acc, preset, held = instr.on_acc, instr.on_preset, instr.off_acc
-    else:
-        acc, preset, held = instr.off_acc, instr.off_preset, instr.on_acc
-    frac_key = f"_frac:{acc.name}"
-    acc_write = _compile_lvalue(acc, ctx)
-    return [
-        f"{sp}if _changed:",
-        f"{sp4}{acc_write} = 0",
-        f'{sp4}_mem["{frac_key}"] = 0',
-        *_tick_lines(acc, preset, instr.unit, ctx, sp),
-        f'{sp}_mem["{frac_key}"] = _new_frac',
-        _keep_frac_line(held, sp),
-        f"{sp}{acc_write} = _acc",
-        f"{sp}if _acc >= int({_compile_value(preset, ctx)}):",
-        f"{sp4}{_compile_lvalue(instr.target, ctx)} = {enabled}",
-    ]
-
-
 def _compile_debounce_instruction(
     instr: DebounceInstruction,
     enabled_expr: str,
@@ -116,50 +90,79 @@ def _compile_debounce_instruction(
     _use_memory(ctx)
     sp = " " * indent
     sp4 = " " * (indent + 4)
+    sp8 = " " * (indent + 8)
     rung_key = f"_debounce_rung:{ctx.state_key_for(instr)}"
+    on_frac = f"_frac:{instr.on_acc.name}"
+    off_frac = f"_frac:{instr.off_acc.name}"
+    on_write = _compile_lvalue(instr.on_acc, ctx)
+    off_write = _compile_lvalue(instr.off_acc, ctx)
+    target_write = _compile_lvalue(instr.target, ctx)
     return [
         f"{sp}_en = bool({enabled_expr})",
-        f"{sp}_changed = _en != bool(_mem.get({rung_key!r}, False))",
+        f"{sp}_was = bool(_mem.get({rung_key!r}, False))",
         f"{sp}_mem[{rung_key!r}] = _en",
         f"{sp}if _en:",
-        *_compile_debounce_side(instr, True, ctx, sp4),
+        f"{sp4}if not _was:",
+        # A rise starts the on side from 0.
+        f"{sp8}{on_write} = 0",
+        f'{sp8}_mem["{on_frac}"] = 0',
+        *_tick_lines(instr.on_acc, instr.on_preset, instr.unit, ctx, sp4),
+        f'{sp4}_mem["{on_frac}"] = _new_frac',
+        f'{sp4}_mem["{off_frac}"] = 0',
+        f"{sp4}{on_write} = _acc",
+        f"{sp4}{off_write} = 0",
+        f"{sp4}if _acc >= int({_compile_value(instr.on_preset, ctx)}):",
+        f"{sp8}{target_write} = True",
         f"{sp}else:",
-        *_compile_debounce_side(instr, False, ctx, sp4),
+        # The off side compares what it had reached before this scan, and not on the fall.
+        f"{sp4}_timed_out = not _was and int({_compile_value(instr.off_acc, ctx)})"
+        f" >= int({_compile_value(instr.off_preset, ctx)})",
+        *_tick_lines(instr.off_acc, instr.off_preset, instr.unit, ctx, sp4),
+        f'{sp4}_mem["{off_frac}"] = _new_frac',
+        _keep_frac_line(instr.on_acc, sp4),
+        f"{sp4}{off_write} = _acc",
+        f"{sp4}if _timed_out:",
+        f"{sp8}{target_write} = False",
     ]
 
 
 def _compile_flasher_phase(
     instr: FlasherInstruction,
-    ends_on_phase: bool,
+    on_phase: bool,
     ctx: CodegenContext,
     sp: str,
 ) -> list[str]:
-    """One phase's tick; when it ends, the other phase starts."""
+    """The running phase's tick; at or past its preset, the other phase starts from 0."""
     sp4 = sp + "    "
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
-    if ends_on_phase:
-        acc, other_acc, limit = instr.on_acc, instr.off_acc, "_on_preset"
-        # The off phase starts: off.
-        ended, running = "False", "True"
+    if on_phase:
+        acc, other, preset, limit, other_phase = (
+            instr.on_acc,
+            instr.off_acc,
+            instr.on_preset,
+            "_on_preset",
+            _FLASH_OFF,
+        )
     else:
-        acc, other_acc = instr.off_acc, instr.on_acc
-        limit = f"int({_compile_value(instr.off_preset, ctx)})"
-        # The on phase starts from 0: on unless its time is up already.
-        ended, running = "_on_preset > 0", "False"
-    preset = instr.on_preset if ends_on_phase else instr.off_preset
+        acc, other, preset, limit, other_phase = (
+            instr.off_acc,
+            instr.on_acc,
+            instr.off_preset,
+            "_off_preset",
+            _FLASH_ON,
+        )
     return [
         *_tick_lines(acc, preset, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
         f"{sp}if _acc >= {limit}:",
-        f"{sp4}_lit = {ended}",
-        f"{sp4}{_compile_lvalue(other_acc, ctx)} = 0",
+        f"{sp4}_phase = {other_phase}",
+        f"{sp4}{_compile_lvalue(other, ctx)} = 0",
         f'{sp4}_mem["{on_frac}"] = 0',
         f'{sp4}_mem["{off_frac}"] = 0',
         f"{sp}else:",
-        f"{sp4}_lit = {running}",
         f'{sp4}_mem["_frac:{acc.name}"] = _new_frac',
-        _keep_frac_line(other_acc, sp4),
+        _keep_frac_line(other, sp4),
     ]
 
 
@@ -173,32 +176,42 @@ def _compile_flasher_instruction(
     sp = " " * indent
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
+    sp12 = " " * (indent + 12)
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
-    idle_key = f"_flash_idle:{ctx.state_key_for(instr)}"
+    phase_key = f"_flash_phase:{ctx.state_key_for(instr)}"
+    on_write = _compile_lvalue(instr.on_acc, ctx)
+    off_write = _compile_lvalue(instr.off_acc, ctx)
+    target_write = _compile_lvalue(instr.target, ctx)
     return [
         f"{sp}if not bool({enabled_expr}):",
-        f'{sp4}_mem["{idle_key}"] = True',
-        f"{sp4}{_compile_lvalue(instr.target, ctx)} = False",
+        f'{sp4}_mem["{phase_key}"] = {_FLASH_IDLE}',
+        f"{sp4}{target_write} = False",
         f"{sp}else:",
-        f'{sp4}_restarting = _mem.get("{idle_key}", True)',
-        f'{sp4}_mem["{idle_key}"] = False',
-        f"{sp4}if _restarting:",
-        f"{sp8}{_compile_lvalue(instr.on_acc, ctx)} = 0",
-        f"{sp8}{_compile_lvalue(instr.off_acc, ctx)} = 0",
+        f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
+        f"{sp4}_off_preset = int({_compile_value(instr.off_preset, ctx)})",
+        f"{sp4}if _on_preset <= 0 or _off_preset <= 0:",
+        # Held reset: idle, dark, both accumulators 0.
+        f'{sp8}_mem["{phase_key}"] = {_FLASH_IDLE}',
         f'{sp8}_mem["{on_frac}"] = 0',
         f'{sp8}_mem["{off_frac}"] = 0',
-        f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
-        f"{sp4}_off_phase = (",
-        f"{sp8}int({_compile_value(instr.on_acc, ctx)}) >= _on_preset",
-        f"{sp8}and int({_compile_value(instr.off_acc, ctx)})"
-        f" < int({_compile_value(instr.off_preset, ctx)})",
-        f"{sp4})",
-        f"{sp4}if not _off_phase:",
-        *_compile_flasher_phase(instr, True, ctx, sp8),
+        f"{sp8}{on_write} = 0",
+        f"{sp8}{off_write} = 0",
+        f"{sp8}{target_write} = False",
         f"{sp4}else:",
-        *_compile_flasher_phase(instr, False, ctx, sp8),
-        f"{sp4}{_compile_lvalue(instr.target, ctx)} = _lit",
+        f'{sp8}_phase = _mem.get("{phase_key}", {_FLASH_IDLE})',
+        f"{sp8}if _phase == {_FLASH_IDLE}:",
+        f"{sp12}_phase = {_FLASH_ON}",
+        f"{sp12}{on_write} = 0",
+        f"{sp12}{off_write} = 0",
+        f'{sp12}_mem["{on_frac}"] = 0',
+        f'{sp12}_mem["{off_frac}"] = 0',
+        f"{sp8}if _phase == {_FLASH_ON}:",
+        *_compile_flasher_phase(instr, True, ctx, sp12),
+        f"{sp8}else:",
+        *_compile_flasher_phase(instr, False, ctx, sp12),
+        f'{sp8}_mem["{phase_key}"] = _phase',
+        f"{sp8}{target_write} = _phase == {_FLASH_ON}",
     ]
 
 

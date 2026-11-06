@@ -91,7 +91,6 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     - ``word``: a Copy into a Word from a register.  Past *upper* it clamps; below 0
       it keeps the low 16 bits of the value, first stopped at ``WORD_STORE_FLOOR``
       (-1 is 0xFFFF, -Inf 0x8000, +Inf 0xFFFF).
-    - ``bit``: a Copy into a bit takes a number's low bit (2 is off).
     """
 
     kind = storage.kind
@@ -105,13 +104,9 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
             return storage.upper if value > 0 else storage.lower
         if kind == "word" and value == value and storage.upper is not None:
             return storage.upper if value > 0 else WORD_STORE_FLOOR & 0xFFFF
-        return False if kind in {"bool", "bit"} else 0
+        return False if kind == "bool" else 0
     if kind == "bool":
         return bool(value)
-    if kind == "bit":
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return bool(value)
-        return bool(int(value) & 1)
     if kind == "char":
         return store_char(value)
     if kind not in {"clamp", "wrap", "word"}:

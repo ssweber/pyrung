@@ -450,7 +450,7 @@ class _SliceElision:
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
         # The checks run scans on the interpreter, which has no iteration cap:
-        # a 32-bit For count can run about 4.29 billion times (a negative
+        # a 32-bit For count can run up to 2147483647 times (a positive
         # Dint), so a program with one gets no enumerated check.
         self.runs_a_wide_for = any(
             isinstance(instr, ForLoopInstruction)

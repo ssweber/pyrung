@@ -130,7 +130,7 @@ def test_a_valid_operand_does_not_fault(runner_factory):
 
 
 def test_non_finite_operand_is_a_division_error_not_a_domain_error(runner_factory):
-    # -1 / 0 is a division by zero, which faults before sqrt sees an operand.
+    # -1 / 0 is a division by zero: it is 0 with SC40, and sqrt(0) is 0, no SC46.
     x = Real("X", default=-1.0)
     zero = Real("Zero")
     dest = Real("Dest")

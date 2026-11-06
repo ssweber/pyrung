@@ -1044,6 +1044,40 @@ def _drum_mid(target):
 _add("drums", "drums/mid-step start held done", _drum_mid("done"))
 _add("drums", "drums/mid-step start held step 2", _drum_mid("step"))
 
+
+def _drum_zero_step(tagged, target):
+    """A 3-step time drum, 2 s / 0 / 2 s, with a jog.  The constant 0 ends step 2 at once
+    (``drum_preset/literal_zero``); a tag holding 0 never ends it, so only the jog does."""
+
+    def build():
+        done, start = Bool("LzDone"), Bool("LzStart", external=True)
+        acc, step = Dint("LzAcc"), Int("LzStep")
+        outs = [Bool(f"LzO{i + 1}") for i in range(3)]
+        middle = Int("LzPreset", default=0) if tagged else 0
+        with Program(strict=False) as prog:
+            with Rung(start):
+                time_drum(
+                    outputs=outs,
+                    presets=[2, middle, 2],
+                    unit="s",
+                    pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    current_step=step,
+                    accumulator=acc,
+                    completion_flag=done,
+                ).reset(Bool("LzReset", external=True)).jog(Bool("LzJog", external=True))
+        plc = PLC(prog, dt=0.01)
+        plc.step()
+        if target == "done":
+            return dict(plc=plc, targets=(done,), goal=_tag_goal(done))
+        return dict(plc=plc, targets=(step == 3,), goal=lambda tags: tags.get("LzStep") == 3)
+
+    return build
+
+
+for _tagged, _label in ((False, "constant"), (True, "tag")):
+    _add("drums", f"drums/{_label} 0 preset step 3", _drum_zero_step(_tagged, "step"))
+    _add("drums", f"drums/{_label} 0 preset done", _drum_zero_step(_tagged, "done"))
+
 # --------------------------------------------------------------------------- goal already true
 
 

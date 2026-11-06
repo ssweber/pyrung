@@ -41,7 +41,7 @@ Where Inf or NaN meets an integer:
 
 - A `math()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`; NaN stores 0 with no flag.
 - A `copy()` of ±Inf into an `Int` clamps to its limit and sets `out_of_range`, and into a `Dint` clamps with no flag (not yet measured on a CLICK); NaN stores 0 with no flag. Into a `Word`, +Inf stores 65535 and −Inf 32768, with no flag.
-- A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, makes the `math()` store 0 and set `out_of_range`.
+- A bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand, or a shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count, is 0 in a `math()` and sets `out_of_range`.
 - A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
 - `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern: +Inf is 0x7F800000, and a NaN is 0xFFFFFFFF, as a CLICK reads it.
 
@@ -51,9 +51,9 @@ pyrung checks the range when `math()` stores its result, not at each step of the
 
 ## Division
 
-- Division by zero produces result = 0 and sets `system.fault.division_error`. The next `math()` to run clears it as it starts, before it reads, and sets it again only if it divides by zero too, so read the flag on the next rung; a `copy()` leaves it.
+- A division by zero is 0 and sets `system.fault.division_error`, and the rest of the formula runs: `math(X / Zero + 5, D)` stores 5. The next `math()` to run sets the flag again only if it divides by zero too, so read it on the next rung; a `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
-- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign: `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero stores 0 with no flag. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
+- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign: `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero is 0 with no flag. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
 ## Math errors
 
@@ -61,11 +61,11 @@ pyrung checks the range when `math()` stores its result, not at each step of the
 math(sqrt(Level), Root)     # Level = -4.0
 ```
 
-A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — stores 0 in the destination and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the scan runs, so a later rung can see the flag; the next scan starts with it off, like the other fault flags. The PLC stays in RUN. That is what a CLICK does, though its help for SC46 says "SC50 is turned to ON, the PLC is put in Stop Mode": on the hardware, SC50 stays off and the PLC keeps scanning.
+A math function given an operand outside its domain — `sqrt` of a negative, `log`/`log10` of 0 or a negative, `asin`/`acos` outside −1..1 — is 0 and sets `system.fault.math_operation_error` (CLICK's SC46), and the rest of the formula runs: `sqrt(Level) + 5` stores 5. The rest of the scan runs, so a later rung can see the flag; the next scan starts with it off, like the other fault flags. The PLC stays in RUN. That is what a CLICK does, though its help for SC46 says "SC50 is turned to ON, the PLC is put in Stop Mode": on the hardware, SC50 stays off and the PLC keeps scanning.
 
-A division by zero earlier in the expression wins: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
+A division by zero inside a function is 0 before the function sees it: `sqrt(X / 0)` is 0 with `division_error`, not a domain error. An infinite operand outside the domain is one: `sqrt` of −Inf and `asin` of Inf are 0 with `math_operation_error`; `sqrt` and `log` of +Inf are +Inf.
 
-A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so it is a math error, as `sqrt(-1)` is: the `math()` stores 0 and sets `math_operation_error`. In a `math()`, zero to the power 0 or to a negative power stores 0 with no flag (no flag for `0 ** 0` is pyrung's choice, not yet read); anywhere else `0 ** 0` is 1.
+A negative base to a fractional power (`(-8.0) ** 0.5`, or `N ** H` with `H` = 0.5) has no real value, so it is a math error, as `sqrt(-1)` is: the power is 0 and sets `math_operation_error`. In a `math()`, zero to the power 0 or to a negative power is 0 with no flag; anywhere else `0 ** 0` is 1.
 
 ## Math outside `math()`
 
@@ -95,10 +95,10 @@ CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `l
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
 | REAL past ±3.4028235E+38 | ±Inf; `math()` sets `system.fault.out_of_range` |
-| Division by zero | Result = 0, `system.fault.division_error` set |
+| Division by zero | That division = 0, the rest of the formula runs, `system.fault.division_error` set |
 | Indexed source below its block (`math(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
 | Indexed source past its block | Reads the type's zero value, no flag |
-| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | Result = 0, `system.fault.math_operation_error` set for the scan |
+| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | That function = 0, the rest of the formula runs, `system.fault.math_operation_error` set for the scan |
 
 ## Range aggregates
 
@@ -130,7 +130,7 @@ Mode inference applies normally: WORD-only ranges infer hex mode, anything else 
 math(abs(Error), Magnitude)
 ```
 
-Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768 has no 16-bit value, so a `math()` into an `Int` stores 0 and sets `system.fault.out_of_range`, as a CLICK does. pyrung does the same into a wider destination, and for a `Dint` tag holding −2147483648; that is pyrung's choice, not yet read on a CLICK.
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768, or of a `Dint` tag holding −2147483648, has no value of its type, so in a `math()` it is 0 and sets `system.fault.out_of_range`, as a CLICK does. pyrung does the same into a wider destination; that is pyrung's choice, not yet read on a CLICK.
 
 ## `randint()`
 
