@@ -306,7 +306,6 @@ APART_GROUPS = [
     test_real_text.group,
     # Writes past the DD bank: deletable, last but one of its part.
     test_past_clean.group,
-    # May stop the PLC: run alone, last, with C401 set by hand.
     test_for_dd_minus.group,
     test_bad_jump.group,
     test_drum_preset.group,

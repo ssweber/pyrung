@@ -59,12 +59,11 @@ with rung():
 ```
 
 The count can be a positive literal or a tag, read once when the loop starts.
-As on CLICK, a tag count is read as an unsigned number of its own width: an
-`Int` of -1 runs 65535 iterations (a scan of a second or more on a CLICK), a
-`Dint` of 65536 runs 65536, and 0 runs none. A negative `Dint` count has not
-been read on a CLICK; pyrung reads it whole too, so -1 runs 4294967295
-iterations and the scan does not end. `prove()` answers `Intractable` for a
-loop whose count can run more than 1,000,000 iterations in a scan.
+As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
+iterations (a scan of a second or more on a CLICK), and a `Dint` count whole
+and signed, so 65536 runs 65536 and -1 runs none. A count of 0 runs none.
+`prove()` answers `Intractable` for a loop whose count can run more than
+1,000,000 iterations in a scan.
 A `Real` count holding Inf or NaN runs no iteration and sets
 `system.fault.out_of_range` (SC43), pyrung's choice: a CLICK For takes an
 integer count, so this has no hardware answer.
