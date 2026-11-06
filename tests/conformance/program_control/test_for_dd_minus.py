@@ -3,7 +3,7 @@
 A DS count of -1 runs 65535 times (``loop/negative_count_reads_unsigned``), and a DD count is read
 whole (``for_wide/count_forms`` ran 65537 and 65536).  A DD count is read signed too: -1 runs none
 (hardware 2026-11-06, read 1/1/0 when C401 armed it by hand, the PLC stayed in RUN), so the case
-now arms itself.
+arms itself and needs no person or raised watchdog.
 
 - ``minus_one_count``: the case writes -1 into the count DD81 (Result1 = 1) and runs the For over
   it once, counting into DD82.  Result2 = 1: no iteration (DD82 = 0); 2 for 65535, the low word
