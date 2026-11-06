@@ -47,6 +47,8 @@ _HELPER_ORDER = (
     "_bit_int",
     "_shift_count",
     "_term_fail",
+    "_calc_div",
+    "_calc_floordiv",
     "_rand_term",
     "_rand_draw",
     "_mod",

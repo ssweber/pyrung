@@ -609,12 +609,15 @@ def _compile_calc_instruction(
     set_flags: list[str] = []
     if flagged:
         if div_err:
-            set_flags += [f"if 40 in {CALC_FLAGS}:", f"    {div_err} = True"]
+            set_flags += [f"    if 40 in {CALC_FLAGS}:", f"        {div_err} = True"]
         if math_err:
-            set_flags += [f"if 46 in {CALC_FLAGS}:", f"    {math_err} = True"]
+            set_flags += [f"    if 46 in {CALC_FLAGS}:", f"        {math_err} = True"]
         if out_of_range_body != ["pass"]:
-            set_flags.append(f"if 43 in {CALC_FLAGS}:")
-            set_flags.extend(f"    {line}" for line in out_of_range_body)
+            set_flags.append(f"    if 43 in {CALC_FLAGS}:")
+            set_flags.extend(f"        {line}" for line in out_of_range_body)
+        if set_flags:
+            # One test on the path with no error.
+            set_flags.insert(0, f"if {CALC_FLAGS}:")
     if set_flags and isinstance(instr.expression, (IndirectRef, IndirectExprRef)):
         # An address below its block raises IndexError (nothing written, the
         # guard's address-error flag): the flags of its failing operations first.

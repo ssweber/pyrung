@@ -316,6 +316,22 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return 0",
         "",
     ],
+    # A calc's division by a divisor that is not a bare tag: by 0 it is 0, with
+    # SC40 (core _op_div).
+    "_calc_div": [
+        "def _calc_div(a, b, flags):",
+        "    if b:",
+        "        return a / b",
+        "    return _term_fail(flags, 40)",
+        "",
+    ],
+    "_calc_floordiv": [
+        "def _calc_floordiv(a, b, flags):",
+        "    if b:",
+        "        return a // b",
+        "    return _term_fail(flags, 40)",
+        "",
+    ],
     # A randint() site whose bounds are read: equal ones (46, SC46) or Inf or NaN
     # (43, SC43) make the site 0 (RandIntExpr.evaluate).  The kernel reads the
     # scan's draw; the board draws.
@@ -516,7 +532,7 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
         needed.add("_bit_int")
     if needed & {"_rand_term", "_rand_draw", "_permissive_op", "_permissive_math"}:
         needed.add("_term_fail")
-    if needed & {"_pow_calc", "_abs_int"}:
+    if needed & {"_pow_calc", "_abs_int", "_calc_div", "_calc_floordiv"}:
         needed.add("_term_fail")
     if "_pow_calc" in needed:
         needed.add("_pow")

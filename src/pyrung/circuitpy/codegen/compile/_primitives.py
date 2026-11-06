@@ -204,14 +204,16 @@ def _compile_expression_impl(
         if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
             # A calc's division by 0 is 0 with SC40.  By a tag, the test is
             # inline, unless the dividend appends flags of its own, which a
-            # skipped dividend would lose.
+            # skipped dividend would lose; else a helper reads the divisor once.
+            ctx.mark_helper("_term_fail")
             if isinstance(expr.right, TagExpr) and not _appends_flags(left):
-                ctx.mark_helper("_term_fail")
                 compiled = (
                     f"(({left} {expr.symbol} {right}) if {right} else _term_fail({flags}, 40))"
                 )
             else:
-                compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
+                helper = "_calc_div" if expr.symbol == "/" else "_calc_floordiv"
+                ctx.mark_helper(helper)
+                compiled = f"{helper}({left}, {right}, {flags})"
             return _calc_step(expr, compiled, ctx, strict)
         return _calc_step(expr, f"({left} {expr.symbol} {right})", ctx, strict)
 
