@@ -795,8 +795,9 @@ def _compile_for_loop_instruction(
         children = _compile_loop_body(instr, ctx)
     finally:
         ctx._for_loop_depth = depth
-    # CLICK reads the count as unsigned, a Dint whole and the rest as 16-bit
-    # (control.for_count_mask); a count of 0 runs FOR_ZERO_COUNT_ITERATIONS iterations.
+    # CLICK reads a Dint count whole and signed, so 0 or below runs none, and
+    # the rest as unsigned 16-bit (control.for_loop_iterations); a count of 0
+    # runs FOR_ZERO_COUNT_ITERATIONS iterations.
     non_finite = "fault.out_of_range" in instr._fault_writes
     if non_finite:
         # A REAL count holding Inf or NaN runs no iteration and sets SC43
@@ -804,10 +805,16 @@ def _compile_for_loop_instruction(
         ctx.mark_helper("_bit_int")
         count_expr = f"_bit_int({count_expr})"
     mask = control.for_count_mask(instr.count)
-    iterations_expr = f"int({count_expr}) & 0x{mask:X}"
-    if control.FOR_ZERO_COUNT_ITERATIONS:
-        iterations_expr = f"({iterations_expr}) or {int(control.FOR_ZERO_COUNT_ITERATIONS)}"
-    iterations_lines = [f"{iterations_var} = {iterations_expr}"]
+    iterations_lines = [f"{iterations_var} = int({count_expr}) & 0x{mask:X}"]
+    zero_runs = int(control.FOR_ZERO_COUNT_ITERATIONS)
+    if mask == control.FOR_COUNT_MASK_32:
+        # Past FOR_COUNT_MAX_32 the bits are a negative count: none.
+        kept = f"({iterations_var} or {zero_runs})" if zero_runs else iterations_var
+        iterations_lines.append(
+            f"{iterations_var} = 0 if {iterations_var} > 0x{control.FOR_COUNT_MAX_32:X} else {kept}"
+        )
+    elif zero_runs:
+        iterations_lines.append(f"{iterations_var} = {iterations_var} or {zero_runs}")
     if non_finite:
         iterations_lines = [
             "try:",
@@ -818,7 +825,7 @@ def _compile_for_loop_instruction(
         ]
     if ctx.proof_metadata and mask > control.FOR_COUNT_MASK_16:
         # The verifier's kernel stops a 32-bit count past its cap rather than
-        # run it (a negative Dint is about 4.29 billion iterations).  The source
+        # run it (a Dint up to 2147483647 runs that many iterations).  The source
         # names the loop by index: its file and line stay out of the lock's hash.
         site = len(ctx.for_cap_sites)
         ctx.for_cap_sites.append(_for_count_site(instr))

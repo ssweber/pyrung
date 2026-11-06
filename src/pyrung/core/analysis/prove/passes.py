@@ -2255,9 +2255,9 @@ def _for_iterations_intractable(
         estimated_space=0,
         tags=list(exc.tags),
         hints=[
-            f"  {exc.count}: a Dint count is read as unsigned 32-bit, so a negative one"
-            " runs about 4.29 billion times; narrow it with min=/max=/choices=, or"
-            " test the loop with run_for()",
+            f"  {exc.count}: a Dint count is read whole, so a positive one can run up to"
+            " 2147483647 times; narrow it with min=/max=/choices=, or test the loop"
+            " with run_for()",
         ],
         journal=journal,
     )

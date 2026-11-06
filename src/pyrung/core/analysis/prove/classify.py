@@ -522,7 +522,8 @@ def _comparison_influencing_tags(
 
     Every tag an index reads counts as well: ``copy(DS[Ptr], N)`` makes ``N``
     depend on ``Ptr``, and the copy edge above sees no tag source there.  The
-    block slots behind the index stay constant storage.
+    block slots behind the index stay constant storage.  A forloop count reads
+    its value as a comparison does, so it counts too (an indexed one: its index).
     """
     influential: set[str] = {name for name in graph.tags if atom_idx.get(name)}
     influential.update(graph.index_tags)
@@ -531,11 +532,13 @@ def _comparison_influencing_tags(
         return frozenset(influential)
 
     from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.instruction.data_transfer import (
         BlockCopyInstruction,
         CopyInstruction,
         FillInstruction,
     )
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
     target_to_sources: dict[str, set[str]] = {}
@@ -580,6 +583,15 @@ def _comparison_influencing_tags(
             if edge is not None:
                 source_name, _ = edge
                 target_to_sources.setdefault(target_name, set()).add(source_name)
+        elif isinstance(instr, ForLoopInstruction):
+            # How many times the body runs is the count's value, as if compared
+            # (``_tag_compared_names``).  An indexed count's slots stay constant
+            # storage, as above; its index does not.
+            count_index: set[str] = set()
+            count_names = _compared_value_names(instr.count, graph, count_index)
+            if not isinstance(instr.count, (IndirectRef, IndirectExprRef)):
+                influential.update(count_names)
+            influential.update(count_index)
 
     changed = True
     while changed:
@@ -819,6 +831,10 @@ def _exact_value_sets(
     return exact
 
 
+#: Why ``_tag_compared_names`` gives a forloop count every value it can hold.
+_FOR_COUNT_REASON = "a forloop count"
+
+
 class _ComparedInputs(NamedTuple):
     """What ``_tag_compared_names`` found; see there."""
 
@@ -864,7 +880,8 @@ def _tag_compared_names(
     arithmetic).  So does the index of an indirect access whose element is
     compared with a changing value, and what that index is computed from; an
     index that is itself a free input keeps its pointer domain
-    (``index_only``).
+    (``index_only``).  A forloop count needs every value too: how many times
+    the body runs is its value, which no comparison partitions.
 
     *exprs* are the lowered expressions of the search (the property and the
     program): their comparisons count like the program's.
@@ -889,6 +906,7 @@ def _tag_compared_names(
         RisingEdgeCondition,
     )
     from pyrung.core.instruction.advanced import SearchInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.tag import ImmediateRef, Tag
     from pyrung.core.validation._common import walk_instructions
     from pyrung.core.validation.walker import _condition_children
@@ -1026,6 +1044,14 @@ def _tag_compared_names(
     for instr in walk_instructions(program):
         if isinstance(instr, SearchInstruction):
             mark_all((instr.value, instr.search_range))
+        elif isinstance(instr, ForLoopInstruction):
+            # How many times the body runs is the count's value, not a class of
+            # it: a call guard's ``count != 0`` splits at 0 alone, a body that
+            # accumulates tells 1 from 2, and the loop's index ends at count - 1
+            # even with no body.  An index keeps its pointer domain.
+            count_index: set[str] = set()
+            mark(_compared_value_names(instr.count, graph, count_index), _FOR_COUNT_REASON)
+            mark_index(count_index, _FOR_COUNT_REASON)
 
     # Back through data flow: whatever such a tag is computed from.  The
     # index of an indirect read or write is a source too: it picks the
@@ -3400,10 +3426,13 @@ def _build_infeasible_hints(
             continue
         tag = graph.tags.get(name)
         if name in compared:
-            why = (
-                f"compared with a changing value ({compared[name]}), so every value it"
-                f" can hold is explored"
-            )
+            if compared[name].startswith(_FOR_COUNT_REASON):
+                why = f"read as {compared[name]}, so every value it can hold is explored"
+            else:
+                why = (
+                    f"compared with a changing value ({compared[name]}), so every value it"
+                    f" can hold is explored"
+                )
             cap = _TAG_COMPARED_DOMAIN_CAP
             if tag is not None and tag.type == TagType.REAL:
                 hints.append(f"  {name}: REAL {why}, and a REAL's values cannot be listed")

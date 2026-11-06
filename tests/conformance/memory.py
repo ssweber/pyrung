@@ -472,7 +472,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "td_write": {"C": range(261, 264), "T": range(150, 159)},
     # DS4226 is past_write's pointer, on its choices.
     "past_clean": {"C": range(231, 233), "DS": range(4226, 4227)},
-    "for_dd_minus": {"C": range(401, 403), "DD": range(81, 83)},
+    "for_dd_minus": {"DD": range(81, 83)},
     "word_floor": {"DD": range(91, 94), "DF": range(31, 33), "DH": range(21, 24)},
     "flasher_off": {"C": range(251, 259), "T": range(131, 141), "DS": range(4405, 4409)},
     # DS3941..3944: the pointer, a code, a clamp's Int, the pointer of 0.

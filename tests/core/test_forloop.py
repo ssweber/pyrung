@@ -79,15 +79,28 @@ def test_forloop_tag_count_zero_runs_no_iteration():
         (Int("Loops"), -1, 65535),
         (Int("Loops"), -32768, 32768),
         (Int("Loops"), 0, 0),
-        # and a DD count whole: 65537 runs 65537, 65536 runs 65536 (hardware 2026-11-05).
+        # and a DD count whole: 65537 runs 65537, 65536 runs 65536 (hardware 2026-11-05),
+        # and signed: -1 runs none (hardware 2026-11-06).
         (Dint("Loops"), 65537, 65537),
         (Dint("Loops"), 65536, 65536),
         (Dint("Loops"), 3, 3),
         (Dint("Loops"), 0, 0),
+        (Dint("Loops"), -1, 0),
+        (Dint("Loops"), -2147483648, 0),
     ],
-    ids=["int-1", "int-32768", "int0", "dint65537", "dint65536", "dint3", "dint0"],
+    ids=[
+        "int-1",
+        "int-32768",
+        "int0",
+        "dint65537",
+        "dint65536",
+        "dint3",
+        "dint0",
+        "dint-1",
+        "dint-min",
+    ],
 )
-def test_forloop_count_is_read_as_unsigned_of_its_width(loops, count, iterations, runner_factory):
+def test_forloop_count_is_read_by_its_width(loops, count, iterations, runner_factory):
     counter = Dint("Counter")
 
     with Program() as prog:
@@ -115,6 +128,9 @@ def test_forloop_dint_element_count_is_read_whole(runner_factory):
     runner.patch({"Counts2": 65537, "Pointer": 2, "Counter": 0})
     runner.step()
     assert runner.current_state.tags["Counter"] == 65537
+    runner.patch({"Counts1": -1, "Pointer": 1, "Counter": 0})
+    runner.step()
+    assert runner.current_state.tags["Counter"] == 0
 
 
 def test_for_count_mask_follows_the_count_width():
@@ -133,12 +149,16 @@ def test_for_zero_count_switch(monkeypatch):
     assert for_loop_iterations(-1) == 65535
     assert for_loop_iterations(65536) == 0
     assert for_loop_iterations(65536, control.FOR_COUNT_MASK_32) == 65536
-    # pyrung's reading of a negative Dint, not read on a CLICK yet.
-    assert for_loop_iterations(-1, control.FOR_COUNT_MASK_32) == 0xFFFFFFFF
+    # A Dint is read signed: -1 runs none (hardware 2026-11-06).
+    assert for_loop_iterations(-1, control.FOR_COUNT_MASK_32) == 0
+    assert for_loop_iterations(-(2**31), control.FOR_COUNT_MASK_32) == 0
+    assert for_loop_iterations(2**31 - 1, control.FOR_COUNT_MASK_32) == 2**31 - 1
     assert for_loop_iterations(7) == 7
     monkeypatch.setattr(control, "FOR_ZERO_COUNT_ITERATIONS", 65536)
     assert for_loop_iterations(0) == 65536
     assert for_loop_iterations(65536) == 65536
+    assert for_loop_iterations(0, control.FOR_COUNT_MASK_32) == 65536
+    assert for_loop_iterations(-1, control.FOR_COUNT_MASK_32) == 0
     assert for_loop_iterations(3) == 3
 
 

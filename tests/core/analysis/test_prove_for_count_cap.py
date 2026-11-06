@@ -1,11 +1,16 @@
 """A For count the verifier would run past its cap answers Intractable.
 
-A Dint count is read as unsigned 32-bit (``control.for_count_mask``), so a
-negative one runs about 4.29 billion iterations in one scan, and the search
-(``never``, ``reachable_states``, ``check_lock``) never returned.  The
+A Dint count is read whole and signed (``control.for_loop_iterations``), so a
+positive one can run up to 2147483647 iterations in one scan, and the search
+(``never``, ``reachable_states``, ``check_lock``) would not return.  The
 verifier's kernel stops a 32-bit count past ``PROVE_FOR_ITERATION_CAP`` and the
 search names the loop and its count; the slice elision's interpreter scans
-skip a program with such a count.  A count the cap allows still answers.
+skip a program with such a count.  A count the cap allows still answers, and a
+negative one runs none.
+
+How many times the body runs is the count's value, so the search explores every
+value a free count can hold (``classify._tag_compared_names``): a count with no
+declared domain, or one too wide to list, is an unbounded domain.
 
 Every shape: ``work`` copies ``Btn`` to ``Y2`` once per iteration, so ``Y3``
 follows ``Btn`` unless a scan runs the loop no times (a count of 0), when
@@ -29,6 +34,7 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    Word,
     call,
     copy,
     forloop,
@@ -78,29 +84,45 @@ def _assert_refused(result: object, iterations: int, tags: list[str]) -> None:
     assert result.tags == tags
 
 
-def test_an_unbounded_dint_count_is_refused_naming_the_loop_and_its_tag() -> None:
-    logic, prop = _loop_program(lambda: Dint("N", external=True))
+#: The largest Dint: the most iterations a 32-bit count runs.
+_MAX_DINT = 2**31 - 1
+
+
+def _huge_count() -> Dint:
+    return Dint("N", external=True, choices={3: "few", _MAX_DINT: "max"})
+
+
+def test_a_huge_dint_count_is_refused_naming_the_loop_and_its_tag() -> None:
+    logic, prop = _loop_program(_huge_count)
     result = never(logic, prop)
-    _assert_refused(result, 0xFFFFFFFF, ["N"])
+    _assert_refused(result, _MAX_DINT, ["N"])
     assert "forloop(N)" in result.reason
     assert any("min=/max=/choices=" in hint for hint in result.hints)
 
 
-def test_a_dint_count_that_can_be_negative_is_refused() -> None:
-    logic, prop = _loop_program(lambda: Dint("N", external=True, min=-1, max=1))
-    _assert_refused(never(logic, prop), 0xFFFFFFFF, ["N"])
+def test_a_negative_dint_count_runs_none_and_answers() -> None:
+    # A DD of -1 runs no iteration (hardware 2026-11-06): Y2 holds and the goal is reached.
+    for count in (
+        lambda: Dint("N", external=True, min=-1, max=1),
+        lambda: Dint("N", external=True, choices={-1: "minus", 3: "few"}),
+        lambda: Dint("N", external=True, choices={-(2**31): "lowest", 3: "few"}),
+    ):
+        logic, prop = _loop_program(count)
+        result = never(logic, prop)
+        assert isinstance(result, Counterexample), result
+        assert any(step.inputs.get("N", 1) <= 0 for step in result.trace), result.trace
 
 
-def test_a_count_computed_below_its_declared_bounds_is_refused() -> None:
-    # N's declared 0..50 does not hold: X - 1 is -1 at X = 0.  The kernel stops it.
-    x = Int("X", external=True, min=0, max=10)
+def test_a_count_computed_past_its_declared_bounds_is_refused() -> None:
+    # N's declared 0..50 does not hold: X is copied in.  The kernel stops it.
+    x = Dint("X", external=True, choices={0: "none", 2_000_000: "many"})
 
     def write_n(n: object) -> None:
         with Rung():
-            math(x - 1, n)
+            copy(x, n)
 
     logic, prop = _loop_program(lambda: Dint("N", min=0, max=50), write_n)
-    _assert_refused(never(logic, prop), 0xFFFFFFFF, ["N"])
+    _assert_refused(never(logic, prop), 2_000_000, ["N"])
 
 
 def test_an_indexed_dint_count_names_its_pointer() -> None:
@@ -109,7 +131,7 @@ def test_an_indexed_dint_count_names_its_pointer() -> None:
 
     def write_dd(_count: object) -> None:
         with Rung():
-            copy(-1, dd[2])
+            copy(2_000_000, dd[2])
 
     logic, prop = _loop_program(lambda: dd[p], write_dd)
     result = never(logic, prop)
@@ -118,9 +140,20 @@ def test_an_indexed_dint_count_names_its_pointer() -> None:
     assert result.tags == ["P"]
 
 
-def test_a_bounded_dint_count_past_65535_still_answers() -> None:
-    logic, prop = _loop_program(lambda: Dint("N", external=True, min=0, max=70000))
-    assert isinstance(never(logic, prop), Counterexample)
+def _assert_unbounded(result: object) -> None:
+    assert isinstance(result, Intractable), result
+    assert result.reason == "unbounded domain on N"
+    assert any("read as a forloop count" in hint for hint in result.hints), result.hints
+
+
+def test_a_count_too_wide_to_list_is_an_unbounded_domain() -> None:
+    # 70001 values: more than the search lists for a value it needs whole.
+    _assert_unbounded(never(*_loop_program(lambda: Dint("N", external=True, min=0, max=70000))))
+
+
+def test_a_count_with_no_declared_domain_is_an_unbounded_domain() -> None:
+    for kind in (Int, Dint):
+        _assert_unbounded(never(*_loop_program(lambda kind=kind: kind("N", external=True))))
 
 
 def test_a_count_at_the_cap_answers_and_one_past_it_is_refused() -> None:
@@ -134,14 +167,15 @@ def test_a_count_at_the_cap_answers_and_one_past_it_is_refused() -> None:
 
 
 def test_a_16_bit_count_is_never_capped() -> None:
-    logic, prop = _loop_program(lambda: Int("N", external=True))
+    # -1 runs 65535 iterations, under the cap.
+    logic, prop = _loop_program(lambda: Int("N", external=True, min=-1, max=1))
     assert isinstance(never(logic, prop), Counterexample)
     assert "_ForIterationsBeyondCap" not in compile_kernel(logic, proof_metadata=True).source
 
 
 def test_reachable_states_and_check_lock_refuse_it_too(tmp_path: Path) -> None:
-    logic, _prop = _loop_program(lambda: Dint("N", external=True))
-    _assert_refused(reachable_states(logic, project=["Y3"]), 0xFFFFFFFF, ["N"])
+    logic, _prop = _loop_program(_huge_count)
+    _assert_refused(reachable_states(logic, project=["Y3"]), _MAX_DINT, ["N"])
     lock = tmp_path / "pyrung.lock"
     write_lock(lock, frozenset(), ["Y3"], "hash")
     with pytest.raises(LockIntractable):
@@ -167,3 +201,78 @@ def _hash_of_a_loop(blank_lines: int) -> str:
 
 def test_a_capped_loops_place_stays_out_of_the_lock_hash() -> None:
     assert _hash_of_a_loop(0) == _hash_of_a_loop(1)
+
+
+@pytest.mark.parametrize("kind", [Int, Dint], ids=["int", "dint"])
+def test_a_called_body_that_counts_its_iterations_is_not_proven(kind: type) -> None:
+    # A call guard's N != 0 split N at 0 alone, and the search took -1, 0 and 1
+    # for every value: never(X == 2) came back Proven.
+    logic, x = _counting_program(lambda: kind("N", external=True))
+    _assert_unbounded(never(logic, x == 2))
+
+
+@pytest.mark.parametrize("kind", [Int, Dint], ids=["int", "dint"])
+def test_a_counting_body_with_a_declared_count_is_exact(kind: type) -> None:
+    logic, x = _counting_program(lambda: kind("N", external=True, min=0, max=5))
+    result = never(logic, x == 2)
+    assert isinstance(result, Counterexample), result
+    assert result.trace[-1].inputs["N"] == 2
+    # A negative Int runs 65533..65535 iterations and a negative Dint none: never 2.
+    logic, x = _counting_program(lambda: kind("N", external=True, min=-3, max=1))
+    assert isinstance(never(logic, x == 2), Proven)
+
+
+def _counting_program(count: Callable[[], object]) -> tuple[Program, Dint]:
+    n = count()
+    x = Dint("X")
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(0, x)
+        with Rung():
+            with forloop(n):
+                call("work")
+        with subroutine("work"):
+            with Rung():
+                math(x + 1, x)
+    return logic, x
+
+
+def _direct_counting_program(
+    count: object, before: Callable[[], None] | None = None
+) -> tuple[Program, Dint]:
+    x = Dint("X")
+    with Program(strict=False) as logic:
+        if before is not None:
+            before()
+        with Rung():
+            copy(0, x)
+        with Rung():
+            with forloop(count):
+                math(x + 1, x)
+    return logic, x
+
+
+@pytest.mark.parametrize("kind", [Int, Dint, Word], ids=["int", "dint", "word"])
+def test_an_unwritten_internal_count_is_not_held_at_its_default(kind: type) -> None:
+    # An unwritten tag nothing compared was constant storage, held at 0: never(X == 2)
+    # came back Proven.  It is free, as an unwritten tag a copy reads is.
+    logic, x = _direct_counting_program(kind("N"))
+    _assert_unbounded(never(logic, x == 2))
+    logic, x = _direct_counting_program(kind("N", min=0, max=5))
+    result = never(logic, x == 2)
+    assert isinstance(result, Counterexample), result
+
+
+def test_a_count_copied_from_an_unwritten_internal_tag_is_not_held_either() -> None:
+    m = Int("M")
+    n = Int("N")
+
+    def write_n() -> None:
+        with Rung():
+            copy(m, n)
+
+    logic, x = _direct_counting_program(n, write_n)
+    result = never(logic, x == 2)
+    assert isinstance(result, Intractable), result
+    assert result.reason == "unbounded domain on M"
+    assert any("read as a forloop count, through N" in hint for hint in result.hints), result.hints

@@ -413,8 +413,8 @@ def _dint_count_is_small(tag: Tag) -> bool:
 
     Its declared ``choices`` all lie there, or its declared ``min`` and ``max``
     both do; a lone ``min`` or ``max`` says nothing.  What the program writes
-    into it is not read.  A negative value is not small: how CLICK reads one
-    is unread.
+    into it is not read.  A negative value is not small: it runs no iteration
+    (a Dint is read signed), though ``count != 0`` holds for it.
     """
     from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 
@@ -433,10 +433,10 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
     no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
     body item needs ``count != 0``.  That is exact for a 16-bit count, and for a
-    Dint tag or element (read whole) declared to hold only
+    Dint tag (read whole and signed) declared to hold only
     ``0..PROVE_FOR_ITERATION_CAP`` (:func:`_dint_count_is_small`).  Any other
     Dint, and an indirect Dint element, stays inexact (``exact`` False): a
-    negative count's reading on CLICK is unread, and past the cap the verifier
+    negative count runs none though it is not 0, and past the cap the verifier
     refuses the loop.  A REAL (0.5 truncates to 0) and an expression are
     inexact on their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is
     nonzero every count runs the body.  A constant count that runs no
