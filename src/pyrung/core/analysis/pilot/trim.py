@@ -344,6 +344,8 @@ def trim_holds(
                 break
     if fork is None:
         return plan
+    # The caller gets the fork to run, with no memo of the tries'.
+    fork._coast_memo = None
     return replace(
         plan,
         fork=fork,

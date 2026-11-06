@@ -210,7 +210,7 @@ Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the co
 
 When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
-A check that raises on a real state, the one `how()` starts from or a scan a trial runs (a trial that fails counts), has not said that state is clear, so `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the check's own exception as its cause. `how()` also asks about states it is only weighing, such as a hold laid over a state, and a raise on one of those says nothing about the route: that check is not violated and the others keep their answers. A state need not have every tag yet: a system tag first appears after a scan, and a block slot once something writes it. So a callable reads with `snapshot.get(name, default)`.
+A check that raises on a real state, the one `how()` starts from or a scan a trial runs (a trial that fails counts), has not said that state is clear, so `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the check's own exception as its cause. `how()` also asks about states it is only weighing, such as a hold laid over a state or a run it tries once a plan has reached, to see whether the plan needs all its temporary logic, and a raise on one of those says nothing about the route: that check is not violated and the others keep their answers. A state need not have every tag yet: a system tag first appears after a scan, and a block slot once something writes it. So a callable reads with `snapshot.get(name, default)`.
 
 ### The route taken
 

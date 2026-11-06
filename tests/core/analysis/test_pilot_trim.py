@@ -185,3 +185,12 @@ def test_a_check_true_where_the_plan_starts_is_watched_again_once_the_plan_has_l
     assert plan.total_scans == before.total_scans
     for reached in (plan.fork, plan.replay()):
         assert not start_held_at_completed(dict(reached.state.tags))
+
+    # With the Start command's release only to drop, dropping it ends in the state to avoid,
+    # where the check was true before the plan's first scan: the release stays.
+    assert "reset(AutoCmd_C_Start)" in str(before)
+    avoid = _compile_avoid((Bool("AutoCmd_C_Complete"), start_held_at_completed))
+    goal = api._goal_check((Int("AutoCmd_State") == 17,))
+    kept = trim.trim_holds(before, goal, avoid, frozenset({"AutoCmd_ResumeAck"}), None)
+    assert "reset(AutoCmd_C_Start)" in str(kept)
+    assert not start_held_at_completed(dict(kept.fork.state.tags))
