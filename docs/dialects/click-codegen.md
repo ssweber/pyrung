@@ -8,8 +8,6 @@ CSV operands accept supported CLICK expressions, not arbitrary Python calls. Uns
 
 `ladder_to_pyrung()` accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
 
-Generated timer and counter calls use pyrung's modern surface syntax: presets render positionally, the default millisecond unit is omitted, and non-default timer units use friendly strings like `"sec"` and `"hour"`.
-
 ```python
 from pyrung.click import ladder_to_pyrung
 
@@ -119,11 +117,11 @@ For the CSV format that codegen reads, see the [laddercodec CSV format guide](ht
 
 ### Round-trip guarantee
 
-The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original ladder CSV. This is tested extensively.
+The generated code round-trips. `exec()` the output, and `pyrung_to_ladder(logic, mapping)` reproduces the original ladder CSV.
 
-Note that codegen always emits the CLICK-first style (slot aliases, no standalone tag constructors). If you started with pyrung-first code (hand-written `Int("SpeedCmd")` + `TagMap`), exporting to CLICK and re-importing produces the CLICK-first form. This is intentional — once the CLICK project is the source of truth, the generated code reflects that. The two styles represent different ownership models, not interchangeable formats.
+Codegen always emits the CLICK-first style (slot aliases, no standalone tag constructors). If you started with pyrung-first code (hand-written `Int("SpeedCmd")` + `TagMap`), exporting to CLICK and re-importing produces the CLICK-first form.
 
-Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nickname comments (`# SpeedCmd..SpeedFbk`) when the endpoints have nicknames. This reflects reality: a CLICK Copy Block with source DS1 and destination DS100 is address-bound. You can't move `SpeedCmd` to `DS501` without rewriting every range instruction that spans it. The nicknames are context, not structure. If you want remappable ranges, add `:named_array` markers to the nickname CSV — that's the explicit act of design that gives you `RecipeProfile.instance_select(1, 2)` instead of raw addresses.
+Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nickname comments (`# SpeedCmd..SpeedFbk`) when the endpoints have nicknames, because a CLICK range is bound to its addresses. For remappable ranges, add `:named_array` markers to the nickname CSV, which gives you `RecipeProfile.instance_select(1, 2)` instead of raw addresses.
 
 ## Multi-file project codegen
 
@@ -142,8 +140,7 @@ to pyrung: setup, the ClickNick workflow, and the program's shape, rewritten on
 every generation. `README.md` and `AGENTS.md` belong to the user: they are
 written once, as a line pointing at pyrung's file (starting
 `<!-- pyrung:guidance -->`) and an empty notes section, and skipped after that
-unless `overwrite=True`. An integration that regenerates into an existing folder
-can copy that line back when the user's file lacks it.
+unless `overwrite=True`.
 
 The guidance describes a temporary CLICK workspace by default. When an
 integration stores the project in a durable location, pass
@@ -185,8 +182,7 @@ with Program() as logic:
         call(_sub_startup)
 ```
 
-The private `_sub_` prefix keeps generated function and module names separate
-from CLICK nicknames. The decorator retains the original CLICK subroutine name.
+The decorator keeps the CLICK subroutine name. The `_sub_` prefix stops the function's name from clashing with a CLICK nickname.
 
 ### Per-file imports
 
@@ -194,4 +190,4 @@ Each generated file imports only what it uses. A subroutine that touches `X001` 
 
 ### Nickname and structure support
 
-Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the slot configs and nickname CSV already provide that mapping.
+Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict.

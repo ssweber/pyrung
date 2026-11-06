@@ -18,9 +18,9 @@ shows ("10000.0000000"), on the float32 value, writes:
 - 1.0E+10: "10000000000.0000000", 19.  Exponential would be "1.0000000E+10", 13.
 - 66.7: "66.6999969", 10, then 11..20 of the span say what the round's '0' was.
 
-pyrung writes no digits: it puts the Real itself in the first TXT, which reads as code 0, and
-leaves the rest of the span 'Z' (a ``_first`` case reads 90 = code 0 then 'Z', and 11610 = "ZZ" in
-each other field; a ``_past`` case 11610 in all five).  The fields hold every pair of codes (``probe_kit.between``), so a pass answers nothing
+pyrung writes the digits as ``to_text()`` does, from the Real's 64-bit value.  That gives CLICK's text
+where the float32 and float64 digits agree, and "123456.7000000" and "66.7000000" where they
+do not.  The fields hold every pair of codes (``probe_kit.between``), so a pass answers nothing
 and a run on a CLICK records what it read.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.

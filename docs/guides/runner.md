@@ -221,7 +221,7 @@ runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
 
-`battery_present = False` is the worst case. A real CLICK keeps its retentive memory through a short outage even without a battery: a capacitor holds it for a few days, and SC27 reports when it ran out. `sys.battery_present` maps to SC203, which mirrors the project's Battery Backup Setup setting; a CLICK cannot detect its battery.
+Test a reboot with `battery_present = False` too, because a CLICK with a dead battery and a discharged capacitor comes back with every tag reset. `sys.battery_present` (SC203) won't warn you, because it reports the project's Battery Backup Setup setting, not the battery itself.
 
 ## Inspecting state
 
@@ -279,9 +279,7 @@ from Python or the debugger. From Python, `cause()` also takes `since=`, and
 `jit=False` records the run as it goes.
 
 `previous_transition()` returns the latest matching recorded transition, or
-`None`. It uses compressed history indexes where available, independent of
-whether the underlying history is encoded as stable, alternating, arithmetic,
-or opaque ranges.
+`None`.
 
 To bound memory on long runs, set a retention window:
 

@@ -19,7 +19,7 @@ A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag, and an index expression (`
 
 A pointer or index expression whose address falls below the block (or in a gap of a sparse block) sets `system.fault.address_error` and leaves the destination alone, for a source or a destination; `math()` with such a source does the same. Past the block's last address there is no flag: a read gives the type's zero value and a write is dropped, and a text or its digits that run past it are cut there. A `copy()` from past the end of a CLICK `DS`, `DH`, `DF` or `TXT` leaves its destination as it was. A `select()` whose bounds are tags or expressions (`DS.select(Start, End)`) is different: a bound outside the block, past it too, sets `address_error` and the instruction writes nothing, and a gap of a sparse block inside the window is skipped. In a rung condition an element outside the block reads as 0 with no flag ([Comparisons](conditions.md#comparisons)).
 
-`out_of_range` and `address_error` follow the last `math()` or copy instruction (`copy()`, `blockcopy()`, `fill()`, `pack_*()`, `unpack_*()`): each clears both as it starts, before it reads its source, and sets the one it raises, so read a flag on the next rung (`copy(system.fault.out_of_range, Bit)` reads it off). A oneshot clears them on the scans it does not fire too. A false rung, a coil, a timer or a counter leaves both as they are.
+Each `math()` or copy instruction (`copy()`, `blockcopy()`, `fill()`, `pack_*()`, `unpack_*()`) clears `out_of_range` and `address_error` when it runs, then sets whichever one it trips. A flag only reports the most recent of those instructions, so check it on the rung right after. Coils, timers and counters don't change either flag.
 
 ## `blockcopy` — copy a range
 

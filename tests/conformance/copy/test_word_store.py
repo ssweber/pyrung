@@ -1,8 +1,9 @@
 """What a Word holds after a store, and what comes out of one: the ``word_store`` group.
 
-Part ``copy`` (``suite.PARTS``).  Read on a CLICK (2026-11-05): a Copy, Block copy or Fill into a
-Word from a register wraps below 0 and clamps past 65535, neither with a flag; a constant keeps its
-low 16 bits.  A Word copied into an Int keeps its bits, and into a DD or a DF is its value
+Part ``copy`` (``suite.PARTS``).  Only ``word_below_zero`` and ``word_literals`` were read on a
+CLICK (2026-11-05).  A Copy into a Word from a register wraps below 0, and a constant keeps its
+low 16 bits, neither with a flag.  The other cases expect the rule pyrung adopted (a clamp past
+65535 with no flag, with Block copy and Fill behaving as Copy) and are not yet confirmed.  A Word copied into an Int keeps its bits, and into a DD or a DF is its value
 (``core/instruction/conversions.py``).  A DH under test is preset to 0x1234, so an instruction that
 refuses reads apart from one that writes.  Results are classes (``probe_kit.class_of``), 0 for any
 other value; SC43 bits are read on the rung after each op.
@@ -10,18 +11,18 @@ other value; SC43 bits are read on the rung after each op.
 - ``word_below_zero``: DS -1, DD -1, DF -1.6 copied into a Word.  Wrap (CLICK): 1, 1, 1 with no
   flag.  Clamp at 0 with SC43: 2, 2, 2, Result4 = 7.  A refusal that leaves the DH: 4.  A DF that
   rounds: 3 (0xFFFE) in Result3, and its raw low word (0xCCCD) reads 0.
-- ``word_above_top``: DD 70000, DD 65536, DF 70000.7.  Clamp with no flag (CLICK): 2, 2, 2,
+- ``word_above_top``: DD 70000, DD 65536, DF 70000.7.  Clamp with no flag (expected): 2, 2, 2,
   Result4 = 0.  Wrap: 1, 1, 1 (4464, 0, 4464).  A DF that rounds reads 3 (4465).  A DF's raw low
   word reads 0.
-- ``word_into_signed``: DH 0xFFFF and 0x8000 copied into an Int.  The bits read as signed (CLICK):
+- ``word_into_signed``: DH 0xFFFF and 0x8000 copied into an Int.  The bits read as signed (expected):
   -1, -32768, no flag.  Clamp, as any value past an Int does: 32767, 32767, SC43 bits 1 and 2 in
   Result4.  The same DH into a DD (Result3) and a DF (ErrorCode): 65535 is 1, -1 is 2.
 - ``block_into_word``: a Block copy into Words, element by element.  DS {-1} (Result1), DD {70000}
-  (Result2), DD {-1} (Result3); SC43 after each block in Result4.  CLICK: 1, 2, 1, 0, the Copy's
+  (Result2), DD {-1} (Result3); SC43 after each block in Result4.  Expected: 1, 2, 1, 0, the Copy's
   rule.  Wrap: 1, 1, 1, 0.  Clamp with SC43: 2, 2, 2, 3 (a block of DS and a block of DD).
-- ``block_from_word``: DH {0xFFFF, 0x8000} block copied into Ints.  The bits (CLICK): -1, -32768,
+- ``block_from_word``: DH {0xFFFF, 0x8000} block copied into Ints.  The bits (expected): -1, -32768,
   0.  Clamp: 32767, 32767, SC43 on (Result3 = 1).
-- ``fill_into_word``: a Fill from a register into Words.  DS -1, DD 70000, DF -1.6.  CLICK: 1, 2,
+- ``fill_into_word``: a Fill from a register into Words.  DS -1, DD 70000, DF -1.6.  Expected: 1, 2,
   1, 0, the Copy's rule.  Wrap with no flag: 1, 1, 1, 0.  Clamp: 2, 2, 2 with whichever flags.
 - ``word_literals`` (last of the group: the editor may refuse a constant out of a Word's range at
   paste, and a refusal costs only this case): the constants -1 and 70000 into a Word by Copy
