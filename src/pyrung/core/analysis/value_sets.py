@@ -16,7 +16,7 @@ from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from pyrung.core.condition import Condition
-from pyrung.core.expression import STRICT_DIVISION, Expression
+from pyrung.core.expression import CALC_FAULTS, Expression
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.conversions import _truncate_to_tag_type
 from pyrung.core.instruction.data_transfer import CopyInstruction
@@ -278,13 +278,14 @@ class _ValueSets:
     def _store(self, instr: Any, dest: Tag, values) -> frozenset[Any] | None:
         """Values *instr* stores into *dest*, given the current value sets."""
         if isinstance(instr, CalcInstruction):
-            # As CalcInstruction.execute: a division by zero raises (and stores
-            # 0); an Inf result stays Inf in a REAL, 0 in an integer register.
-            token = STRICT_DIVISION.set(True)
+            # As CalcInstruction.execute: a failing operation is 0 and the
+            # formula carries on (its flag noted, and dropped here); an Inf
+            # result stays Inf in a REAL, 0 in an integer register.
+            token = CALC_FAULTS.set([])
             try:
                 raw = self._evaluate(instr.expression, values)
             finally:
-                STRICT_DIVISION.reset(token)
+                CALC_FAULTS.reset(token)
             if raw is None:
                 return None
             out: set[Any] = set()

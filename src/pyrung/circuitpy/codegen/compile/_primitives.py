@@ -126,10 +126,11 @@ def _compile_expression_impl(
 ) -> str:
     """Return a Python expression string with explicit parentheses.
 
-    *strict* is for calc, whose expression raises on a math error (calc stores
-    0 and sets the flag).  Anywhere else an expression is permissive, as the
-    core's: an operation that can raise goes through ``_permissive_op`` /
-    ``_permissive_math``, which give 0 instead.
+    An operation that can fail is 0 and the rest runs, as the core's: it goes
+    through ``_permissive_op``, ``_permissive_math`` or a helper of its own.
+    *strict* is for calc, where the operation also appends its flag's code to
+    the calc's ``_calc_flags`` (:data:`CALC_FLAGS`, core ``CALC_FAULTS``),
+    which the calc sets after the formula; nothing in the formula raises.
     """
     if isinstance(expr, TagExpr):
         return _snapshot_tag_symbol(
@@ -157,12 +158,20 @@ def _compile_expression_impl(
             strict=strict,
         )
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
-        if not strict and (
+        flags = CALC_FLAGS if strict else None
+        if (not strict or not isinstance(expr, CalcBinaryExpr)) and (
             _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
         ):
+            # Outside calc; in one, a randint() bound (calc_form keeps its ops).
             symbol = {"%": "mod", "**": "pow0"}[expr.symbol] if calc_op else expr.symbol
-            return _permissive_op(symbol, left, right, ctx)
+            return _permissive_op(symbol, left, right, ctx, flags)
         if expr.symbol in _BITWISE_SYMBOLS:
+            if _binary_may_raise(expr):
+                # A calc's: an Inf or NaN operand, or a negative shift count, is
+                # 0 with SC43.  (A calc's steps are never integers past 2 ** 53,
+                # so none is too large for a float: _may_be_huge is moot.)
+                compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
+                return _calc_step(expr, compiled, ctx, strict)
             left_int = _bit_int_expr(expr.left, left, ctx)
             right_int = _bit_int_expr(expr.right, right, ctx)
             if expr.symbol in ("<<", ">>"):
@@ -170,12 +179,12 @@ def _compile_expression_impl(
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
         if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
             # A calc's ** (core _op_pow_calc): a zero base to a power of 0 or
-            # below is a _QuietMathError, then as _pow.
+            # below is 0 with no flag, a complex result 0 with SC46.
             ctx.mark_helper("_math_func")
-            ctx.mark_helper("_QuietMathError")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")
-            return _calc_step(expr, f"_pow_calc({left}, {right})", ctx, strict)
+            ctx.mark_helper("_term_fail")
+            return _calc_step(expr, f"_pow_calc({left}, {right}, {flags})", ctx, strict)
         if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
             # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
             # raises _MathDomainError for a complex result; an integer power is
@@ -188,11 +197,22 @@ def _compile_expression_impl(
             and expr.symbol == "%"
             and not (_non_negative(expr.left) and _positive_literal(expr.right))
         ):
-            # A calc's MOD truncates (the dividend's sign) and a MOD by 0 is a
-            # _QuietMathError, as the core's _op_mod; Python's % floors.
-            ctx.mark_helper("_QuietMathError")
+            # A calc's MOD truncates (the dividend's sign) and a MOD by 0 is 0
+            # with no flag, as the core's _op_mod; Python's % floors.
             ctx.mark_helper("_mod")
             return f"_mod({left}, {right})"
+        if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
+            # A calc's division by 0 is 0 with SC40.  By a tag, the test is
+            # inline, unless the dividend appends flags of its own, which a
+            # skipped dividend would lose.
+            if isinstance(expr.right, TagExpr) and not _appends_flags(left):
+                ctx.mark_helper("_term_fail")
+                compiled = (
+                    f"(({left} {expr.symbol} {right}) if {right} else _term_fail({flags}, 40))"
+                )
+            else:
+                compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
+            return _calc_step(expr, compiled, ctx, strict)
         return _calc_step(expr, f"({left} {expr.symbol} {right})", ctx, strict)
 
     if isinstance(expr, UnaryExpr):
@@ -203,37 +223,42 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
+        flags = CALC_FLAGS if strict else None
         if expr.symbol == "abs":
             floor = _abs_floor(expr)
             if floor is not None:
                 # abs() of an Int or Dint tag in a calc (calc_form): the bottom of
-                # the range raises OverflowError, 0 with SC43.
+                # the range is 0, with SC43.
                 ctx.mark_helper("_abs_int")
-                return f"_abs_int({inner}, {floor})"
+                ctx.mark_helper("_term_fail")
+                return f"_abs_int({inner}, {floor}, {flags})"
             return _calc_step(expr, f"abs({inner})", ctx, strict)
         if expr.symbol == "~":
-            if not strict and _may_be_float(expr.operand):
-                return _permissive_op("~", inner, "0", ctx)
+            if _may_be_float(expr.operand):
+                compiled = _permissive_op("~", inner, "0", ctx, flags)
+                return _calc_step(expr, compiled, ctx, strict) if strict else compiled
             return _calc_step(expr, f"(~{_bit_int_expr(expr.operand, inner, ctx)})", ctx, strict)
         return _calc_step(expr, f"({expr.symbol}({inner}))", ctx, strict)
 
     if isinstance(expr, MathFuncExpr):
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
-        # _math_func passes a non-finite operand through and raises
-        # _MathDomainError for a domain error, as MathFuncExpr.evaluate does;
-        # outside calc _permissive_math gives 0 for it instead, and for an
-        # integer too large for a float (OverflowError).
-        ctx.mark_helper("_math_func")
-        helper = "_math_func"
-        if not strict and (expr.name in DOMAIN_LIMITED_MATH_FUNCS or _may_be_huge(expr.operand)):
-            ctx.mark_helper("_permissive_math")
-            helper = "_permissive_math"
-        return (
-            f"{helper}(math.{expr.name}, "
-            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots, strict=strict)}"
-            ")"
+        # _math_func passes a non-finite operand through, as MathFuncExpr.evaluate
+        # does; _permissive_math also gives 0 for a domain error (SC46 in a
+        # calc) and for an integer too large for a float (SC43).
+        operand = _compile_expression_impl(
+            expr.operand,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if expr.name in DOMAIN_LIMITED_MATH_FUNCS or _may_be_huge(expr.operand):
+            ctx.mark_helper("_permissive_math")
+            tail = f", {CALC_FLAGS}" if strict else ""
+            return f"_permissive_math(math.{expr.name}, {operand}{tail})"
+        ctx.mark_helper("_math_func")
+        return f"_math_func(math.{expr.name}, {operand})"
 
     if isinstance(expr, ShiftFuncExpr):
         value = _compile_expression_impl(
@@ -250,12 +275,13 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-        if not strict and (
+        if (
             _may_be_float(expr.value)
             or _may_be_float(expr.count)
             or (expr.name in ("lsh", "rsh") and not _non_negative_literal(expr.count))
         ):
-            return _permissive_op(expr.name, value, count, ctx)
+            compiled = _permissive_op(expr.name, value, count, ctx, CALC_FLAGS if strict else None)
+            return _calc_step(expr, compiled, ctx, strict) if strict else compiled
         value_int = _bit_int_expr(expr.value, value, ctx)
         count_int = _bit_int_expr(expr.count, count, ctx)
         if expr.name in ("lsh", "rsh"):
@@ -291,16 +317,16 @@ def _compile_expression_impl(
     if isinstance(expr, RandIntExpr):
         # As RandIntExpr.evaluate: a bare Real tag as a bound reads 0, and equal
         # bounds, or one holding Inf or NaN, make the site 0.  In a calc the site
-        # appends its flag to the calc's _calc_flags (CALC_FLAGS), which the calc
-        # sets after the formula: only the site is zeroed.
+        # appends its flag to the calc's _calc_flags (CALC_FLAGS), as any failing
+        # operation does: only the site is zeroed.
         if expr.real_bounds:
             return "0"
         flags = CALC_FLAGS if strict else "None"
         if expr.equal_bounds:
             if not strict:
                 return "0"
-            ctx.mark_helper("_rand_fail")
-            return f"_rand_fail({flags}, 46)"
+            ctx.mark_helper("_term_fail")
+            return f"_term_fail({flags}, 46)"
         draw = ""
         if ctx.kernel_runtime:
             # The runner's input drain wrote this scan's draw into the site tag.
@@ -328,7 +354,7 @@ def _compile_expression_impl(
         )
         if expr.reads_bounds:
             ctx.mark_helper("_bit_int")
-            ctx.mark_helper("_rand_fail")
+            ctx.mark_helper("_term_fail")
             if ctx.kernel_runtime:
                 ctx.mark_helper("_rand_term")
                 return f"_rand_term({flags}, {draw}, {lo}, {hi})"
@@ -411,8 +437,16 @@ def _positive_int_literal(expr: Any) -> bool:
     return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value > 0
 
 
-#: The list a calc's randint() sites append their flags to (``_rand_fail``).
+#: The list a calc's failing operations append their flags' codes to (``_term_fail``).
 CALC_FLAGS = "_calc_flags"
+
+_CALC_FLAGS_RE = re.compile(rf"\b{CALC_FLAGS}\b")
+
+
+def _appends_flags(compiled: str) -> bool:
+    """Whether the compiled calc code *compiled* can append to :data:`CALC_FLAGS`."""
+    return _CALC_FLAGS_RE.search(compiled) is not None
+
 
 #: Tag types whose value is never negative.
 _UNSIGNED_TYPES = frozenset({TagType.BOOL, TagType.WORD})
@@ -431,15 +465,6 @@ def _abs_floor(expr: UnaryExpr) -> int | None:
         if expr.op is op:
             return ABS_FLOORS[type_name]
     return None
-
-
-def calc_site_flags(expr: Any) -> bool:
-    """Whether a calc of *expr* has a randint() site that can append a flag."""
-    if isinstance(expr, RandIntExpr):
-        return not expr.real_bounds and (expr.equal_bounds or expr.reads_bounds)
-    if isinstance(expr, Expression):
-        return any(calc_site_flags(child) for child in vars(expr).values())
-    return False
 
 
 #: The largest magnitude of each integer tag type.
@@ -593,20 +618,25 @@ def _shift_count_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
     return f"_shift_count({compiled})"
 
 
-def _permissive_op(op: str, left: str, right: str, ctx: CodegenContext) -> str:
+def _permissive_op(
+    op: str, left: str, right: str, ctx: CodegenContext, flags: str | None = None
+) -> str:
     """``_permissive_op(op, left, right)``: the operation, or 0 for a math error.
 
-    The core's expressions outside calc give 0 where an operation raises
-    (``_permissive`` in pyrung.core.expression).
+    The core's expressions give 0 where an operation raises (``_permissive`` in
+    pyrung.core.expression).  In a calc (*flags*, :data:`CALC_FLAGS`) the
+    error's flag is appended too.
     """
     ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_shift_count")
     ctx.mark_helper("_math_func")
-    ctx.mark_helper("_QuietMathError")
     ctx.mark_helper("_mod")
     ctx.mark_helper("_pow")
     ctx.mark_helper("_pow_calc")
+    ctx.mark_helper("_term_fail")
     ctx.mark_helper("_permissive_op")
-    return f"_permissive_op({op!r}, {left}, {right})"
+    tail = f", {flags}" if flags else ""
+    return f"_permissive_op({op!r}, {left}, {right}{tail})"
 
 
 _may_be_float = may_be_float
