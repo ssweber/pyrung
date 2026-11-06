@@ -34,8 +34,8 @@ from pyrung import (
 )
 from pyrung.core import AvoidCheckError
 from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.analysis.pilot import api, budget, pilot_events, pilot_how
 from pyrung.core.analysis.pilot import avoid as avoid_module
-from pyrung.core.analysis.pilot import budget, pilot_events, pilot_how
 from pyrung.core.analysis.pilot.avoid import (
     _avoid_forces,
     _avoid_scan_names,
@@ -1028,18 +1028,27 @@ def _rate_on_speed():
     return prog, target
 
 
-def test_a_rate_check_raising_only_on_the_hold_laid_over_the_state_keeps_the_route() -> None:
+def test_a_rate_check_raising_only_on_the_hold_laid_over_the_state_keeps_the_route(
+    monkeypatch,
+) -> None:
     """Acc is 0 only until the first scan with Speed on has run its timer."""
     prog, target = _rate_on_speed()
+
+    def rate(s):
+        return 1000 / s["Rn_Acc"] > 1e9 if s["Speed"] > 3 else False
+
+    # The drive, with the temporary logic it laid over the state.
+    monkeypatch.setattr(api._trim, "trim_holds", lambda plan, *_args: plan)
     without = _scanned(prog, 1).how(target, max_scans=2000)
     assert (without.total_scans, _holds(without)) == (100, 2)
+    plan = _scanned(prog, 1).how(target, avoid=rate, max_scans=2000)
+    _same_plan(plan, without)
+    monkeypatch.undo()
 
-    plan = _scanned(prog, 1).how(
-        target,
-        avoid=lambda s: 1000 / s["Rn_Acc"] > 1e9 if s["Speed"] > 3 else False,
-        max_scans=2000,
-    )
-
+    # A Set in its place runs the same, with the check never raising on the way.
+    without = _scanned(prog, 1).how(target, max_scans=2000)
+    assert (without.total_scans, _holds(without)) == (100, 0)
+    plan = _scanned(prog, 1).how(target, avoid=rate, max_scans=2000)
     _same_plan(plan, without)
 
 

@@ -18,6 +18,7 @@ import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.restart as _restart
 import pyrung.core.analysis.pilot.static_proofs as _static_proofs
 import pyrung.core.analysis.pilot.target_route as _target_route
+import pyrung.core.analysis.pilot.trim as _trim
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
 from pyrung.core.analysis.pilot.avoid import _AvoidCheckRaised
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
@@ -308,6 +309,10 @@ def pilot_how(
     plan, setup, outcome = _how_from(
         plc, conditions, max_scans, avoid_pred, unlink, on_event, wall_clock_s
     )
+    if plan.status is PlanStatus.REACHED:
+        return _trim.trim_holds(
+            plan, _goal_check(conditions), avoid_pred, frozenset(setup.steerable), clock
+        )
     if plan.status is not PlanStatus.STOPPED or outcome is None:
         return plan
     # A search that ran out of time or work did not find there was nothing left to do.  Under a

@@ -478,6 +478,9 @@ def project_pilot_overlay(
     return projected
 
 
+PILOT_RUNGS_BUILT_FROM = "_pilot_rungs_built_from"
+
+
 def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
     """Replace the overlay only before this runner has executed a local scan.
 
@@ -501,7 +504,12 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
         if dest is None:
             raise KeyError(f"pilot rung destination {rule.rung.dest!r} is not a program tag")
         rules.append((dest, rule.rung.value, rule.guard))
-    _set_synth_holds(plc, [guarded_copy_rung(rules)] if rules else [])
+    holds = [guarded_copy_rung(rules)] if rules else []
+    for rung in holds:
+        # What the rung was built from, kept with it: an epoch keeps its holds, so a plan's
+        # recording says which PILOT rungs ran on each of its scans.
+        setattr(rung, PILOT_RUNGS_BUILT_FROM, materialized)
+    _set_synth_holds(plc, holds)
 
 
 def _merged_pilot_rungs(

@@ -14,7 +14,7 @@ import pytest
 
 from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, latch, on_delay, out, time_drum
 from pyrung.core import PLC
-from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot import api, pilot_events
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
 from pyrung.core.coast_run import coast_until, work_charged
@@ -204,10 +204,20 @@ def test_the_recording_stepped_from_the_start_lands_there_too(build: Any, landin
     assert stepped.history.at(landing - 1).tags[goal.name] is False
 
 
-def test_a_drum_reset_on_the_way_in_leaves_the_drum_to_run_its_whole_time() -> None:
+def _untrimmed(monkeypatch: pytest.MonkeyPatch, prog: Program, goal: Bool) -> Any:
+    """The plan as the drive found it, with the temporary logic it went in with."""
+    monkeypatch.setattr(api._trim, "trim_holds", lambda plan, *_args: plan)
+    path = _how(prog, goal)
+    monkeypatch.undo()
+    return path
+
+
+def test_a_drum_reset_on_the_way_in_leaves_the_drum_to_run_its_whole_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The plan's one scan of reset takes the step from 0 to 1, and the drum then runs from there."""
     prog, goal = _drum()
-    path = _how(prog, goal)
+    path = _untrimmed(monkeypatch, prog, goal)
     assert path.reachable, str(path)
     fork = path.fork
     assert fork.history.at(2).tags["LwReset"] is True
@@ -299,9 +309,9 @@ def test_a_budget_in_work_lands_where_stepping_does() -> None:
     assert plc.state.tags == stepped.state.tags
 
 
-def test_only_a_live_wait_under_a_hold_counts_work() -> None:
+def test_only_a_live_wait_under_a_hold_counts_work(monkeypatch: pytest.MonkeyPatch) -> None:
     prog, goal = _chain(3, 2, "min")
-    path = _how(prog, goal)
+    path = _untrimmed(monkeypatch, prog, goal)
     assert path.reachable, str(path)
     fork = path.fork
     assert fork._synthesis.holds

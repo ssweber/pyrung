@@ -26,6 +26,12 @@ module.
   (`restart.try_release`); the public `PLC.fork()` still starts clean.
 - `PlanStatus.REACHED` carries the reached fork. Its scan log and synthesis
   holds are the replayable witness; replay does not re-plan.
+- Once a drive reaches, `trim.py` runs it again from the anchor with each hold
+  left out, then as a plain Set, and keeps the simpler run when it reaches on the
+  same scan with nothing avoided. The kept run is the plan's fork, so text and
+  replay stay one recording. The per-scan holds come from the fork's epochs (each
+  compiled hold carries the PilotRungs it was built from), not from `hold_log`,
+  which keeps reverted installs too.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
   unreachability, over every write to the tags involved and not one traced route
   (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`. Two writes it
