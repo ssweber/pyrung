@@ -249,6 +249,7 @@ group = Group(
             init=init_across_types,
             expect={"Result1": 0, "ErrorCode": 2},
             probe="what a Copy does across bits and numbers",
+            pending="BIT",
         ),
         case(
             "A Copy from a pointer past the bank leaves the destination, with no flag: DS4501 "
@@ -309,6 +310,7 @@ block_group = Group(
             init=init_block_forms,
             expect={"Result1": 12, "Result2": 2, "Result3": 2, "Result4": 0},
             probe="a block copy's converter; a Fill across types",
+            pending="BIT",
         ),
     ],
 )

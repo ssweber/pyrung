@@ -131,8 +131,10 @@ def test_a_word_into_a_dint_or_a_real_is_its_value(runner_factory):
     assert (tags["D"], tags["R"]) == (65535, 65535.0)
 
 
-@pytest.mark.parametrize(("value", "on"), [(2, False), (3, True), (1, True), (0, False)])
-def test_a_number_into_a_bit_takes_its_low_bit(runner_factory, value, on):
+@pytest.mark.parametrize(("value", "on"), [(2, True), (3, True), (1, True), (-1, True), (0, False)])
+def test_a_number_into_a_bit_is_on_when_nonzero(runner_factory, value, on):
+    # CLICK's editor refuses a constant into a bit (CLK_COPY_CONSTANT_INTO_BIT), so no
+    # reading of an accepted form backs the low-bit store a pasted one showed.
     src = Int("Src", default=value)
     bit, bit2 = Bool("Bit"), Bool("Bit2")
     bits = Block("B", TagType.BOOL, 1, 2)
