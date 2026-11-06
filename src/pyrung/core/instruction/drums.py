@@ -248,7 +248,7 @@ class _DrumBaseInstruction(Instruction):
         if self.jump_condition is not None and self.jump_step is None:
             raise ValueError("drum jump requires step when condition is provided")
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return True
 
     def set_jump(self, condition: Any, step: Tag | int) -> None:

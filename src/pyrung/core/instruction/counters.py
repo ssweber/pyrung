@@ -146,7 +146,7 @@ class CountUpInstruction(Instruction):
                 }
             )
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return True
 
     def advance_profile(self) -> AdvanceProfile:
@@ -260,7 +260,7 @@ class CountDownInstruction(Instruction):
                 }
             )
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return True
 
     def advance_profile(self) -> AdvanceProfile:

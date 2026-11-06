@@ -60,6 +60,12 @@ class Rung:
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
         self._execution_plan: list[tuple[int, Instruction | Rung]] = []
         self._terminal_instruction: Instruction | None = None
+        # Outputs in this rung's wire tree (its own and its branches'), and the
+        # box with pins among them: a box with pins ends its rung.
+        self._tree_outputs = 0
+        self._pin_box: Instruction | None = None
+        # A forloop body's bare instructions are each a body rung of their own.
+        self._loop_capture = False
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
@@ -79,14 +85,27 @@ class Rung:
             self._conditions.append(_as_condition(cond))
 
     def add_instruction(self, instruction: Instruction) -> None:
-        """Add an instruction to execute when conditions are true."""
-        if self._terminal_instruction is not None:
-            terminal_name = type(self._terminal_instruction).__name__
+        """Add an instruction to execute when conditions are true.
+
+        A box with pins (:meth:`Instruction.has_pins`) ends its rung: it is
+        refused beside any other output of the rung's wire tree (the trunk and
+        every branch), as CLICK draws its pins from the box's own wire.
+        """
+        terminal = self._terminal_instruction
+        if terminal is not None:
+            if terminal.has_pins() and not self._loop_capture:
+                raise RuntimeError(_box_shares_rung(terminal, instruction))
+            terminal_name = type(terminal).__name__
             current_name = type(instruction).__name__
             raise RuntimeError(
                 f"{terminal_name} is terminal in this flow and must be last; "
                 f"cannot add instruction {current_name}."
             )
+        if not self._loop_capture:
+            if self._pin_box is not None:
+                raise RuntimeError(_box_shares_rung(self._pin_box, instruction))
+            if instruction.has_pins() and self._tree_outputs:
+                raise RuntimeError(_box_shares_rung(instruction, self._first_output()))
         if getattr(instruction, "end_line", None) is None:
             end_line = _capture_call_end_line(
                 getattr(instruction, "source_file", None),
@@ -100,18 +119,48 @@ class Rung:
         self._execution_plan.append((instruction._executor_kind, instruction))
         if instruction.is_terminal():
             self._terminal_instruction = instruction
+        self._tree_outputs += 1
+        if instruction.has_pins():
+            self._pin_box = instruction
 
     def add_branch(self, branch: Rung) -> None:
-        """Add a nested branch (parallel path) to this rung."""
-        if self._terminal_instruction is not None:
-            terminal_name = type(self._terminal_instruction).__name__
+        """Add a nested branch (parallel path) to this rung.
+
+        Refused where it would put a box with pins beside another output (see
+        :meth:`add_instruction`).
+        """
+        terminal = self._terminal_instruction
+        if terminal is not None:
+            other = branch._first_output()
+            if terminal.has_pins() and other is not None:
+                raise RuntimeError(_box_shares_rung(terminal, other))
+            terminal_name = type(terminal).__name__
             raise RuntimeError(
                 f"{terminal_name} is terminal in this flow and must be last; "
                 "cannot add branch(...)."
             )
+        if self._tree_outputs and branch._tree_outputs:
+            if self._pin_box is not None:
+                raise RuntimeError(_box_shares_rung(self._pin_box, branch._first_output()))
+            if branch._pin_box is not None:
+                raise RuntimeError(_box_shares_rung(branch._pin_box, self._first_output()))
+        self._tree_outputs += branch._tree_outputs
+        if branch._pin_box is not None:
+            self._pin_box = branch._pin_box
         self._branches.append(branch)
         self._execution_items.append(branch)
         self._execution_plan.append((_EXECUTOR_BRANCH, branch))
+
+    def _first_output(self) -> Instruction | None:
+        """The first instruction of this rung's wire tree, in solve order."""
+        for item in self._execution_items:
+            if isinstance(item, Rung):
+                found = item._first_output()
+                if found is not None:
+                    return found
+            else:
+                return item
+        return None
 
     def sp_tree(self) -> SPNode | None:
         """Return this rung's condition structure as an SP tree.
@@ -238,3 +287,41 @@ class Rung:
                 item.execute(ctx, item._solve_row(ctx, enabled))
             else:
                 item.execute(ctx, enabled)
+
+
+# DSL names that do not follow from the instruction class name.
+_DSL_NAMES = {
+    "CalcInstruction": "math",
+    "FunctionCallInstruction": "run_function",
+    "EnabledFunctionCallInstruction": "run_enabled_function",
+    "BlockCopyInstruction": "blockcopy",
+    "ForLoopInstruction": "forloop",
+    "ReturnInstruction": "return_early",
+    "BreakInstruction": "break_loop",
+    "ContinueInstruction": "continue_loop",
+    "ModbusSendInstruction": "send",
+    "ModbusReceiveInstruction": "receive",
+}
+
+
+def _dsl_label(instruction: Instruction | None) -> str:
+    """``count_up() (line 12)``: the instruction as its author wrote it."""
+    if instruction is None:  # pragma: no cover - defensive
+        return "the other output"
+    class_name = type(instruction).__name__
+    name = _DSL_NAMES.get(class_name)
+    if name is None:
+        stem = class_name.removesuffix("Instruction")
+        name = "".join(f"_{ch.lower()}" if ch.isupper() else ch for ch in stem).lstrip("_")
+    line = getattr(instruction, "source_line", None)
+    return f"{name}() (line {line})" if line is not None else f"{name}()"
+
+
+def _box_shares_rung(box: Instruction, other: Instruction | None) -> str:
+    """Why *box*, a box with pins, cannot share its rung with *other*."""
+    return (
+        f"{_dsl_label(box)} has pins, so it ends its rung: CLICK draws its pins from the "
+        f"box's own wire, and no other output or branch shares that rung. Move "
+        f"{_dsl_label(other)} off this rung: what comes before the box into a rung above, "
+        "what follows it into `with Rung(...).continued():` or a rung of its own."
+    )
