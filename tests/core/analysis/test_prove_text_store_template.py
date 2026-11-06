@@ -72,7 +72,7 @@ def test_a_true_claim_over_the_store_still_proves():
     assert isinstance(result, Proven)
 
 
-@pytest.mark.parametrize("name", ["Q{0}", "Q\n", 'Q"x'], ids=["braces", "backslash", "dquote"])
+@pytest.mark.parametrize("name", ["Q{0}", r"Q\x", 'Q"x'], ids=["braces", "backslash", "dquote"])
 def test_a_store_into_a_block_of_any_name_is_no_proof(name):
     """The blockless kernel writes ``Q{0}2`` as named, so Seen is reachable."""
     blk = Block(name, TagType.CHAR, 1, 10)

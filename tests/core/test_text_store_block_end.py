@@ -371,7 +371,7 @@ def test_digits_into_a_tag_mapped_onto_the_bank_write_what_fits(engine, before, 
     assert _past(names, "DS", 4500) == []
 
 
-_ODD_NAMES = ["Q{0}", "Q{", "Q\n", 'Q"x', "Q'x"]
+_ODD_NAMES = ["Q{0}", "Q{", r"Q\x", 'Q"x', "Q'x"]
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
