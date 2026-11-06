@@ -206,21 +206,30 @@ class _LadderExporter(
             return []
         return [("#", line) for line in rung.comment.splitlines()]
 
-    def _normalize_branching_rung(self, rung: Rung) -> Rung:
+    def _normalize_branching_rung(self, rung: Rung, *, path: str | None = None) -> Rung:
         """Normalize a branching rung into an ordered shared-prefix tree.
 
         A contact is factored into a shared node only where that does not read
-        it across a write of the rung (see :mod:`._solve_order`).
+        it across a write of the rung (see :mod:`._solve_order`).  With *path*
+        (export), the rung is refused when its drawing would read a contact at
+        another point of the solve.
         """
         outputs = self._collect_instruction_trees(rung)
         if not outputs:
-            return rung
+            return rung  # branches that hold no output draw no rows
         order = ReadOrder(self._program, rung, [instr for _tree, instr in outputs])
         normalized = self._build_normalized_rung_from_trees(
             outputs, order=order, members=[(k, 0) for k in range(len(outputs))]
         )
         normalized._use_prior_snapshot = rung._use_prior_snapshot
         normalized.comment = rung.comment
+        normalized.source_file = rung.source_file
+        normalized.source_line = rung.source_line
+        normalized.end_line = rung.end_line
+        if path is not None:
+            moved = order.check(normalized)
+            if moved is not None:
+                self._refuse_moved_read(moved, outputs, path=path, source=rung)
         return normalized
 
     def _series_tree(self, *nodes: SPNode | None) -> SPNode | None:
@@ -408,22 +417,7 @@ class _LadderExporter(
             return rung
         if any(type(instr).__name__ == "ForLoopInstruction" for instr in rung._instructions):
             return rung
-        outputs = self._collect_instruction_trees(rung)
-        if not outputs:
-            return rung  # branches that hold no output draw no rows
-        order = ReadOrder(self._program, rung, [instr for _tree, instr in outputs])
-        factored = self._build_normalized_rung_from_trees(
-            outputs, order=order, members=[(index, 0) for index in range(len(outputs))]
-        )
-        factored._use_prior_snapshot = rung._use_prior_snapshot
-        factored.comment = rung.comment
-        factored.source_file = rung.source_file
-        factored.source_line = rung.source_line
-        factored.end_line = rung.end_line
-        moved = order.check(factored)
-        if moved is not None:
-            self._refuse_moved_read(moved, outputs, path=path, source=rung)
-        return factored
+        return self._normalize_branching_rung(rung, path=path)
 
     def _refuse_moved_read(
         self,

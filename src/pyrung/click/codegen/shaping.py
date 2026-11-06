@@ -63,11 +63,13 @@ def rung_blocks(rung: _AnalyzedRung) -> tuple[SPNode | None, list[_BlockItem]]:
     a rung with other outputs a rung of its own.  A lone remaining output keeps
     its branch contacts by moving them onto the rung condition.
 
-    That is the one drawing that does not round-trip as written: CLICK draws
+    That is the one pyrung drawing that does not round-trip as written: CLICK draws
     ``with rung(A): with branch(B): out(Y)`` as A then B in series on one row,
     the same cells as ``with rung(A, B): out(Y)``.  The rows hold no mark of
     where the rung's contacts end and the branch's begin, so the plain rung is
-    the one read back.
+    the one read back.  (The other way, a CLICK pin teed off the box's input
+    wire comes back with the shared contacts in its condition and re-exports
+    from the rail.)
     """
     real = [instr for instr in rung.instructions if instr.af_token != NOP]
     condition = rung.condition_tree

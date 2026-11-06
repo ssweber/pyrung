@@ -13,7 +13,7 @@ shift(C.select(1, 8)) \
 - **rung condition** is the data bit inserted at position 1
 - **Clock** — shift occurs on the rising edge of the clock condition
 - **Reset** — level-sensitive: clears all bits in range while True
-- Terminal after `.clock(...).reset(...)`.
+- With `.clock(...).reset(...)` it is a box with pins and ends its rung.
 
 Direction is determined by the range order:
 - `C.select(1, 8)` → shifts low-to-high (data enters at C1, exits at C8)
