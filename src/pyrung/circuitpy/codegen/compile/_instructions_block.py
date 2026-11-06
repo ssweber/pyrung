@@ -58,7 +58,7 @@ def _compile_blockcopy_instruction(
         return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
     stem = ctx.next_name("blockcopy")
     store_expr = _copy_store_expr(
-        "_raw", _range_type_name(instr.dest), instr.source.block.type, ctx
+        "_raw", _range_type_name(instr.dest), TagType[_range_type_name(instr.source)], ctx
     )
     clamp_cond = _copy_clamp_condition(
         "_raw", _range_type_name(instr.dest), _range_type_name(instr.source)
