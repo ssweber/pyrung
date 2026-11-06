@@ -1009,8 +1009,9 @@ def _analyze_single_rung(
 
     # Dropped-condition detection: every content edge's Leaf should reach at
     # least one output or pin tree before output grouping (the pre-group trees
-    # hold every cell each output reads).  Positions absent from every pre-group tree were pruned as dead-end edges
-    # (unwired conditions) and silently omitted from the logic.  This only sees
+    # hold every cell each output reads).  Positions absent from every
+    # pre-group tree were pruned as dead-end edges (unwired conditions) and
+    # silently omitted from the logic.  This only sees
     # drops made here; a contact lost later (splitting, emission) is caught by
     # shaping.emitted_logic_mismatch against source_outputs.
     present: set[tuple[int, int]] = set()
