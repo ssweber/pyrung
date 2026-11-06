@@ -42,6 +42,8 @@ yourself, or run the gate.
   commit that makes its case pass.
 - Touch user docs only when an author's code would change (docs/AGENTS.md, "Keep a line only if
   it changes what an author writes"). A fine edge of the engine goes in a test, not a paragraph.
+- Every sentence you write (docs, CHANGELOG, comments, docstrings, commit messages) follows the
+  Writing section of the root AGENTS.md. Run its grep over your added lines before you hand back.
 - Do not dispatch subagents or ask for an independent review: one is already scheduled.
 - If the step is underspecified, or a correct fix needs a design decision or a change outside
   your step (e.g. the prover, a shared runtime path), stop and say so in your hand-back rather

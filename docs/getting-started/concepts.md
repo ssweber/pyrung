@@ -97,7 +97,7 @@ copy("g", State)              # Copy a value into a tag
 math(Step + 1, Step)          # Evaluate an expression, store the result
 
 on_delay(MyTimer, preset=3000)               # Timer: accumulate while rung is true
-count_up(MyCounter, preset=100)              # Counter: increment each scan
+count_up(MyCounter, preset=100)              # Counter: one count per rising edge
 ```
 
 `out` vs `latch`: `out` follows the rung — true when the rung is true, false when it's false. `latch` is sticky — once set, it stays set until explicitly `reset`.
@@ -272,7 +272,7 @@ plc.unforce("Button")
 
 The PLC exposes built-in status and control through the `system` namespace. Import it with `from pyrung import system`.
 
-**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`, and `scan_clock_toggle`, which is on when `scan_counter` is even (the first scan included), as a CLICK's SC3 is. Use `first_scan` for one-time initialization:
+**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`, and `scan_clock_toggle`. Use `first_scan` for one-time initialization:
 
 ```python
 with rung(system.sys.first_scan):

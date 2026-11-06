@@ -71,7 +71,7 @@ with rung(A):
             out(Z)  # Executes when A AND B AND C
 ```
 
-This exists so codegen can faithfully represent imported ladder topologies. For hand-written logic, flat branches are clearer.
+For hand-written logic, flat branches are clearer.
 
 ## Continued rungs
 
@@ -84,7 +84,7 @@ with rung(Counter == 10).continued():
     out(X)  # True: Counter was set to 10 above
 ```
 
-`.continued()` exists so CLICK projects round-trip: a CLICK rung with two wires imports as a rung and a continued rung, and exports back as one CLICK rung. It is also how a box with pins shares a CLICK rung with other outputs: each sits on a wire of its own (see the [CLICK dialect](../dialects/click.md)).
+`.continued()` exists so CLICK projects round-trip. A CLICK rung with two wires imports as a rung and a continued rung, and exports back as one CLICK rung. `.continued()` is also how a box with pins shares a CLICK rung with other outputs. The box and the outputs each sit on a wire of their own (see [Boxes with pins](../dialects/click.md#boxes-with-pins)).
 
 Constraints:
 

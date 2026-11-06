@@ -14,9 +14,10 @@ scans.  The readings:
 - An on phase of 5 ms, then a scan off, again: Result2 about 20, one a 5 ms phase, and Result1 a
   little under Result3.
 
-ErrorCode is the flasher's TDs at 160 ms, ``on TD * 180 + off TD`` (each at most about 165 there,
-so the pair fits an Int and reads back as ``divmod(ErrorCode, 180)``).  It tells apart what the
-counts alone do not:
+ErrorCode is the flasher's TDs at 160 ms, ``on TD * 180 + off TD``.  Each TD is at most 160 plus
+a scan there.  With scans under about 20 ms (a Result3 of 5 or more) both stay under 180, so the
+pair fits an Int and ``divmod(ErrorCode, 180)`` decodes it exactly.  With longer scans the
+decode can be off.  ErrorCode tells apart what the counts alone do not:
 
 - Dark, the off phase timing on and never ending (a preset of 0 or below that never ends, or -5
   read as 65531 ms): off TD about 155, on TD 5 or 0 (about 1055 or 155).  Within 160 ms the two

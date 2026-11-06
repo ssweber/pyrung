@@ -1,10 +1,10 @@
 # CLICK Internals
 
-What a real CLICK does that its manuals don't say, measured on hardware and in CLICK Programming Software. pyrung's estimates and validators rest on these numbers.
+What each element of a CLICK program costs in program steps, and how pyrung estimates a program's total.
 
 ## Program steps
 
-A CLICK project holds at most 8,000 program steps. AutomationDirect does not publish what each element costs, so pyrung measured it and estimates from the exported ladder:
+A CLICK project holds at most 8,000 program steps. AutomationDirect does not publish what each element costs, so pyrung estimates the total from the exported ladder:
 
 ```python
 from pyrung.click import estimate_steps, pyrung_to_ladder
@@ -15,7 +15,7 @@ print(estimate.total, estimate.main, estimate.subroutines)
 
 `estimate.unmeasured` names any instruction no probe has measured yet; each one is costed high (8) on purpose. Validation reports `CLK_STEP_LIMIT` when the estimate passes 95% of the limit (a hint) or the limit itself (a warning).
 
-The estimate reads the exported CSV rows, so it sees what CLICK is given: legs, pin rows and the always-on rail as CLICK lays them out. Against a whole project (a 592-rung part of the conformance suite) it came to 6,067 where CLICK reported 6,088, before `break` and `continue` were measured. Leave a few hundred steps of margin.
+The estimate reads the exported CSV rows, so it sees the legs, pin rows and always-on rail as CLICK lays them out. The estimate is within about 1% on a large project. Leave a few hundred steps of margin.
 
 ### Measured costs
 
@@ -45,10 +45,6 @@ Each cost below excludes the rung's contacts unless noted.
 
 A rung with two or more output legs pays extra: 1, plus 1 for each leg without a contact of its own (the first leg counts as one). Two coils on one rung cost 6 with their contact, not 3.
 
-`math` fits its six measured formulas, counting operands and operators but not parentheses: `DS30 + DS31` is 5 and `(DS33 * DS34 + DS35) / DS36` is 9. A formula with REAL constants came out 1 lower than the rule (`DF1 * 1.8 + 32.0` is 6), so the rule rounds up there.
+`math` fits its six measured formulas, counting operands and operators but not parentheses: `DS30 + DS31` is 5 and `(DS33 * DS34 + DS35) / DS36` is 9.
 
-One drum was measured: an event or time drum with 2 outputs and 3 steps is 14, plus its contacts. Other sizes are estimated as 8 + pattern cells, a guess.
-
-### Method
-
-`devtools/click_step_probe.py` builds a project with one element per rung. Load it with Guided Paste, read the step count (the PC side of **Write Project into PLC** shows it without a download), then delete rungs from the bottom up and read the count after each. Each difference is one rung's cost. The script writes the sheet to fill in, and `--check` compares the estimator with the readings it holds (2026-10-29, CLICK Programming Software). A new round adds its rungs and readings there.
+A drum is estimated as 8 plus its pattern cells (outputs times steps), plus its contacts. Only a 2-output, 3-step drum has been checked on a CLICK.

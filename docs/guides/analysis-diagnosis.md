@@ -120,9 +120,9 @@ Y001 = False  [why]
 
     `how()` is experimental. When it finds a path, the path is a real recording you can replay. On real programs it sometimes stops without one, and it can take a minute. `Stopped` is not a proof that no path exists — see the headline meanings below.
 
-    The `Plan`/`Path`/route API may still change; `avoid=` semantics and `via=` already changed between v0.10 and v0.11.
+    The `Plan`/`Path`/route API may still change.
 
-    `how()` was rewritten in v0.11. Earlier versions searched breadth-first and returned the shortest path. PILOT returns a path it verified, not necessarily the shortest — which is what lets it wait through timer dwells and navigate multi-step machines.
+    `how()` returns a path it has checked, not necessarily the shortest. That is what lets it wait through timer dwells and navigate multi-step machines.
 
 `how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
 
@@ -161,15 +161,13 @@ The headline is deliberately specific:
 - `Cannot reach` means `how()` proved a conflict or physical constraint.
 - `Stopped` means it could not identify another safe action. It does not call an unknown path impossible.
 
-The debug console reports long-running work as it happens. Trials and investigations are deliberately streamed as unfinished sentences, then completed by the result event:
+The debug console reports long-running work as it happens:
 
 ```
 Trying CmdStart=True... done.
   State jumped 6 -> 10 Checking... unexpected.
   Preventable? Yes -- with rung(State == 3): latch(DoorClosed).
 ```
-
-`Trying CmdStart=True...` is emitted before its trial; ` done.` is appended only after acceptance. `Checking...` is emitted before stable-landing analysis. `Preventable?` is emitted before causal replay, and the replay result is appended on the same line when the investigation returns. A long investigation therefore reads as active work instead of a hung console.
 
 ### Condition syntax
 
@@ -198,7 +196,7 @@ PILOT works toward each target.
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too: PILOT carries the condition into trial coasts, so there is no two-scan wink where it blips true and settles false again. An opaque Python callable has no readable condition; it is checked at trial endpoints, retained real snapshots, and kernel scans the coast actually executes, but not scans a coast runs in the guarded loop. Use condition syntax when every logical scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable can't be read as a condition, so `how()` checks it only at the end of each command it tries, on the snapshots it keeps, and on the scans of a wait that run one at a time. It doesn't check the repeated scans a long wait runs compiled. Use condition syntax when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
 
 Pass more than one condition — a tuple or list — for a **union of exclusions**: each is avoided independently.
 
@@ -210,7 +208,7 @@ Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the co
 
 When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
-A check that raises on a real state, the one `how()` starts from or a scan a trial runs (a trial that fails counts), has not said that state is clear, so `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the check's own exception as its cause. `how()` also asks about states it is only weighing, such as a hold laid over a state, and a raise on one of those says nothing about the route: that check is not violated and the others keep their answers. A state need not have every tag yet: a system tag first appears after a scan, and a block slot once something writes it. So a callable reads with `snapshot.get(name, default)`.
+`how()` can't tell whether a state is safe if an `avoid=` callable raises on it. That covers the start state and any scan of a command `how()` tries, even one that fails. `how()` then returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the callable's exception as its cause. A state may be missing some tags, because a system tag appears only after the first scan and a block slot only once something writes it. So read tags with `snapshot.get(name, default)`.
 
 ### The route taken
 

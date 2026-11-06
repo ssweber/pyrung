@@ -165,7 +165,8 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
         address_formatter=_click_address_formatter,
     )
     # Read on a CLICK: a Copy from a pointer past these banks leaves its destination.
-    # Past DD it reads 0 (``faults/pointer_past_bank_lands``).
+    # Past DD a CLICK reads whatever memory follows (``faults/pointer_past_bank``).
+    # pyrung has no memory there, so the read gives 0.
     block._past_end_keeps = name in _PAST_END_KEEPS
     return block
 

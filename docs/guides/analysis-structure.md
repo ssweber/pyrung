@@ -178,17 +178,13 @@ Motor = SafetyOK, Or(Start, Jog)
 These are inferred properties of the current program, not stored tag metadata,
 and they do not add contacts or otherwise change execution.
 
-### What it tells you
-
-The simplified form strips away organizational structure — the intermediate tags that exist to break logic into reviewable chunks — and shows the actual dependency. A 14-rung → 2-term reduction tells you: 8 inputs matter, there are 2 independent paths, and `MaintOverride` bypasses everything.
-
 ### Branch topology is preserved
 
 Sibling branches that both drive a tag (an `out()`, then a `latch()` below it) produce `And(parent, Or(local₁, local₂))`, not the flat DNF form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution — shared preconditions appear once, with the distinguishing triggers nested inside.
 
 ### Cycles (seal-in)
 
-Feedback loops like seal-in latches are detected and left as-is. When resolution encounters a tag it has already visited in the current chain, it stops substituting. The seal-in tag appears in the output as a leaf — indicating the latch rather than infinitely expanding.
+Feedback loops like seal-in latches are left as they are, so the seal-in tag appears in the output as itself, not expanded.
 
 ## Ladder lints
 

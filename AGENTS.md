@@ -32,6 +32,34 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - Preserve user-authored Unicode in tag names, choice labels, comments, values, and source excerpts. The ASCII rule applies to pyrung's surrounding text, not user data.
 - Documentation, comments, and generated documentation may use typographic Unicode when their output channel is explicitly UTF-8.
 
+## Writing
+
+These rules cover the docs, `CHANGELOG.md`, comments, docstrings and commit messages. Each must pass one test. A PLC programmer who knows Python reads the sentence once and knows what it means. If they would ask "what does this mean?", rewrite the sentence or cut it.
+
+- **Use the ordinary word.** A word pyrung coined (coast, fold, stretch, free system tag, body row, site) gets the plain word instead, or a definition on that page before its first use. Never use a name only the code uses.
+- **Say who does what to what.** Write "each `copy()` clears the flag", not "the flag follows the last copy".
+- **One idea per sentence, with a subject and a verb.** End it with a full stop. Don't chain clauses with a colon or a semicolon.
+- **A comma joins words, not facts.** When commas start holding a list of facts, write a list.
+- **Keep the subject short.** Don't make the reader hold five items before the verb. Say what happens, then list what causes it.
+- **"It" means the noun just before it.** Otherwise repeat the noun.
+- **New behaviour first, old behaviour in brackets:** "stores 5 (it stored 0)". Don't write "where it stored 0".
+- **When two versions pass the test, keep the shorter.**
+
+Each channel has its own shape:
+
+- **Changelog:** the headline is one sentence saying what changed for the user. Each sub-bullet is one change. What the user should do about it comes last ("Copy it into an `Int` first."). No rationale and no evidence.
+- **Docs:** code first, then what it does, then the gotcha. If the code is clear, don't restate it in prose.
+- **Comments and docstrings:** say why, in one or two sentences, with the purpose first and then the trap. Cut a comment that narrates what the code plainly does.
+
+To review prose, give a fresh reviewer these rules and the diff, not the writer's reasoning. A quick grep first finds most of the problems:
+- a `;` in a sentence
+- a colon in the middle of a sentence
+- three or more commas in one sentence
+- "where it"
+- the coined words above
+
+The reviewer then reads every flagged line, and every new noun, against the test.
+
 ## Module Map
 
 ```
@@ -98,7 +126,7 @@ src/pyrung/
 - `src/pyrung/core/analysis/prove/AGENTS.md` — Prover internals, optimization glossary, module map, invariants
 - `src/pyrung/core/analysis/pilot/AGENTS.md` — PILOT steering invariants, actual control flow, module map
 - `editors/vscode/pyrung-debug/AGENTS.md` — VS Code extension event architecture, key files
-- `docs/AGENTS.md` — Documentation tone/style, API design decisions, technical details
+- `docs/AGENTS.md` — Documentation tone and style, API design decisions, technical details
 - `tests/conformance/AGENTS.md` — Conformance suite protocol, groups and manifest, register layout, wire pacing, coverage checklist
 - `tests/fuzz/reproducers/AGENTS.md` — Fuzz reproducer workflow, diagnose script usage
 
@@ -119,7 +147,7 @@ src/pyrung/
 
 ## Gotchas
 
-- `copy()` clamps out-of-range; `math()` wraps (modular arithmetic)
+- `copy()` clamps out-of-range, except a `Word` into an `Int` keeps its bits and a negative into a `Word` wraps; `math()` wraps (modular arithmetic)
 - Counters count rising edges (CLICK semantics, per-counter input memory `_cu:i{N}`/`_cd:i{N}`); a held input counts once. Down counter Done is `Acc <= preset` from Acc 0 (a negative preset counts down to it; a positive one is done at once unless Acc is staged above it)
 - Division by zero → that division = 0 (the rest of the formula runs), fault flag set
 - Comma inside `Rung(...)` is implicit AND; use `Or()` for OR logic
