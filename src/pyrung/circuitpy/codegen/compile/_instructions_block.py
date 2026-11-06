@@ -638,7 +638,7 @@ def _drum_end_lines(
         _compile_step_selector_lines(
             step_var="_step",
             target_var="_end_met",
-            value_exprs=_time_event_end_exprs(instr, preset_exprs, ctx),
+            value_exprs=_time_event_end_exprs(instr, ctx),
         )
     )
     return lines
@@ -658,15 +658,14 @@ def _time_up_expr(preset: Tag | int) -> str:
 def _drum_latch_lines(
     instr: TimeDrumInstruction | TimeEventDrumInstruction, ctx: CodegenContext
 ) -> list[str]:
-    """A tag preset is read on the first scan its step times, then held until the drum
-    moves (a correction keeps it): ``_limit``."""
+    """A tag preset is read on the first scan its step times, then held: ``_limit``."""
     if not latches_presets(instr):
         return []
     key_base = ctx.state_key_for(instr)
     step_key = f"{PRESET_STEP_MEMORY}:{key_base}"
     value_key = f"{PRESET_MEMORY}:{key_base}"
     return [
-        f"if int(_mem.get({step_key!r}, 0)) != 0:",
+        f"if _step == int(_mem.get({step_key!r}, 0)):",
         f"    _limit = int(_mem.get({value_key!r}, 0))",
         "else:",
         f"    _mem[{step_key!r}] = _step",
@@ -706,7 +705,6 @@ def _event_drum_event_exprs(instr: EventDrumInstruction, ctx: CodegenContext) ->
 
 def _time_event_end_exprs(
     instr: TimeEventDrumInstruction,
-    preset_exprs: list[str | None],
     ctx: CodegenContext,
 ) -> list[str]:
     """Per step: its time is up (if it has a preset) and its event is on (if it has one)."""
@@ -714,9 +712,9 @@ def _time_event_end_exprs(
     # Snapshots exist for the steps that have an event, in step order.
     snapshots = iter(snap_events) if isinstance(snap_events, list) else None
     exprs: list[str] = []
-    for preset, preset_expr, event in zip(instr.presets, preset_exprs, instr.events, strict=True):
+    for preset, event in zip(instr.presets, instr.events, strict=True):
         parts: list[str] = []
-        if preset_expr is not None:
+        if preset is not None:
             parts.append(f"({_time_up_expr(preset)})")
         if event is not None:
             if snapshots is not None:

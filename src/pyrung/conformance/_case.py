@@ -43,6 +43,10 @@ PENDING_STEPS: Mapping[str, str] = {
         "which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer;"
         " not a Math or a Copy of NaN)"
     ),
+    "PRESET": (
+        "when a drum reads a DS preset (pyrung reads it on the first scan its step times;"
+        " a CLICK does not)"
+    ),
 }
 
 

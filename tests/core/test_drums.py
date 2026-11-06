@@ -1241,9 +1241,12 @@ def test_a_tag_preset_is_read_when_its_step_starts_timing(kind: str, backend: ty
 
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
-def test_a_step_written_to_the_register_keeps_the_held_preset(kind: str, backend: type) -> None:
-    """A write to the step register is not a move: the preset held stays, as a correction's
-    does (``drum_preset/entry_or_first_timing_scan`` Result3)."""
+def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend: type) -> None:
+    """A write to the step register is not a move, but the step it lands on reads its preset.
+
+    pyrung's choice, unread on a CLICK (when a CLICK reads a DS preset is open:
+    ``drum_preset/entry_or_first_timing_scan``).
+    """
     plc = backend(_preset_drum(kind, [Int("P"), Int("P")]), dt=0.01)
     plc.patch({"Enable": True, "P": 1000})
     for _ in range(4):
@@ -1251,28 +1254,7 @@ def test_a_step_written_to_the_register_keeps_the_held_preset(kind: str, backend
     plc.patch({"P": 20, "Step": 2})
     plc.step()
     tags = plc.current_state.tags
-    assert (tags["Step"], tags["Acc"], tags["Done"]) == (2, 40, False)
-    # A move reads the preset afresh: a jump to step 1 ends on its second tick.
-    plc.patch({"Go": True})
-    plc.step()
-    plc.step()
-    plc.step()
-    assert _snapshot(plc) == (2, False, True, False)
-
-
-@pytest.mark.parametrize("backend", BACKENDS)
-@pytest.mark.parametrize("kind", ["time", "time_event"])
-def test_a_corrected_step_keeps_the_held_preset(kind: str, backend: type) -> None:
-    """A bad step goes back to step 1 without reading step 1's preset again."""
-    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
-    plc.patch({"Enable": True, "P": 30_000})
-    for _ in range(4):
-        plc.step()
-    plc.patch({"P": 10, "Step": 5})
-    for _ in range(5):
-        plc.step()
-    tags = plc.current_state.tags
-    assert (tags["Step"], tags["Acc"], tags["Done"]) == (1, 80, False)
+    assert (tags["Step"], tags["Acc"], tags["Done"]) == (2, 40, True)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -1296,7 +1278,10 @@ def test_a_tag_preset_of_zero_or_below_never_ends_its_step(
 def test_a_constant_preset_of_zero_or_below_ends_its_step_at_once(
     kind: str, backend: type, latching: bool, preset: int
 ) -> None:
-    """``drum_preset/literal_zero``: the first scan the step times ends it."""
+    """``drum_preset/literal_zero``: the first scan the step times ends it.
+
+    A CLICK read the constant 0; -5 ending at once too is pyrung's choice, unread.
+    """
     second = Int("P") if latching else 30_000
     plc = backend(_preset_drum(kind, [preset, second]), dt=0.01)
     plc.patch({"Enable": True, "P": 30_000})

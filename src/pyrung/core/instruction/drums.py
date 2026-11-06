@@ -301,12 +301,15 @@ class _DrumBaseInstruction(Instruction):
 
         1. reset, a level: step 1, the completion flag and every output off;
         2. a jump edge: to its step if the drum has it, and a step it does not
-           have does nothing at all (no jog, no correction, no own logic);
+           have does nothing at all that scan (no jog, no correction, no own
+           logic), though the scan's jog, jump, rung and event edges are still
+           spent, as on any scan (pyrung's choice, unread on a CLICK: a held jog
+           does not act next scan, and a return scan's row waits for a move);
         3. a jog edge: one step forward, or complete on the last step; on a bad
            step it does nothing;
         4. own logic, with the rung true: a bad step corrects to 1 (no row, Acc
-           and the latched preset kept), and that is not an action, so with the
-           completion flag off the drum then runs its time or event.  On the
+           kept), and that is not an action, so with the completion flag off
+           the drum then runs its time or event.  On the
            return scan (the rung came back, a reset ended, or the first scan) it
            writes the row and no more; otherwise it ticks Acc if the step has a
            time and moves if the step's end is met.
@@ -453,9 +456,11 @@ PRESET_MEMORY = "_drum_preset"
 def time_is_up(spec: Tag | int, preset: int, acc: int) -> bool:
     """A timed step's end: *preset* is the value the step holds, *spec* where it came from.
 
-    A tag preset of 0 or less never ends its step (``drum_limits/preset_from_ds``);
-    a constant one ends it at once (``drum_preset/literal_zero``).  The compiled
-    kernel's ``_time_up_expr`` is the same test.
+    A tag preset of 0 or less never ends its step: on a CLICK a DS 0 or -5 on
+    step 1 after a reset never ended it (``drum_limits/preset_from_ds``); other
+    steps are unread and follow it.  A constant 0 ends its step at once
+    (``drum_preset/literal_zero``); a negative constant does too, pyrung's
+    choice, unread.  The compiled kernel's ``_time_up_expr`` is the same test.
     """
     if not isinstance(spec, Tag) and spec <= 0:
         return acc >= preset
@@ -472,12 +477,11 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     """A drum with an accumulator: its time ticks and clears here, for the routine.
 
     A step's preset is read on the first scan the step times, and held until
-    the drum moves (``PRESET_STEP_MEMORY``), as a CLICK reads a DS preset:
-    lowered under Acc mid-step it does not end the step, and a step the
-    register reaches without a move (a correction, a write) keeps the preset
-    held.  A drum with literal presets keeps no such memory.  A tag preset of
-    0 or less never ends its step; a constant one ends it on its first timing
-    scan (:func:`time_is_up`).
+    the step changes (``PRESET_STEP_MEMORY``).  On a CLICK a DS preset lowered
+    under Acc mid-step did not end the step; when a CLICK reads it is open
+    (``drum_preset/entry_or_first_timing_scan``, pending).  A drum with literal
+    presets keeps no such memory.  A tag preset of 0 or less never ends its
+    step; a constant 0 ends it on its first timing scan (:func:`time_is_up`).
     """
 
     accumulator: Tag
@@ -485,10 +489,10 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     presets: tuple[Any, ...]  # each kind narrows it: a time & event step may have none
 
     def _step_preset(self, ctx: ScanContext, step: int, preset: Tag | int) -> int:
-        """The preset held since the drum last moved, or *step*'s, read now and held."""
+        """*step*'s preset as the step read it when it started timing."""
         if not latches_presets(self):
             return _resolve_preset_value(preset, ctx)
-        if int(ctx.get_memory(self.memory_key(PRESET_STEP_MEMORY), 0)) != 0:
+        if int(ctx.get_memory(self.memory_key(PRESET_STEP_MEMORY), 0)) == step:
             return int(ctx.get_memory(self.memory_key(PRESET_MEMORY), 0))
         value = _resolve_preset_value(preset, ctx)
         ctx.set_memory(self.memory_key(PRESET_STEP_MEMORY), step)
@@ -526,7 +530,9 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
 
         Its Acc still counts; only a jog, a jump or a reset moves the drum off
         it.  The preset is read from *snapshot*, the value the step reads when
-        it starts timing.  A constant preset of 0 or less ends its step at once.
+        it starts timing.  A CLICK read this on step 1 after a reset only
+        (:func:`time_is_up`).  A constant preset of 0 or less ends its step at
+        once.
         """
         spec = self.presets[step - 1]
         if not isinstance(spec, Tag):
