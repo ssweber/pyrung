@@ -620,12 +620,20 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        assert "_math_func(math.sqrt, " in compile_expression(sqrt(a), ctx, strict=True)
-        # Outside calc a domain error gives 0 (permissive), so sqrt goes through
-        # _permissive_math; a division by a variable through _permissive_op.
-        assert "_permissive_math(math.sqrt, " in compile_expression(sqrt(a), ctx)
+        # A domain error gives 0, so sqrt goes through _permissive_math, which in
+        # a calc appends SC46 to _calc_flags; a function with no domain error is
+        # _math_func.  A division by a variable goes through _permissive_op
+        # outside calc; in one (calc_form) it tests the divisor inline.
+        from pyrung.core.instruction.calc import calc_form
+
+        assert "_math_func(math.sin, " in compile_expression(sin(a), ctx, strict=True)
+        assert "_permissive_math(math.sqrt, _t_A)" in compile_expression(sqrt(a), ctx)
+        assert "_permissive_math(math.sqrt, _t_A, _calc_flags)" in compile_expression(
+            sqrt(a), ctx, strict=True
+        )
         assert "_permissive_op('/', " in compile_expression(a / b, ctx)
-        assert " / " in compile_expression(a / b, ctx, strict=True)
+        divided = compile_expression(calc_form(a / b, "decimal", TagType.INT), ctx, strict=True)
+        assert divided == "((_t_A / _t_B) if _t_B else _term_fail(_calc_flags, 40))"
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)
 
     def test_unknown_expression_type_raises(self):
@@ -2667,7 +2675,8 @@ class TestBoardPeripheralsAndRunStop:
             target_scan_ms=10.0,
             runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
         )
-        assert "except _MathDomainError:" in result.code
+        assert "_permissive_math(math.sqrt, " in result.code
+        assert "if 46 in _calc_flags:" in result.code
 
         class StubBase:
             def __init__(self):
@@ -2696,8 +2705,8 @@ class TestBoardPeripheralsAndRunStop:
             result.code, monkeypatch, stub_base, runtime_source=result.runtime, scans=2
         )
         ctx = _context_for_program(prog, hw)
-        # Every scan runs the logic: the calc stores 0 and sets SC46 again
-        # (it clears at each scan start), and the output stays on.
+        # Every scan runs the logic: the root is 0 and sets SC46 again (it
+        # clears at each scan start), and the output stays on.
         assert namespace[ctx.symbol_for_tag(dest)] == 0.0
         assert namespace[ctx.symbol_for_tag(system.fault.math_operation_error)] is True
         # No scan is in STOP: the outputs are never forced off.

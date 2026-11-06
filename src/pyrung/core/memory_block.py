@@ -1693,7 +1693,14 @@ class IndirectExprRef:
             IndexError: If resolved address is out of range (``PastBankError``
                 past the end of the block).
         """
-        addr = int(self.expr.evaluate(ctx))
+        value = self.expr.evaluate(ctx)
+        if value != value or value in (float("inf"), float("-inf")):
+            # In a Math an integer step past 2 ** 53 is a double, so the address
+            # can be +/-Inf or NaN (``lsh(P1, 2000)``): no element, an address
+            # outside the block, as one below it (the address error, nothing
+            # written).
+            raise IndexError(f"Address {value} out of range for {self.block.name} block")
+        addr = int(value)
         self.block._validate_address(addr)
         return self.block._get_tag(addr)
 

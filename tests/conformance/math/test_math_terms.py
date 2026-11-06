@@ -2,7 +2,8 @@
 
 What the 2026-11-05 round left unread in ``math_more``, for the fix step ``math-click`` (2 in the
 ``conform-fix`` arc).  A question's field holds every candidate (``probe_kit.between``), so a
-pass answers nothing and a run on a CLICK records what it read.
+pass answers nothing and a run on a CLICK records what it read; an answered one expects what
+the CLICK read.
 
 - ``wide_values``: the two values ``math_more`` read as "neither listed".  ABS(-2147483648) into a
   DD preset 99 (``abs_and_precision`` ErrorCode): Result1 1 for itself, 2 for 2147483647, 3 for 0
@@ -12,10 +13,11 @@ pass answers nothing and a run on a CLICK records what it read.
   low 32 bits), 3 for 24 (its low 16 bits, 24064, as the rule for a wide Math constant predicts),
   4 for 99, 5 for 2147483 (the constant clamped to 2147483647), and ErrorCode the DD copied into
   an Int (24, or 32767 for 3000000).  Result4 has SC43
-  after the ABS (bit 1) and after the division (bit 2).  pyrung reads 1, -21474, 1, 1, 32767: the
-  ABS wraps back to itself with SC43, and the constant is whole.
+  after the ABS (bit 1) and after the division (bit 2).  pyrung reads 3, 0, 3, 1, 24, as a CLICK
+  did (2026-11-06): the ABS is 0 with SC43, and the constant is its low 16 bits.
 - ``error_terms``: is a math error's 0 put on its term or on the whole formula, outside RAND
-  (``store_probe/rand_tag_bounds`` read RAND ( 7 , 7 ) + 5 as 5)?  DD 7 / DD 0 + 5 (Result1): 5
+  (``store_probe/rand_tag_bounds`` read RAND ( 7 , 7 ) + 5 as 5)?  Answered on a CLICK
+  (2026-11-06): the term, 5, 5, 5, 0, 7, and 0 ^ 0 raises no flag.  DD 7 / DD 0 + 5 (Result1): 5
   for the term, 0 for the formula, 99 for no store.  (DD 7 / DD 0 + 1) * 5 (Result2): 5 for the
   term, 0 for the formula.  SQRT(DF -4.0) + 5 (Result3): 5 or 0.  DD 0 ^ DD 0 (Result4): 0
   (``power_edges`` read it), 99 for no store.  ErrorCode has the flags: SC40 after the first two
@@ -23,15 +25,14 @@ pass answers nothing and a run on a CLICK records what it read.
   (bit 32): which flag 0 ^ 0 raises.  Into an Int a 0 for the formula is also what a term that
   went non-finite and carried through writes (``non_finite_math_into_int`` stores 0), and SQRT of
   -4.0 alone is 0 with SC46 (``math_error``): Result3 = 0 with bit 4 off is a NaN carried through
-  and stored as 0 with no flag.  ``error_terms_real`` tells these apart.  pyrung reads 0, 0, 0,
-  1, 7: the formula is 0, and 0 ^ 0 is 1 with no flag.
+  and stored as 0 with no flag.  ``error_terms_real`` tells these apart.
 - ``error_terms_real``: the same three formulas into DFs preset 99.0, where a non-finite value is
-  kept.  Result1 (7 / 0 + 5), Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0
-  (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
+  kept.  Answered on a CLICK (2026-11-06): the term, 1, 1, 1, 50, 50.  Result1 (7 / 0 + 5),
+  Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0 (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
   by 0 carried through), 5 for -Inf, 0 for any other: NaN or a finite value none of these (7 / 0
   stored as 7 makes 12.0).  Result4 is DF12 * 10 and ErrorCode DF14 * 10, each into an Int, to
   size a finite other reading of Result1 and Result3 (a NaN or an infinity there writes what a
-  Math into an Int makes of one).  pyrung reads 2, 2, 2, 0, 0.
+  Math into an Int makes of one).
 
 SC46 stays on to the end of the scan, so the root and the power each run on the first scan whose
 SC46 is off right before them, as ``probe_kit.GuardedProbes`` does; SC40 and SC43 follow the last
@@ -189,36 +190,33 @@ group = Group(
             probe="ABS of the least DD; a constant past 32 bits over a DD (2)",
         ),
         case(
-            "A math error's 0 in a larger formula: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 "
-            "(Result2), SQRT(-4.0) + 5 (Result3) read 5 if the term alone is 0 and 0 if the "
-            "formula is; 0 ^ 0 (Result4); the flags each raises (ErrorCode)",
+            "A math error's 0 is its term's: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 (Result2) "
+            "and SQRT(-4.0) + 5 (Result3) are 5; 0 ^ 0 (Result4) is 0; SC40 after the two "
+            "divisions and SC46 after the root, 0 ^ 0 none (ErrorCode 7)",
             ladder=prove_error_terms,
             init=init_error_terms,
             expect={
-                "Result1": between(0, 99),
-                "Result2": between(0, 99),
-                "Result3": between(0, 99),
-                "Result4": between(0, 99),
-                "ErrorCode": between(0, 63),
+                "Result1": 5,
+                "Result2": 5,
+                "Result3": 5,
+                "Result4": 0,
+                "ErrorCode": 7,
             },
             scans=scans_for(WINDOW),
-            probe="a math error zeroes its term or its formula; 0 ^ 0's flag (2)",
         ),
         case(
-            "A math error's 0 in a larger formula into a DF: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 "
-            "(Result2), SQRT(-4.0) + 5 (Result3) read 1 for 5.0, the term alone 0; 2 for 0.0, the "
-            "formula; 4 for +Inf, 5 for -Inf; 0 for NaN or another value, sized by Result4 "
-            "(Result1's DF * 10) and ErrorCode (Result3's)",
+            "A math error's 0 is its term's, into a DF too: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 "
+            "(Result2) and SQRT(-4.0) + 5 (Result3) are 5.0 (1); Result1's and Result3's DF * 10 "
+            "(Result4, ErrorCode) are 50",
             ladder=prove_error_terms_real,
             init=init_error_terms_real,
             expect={
-                "Result1": between(0, 5),
-                "Result2": between(0, 5),
-                "Result3": between(0, 5),
-                "Result4": between(-32768, 32767),
-                "ErrorCode": between(-32768, 32767),
+                "Result1": 1,
+                "Result2": 1,
+                "Result3": 1,
+                "Result4": 50,
+                "ErrorCode": 50,
             },
-            probe="into a DF: a math error zeroes its term, its formula, or carries through (2)",
         ),
     ],
 )
