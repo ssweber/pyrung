@@ -2,8 +2,10 @@
 
 SC40 (``fault.division_error``) follows the last Math: any Math that runs sets or
 clears it.  SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
-follow the last Copy or Math.  Nothing else touches them, and an instruction that
-does not run clears nothing.  A pointer below its block is SC44 with the
+follow the last Copy or Math.  Nothing else touches them.  An instruction clears
+the flags it follows as it starts, before it reads its operands, and a one-shot
+that does not fire still clears them; one on a rung that is off clears nothing.  A
+pointer below its block is SC44 with the
 destination left alone; past it, there is no flag, a read gets the type's zero
 and a write is dropped.  A dynamic window out of its block is SC44 on either side,
 with nothing written.  ``tests/conformance/system/test_system.py`` and
@@ -243,22 +245,42 @@ def test_a_rung_that_does_not_run_clears_nothing(engine, fault_name, monkeypatch
     assert _run(prog, engine, (flag,), monkeypatch) == (True,)
 
 
+_ONESHOTS: dict[str, Callable[[], object]] = {
+    "copy": lambda: copy(1, _Other, oneshot=True),
+    "calc": lambda: calc(_Other + 1, _Other, oneshot=True),
+}
+
+
 @pytest.mark.parametrize("engine", _SCANNING_ENGINES)
-@pytest.mark.parametrize("fault_name", ["SC43_copy", "SC44_copy"])
-def test_a_oneshot_that_does_not_fire_clears_nothing(engine, fault_name, monkeypatch) -> None:
-    """On scan 1 the oneshot fires and clears the flag; on scan 2 it does not."""
+@pytest.mark.parametrize(
+    ("fault_name", "oneshot"),
+    [
+        ("SC43_copy", "copy"),
+        ("SC44_copy", "copy"),
+        ("SC40", "calc"),
+        ("SC43_copy", "calc"),
+        ("SC44_copy", "calc"),
+    ],
+)
+def test_a_oneshot_that_does_not_fire_still_clears(
+    engine, fault_name, oneshot, monkeypatch
+) -> None:
+    """The oneshot clears the flag on scan 1, when it fires, and on scan 2, when it does not.
+
+    CLICK: ``flag_probe/oneshot_that_does_not_fire``.
+    """
     flag, fault = _FAULTS[fault_name]
     cleared, kept = Bool("Cleared"), Bool("Kept")
     with Program(strict=False) as prog:
         with Rung():
             fault()
         with Rung():
-            copy(1, _Other, oneshot=True)
+            _ONESHOTS[oneshot]()
         with Rung(system.sys.first_scan, ~flag):
             latch(cleared)
         with Rung(~system.sys.first_scan, flag):
             latch(kept)
-    assert _run(prog, engine, (cleared, kept), monkeypatch, scans=2) == (True, True)
+    assert _run(prog, engine, (cleared, kept), monkeypatch, scans=2) == (True, False)
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
@@ -298,25 +320,25 @@ def test_a_flag_clears_at_the_next_scan_whatever_runs(engine, monkeypatch) -> No
     [(SC43, lambda: copy(_Big, _Sink)), (SC44, lambda: copy(_Tbl[_Zero], _Sink))],
     ids=["SC43", "SC44"],
 )
-def test_a_source_reads_the_flag_as_the_instruction_found_it(
-    engine, flag, fault, monkeypatch
-) -> None:
-    seen = Bool("SeenFlag")
+def test_a_copy_clears_the_flag_before_it_reads_it(engine, flag, fault, monkeypatch) -> None:
+    """CLICK: ``flag_probe/source_flag_is_read_before_the_copy_settles``."""
+    seen = Bool("SeenFlag", default=True)
     with Program(strict=False) as prog:
         with Rung():
             fault()
             copy(flag, seen)
-    assert _run(prog, engine, (seen, flag), monkeypatch) == (True, False)
+    assert _run(prog, engine, (seen, flag), monkeypatch) == (False, False)
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
-def test_a_calc_reading_the_flag_reads_it_as_it_found_it(engine, monkeypatch) -> None:
+def test_a_calc_clears_the_flag_before_it_reads_it(engine, monkeypatch) -> None:
+    """CLICK: ``flag_probe/source_flag_in_a_math``."""
     number = Int("Number")
     with Program(strict=False) as prog:
         with Rung():
             calc(100 / _Zero, _Sink)
             calc(SC40 + 5, number)
-    assert _run(prog, engine, (number, SC40), monkeypatch) == (6, False)
+    assert _run(prog, engine, (number, SC40), monkeypatch) == (5, False)
 
 
 # ---- Pointers ---------------------------------------------------------------------
@@ -1114,10 +1136,10 @@ def test_the_analyses_see_every_flag_a_for_or_a_search_can_set() -> None:
     assert declared(lambda: search(_SrcU.select(_SrcOne, 2) == 0, **result)) == address
 
 
-# ---- A followed flag as a source: each read sees the flag as the instruction found it --
+# ---- A flag as a source: one its instruction follows reads clear, any other as it is ----
 
 _FlagInt = Int("FlagInt", default=-1)
-_FlagBool = Bool("FlagBool")
+_FlagBool = Bool("FlagBool", default=True)
 _FlagBools = Block("FlagBools", TagType.BOOL, 1, 2)
 _FlagInts = Block("FlagInts", TagType.INT, 1, 2)
 _FlagIdx = Int("FlagIdx", default=1)
@@ -1153,18 +1175,21 @@ _FLAG_READS: dict[str, tuple[Callable[[Any], object], Any]] = {
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("position", list(_FLAG_READS))
 @pytest.mark.parametrize("fault_name", list(_FAULTS))
-def test_a_source_reads_a_flag_as_its_instruction_found_it(
+def test_a_source_reads_a_flag_its_instruction_follows_as_clear(
     engine, position, fault_name, monkeypatch
 ) -> None:
+    """A Copy or Fill follows SC43 and SC44, and reads SC40 as it is; a Math follows all three."""
     flag, fault = _FAULTS[fault_name]
     read, shown = _FLAG_READS[position]
+    followed = flag is not SC40 or position.startswith("calc")
     with Program(strict=False) as prog:
         with Rung():
-            copy(0, _FlagInts[1])
-            copy(0, _FlagInts[2])
+            copy(1, _FlagInts[1])
+            copy(1, _FlagInts[2])
+            copy(1, _FlagBools[2])
             fault()
             read(flag)
-    assert bool(_run(prog, engine, (shown,), monkeypatch)[0]) is True
+    assert bool(_run(prog, engine, (shown,), monkeypatch)[0]) is not followed
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
@@ -1175,5 +1200,6 @@ def test_a_source_reads_a_clear_flag_as_clear(engine, position, monkeypatch) -> 
         with Rung():
             copy(1, _FlagInts[1])
             copy(1, _FlagInts[2])
+            copy(1, _FlagBools[2])
             read(SC43)
     assert bool(_run(prog, engine, (shown,), monkeypatch)[0]) is False

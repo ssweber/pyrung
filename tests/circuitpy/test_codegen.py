@@ -1669,8 +1669,8 @@ class TestBoardPeripheralsAndRunStop:
             ("inf", Int, 32767, True),
             ("-inf", Int, -32768, True),
             ("nan", Int, 0, False),
-            ("inf", Dint, 2147483647, True),
-            ("-inf", Dint, -2147483648, True),
+            ("inf", Dint, 2147483647, False),
+            ("-inf", Dint, -2147483648, False),
             ("nan", Dint, 0, False),
             ("inf", Word, 65535, False),
             ("-inf", Word, 32768, False),
@@ -1680,8 +1680,9 @@ class TestBoardPeripheralsAndRunStop:
     def test_copy_non_finite_on_every_backend(
         self, monkeypatch, operand, dest_tag, stored, flagged
     ):
-        """A Copy of +/-Inf clamps with SC43 on an INT or DINT and with none on a WORD (CLICK:
-        65535 and 32768); NaN stores 0 with none."""
+        """A Copy of +/-Inf clamps with SC43 on an INT, and with none on a DINT (as a Real past
+        it, ``flag_probe/bulk_ops_clear_flags``) or a WORD (CLICK: 65535 and 32768); NaN
+        stores 0 with none."""
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1704,7 +1705,7 @@ class TestBoardPeripheralsAndRunStop:
             (Real, -32768.5, Int, -32768, False),
             (Real, 32768.0, Int, 32767, True),
             (Real, -32769.0, Int, -32768, True),
-            (Real, 1.0e10, Dint, 2147483647, True),
+            (Real, 1.0e10, Dint, 2147483647, False),
             (Dint, 70000, Word, 65535, False),
             (Dint, -1, Word, 65535, False),
             (Word, 65535, Int, -1, False),
@@ -1713,8 +1714,8 @@ class TestBoardPeripheralsAndRunStop:
     def test_copy_clamp_flag_on_every_backend(
         self, monkeypatch, source_tag, value, dest_tag, stored, flagged
     ):
-        """A Copy raises SC43 when the store stops at a limit: not on a truncation, a wrap, or
-        a WORD's clamp."""
+        """A Copy raises SC43 when the store stops at a limit: not on a truncation, a wrap, a
+        WORD's clamp, or a REAL's clamp into a DINT (CLICK: DF 1.0E+10 into a DD)."""
         source = source_tag("Source", default=value)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1760,6 +1761,27 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, watch, scans=2)
         expected = (max(-32768, min(32767, values[0])), values[1], flagged)
         assert results == {name: expected for name in results}
+
+    def test_blockcopy_real_into_dint_clamps_with_no_flag_on_every_backend(self, monkeypatch):
+        """A Real clamps into a Dint with no SC43, as a single Copy's does (CLICK)."""
+        source = Block("SrcR", TagType.REAL, 1, 2)
+        dest = Block("DstD", TagType.DINT, 1, 2)
+        first, second = Dint("First"), Dint("Second")
+        seen = Bool("Seen")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                copy(1.0e10, source[1])
+                copy(-1.0e10, source[2])
+            with Rung(~system.sys.first_scan):
+                blockcopy(source.select(1, 2), dest.select(1, 2))
+            with Rung(system.fault.out_of_range):
+                out(seen)
+            with Rung(~system.sys.first_scan):
+                copy(dest[1], first)
+                copy(dest[2], second)
+
+        results = _on_every_backend(prog, monkeypatch, (first, second, seen), scans=2)
+        assert results == {name: (2147483647, -2147483648, False) for name in results}
 
     def test_fill_clamps_with_no_flag_on_every_backend(self, monkeypatch):
         """A Fill stops at the limit with no flag: only Single, Block and Pack Copy raise it."""
