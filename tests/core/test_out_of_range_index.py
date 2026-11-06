@@ -414,8 +414,8 @@ def test_copy_and_calc_source_outside_its_block(engine: str, monkeypatch) -> Non
 
     # Past the block: the type's zero, no flag.  Below it: nothing written and
     # the flag.  In range: the element.  A division by zero in calc's own index
-    # is calc's division error (0 and its flag), as any division in calc is, and
-    # the index it gives, 0, is below the block.
+    # is calc's division error, as any division in calc is: the division is 0
+    # with its flag, and the index it gives, 0, is below the block.
     assert {name: actual[name] for name in tags if name.startswith("D_")} == {
         "D_copy_past": 0,
         "D_copy_past_expr": 0,
@@ -425,7 +425,7 @@ def test_copy_and_calc_source_outside_its_block(engine: str, monkeypatch) -> Non
         "D_copy_below_expr": 7,
         "D_calc_below": 7,
         "D_calc_below_expr": 7,
-        "D_calc_div0": 0,
+        "D_calc_div0": 7,
         "D_calc_sum": _tbl(5),
     }
     assert {name: bool(actual[f"Flag_{name}"]) for name in tags if name.startswith("D_")} == {
@@ -437,7 +437,7 @@ def test_copy_and_calc_source_outside_its_block(engine: str, monkeypatch) -> Non
         "D_copy_below_expr": True,
         "D_calc_below": True,
         "D_calc_below_expr": True,
-        "D_calc_div0": False,
+        "D_calc_div0": True,
         "D_calc_sum": False,
     }
     assert bool(actual["Div0"]) is True

@@ -433,13 +433,16 @@ class CalcInstruction(OneShotMixin, Instruction):
             value = resolve_tag_or_value_ctx(self.expression, ctx)
         except IndexError:
             # An indexed source below its block: the address-error flag,
-            # nothing written (as copy(), the kernel and CircuitPython do).
-            _set_fault_address_error(ctx)
-            return
+            # nothing written (as copy(), the kernel and CircuitPython do),
+            # after the flags of its address's failing operations.
+            value = None
         finally:
             CALC_FAULTS.reset(token)
         for name in faults:
             _raise_fault(ctx, name)
+        if value is None:
+            _set_fault_address_error(ctx)
+            return
 
         if _math_out_of_range_for_dest(value, self.dest, self.mode):
             _set_fault_out_of_range(ctx)

@@ -606,15 +606,23 @@ def _compile_calc_instruction(
     # rest of the formula runs (core CALC_FAULTS), and its flags are set after.
     flagged = _appends_flags(value_expr)
     enabled_body = [f"{CALC_FLAGS} = []"] if flagged else []
-    enabled_body.append(f"_calc_value = {value_expr}")
+    set_flags: list[str] = []
     if flagged:
         if div_err:
-            enabled_body += [f"if 40 in {CALC_FLAGS}:", f"    {div_err} = True"]
+            set_flags += [f"if 40 in {CALC_FLAGS}:", f"    {div_err} = True"]
         if math_err:
-            enabled_body += [f"if 46 in {CALC_FLAGS}:", f"    {math_err} = True"]
+            set_flags += [f"if 46 in {CALC_FLAGS}:", f"    {math_err} = True"]
         if out_of_range_body != ["pass"]:
-            enabled_body.append(f"if 43 in {CALC_FLAGS}:")
-            enabled_body.extend(f"    {line}" for line in out_of_range_body)
+            set_flags.append(f"if 43 in {CALC_FLAGS}:")
+            set_flags.extend(f"    {line}" for line in out_of_range_body)
+    if set_flags and isinstance(instr.expression, (IndirectRef, IndirectExprRef)):
+        # An address below its block raises IndexError (nothing written, the
+        # guard's address-error flag): the flags of its failing operations first.
+        enabled_body += ["try:", f"    _calc_value = {value_expr}", "finally:"]
+        enabled_body.extend(f"    {line}" for line in set_flags)
+    else:
+        enabled_body.append(f"_calc_value = {value_expr}")
+        enabled_body.extend(set_flags)
     dest_type = instr.dest.type.name
     range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
     if dest_type == "REAL" and instr.mode != "hex":

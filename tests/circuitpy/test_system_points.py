@@ -369,7 +369,7 @@ def test_a_math_function_emits_no_stop_hold(monkeypatch, runstop):
     hw = _hw()
     code = generate_circuitpy(prog, hw, target_scan_ms=1.0, runstop=runstop).code
 
-    assert "_math_func" in code
+    assert "_permissive_math" in code
     assert "_stop_hold" not in code
     if runstop is None:
         assert "_mode_run" not in code

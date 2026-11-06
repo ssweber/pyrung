@@ -9,7 +9,7 @@ import pytest
 
 from pyrung.core import Block, Bool, Int, ScanContext, SystemState, TagType
 from pyrung.core.condition import Condition
-from pyrung.core.expression import STRICT_DIVISION
+from pyrung.core.expression import CALC_FAULTS
 from tests.conftest import evaluate_condition
 
 # =============================================================================
@@ -724,24 +724,25 @@ class TestExpressionEdgeCases:
         assert expr.evaluate(ctx) == 0
         assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
 
-    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
-    def test_division_by_zero_inside_calc_raises(self, symbol):
-        """Inside calc (STRICT_DIVISION) a division by zero raises: calc sets SC40."""
+    @pytest.mark.parametrize("symbol", ["/", "//"])
+    def test_division_by_zero_inside_calc_is_its_term_with_sc40(self, symbol):
+        """Inside calc (CALC_FAULTS) a division by zero is 0 too, and notes SC40;
+        the rest of the formula runs."""
         DS = Block("DS", TagType.INT, 1, 9)
-        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
+        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2]}[symbol] + 5
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
-        token = STRICT_DIVISION.set(True)
+        faults: list[str] = []
+        token = CALC_FAULTS.set(faults)
         try:
-            with pytest.raises(ZeroDivisionError):
-                expr.evaluate(ctx)
+            assert expr.evaluate(ctx) == 5
         finally:
-            STRICT_DIVISION.reset(token)
+            CALC_FAULTS.reset(token)
+        assert faults == ["fault.division_error"]
 
     def test_calc_form_swaps_in_clicks_mod_and_power(self):
-        """calc runs CLICK's MOD (truncated; by 0 a QuietMathError) and 0 ** 0 as
-        an error; the expression itself keeps Python's ``%`` and ``**``."""
-        from pyrung.core.expression import QuietMathError
+        """calc runs CLICK's MOD (truncated; by 0 a 0 with no flag) and 0 ** 0 as
+        such an error; the expression itself keeps Python's ``%`` and ``**``."""
         from pyrung.core.instruction.calc import calc_form
 
         DS = Block("DS", TagType.INT, 1, 9)
@@ -749,13 +750,14 @@ class TestExpressionEdgeCases:
         mod, by_zero, power = DS[1] % DS[2], DS[1] % DS[3], DS[3] ** DS[3]
         assert (mod.evaluate(ctx), power.evaluate(ctx)) == (1, 1)
         assert calc_form(mod, "decimal", TagType.INT).evaluate(ctx) == -1
-        token = STRICT_DIVISION.set(True)
+        faults: list[str] = []
+        token = CALC_FAULTS.set(faults)
         try:
             for expr in (by_zero, power):
-                with pytest.raises(QuietMathError):
-                    calc_form(expr, "decimal", TagType.INT).evaluate(ctx)
+                assert calc_form(expr + 5, "decimal", TagType.INT).evaluate(ctx) == 5
         finally:
-            STRICT_DIVISION.reset(token)
+            CALC_FAULTS.reset(token)
+        assert faults == []
 
     def test_expression_with_default_value(self):
         """Expression uses tag's default when not in state."""
