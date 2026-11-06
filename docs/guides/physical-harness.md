@@ -131,7 +131,7 @@ Both forms are valid:
 - `link="State:SORTING"` — resolves `SORTING` through the tag's choices map
 - `link="State:2"` — uses the literal integer directly, no choices map needed
 
-If the part after the colon is a valid integer literal, it's used directly. Otherwise it's looked up in the enable tag's choices map. A missing choices map is only an error when the value isn't a numeric literal.
+If the part after the colon is a valid integer literal, it's used directly. Otherwise it's looked up in the enable tag's choices map.
 
 Value triggers also work on Char tags for string matching:
 
@@ -204,17 +204,11 @@ with PLC(logic, dt=0.010) as plc:
     assert Gripper[1].Sts.value is True
 ```
 
-No manual feedback toggling. The harness discovered the `En → Fb_Contact` and `En → Fb_Vacuum` couplings from the UDT declaration, installed edge monitors on `En`, and scheduled `Fb` patches using the declared timing.
+The test never toggles the feedback by hand.
 
 ### How bool feedback works
 
-Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), scanned as a **plant at the top of each scan** — the input-read phase. The on-delay accumulates while the command is sustained; once it crosses `on_delay`, `Fb` asserts, and the off-delay holds `Fb` for `off_delay` after the command drops. A command pulse shorter than `on_delay` never sustains the timer, so it never fabricates feedback — this is **dwell**, not a transport delay. The on-delay is rounded up to scan ticks based on the PLC's `dt`:
-
-| `on_delay` | `dt` | Ticks |
-|-----------|------|-------|
-| `20ms` | `0.010` | 2 |
-| `20ms` | `0.001` | 20 |
-| `20ms` | `0.100` | 1 (minimum) |
+Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), scanned as a **plant at the top of each scan** — the input-read phase. The on-delay accumulates while the command is sustained. Once it crosses `on_delay`, `Fb` asserts. The off-delay then holds `Fb` for `off_delay` after the command drops. A command pulse shorter than `on_delay` never sustains the timer, so the pulse never fabricates feedback — this is **dwell**, not a transport delay. The on-delay is rounded up to scan ticks based on the PLC's `dt`.
 
 Feedback is an **input**: the plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan — with `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model: a sensor can't respond to an output before it's written.)
 
@@ -224,7 +218,7 @@ Multiple `Fb` fields linked to the same `En` are independent timers, each with i
 
 ### How profile-driven feedback works
 
-A `profile=` spec is **declarative data**, not a Python function — the harness lowers it to real plant rungs (a guarded `math` or timer), so it compiles, traces, and round-trips through a CLICK nickname comment like everything else. There are three specs.
+A `profile=` spec is **declarative data**, not a Python function. There are three specs.
 
 **`Ramp`** — a constant-slope analog response. `Fb` moves `up` units per second while `En` is active and `down` units per second otherwise (`down` is usually negative — an ambient decay or bleed-down; `0` means "hold on En fall"). Rates are per **second**, applied against the `sys.dt` system tag, so they're stable across scan periods:
 
@@ -262,7 +256,7 @@ A counter instruction in the logic counts the rising edges — the harness produ
 
 In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
-In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional `~` or trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, `[on_delay=300ms, link=~Vent_Sol]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address; an address without a nickname keeps its address name (`Y005`), which is what generated code calls that slot. A nickname wins over an address that looks the same.
+In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional `~` or trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, `[on_delay=300ms, link=~Vent_Sol]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address. An address without a nickname keeps its address name (`Y005`).
 
 ## Validation
 
@@ -303,7 +297,7 @@ Fb_Temp: Real = Field(physical=THERMOCOUPLE, link="En",
                       min=0, max=250, uom="degC")
 ```
 
-The [`TAG_RANGE_VIOLATION` ladder lint](ladder-lints.md#rule-reference) catches literal writes outside these bounds, and the runtime bounds checker flags dynamic writes that land outside the declared range after each scan — see [Testing: Checking bounds](testing.md#checking-bounds). Values are never clamped; the check sets a warning and populates `plc.bounds_violations`. The debugger's Data View shows declared ranges as hints. Profile functions receive only `(cur, en, dt)`, so pass constants explicitly if a profile needs bounds.
+The [`TAG_RANGE_VIOLATION` ladder lint](ladder-lints.md#rule-reference) catches literal writes outside these bounds, and the runtime bounds checker flags dynamic writes that land outside the declared range after each scan — see [Testing: Checking bounds](testing.md#checking-bounds). Values are never clamped. The check sets a warning and populates `plc.bounds_violations`. The debugger's Data View shows declared ranges as hints.
 
 ## Fault coverage
 

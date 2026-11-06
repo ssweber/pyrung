@@ -23,8 +23,9 @@ end of the scan.  The adopted model: a flag follows the last instruction, any
 instruction (Result1..3 = 0, 0, 0).  The others: any Math clears it (346, 0,
 0); only an instruction of its own kind (346, 346, 0); a flag on from the
 fault to the end of the scan (346, 346, 346).  hardware round 2, 2026-10-30:
-SC43 and SC44 follow the last instruction (0, 0, 0); SC40 follows the last Math
-(346, 0, 0), so a Copy leaves it as it is.
+SC43 and SC44 follow the last Copy-family instruction or Math (0, 0, 0).  A coil,
+an open rung, a timer or a counter leaves them (``address_flag_vs_other_instructions``).
+SC40 follows the last Math (346, 0, 0), so a Copy leaves it as it is.
 
 What else clears a flag (probes).  Round 2 tried a Copy and a
 Math only.  Three more cases raise their fault again before each instruction
@@ -449,7 +450,7 @@ def _fault_init(base):
     return init
 
 
-#: SC43 and SC44 follow the last instruction (hardware round 2), so every probe reads them off.
+#: SC43 and SC44 follow the last Copy-family instruction or Math, so every probe reads them off.
 _FAULT_EXPECT = {"Result1": 0, "Result2": 0, "Result3": 0}
 
 

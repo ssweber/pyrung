@@ -39,6 +39,9 @@ the builder's handoff: judge the code, not the story.
 - Docs and changelog match the code; the repo's output rules (pyrung: ASCII-only
   pyrung-authored text, "pyrung" lowercase). Added docs lines earn their place (docs/AGENTS.md,
   "Keep a line only if it changes what an author writes"): name the ones that don't.
+- Prose against the Writing section of the root AGENTS.md. Run its grep over every added line
+  of docs, CHANGELOG, comments, docstrings and commit messages, then read each flagged line and
+  each new noun. A sentence that breaks a rule is a NON-BLOCKING finding with the rewrite.
 - Do not trust stated rationales in comments or commit messages; a rationale never downgrades
   a finding.
 

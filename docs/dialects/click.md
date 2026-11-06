@@ -83,7 +83,7 @@ ds.slot(200, retentive=True, default=123)
 td.slot(1, 5, retentive=False, default=0)
 ```
 
-Re-applying identical configuration is a no-op, even after the slot is materialized (`block[n]` accessed). A conflicting second claim — a different name or default for the same slot — raises `ValueError` naming both values. Each call to `ClickBlocks()` returns fresh blocks with no shared state, so multi-project workflows don't need manual cleanup.
+Each call to `ClickBlocks()` returns fresh blocks with no shared state, so multi-project workflows don't need manual cleanup.
 
 Retentive registers ignore their CSV initial value, matching hardware: the CLICK PLC applies the initial value at project download only, and a retentive register keeps its last value afterward. pyrung therefore models retentive slots with the type zero, and codegen omits `default=` for them.
 
@@ -104,7 +104,7 @@ CLICK-style constructor aliases as alternatives to IEC names:
 This DSL follows CLICK PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context.
 
 1. **Keep the CLICK name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
-2. **Use a domain synonym** when CLICK's name shadows a Python builtin: `set` → `latch`, well-understood PLC terminology. `math` keeps CLICK's name although it hides the standard `math` module in a file that imports it; import that one under another name (`import math as pymath`), and `math.sqrt` on pyrung's `math` says so.
+2. **Use a domain synonym** when CLICK's name shadows a Python builtin: `set` → `latch`, well-understood PLC terminology. `math` keeps CLICK's name, although pyrung's `math` hides Python's `math` module in a file that imports it. Import Python's under another name (`import math as pymath`).
 3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit — and the name should say so.
 
 | CLICK instruction | pyrung DSL | Reason |
@@ -210,11 +210,11 @@ OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1
 on_delay(OvenTimer, preset=100)
 ```
 
-The T (done-bit) nickname names the clone, or the TD/CTD nickname when the T has none. Each field keeps its own address's nickname; a field whose address has none is named after the address. A tag named after its own address exports with no nickname, so codegen never invents one.
+The clone is named after the T (done-bit) nickname, or after the TD/CTD nickname if the T has none.
 
 If the nickname already ends with `_Done` or `_Acc`, the suffix is stripped automatically — `"OvenTimer_Done"` becomes `Timer.clone("OvenTimer")`.
 
-The clone follows the retentive setting of its addresses. The built-in `Timer` and `Counter` match CLICK's bank defaults (T, TD non-retentive; CT, CTD retentive), so a field whose address differs gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive. A comment on either address rides along the same way, as `comments={'Acc': 'Elapsed cure time'}`.
+The clone takes the retentive setting of its addresses. The built-in `Timer` and `Counter` already match CLICK's bank defaults (T, TD non-retentive; CT, CTD retentive), so only an address set differently gets an override, such as `Timer.clone("T1", ..., retentive={'Acc': True})` for a TD set retentive.
 
 Condition references resolve through the clone. A rung conditioned on T1 renders as `OvenTimer.Done`:
 
@@ -287,7 +287,7 @@ Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, a
 
 Bracket metadata can appear alongside markers or ordinary comments. It preserves tag flags, choices, range bounds, units, and physical annotations through nickname CSV import/export. For int-backed boolean values in register memory, use the built-in shorthand `[choices=Bool]` instead of spelling out `[choices=False:0|True:1]`.
 
-**Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
+**Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`.
 
 **Named arrays** use `:named_array` markers. Count and stride are optional — the importer infers them from the row span between open/close tags:
 
@@ -377,7 +377,7 @@ Export to CLICK nickname CSV for import into CLICK Programming Software:
 mapping.to_nickname_file("project.csv")
 ```
 
-Mapped tags and blocks emit rows with canonical logical names, initial values, retentive flags, and preserved address comments. If a row needs both a block marker and user comment text, both are emitted in the same CSV comment field. Unmapped tags are omitted. CLICK nicknames hold at most 24 characters; validation reports a longer one as `CLK_NICKNAME_TOO_LONG`, and ladder export refuses it.
+Mapped tags and blocks emit rows with canonical logical names, initial values, retentive flags, and preserved address comments. Unmapped tags are omitted. CLICK nicknames hold at most 24 characters. Validation reports a longer one as `CLK_NICKNAME_TOO_LONG`, and ladder export refuses it.
 
 ## Validation
 
@@ -421,17 +421,26 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### Out coil variants
 
-`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number (the coil names only the TD; CLICK claims the whole timer), and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. The CSV token names each phase's TD: `debounce(Y001,on_acc=TD1,on_preset=100,off_acc=TD2,off_preset=DS5,unit=Tms)`. CLICK's Out dialog offers fewer units than its timers: `debounce` and `flasher` take `ms` or `sec`, `timed` takes `ms`, `sec` or `min`; any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`. A CLICK Out coil never sets the phase timer's `T` bit (measured on hardware), and pyrung does not either.
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number, and a register preset to `DS`. A timer or counter whose Done and Acc map to different numbers is `CLK_TIMER_PAIR_MISMATCH`, for `on_delay` and the counters too. CLICK's Out dialog offers fewer units than its timers. `debounce` and `flasher` take `ms` or `sec`, and `timed` takes `ms`, `sec` or `min`. Any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`.
 
 ### For/Next
 
-A `forloop` exports as its For rung, one rung per body item, and `next()`: a bare instruction is a wire-only rung, a `with rung(...)` inside the loop keeps its contacts, and a nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`. CLICK allows three levels of loops, counting the loops of a subroutine called inside a loop (`CLK_FORLOOP_NESTING_DEPTH`), a one-shot only on the outermost For (`CLK_FORLOOP_INNER_ONESHOT`), and no `return_early()` between For and Next (`CLK_FORLOOP_RETURN_INSIDE`). CLICK has no nested subroutine calls: a `call()` inside a subroutine is flagged (`CLK_NESTED_CALL`). `loop.idx` has no CLICK address; count iterations with a `DS` pointer instead. A false For rung skips its body, a DS count is read as unsigned 16-bit and a DD count whole and signed (-1 runs none, confirmed on a CLICK on 2026-11-06), and a count of 0 runs no iteration, all confirmed on a CLICK; an edge contact or a one-shot inside a loop are not yet confirmed.
+A `forloop` exports as its For rung, one rung per body item, and `next()`. A bare instruction is a wire-only rung, a `with rung(...)` inside the loop keeps its contacts, and a nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`.
+
+CLICK allows:
+
+- three levels of loops, counting the loops of a subroutine called inside a loop (`CLK_FORLOOP_NESTING_DEPTH`)
+- a one-shot only on the outermost For (`CLK_FORLOOP_INNER_ONESHOT`)
+- no `return_early()` between For and Next (`CLK_FORLOOP_RETURN_INSIDE`)
+- no nested subroutine calls, so a `call()` inside a subroutine is flagged (`CLK_NESTED_CALL`)
+
+`loop.idx` has no CLICK address, so count iterations with a `DS` pointer instead. A false For rung skips its body. A `DS` count is read as unsigned 16-bit, so -1 runs 65535 iterations. A `DD` count is signed, so -1 runs none. A count of 0 runs none.
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
 ### Program steps
 
-A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_ladder(logic, mapping))` estimates a program's count from measured per-element costs, and validation reports `CLK_STEP_LIMIT` as a program nears or passes the limit. Export still writes such a program, with the finding as a `UserWarning`. The costs and how they were measured are in [CLICK Internals](click-internals.md#program-steps).
+A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_ladder(logic, mapping))` estimates a program's count, and validation reports `CLK_STEP_LIMIT` as a program nears or passes the limit. Export still writes such a program, with the finding as a `UserWarning`.
 
 ## Ladder CSV export
 
@@ -449,7 +458,7 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 
 To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen](click-codegen.md).
 
-A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing, and CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL, and imports back as the blank. A `""` in an older CSV still imports as the blank, and any other `$hh` (`$0D`) imports as its one character. A longer text constant with a NUL in it is refused.
+A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing, and CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL, and imports back as the blank.
 
 ### Empty and comment-only rungs
 
@@ -473,11 +482,36 @@ with rung():
 
 Both forms produce identical CSV output.
 
-A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK will not hold: an empty rung with conditions (`with Rung(C1): pass`; CLICK rejects a contact in front of NOP) and an empty rung next to a `.continued()` rung (they would share one CLICK rung, and CLICK deletes the NOP row).
+A NOP has to sit alone on a bare wire, so the exporter refuses two shapes CLICK will not hold: an empty rung with conditions (`with Rung(C1): pass`) and an empty rung next to a `.continued()` rung.
 
-A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) needs a CLICK rung of its own. CLICK takes all inputs (pins) of a box from the same branch, so a box whose input wire also feeds another output (`latch(C3)` then `count_up(...).reset(...)` on one rung, or the box in one `branch()` beside another) can be drawn but does not compile (C000A). The exporter splits such a rung: the outputs above the box stay on the first CLICK rung, the box starts a rung of its own, and the outputs below it follow as continued wires. Each CLICK rung the split makes repeats the contacts in front of its outputs, and since CLICK reads a contact where its row stands, the split solves as the pyrung rung does. The exporter refuses only when it cannot: a repeated contact reads a tag that an output above it on the same rung writes (`with Rung(C5): reset(C5)` then a box in a branch), so the second copy would read the new value. Move the output that writes it off the rung: to a rung of its own, or to a separate rung before the box. A box with no pins, such as a TON, can share the wire.
+### Boxes with pins
 
-On import, outputs that share a contact by label are grouped under one `with rung(...)` or `with branch(...)` only when no output between them writes what the contact reads, so the generated code reads each contact where the CLICK rung does.
+A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) needs a CLICK rung of its own, so the exporter splits a rung that shares the box's wire with other outputs. This:
+
+```python
+with Rung(Start):
+    latch(Seen)
+    with branch(Auto):
+        count_up(Parts, preset=10).reset(Reset)   # the box ends its branch
+    out(Lamp)                                     # back on the trunk
+```
+
+exports with `Start` repeated in front of each part:
+
+- `latch(Seen)` on one CLICK rung
+- the counter on the next
+- `out(Lamp)` on a wire of its own below the counter
+
+Because the contacts are repeated, the export refuses a rung where a repeated contact reads a tag an output above it writes:
+
+```python
+with Rung(Seen):
+    reset(Seen)                 # the repeated Seen contact would read False
+    with branch(Auto):
+        count_up(Parts, preset=10).reset(Reset)
+```
+
+Move the output that writes the tag to a rung of its own before the box. A box with no pins, such as a TON, can share the wire.
 
 ## Loading PLC state
 
@@ -523,8 +557,6 @@ server = ClickServer(provider, port=502)
 ```
 
 Reads return the current committed state. Writes queue a `runner.patch()` for the next scan.
-
-A DF holding ±Inf or NaN (a Math overflow stores Inf, as on a CLICK) reads as that float32. A Modbus write of Inf or NaN to a DF is refused: `pyclickplc` accepts only a finite float32.
 
 If another device on the LAN can't reach the soft PLC, check the Windows Firewall: both the TCP port (default 502) and the Python interpreter need to be allowed through.
 
@@ -604,7 +636,7 @@ receive(
 )
 ```
 
-`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous. CLICK export keeps the form you wrote: a hex address exports as MODBUS Hex, and a 984 address or a raw offset exports as MODBUS 984.
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous.
 
 `word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit CLICK types (DD, DF, etc.).
 

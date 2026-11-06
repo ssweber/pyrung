@@ -49,7 +49,6 @@ Add to `.vscode/launch.json`:
 - Hit count: edit breakpoint hit count (fires on every Nth hit: N, 2N, 3N...)
 - Logpoint: right-click gutter -> Add Logpoint
 - Snapshot logpoint: set log message to `Snapshot: my_label`
-- Logpoints and snapshot logpoints fire during both Continue and stepping commands.
 
 Condition expressions use the pyrung DSL, for example:
 
@@ -92,13 +91,12 @@ Use the VS Code `Watch` panel for read-only expression evaluation.
 
 - Bare tag/memory names return the current raw value (`Counter`, `Fault`, `Step[CurStep]`).
 - Predicate expressions return `True`/`False` (`Fault & (MotorTemp > 100)`, `Mode == 1`).
-- Unknown names fail with an explicit error so typos are visible.
 
 Watch evaluation uses the same visible state as the Variables panel during stepping, including pending mid-scan values.
 
 ## Debug Console
 
-The Debug Console accepts typed commands for PLC execution, inspection, analysis, and session capture. Use `help` to print this catalog, or the VS Code `Watch` panel for read-only predicate evaluation.
+The Debug Console accepts typed commands for PLC execution, inspection, analysis, and session capture. Use `help` to print this catalog.
 
 ### Command reference
 
@@ -191,8 +189,6 @@ pause                      # stop a running continue
 
 `step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `m`, `min`, `h`, and `d`, including compact compound durations such as `1h30min`.
 
-`continue` starts a background scan loop (same as the VS Code Continue button). `pause` signals it to stop after the current scan.
-
 Long-running `how` and `prove` requests hold the Debug Console's state lock. Cancel them from another terminal with `pyrung live stop`; entering `stop` in the same Debug Console cannot preempt its active request.
 
 ### Causal queries
@@ -246,8 +242,6 @@ monitor Button             # watch Button for value changes
 unmonitor Button           # stop watching
 ```
 
-Monitors also appear in the Variables panel under `PLC Monitors` and can be promoted to data breakpoints.
-
 ### Notes and log
 
 Annotate the timeline with free-text notes and review recent activity.
@@ -259,18 +253,7 @@ log                             # show last 20 scans of activity
 log 50                          # show last 50 scans
 ```
 
-`log` shows patches, force changes, tag transitions, and notes — everything that happened in the scan window. When commands come from `pyrung live`, the scan header is tagged with `(live)` so you can tell who did what in a pair-programming session.
-
-```text
-scan 12  forces: EstopOK=True
-
-scan 10:
-  # testing startup sequence
-scan 11:  (live)
-  patch StartBtn True
-  ConveyorMotor: False -> True
-  Running: False -> True
-```
+`log` shows patches, force changes, tag transitions, and notes — everything that happened in the scan window.
 
 ### Session capture
 
@@ -287,17 +270,13 @@ record stop                # stop recording, print transcript
 
 On stop, the transcript is printed as plain text — one command per line with a `# action:` comment header. The transcript is the session file format: paste it back into the console or save it to a file for replay.
 
-If forces are active when recording starts, a warning is printed.
-
 ```text
 replay session.txt                            # use the current program harness
 replay session.txt --harness recorded         # replay recorded harness inputs
 replay session.txt --harness off              # ignore harness inputs
 ```
 
-Replay reads the file, skips `#` comment lines and blank lines, and executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
-
-Commands executed during replay are captured normally — if a recording is active, they appear in the transcript. The `record`, `replay`, `help`, `pause`, `continue`, and `spec` verbs themselves are never captured.
+Replay executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
 
 Stopping a recording also mines candidate invariants from the captured scan range. Review them before turning accepted formulas into tests:
 
@@ -318,7 +297,7 @@ If your program uses [Physical annotations](physical-harness.md) with `physical=
 Harness: 3 feedback loop(s) (2 bool, 1 analog); `harness status` for details
 ```
 
-No configuration is needed — if you annotated your tags or UDTs, the harness activates. It lowers the declared feedback into synthesized plant rungs that execute before the program logic. Forces still win: force a feedback tag to hold it regardless of what the plant rungs calculate.
+A force still wins over the harness. Force a feedback tag to hold it whatever the harness computes.
 
 ```text
 harness status             # show couplings, pending patches, active state
@@ -326,35 +305,7 @@ harness remove             # disable the harness for this session
 harness install            # re-install after removal
 ```
 
-`harness status` lists each coupling with its timing or profile. Value-triggered couplings show the trigger with `==`:
-
-```text
-Harness: active
-  bool  Gripper_En -> Gripper_Fb_Contact  (on=5ms, off=5ms)
-  bool  Gripper_En -> Gripper_Fb_Vacuum   (on=20ms, off=80ms)
-  bool  Sorter_State==2 -> Sorter_BinSensor  (on=2000ms, off=500ms)
-  analog  Heater_En -> Heater_Fb_Temp  profile=ramp:up=0.5|down=-0.05
-  analog  Oven_Mode==2 -> Oven_Temp  profile=approach:toward=180.0|rate=0.3
-```
-
-Bool feedback transitions appear in the Debug Console output prefixed with `[harness]`:
-
-```text
-[harness] Gripper_Fb_Contact=True
-```
-
-If a session recording is active, Bool feedback transitions are captured as `harness:nominal` inputs. Analog feedback is deterministic plant-rung state and is not recorded as a separate input:
-
-```text
-# action: test_gripper_cycle
-patch Cmd true
-run 100ms
-harness:nominal: patch Gripper_Fb_Contact True
-harness:nominal: patch Gripper_Fb_Vacuum True
-step 5
-```
-
-With the default `--harness current` mode, replay skips those recorded inputs because the current harness reproduces them from program state. Use `--harness recorded` to remove the current harness and apply the captured inputs instead.
+If a session recording is active, Bool feedback transitions are captured as `harness:nominal` inputs. Analog feedback is computed by the harness each scan, so it is not recorded as a separate input.
 
 ### Bench links
 
@@ -371,9 +322,9 @@ links bench off    # set every bench change aside without forgetting it; `links 
 links disable X002 # set one aside; `links enable X002` again
 ```
 
-A link is refused when the program writes the feedback (plant rungs and logic would fight over it every scan), when the feedback is readonly, or when its type does not suit the response: on/off delays and `pulse` drive a Bool, `ramp` and `approach` a number. A link added while its enable is already on starts cold, so the feedback follows after its on-delay.
+A link added while its enable is already on starts cold, so the feedback follows after its on-delay.
 
-Bench links live in the debug session, not the runner, so `reload` keeps them. After a reload, a bench link the program now declares the same way is dropped (it reached the program), and one that no longer fits the reloaded program is dropped with a note. A recording captures the link verbs; replay runs them only with `--harness current`.
+Bench links live in the debug session, not the runner, so `reload` keeps them. A recording captures the link verbs, and replay runs them only with `--harness current`.
 
 ## pyrung live
 
@@ -400,9 +351,7 @@ pyrung live "force Button true; step 5; cause Light"  # chain commands with ;
 pyrung live -h                             # show all available commands
 ```
 
-When only one session is active, `--session` can be omitted. With multiple sessions, the CLI lists them and asks you to pick one. Running with no arguments lists active sessions.
-
-Commands can be chained with `;` in a single invocation — they run sequentially over one connection, halting on first error. Every console command works over the live connection — forces, patches, stepping, queries, record/replay. The response is printed to stdout. Exit code is 0 on success, 1 on error.
+Commands chained with `;` run sequentially over one connection, halting on first error. Exit code is 0 on success, 1 on error.
 
 ### Python library
 
@@ -429,12 +378,6 @@ scan 11:  (live)
 
 The live client can do everything the Debug Console can — forces, patches, causal queries, recording. Stepping from either side advances the same scan counter.
 
-### How it works
-
-The server is a single-threaded TCP listener that dispatches commands through the same `console.dispatch()` path as the Debug Console. Commands are serialized by the adapter's state lock — a live client waits if a scan is in progress.
-
-Session discovery uses port files in the system temp directory (`<tempdir>/pyrung/pyrung-<name>.port`). The file is created on launch and removed on disconnect. Stale port files from crashed processes are pruned automatically when listing sessions.
-
 ## Hot-reload
 
 Re-execute the program file while preserving PLC state — tags, memory, timer accumulators, counter values, and forces all carry over. History clears. Same experience as downloading a new program to a running PLC.
@@ -446,7 +389,7 @@ reload                         # from the Debug Console
 pyrung live reload             # from another terminal
 ```
 
-The reload re-runs your program file, discovers the new runner, and patches the old state onto it. Scan ID and timestamp continue from where they were. Forces are re-applied. Debug registrations (breakpoints, monitors) are cleared since rung indices may have shifted.
+Scan ID and timestamp continue from where they were. Debug registrations (breakpoints, monitors) are cleared since rung indices may have shifted.
 
 ### Auto-reload on file save
 
@@ -455,19 +398,13 @@ autoreload                     # watch the program directory
 autoreload off                 # stop watching
 ```
 
-`autoreload` polls every `.py` file under the program directory once per second. When any of them changes, the program reloads automatically after a short debounce. No new dependency — it uses `os.stat` polling. Set `"autoReload": true` in `launch.json` to enable the same behavior when the session starts.
+`autoreload` polls every `.py` file under the program directory once per second. When any of them changes, the program reloads automatically after a short debounce. Set `"autoReload": true` in `launch.json` to enable the same behavior when the session starts.
 
 If `continue` is running when a file change is detected, the watcher skips the reload and logs a message. Pause first, then save to trigger the reload.
 
 ### Tag type changes
 
-If a tag changes type between reloads (e.g. `Bool('X')` becomes `Int('X')`), the old value is dropped and the tag gets its new default. A warning is printed:
-
-```text
-Reloaded at scan 42 (5 tag(s))
-Warnings:
-  X: type changed BOOL -> INT, using new default
-```
+If a tag changes type between reloads (e.g. `Bool('X')` becomes `Int('X')`), the old value is dropped and the tag gets its new default, with a warning.
 
 New tags added to the program get their defaults. Removed tags become harmless orphans in state.
 

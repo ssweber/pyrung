@@ -47,7 +47,10 @@ none.
   is the last Math of its scan (the case starts last and waits 40 scans for its neighbours), read on the next scan
   above the case's own count, the first Math there.  Result1 = 1 for SC40 still on (0 cleared),
   Result2 = 1 for SC46 still on (0 cleared).  ``ErrorCode`` = 11 is the control: SC40 (tens) and
-  SC46 (units) were each on right after the op.  SC43 and SC44 are not asked: main's hash Copy on every scan settles them.
+  SC46 (units) were each on right after the op.  Main's hash Copy and the groups that main calls
+  before this one (``boot_read``, ``rtc_set``, ``for_wide``) run between the op and the reads, so a
+  0 doesn't show that the scan-start clear turned the flag off.  SC43 and SC44 are not asked,
+  because main's hash Copy on every scan settles them.
 
 ``rtc_set``:
 
@@ -366,8 +369,8 @@ _WAIT = 40
 
 
 def prove_math_flags_over_a_scan(slot):
-    # The reads come first, above the case's own count: nothing but the Copy of main
-    # runs between the op and them.
+    # The reads come first, above the case's own count.  Main's hash Copy and the groups
+    # that main calls before this one run between the op and the reads.
     with Rung(slot.Cmd != 0, slot.Scratch == _WAIT, SC40):
         copy(1, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2, SC46):

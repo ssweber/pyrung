@@ -62,17 +62,14 @@ The count can be a positive literal or a tag, read once when the loop starts.
 As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
 iterations (a scan of a second or more on a CLICK), and a `Dint` count whole
 and signed, so 65536 runs 65536 and -1 runs none. A count of 0 runs none.
-`prove()` answers `Intractable` for a loop whose count can run more than
-1,000,000 iterations in a scan, and for a count read from a tag the program
-does not write (an input) that has neither `choices=` nor a `min=`/`max=`
-spanning at most 1000 values.
-A `Real` count holding Inf or NaN runs no iteration and sets
-`system.fault.out_of_range` (SC43), pyrung's choice: a CLICK For takes an
-integer count, so this has no hardware answer.
+The verifier (`always()`, `never()`, `pyrung lock`) answers `Intractable` when
+a loop can run more than 1,000,000 iterations in a scan, or when its count
+comes from an input without `choices=` or a `min=`/`max=` range of 1000
+values or fewer.
 
 For CLICK, the count must be a constant or a `DS`, `DD`, `TD`, `CTD` or `SD`
 tag. CLICK validation reports `CLK_FORLOOP_COUNT_BANK` for a count in any other
-bank; a `DF` count pasted into a CLICK stops the PLC on its watchdog. Copy the
+bank. Copy the
 count into a `DS` or `DD` tag and loop on that.
 
 ```python
@@ -121,9 +118,8 @@ the loop stops, `reset()` it from a rung of its own.
 
 ### Nested loops
 
-Loops nest up to three deep. Each one has its own index (`_forloop_idx`,
-`_forloop_idx2`, `_forloop_idx3`), and `break_loop()` / `continue_loop()` act
-on the innermost:
+Loops nest up to three deep. Each one has its own `loop.idx`, and
+`break_loop()` / `continue_loop()` act on the innermost:
 
 ```python
 with rung(Enable):
