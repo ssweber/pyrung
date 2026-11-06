@@ -27,8 +27,8 @@ the CLICK read.
   -4.0 alone is 0 with SC46 (``math_error``): Result3 = 0 with bit 4 off is a NaN carried through
   and stored as 0 with no flag.  ``error_terms_real`` tells these apart.
 - ``error_terms_real``: the same three formulas into DFs preset 99.0, where a non-finite value is
-  kept.  Answered on a CLICK (2026-11-06): the term, 1, 1, 1, 50, 50.  Result1 (7 / 0 + 5), Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0
-  (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
+  kept.  Answered on a CLICK (2026-11-06): the term, 1, 1, 1, 50, 50.  Result1 (7 / 0 + 5),
+  Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0 (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
   by 0 carried through), 5 for -Inf, 0 for any other: NaN or a finite value none of these (7 / 0
   stored as 7 makes 12.0).  Result4 is DF12 * 10 and ErrorCode DF14 * 10, each into an Int, to
   size a finite other reading of Result1 and Result3 (a NaN or an infinity there writes what a
