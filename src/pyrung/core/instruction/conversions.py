@@ -269,11 +269,14 @@ def _store_copy_value_to_tag_type(value: Any, tag: Tag, source: Any = None) -> A
 def _copy_clamps(value: Any, tag: Tag, source: Any = None) -> bool:
     """True when a Copy of the number *value* into *tag* stops at a limit, raising SC43.
 
-    Only an INT or DINT clamps with the flag; a Word's clamp raises none.  +/-Inf
-    clamps; NaN stores 0 and does not.
+    Only an INT or DINT clamps with the flag; a Word's clamp raises none, and nor
+    does a REAL register's into a DINT (CLICK: DF 1.0E+10 into a DD,
+    ``flag_probe/bulk_ops_clear_flags``).  +/-Inf clamps; NaN stores 0 and does not.
     """
     storage = copy_store_transform(tag.type, source)
     if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):
+        return False
+    if source is TagType.REAL and tag.type is TagType.DINT:
         return False
     if isinstance(value, float) and not math.isfinite(value):
         return not math.isnan(value)
