@@ -466,8 +466,9 @@ def _may_be_double(*compiled: str) -> bool:
     A calc's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``),
     and so may be +/-Inf or NaN (``lsh(1, 2000)``, Inf - Inf), where
     :func:`_may_be_float` sees an integer.  ``int()`` of one raises, so a bitwise,
-    shift or address use of such an operand needs its guard.  An integer operand
-    without ``_dbl`` is at most 2 ** 53 in size.
+    shift or address use of such an operand needs its guard, and a float's ``**``
+    raises past the float range, so a power of one needs ``_pow``.  An integer
+    operand without ``_dbl`` is at most 2 ** 53 in size.
     """
     return any(_DOUBLE_RE.search(code) is not None for code in compiled)
 
