@@ -11,6 +11,8 @@ CircuitPython code, and the prover must see the rest of the formula live.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import reduce
+from operator import mul
 from typing import Any
 
 import pytest
@@ -30,9 +32,12 @@ from pyrung.core import (
     TagType,
     copy,
     latch,
+    lro,
     lsh,
     math,
     out,
+    rro,
+    rsh,
     system,
 )
 from pyrung.core.analysis.prove import Counterexample, Proven, never
@@ -59,6 +64,14 @@ SEVEN, ZERO, MINUS = Dint("Seven"), Dint("Zero"), Real("Minus")
 SEVEN_INT, ZERO_INT, NEGATIVE = Int("SevenInt"), Int("ZeroInt"), Int("Negative")
 INT_BOTTOM, DINT_BOTTOM = Int("IntBottom"), Dint("DintBottom")
 BIG, MINUS_EIGHT = Real("Big"), Real("MinusEight")
+ONE, FAR, THOUSAND = Int("One"), Int("Far"), Int("Thousand")
+DINT_TOP = Dint("DintTop")
+
+
+def _past_doubles() -> Any:
+    """34 factors of 2 ** 31 - 1: a double past 2 ** 53, then Inf past 2 ** 1024."""
+    return reduce(mul, [DINT_TOP] * 34)
+
 
 #: Each formula, its destination type, what it stores, and the flags it raises.
 FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
@@ -80,6 +93,29 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "abs_dint_bottom": (lambda: abs(DINT_BOTTOM) + 1, Dint, 1, {43}),
     "negative_shift": (lambda: lsh(SEVEN_INT, NEGATIVE) + 1, Int, 1, {43}),
     "inf_into_and": (lambda: ((BIG**9) & 1) + 2, Int, 2, {43}),
+    # A calc's integer step past 2 ** 53 is a double, Inf past 2 ** 1024
+    # (lsh(1, 2000)): a bit operation on Inf is 0 with SC43, as on a Real's.
+    "stepped_inf_into_and": (lambda: (lsh(ONE, FAR) & 1) + 2, Int, 2, {43}),
+    "stepped_inf_into_and_real": (lambda: (lsh(ONE, FAR) & 1) + 2, Real, 2.0, {43}),
+    "stepped_inf_into_or": (lambda: ((ONE << FAR) | 0) + 2, Int, 2, {43}),
+    "stepped_inf_into_xor": (lambda: (lsh(ONE, FAR) ^ 1) + 2, Int, 2, {43}),
+    "stepped_inf_inverted": (lambda: ~lsh(ONE, FAR) + 2, Int, 2, {43}),
+    "stepped_inf_shifted_left": (lambda: lsh(lsh(ONE, FAR), 1) + 2, Int, 2, {43}),
+    "stepped_inf_shifted_right": (lambda: rsh(lsh(ONE, FAR), 1) + 2, Int, 2, {43}),
+    "stepped_inf_as_shift_count": (lambda: (ONE << lsh(ONE, FAR)) + 2, Int, 2, {43}),
+    "stepped_inf_rotated_left": (lambda: lro(lsh(ONE, FAR), 1) + 2, Int, 2, {43}),
+    "stepped_inf_rotated_right": (lambda: rro(lsh(ONE, FAR), 1) + 2, Int, 2, {43}),
+    "product_past_doubles_into_and": (lambda: (_past_doubles() & 1) + 2, Int, 2, {43}),
+    # A finite double to an integer power past the float range is Inf, as a
+    # Real's is: no term error, Inf into an integer register is 0 with SC43.
+    "stepped_double_squared": (lambda: lsh(ONE, THOUSAND) ** 2 + 2, Int, 0, {43}),
+    "stepped_double_cubed_real": (lambda: lsh(ONE, THOUSAND) ** 3 + 2, Real, float("inf"), {43}),
+    "stepped_double_negative_cubed": (
+        lambda: (0 - lsh(ONE, THOUSAND)) ** 3 + 2,
+        Real,
+        float("-inf"),
+        {43},
+    ),
     "no_error": (lambda: SEVEN / 2 + 5, Real, 8.5, set()),
 }
 
@@ -94,6 +130,10 @@ STAGED = {
     DINT_BOTTOM: -2147483648,
     BIG: 1.0e38,
     MINUS_EIGHT: -8.0,
+    ONE: 1,
+    FAR: 2000,
+    THOUSAND: 1000,
+    DINT_TOP: 2147483647,
 }
 
 
@@ -171,15 +211,16 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
     assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags
 
 
-ONE, FAR = Int("One"), Int("Far")
 TABLE = Block("Table", TagType.INT, 1, 10)
 
 #: A pointer whose address is a calc's double past the integer range: Inf
-#: (``lsh(1, 2000)``) or NaN (Inf - Inf), each alone and after a division by 0.
+#: (``lsh(1, 2000)``) or NaN (Inf - Inf), each alone and after a division by 0;
+#: and ``~`` of Inf, 0 with SC43: below the block.
 POINTERS: dict[str, tuple[Callable[[], Any], set[int]]] = {
     "shift_to_inf": (lambda: TABLE[lsh(ONE, FAR)], set()),
     "inf_minus_inf": (lambda: TABLE[lsh(ONE, FAR) - lsh(ONE, FAR) + 3], set()),
     "nan_after_div0": (lambda: TABLE[SEVEN // ZERO + lsh(ONE, FAR) - lsh(ONE, FAR)], {40}),
+    "inverted_inf": (lambda: TABLE[~lsh(ONE, FAR)], {43}),
 }
 
 

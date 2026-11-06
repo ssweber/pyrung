@@ -166,10 +166,11 @@ def _compile_expression_impl(
             symbol = {"%": "mod", "**": "pow0"}[expr.symbol] if calc_op else expr.symbol
             return _permissive_op(symbol, left, right, ctx, flags)
         if expr.symbol in _BITWISE_SYMBOLS:
-            if _binary_may_raise(expr):
+            if _binary_may_raise(expr) or (strict and _may_be_double(left, right)):
                 # A calc's: an Inf or NaN operand, or a negative shift count, is
-                # 0 with SC43.  (A calc's steps are never integers past 2 ** 53,
-                # so none is too large for a float: _may_be_huge is moot.)
+                # 0 with SC43.  A calc's integer step past 2 ** 53 is a double
+                # (_dbl), which may be Inf or NaN too (lsh(1, 2000)); an operand
+                # with none is an integer of at most 2 ** 53, so int() is safe.
                 compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
                 return _calc_step(expr, compiled, ctx, strict)
             left_int = _bit_int_expr(expr.left, left, ctx)
@@ -185,10 +186,15 @@ def _compile_expression_impl(
             ctx.mark_helper("_pow_calc")
             ctx.mark_helper("_term_fail")
             return _calc_step(expr, f"_pow_calc({left}, {right}, {flags})", ctx, strict)
-        if expr.symbol == "**" and (_may_be_float(expr.left) or _may_be_float(expr.right)):
+        if expr.symbol == "**" and (
+            _may_be_float(expr.left)
+            or _may_be_float(expr.right)
+            or (strict and _may_be_double(left, right))
+        ):
             # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
             # raises _MathDomainError for a complex result; an integer power is
-            # exact and never overflows.
+            # exact and never overflows.  A calc's stepped double (_dbl) is a
+            # float: lsh(1, 1000) ** 2 is Inf, not an OverflowError.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
@@ -236,7 +242,7 @@ def _compile_expression_impl(
                 return f"_abs_int({inner}, {floor}, {flags})"
             return _calc_step(expr, f"abs({inner})", ctx, strict)
         if expr.symbol == "~":
-            if _may_be_float(expr.operand):
+            if _may_be_float(expr.operand) or (strict and _may_be_double(inner)):
                 compiled = _permissive_op("~", inner, "0", ctx, flags)
                 return _calc_step(expr, compiled, ctx, strict) if strict else compiled
             return _calc_step(expr, f"(~{_bit_int_expr(expr.operand, inner, ctx)})", ctx, strict)
@@ -281,6 +287,7 @@ def _compile_expression_impl(
             _may_be_float(expr.value)
             or _may_be_float(expr.count)
             or (expr.name in ("lsh", "rsh") and not _non_negative_literal(expr.count))
+            or (strict and _may_be_double(value, count))
         ):
             compiled = _permissive_op(expr.name, value, count, ctx, CALC_FLAGS if strict else None)
             return _calc_step(expr, compiled, ctx, strict) if strict else compiled
@@ -448,6 +455,21 @@ _CALC_FLAGS_RE = re.compile(rf"\b{CALC_FLAGS}\b")
 def _appends_flags(compiled: str) -> bool:
     """Whether the compiled calc code *compiled* can append to :data:`CALC_FLAGS`."""
     return _CALC_FLAGS_RE.search(compiled) is not None
+
+
+_DOUBLE_RE = re.compile(r"\b_dbl\(")
+
+
+def _may_be_double(*compiled: str) -> bool:
+    """Whether a compiled calc operand can hold a double from an integer step.
+
+    A calc's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``),
+    and so may be +/-Inf or NaN (``lsh(1, 2000)``, Inf - Inf), where
+    :func:`_may_be_float` sees an integer.  ``int()`` of one raises, so a bitwise,
+    shift or address use of such an operand needs its guard.  An integer operand
+    without ``_dbl`` is at most 2 ** 53 in size.
+    """
+    return any(_DOUBLE_RE.search(code) is not None for code in compiled)
 
 
 #: Tag types whose value is never negative.
@@ -1553,7 +1575,7 @@ def _compile_value(
         )
         if condition:
             return _compile_condition_element_read(value.block, binding, expr, ctx, block_snapshots)
-        if strict and "_dbl(" in expr:
+        if strict and _may_be_double(expr):
             # A calc's integer step past 2 ** 53 is a double (_dbl), so the address
             # can be +/-Inf or NaN, which _addr_int makes -1: below every block,
             # the address error and nothing written (core IndirectExprRef.resolve_ctx).
