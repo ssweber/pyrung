@@ -55,6 +55,7 @@ from .findings import (
     CLK_STEP_LIMIT,
     CLK_TEXT_ORDER_COMPARE,
     CLK_TEXT_PAST_BANK,
+    CLK_TEXT_PAST_BLOCK,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
@@ -349,6 +350,7 @@ __all__ = [
     "CLK_CALC_ARG_NOT_PLAIN",
     "CLK_TEXT_ORDER_COMPARE",
     "CLK_TEXT_PAST_BANK",
+    "CLK_TEXT_PAST_BLOCK",
     "ClickFinding",
     "ClickValidationReport",
 ]

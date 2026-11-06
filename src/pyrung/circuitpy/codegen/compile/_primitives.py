@@ -571,12 +571,28 @@ def _parse_sequential_tag_name(name: str) -> tuple[str, int, int] | None:
 def _compute_sequential_reloads(
     target_name: str,
     ctx: CodegenContext,
+    following_names: list[str] | None = None,
 ) -> list[tuple[int, str]] | None:
+    """The referenced scalars a store of several elements from *target_name* writes.
+
+    *following_names* are the elements after the target in its block
+    (``element_names_after``); a tag in no block counts on by name.
+    """
+    if following_names is not None:
+        reloads = [
+            (offset, ctx.symbol_for_tag(ctx.referenced_tags[name]))
+            for offset, name in enumerate(following_names, start=1)
+            if name in ctx.referenced_tags
+            and name != target_name
+            and name not in ctx.tag_block_addresses
+            and name not in ctx.dict_backed_tag_names
+        ]
+        return reloads or None
     seq = _parse_sequential_tag_name(target_name)
     if seq is None:
         return None
     prefix, base, width = seq
-    reloads: list[tuple[int, str]] = []
+    reloads = []
     for tag_name in list(ctx.referenced_tags):
         if (
             tag_name == target_name
@@ -603,6 +619,42 @@ def _compute_sequential_reloads(
     return sorted(reloads) if reloads else None
 
 
+def _kernel_following_store_lines(
+    values_var: str, target_name: str | None, following_names: list[str]
+) -> list[str]:
+    """The kernel's stores of the elements after a static target, by their names."""
+    if not following_names:
+        return []
+    stop = f"min(len({values_var}), {len(following_names) + 1})"
+    seq = _parse_sequential_tag_name(target_name) if target_name else None
+    if seq is None:
+        names = tuple(following_names)
+        return [
+            f"    _seq_names = {names!r}",
+            f"    for _seq_i in range(1, {stop}):",
+            f"        tags[_seq_names[_seq_i - 1]] = {values_var}[_seq_i]",
+        ]
+    prefix, base, width = seq
+    # Most elements carry the name the target's counts on to; the rest (a named
+    # slot, a tag mapped onto the address) are listed.
+    renamed = {
+        offset: name
+        for offset, name in enumerate(following_names, start=1)
+        if name != f"{prefix}{base + offset:0{width}d}"
+    }
+    counted = f'f"{prefix}{{{base} + _seq_i:0{width}d}}"'
+    if not renamed:
+        return [
+            f"    for _seq_i in range(1, {stop}):",
+            f"        tags[{counted}] = {values_var}[_seq_i]",
+        ]
+    return [
+        f"    _seq_names = {renamed!r}",
+        f"    for _seq_i in range(1, {stop}):",
+        f"        tags[_seq_names.get(_seq_i) or {counted}] = {values_var}[_seq_i]",
+    ]
+
+
 def _copy_converter_write_lines(
     *,
     values_var: str,
@@ -614,42 +666,46 @@ def _copy_converter_write_lines(
     sequential_reloads: list[tuple[int, str]] | None = None,
     kernel: bool = False,
     fit: int | None = None,
+    following_names: list[str] | None = None,
 ) -> list[str]:
     """Write *values_var*'s elements from the target on, as many as its block holds.
 
     *fit* is how many elements a static target's block holds from it
-    (``block_room``), ``None`` for a tag in no block; an indexed target's block
-    array ends where its block does.  The rest are dropped, with no flag.
+    (``block_room``), ``None`` for a tag in no block, and *following_names* the
+    elements after a scalar one (``element_names_after``); an indexed target's
+    block array ends where its block does.  The rest are dropped, with no flag.
     """
     if target_kind == "scalar":
-        seq = _parse_sequential_tag_name(target_name) if target_name else None
-        if seq is not None:
-            prefix, base, width = seq
-            lines = [
-                f"if len({values_var}) >= 1:",
-                f"    {target_symbol} = {values_var}[0]",
-            ]
+        first = [
+            f"if len({values_var}) >= 1:",
+            f"    {target_symbol} = {values_var}[0]",
+        ]
+        reloads = sequential_reloads or []
+        if following_names is not None:
+            # A target in a block: the elements after it are the block's own.
+            lines = list(first)
             if kernel:
                 # The kernel keeps every tag in ``tags``; generated board code has
                 # no such dict and stores only the registers it references (below).
-                stop = f"len({values_var})" if fit is None else f"min(len({values_var}), {fit})"
-                lines += [
-                    f"    for _seq_i in range(1, {stop}):",
-                    f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
-                ]
-            if sequential_reloads:
-                for offset, symbol in sequential_reloads:
-                    if fit is not None and offset >= fit:
-                        continue
+                lines += _kernel_following_store_lines(values_var, target_name, following_names)
+            for offset, symbol in reloads:
+                if offset <= len(following_names):
                     lines.append(f"    if len({values_var}) > {offset}:")
                     lines.append(f"        {symbol} = {values_var}[{offset}]")
             return lines
-        if fit == 1:
-            # The target ends its block: the first element is all that fits.
-            return [
-                f"if len({values_var}) >= 1:",
-                f"    {target_symbol} = {values_var}[0]",
-            ]
+        seq = _parse_sequential_tag_name(target_name) if target_name else None
+        if seq is not None:
+            prefix, base, width = seq
+            lines = list(first)
+            if kernel:
+                lines += [
+                    f"    for _seq_i in range(1, len({values_var})):",
+                    f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
+                ]
+            for offset, symbol in reloads:
+                lines.append(f"    if len({values_var}) > {offset}:")
+                lines.append(f"        {symbol} = {values_var}[{offset}]")
+            return lines
         return [
             f"if len({values_var}) > 1:",
             *_indent_body(fault_body, 4),

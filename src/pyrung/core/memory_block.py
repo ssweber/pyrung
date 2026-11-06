@@ -273,18 +273,36 @@ class PastBankError(IndexError):
     """
 
 
-def block_room(tag: Tag) -> int | None:
-    """How many elements *tag*'s block holds from *tag* to its end, *tag* included.
+def _store_block(tag: Tag) -> tuple[Block, int] | None:
+    """The block and address a store of several elements from *tag* counts in.
 
+    A tag's own block, or for a slot of a block mapped onto a bank (``map_to``) the
+    mapped block, though reading the bank's address stamps the slot with the bank.
     ``None`` for a tag in no block, and for a field of a UDT or named array, whose
     block is the field's own and not the memory the structure lies in.
     """
-    block = getattr(tag, "_pyrung_block", None)
-    addr = getattr(tag, "_pyrung_block_addr", None)
+    home = getattr(tag, "_pyrung_mapped_home", None)
+    if home is not None:
+        block, addr = home
+    else:
+        block = getattr(tag, "_pyrung_block", None)
+        addr = getattr(tag, "_pyrung_block_addr", None)
     if not isinstance(block, Block) or not isinstance(addr, int):
         return None
     if block._pyrung_structure_kind is not None:
         return None
+    return block, addr
+
+
+def block_room(tag: Tag) -> int | None:
+    """How many elements *tag*'s block holds from *tag* to its end, *tag* included.
+
+    ``None`` for a tag ``_store_block`` finds in no block.
+    """
+    found = _store_block(tag)
+    if found is None:
+        return None
+    block, addr = found
     return max(0, block.end - addr + 1)
 
 
@@ -297,6 +315,41 @@ def elements_that_fit(tag: Tag, count: int) -> int:
     """
     room = block_room(tag)
     return count if room is None else min(count, room)
+
+
+def _element_at(block: Block, addr: int) -> Tag:
+    # The tag mapped onto the address first, as ``block[addr]`` gives it, but
+    # without stamping it with this block (``_get_tag``), which would change the
+    # block a later store from that tag counts in.
+    mapped = block._mapped_tags.get(addr)
+    return mapped if mapped is not None else block._get_tag(addr)
+
+
+def _element_name(block: Block, addr: int) -> str:
+    mapped = block._mapped_tags.get(addr)
+    return mapped.name if mapped is not None else block._effective_slot_name(addr)
+
+
+def elements_after(tag: Tag, count: int) -> list[Tag] | None:
+    """The block elements after *tag*, up to *count* elements from *tag* on in all.
+
+    Each is the tag that holds its address: a slot's own name, or a tag mapped
+    onto it (``map_to``).  ``None`` for a tag ``block_room`` does not count in.
+    """
+    found = _store_block(tag)
+    if found is None:
+        return None
+    block, addr = found
+    return [_element_at(block, addr + offset) for offset in range(1, count)]
+
+
+def element_names_after(tag: Tag, count: int) -> list[str] | None:
+    """The names of ``elements_after(tag, count)``, without making the tags."""
+    found = _store_block(tag)
+    if found is None:
+        return None
+    block, addr = found
+    return [_element_name(block, addr + offset) for offset in range(1, count)]
 
 
 @dataclass(eq=False)
@@ -1007,6 +1060,9 @@ class Block:
                     # TagMap report it as a hardware address conflict.
                     continue
                 hw_block._mapped_tags[hw_addr] = slot_tag
+                # A store of several elements from the slot counts in this block,
+                # though the bank stamps the slot as its own (``_annotate_tag``).
+                object.__setattr__(slot_tag, "_pyrung_mapped_home", (self, logical_addr))
                 hw_block._slot_names_changed += 1
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyclickplc.banks import BANKS
@@ -15,6 +16,7 @@ from pyrung.core.instruction.conversions import (
     copy_source_kind,
 )
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
+from pyrung.core.memory_block import _element_name, _store_block, block_room
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import ProgramLocation, _condition_children
@@ -28,6 +30,7 @@ from .findings import (
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_TEXT_PAST_BANK,
+    CLK_TEXT_PAST_BLOCK,
     CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
@@ -428,24 +431,53 @@ def _evaluate_pack_text(
     return findings
 
 
-# The fewest characters ``to_text()`` writes of a tag of each type: zero suppressed,
-# one; else an Int's five digits, a Dint's ten, a Word's four hex digits.  A finite
-# Real has seven decimals ("0.0000000", or "0.0000000E+00" in exponential form).
-_FIXED_TEXT_WIDTH = {TagType.INT: 5, TagType.DINT: 10, TagType.WORD: 4}
+# The fewest characters ``to_text()`` writes of a tag of each type, and whether that
+# is every value's length: zero suppressed, one or more; else an Int's five digits
+# (six with a sign), a Dint's ten (eleven), a Word's four hex digits.  A finite Real
+# has seven decimals, "0.0000000" or "0.0000000E+00" in exponential form, the
+# shortest; NaN and infinity are "nan", "inf" and "-inf".
+_FIXED_TEXT_WIDTH = {TagType.INT: (5, False), TagType.DINT: (10, False), TagType.WORD: (4, True)}
 _REAL_TEXT_WIDTH = 9
 _REAL_EXPONENTIAL_TEXT_WIDTH = 13
 
 
-def _fewest_elements_written(instruction: Any) -> int | None:
-    """The fewest elements a Copy writes from its destination on, or ``None`` for one."""
+@dataclass(frozen=True)
+class _Written:
+    """How many elements a Copy writes from its destination on.
+
+    *count* is every value's length when *exact*, else the fewest, for a finite
+    value only when *finite_only*.
+    """
+
+    count: int
+    exact: bool
+    finite_only: bool = False
+
+    def describe(self, what: str) -> str:
+        if self.exact:
+            return f"{self.count} {what}"
+        finite = " for a finite value" if self.finite_only else ""
+        return f"{self.count} {what} or more{finite}"
+
+    def dropped(self, room: int) -> str:
+        if self.exact:
+            return f"the last {self.count - room}"
+        return f"all but the first {room}"
+
+    def kept(self) -> str:
+        return "every one" if self.exact else f"the first {self.count}"
+
+
+def _fewest_elements_written(instruction: Any) -> _Written | None:
+    """How many elements a Copy writes from its destination on, or ``None`` for one."""
     source = instruction.source
     converter = instruction.convert
     if converter is None:
         target = instruction.target
         is_text = isinstance(target, Tag) and target.type is TagType.CHAR
-        return len(source) if isinstance(source, str) and is_text else None
+        return _Written(len(source), True) if isinstance(source, str) and is_text else None
     if converter.mode in {"value", "ascii"}:
-        return len(source) if isinstance(source, str) else None
+        return _Written(len(source), True) if isinstance(source, str) else None
     if converter.mode != "text":
         return None
     tail = 0 if converter.termination_code is None else 1
@@ -460,14 +492,14 @@ def _fewest_elements_written(instruction: Any) -> int | None:
             )
         except (TypeError, ValueError, OverflowError):
             return None
-        return len(text) + tail
+        return _Written(len(text) + tail, True)
     if kind is TagType.REAL:
         width = _REAL_EXPONENTIAL_TEXT_WIDTH if converter.exponential else _REAL_TEXT_WIDTH
-        return width + tail
+        return _Written(width + tail, False, finite_only=True)
     if converter.suppress_zero:
-        return 1 + tail
-    width = _FIXED_TEXT_WIDTH.get(kind)
-    return None if width is None else width + tail
+        return _Written(1 + tail, False)
+    fixed = _FIXED_TEXT_WIDTH.get(kind)
+    return None if fixed is None else _Written(fixed[0] + tail, fixed[1])
 
 
 def _evaluate_text_past_bank(
@@ -476,10 +508,13 @@ def _evaluate_text_past_bank(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """CLK_TEXT_PAST_BANK: a Copy by address whose text runs past the end of its bank.
+    """CLK_TEXT_PAST_BANK and CLK_TEXT_PAST_BLOCK: a Copy by address whose text runs
+    past the end of its bank, or of its own block while the bank goes on.
 
-    pyrung writes the elements that fit and drops the rest; it warns, as the store is
-    one a CLICK takes.  Only a store whose shortest text runs past is reported.
+    pyrung writes the elements its block holds and drops the rest.  Past the bank
+    it warns, as the store is one a CLICK takes; past a block mapped inside a bank
+    it warns that a CLICK writes on into the bank where pyrung stops.  Only a store
+    whose shortest text runs past is reported.
     """
     if type(instruction).__name__ != "CopyInstruction":
         return []
@@ -488,8 +523,8 @@ def _evaluate_text_past_bank(
         target = target.value
     if not isinstance(target, Tag):
         return []
-    count = _fewest_elements_written(instruction)
-    if count is None or count < 2:
+    written = _fewest_elements_written(instruction)
+    if written is None or written.count < 2:
         return []
     resolution = resolver.resolve_operand_slots(target)
     if resolution.unresolved or len(resolution.slots) != 1:
@@ -498,29 +533,59 @@ def _evaluate_text_past_bank(
     bank = BANKS.get(slot.memory_type)
     if bank is None or slot.address is None:
         return []
-    room = bank.max_addr - slot.address + 1
-    if count <= room:
-        return []
+    count = written.count
+    bank_room = bank.max_addr - slot.address + 1
+    block_room_ = block_room(target)
     location_text = _format_location(_instruction_location(base_location, "instruction.target"))
-    start = f"{slot.memory_type}{slot.address}"
-    end = f"{slot.memory_type}{bank.max_addr}"
-    what = "characters" if slot.memory_type == "TXT" else "digits"
+    memory_type = slot.memory_type
+    start = f"{memory_type}{slot.address}"
+    what = "characters" if memory_type == "TXT" else "elements"
+    severity = "error" if mode == "strict" else "warning"
+
+    if block_room_ is not None and block_room_ < min(count, bank_room):
+        home = _store_block(target)
+        assert home is not None
+        block = home[0]
+        named = target.name if target.name == start else f"{target.name} ({start})"
+        lowest = block.end - count + 1
+        return [
+            ClickFinding(
+                code=CLK_TEXT_PAST_BLOCK,
+                severity=severity,
+                message=(
+                    f"copy() into {named} at {location_text} writes "
+                    f"{written.describe(what)}, past {_element_name(block, block.end)} at the "
+                    f"end of its block {block.name}: pyrung drops "
+                    f"{written.dropped(block_room_)}, where a "
+                    f"CLICK writes on into {memory_type}{slot.address + block_room_}."
+                ),
+                location=location_text,
+                suggestion=(
+                    f"Start it at {_element_name(block, lowest)} or lower to keep "
+                    f"{written.kept()}."
+                    if lowest >= block.start
+                    else f"Map {block.name} onto more of {memory_type} to keep {written.kept()}."
+                ),
+            )
+        ]
+    if count <= bank_room:
+        return []
     lowest = bank.max_addr - count + 1
-    suggestion = (
-        f"Start it at {slot.memory_type}{lowest} or lower to keep every one."
-        if lowest >= bank.min_addr
-        else None
-    )
     return [
         ClickFinding(
             code=CLK_TEXT_PAST_BANK,
-            severity="error" if mode == "strict" else "warning",
+            severity=severity,
             message=(
-                f"copy() into {start} at {location_text} writes {count} or more {what}, "
-                f"past {end} at the end of the bank: the last {count - room} are dropped."
+                f"copy() into {start} at {location_text} writes {written.describe(what)}, "
+                f"past {memory_type}{bank.max_addr} at the end of the bank: "
+                f"{written.dropped(bank_room)} are dropped."
             ),
             location=location_text,
-            suggestion=suggestion,
+            suggestion=(
+                f"Start it at {memory_type}{lowest} or lower to keep {written.kept()}."
+                if lowest >= bank.min_addr
+                else None
+            ),
         )
     ]
 

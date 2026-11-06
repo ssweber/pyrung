@@ -64,7 +64,9 @@ def _scan(
         compiled = compile_kernel(prog, blockless=engine == "kernel_blockless")
         kernel = compiled.create_kernel()
         _step_compiled_kernel(compiled, kernel, dt=0.010)
-        return {tag.name: kernel.tags[tag.name] for tag in watch}, set(kernel.tags)
+        # A blockless kernel holds only the tags the program names or writes.
+        tags = kernel.tags
+        return {tag.name: tags.get(tag.name, tag.default) for tag in watch}, set(tags)
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
     result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
@@ -235,3 +237,70 @@ def test_the_write_sites_of_a_text_stop_at_the_block_end():
     (instr,) = prog.rungs[0]._execution_items
     names = [getattr(target, "name", None) for target in instruction_write_targets(instr)]
     assert names == ["TXT997", "TXT998", "TXT999", "TXT1000"]
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_text_into_a_bank_of_another_blocks_object_keeps_its_addresses(engine, monkeypatch):
+    """Two ``ClickBlocks()`` are one TXT bank: a range over one still lets a text
+    into the other land at its own addresses."""
+    first, second = ClickBlocks(), ClickBlocks()
+    watch = [second.txt[1], second.txt[2], first.txt[5]]
+    with Program(strict=False) as prog:
+        with Rung():
+            fill("x", first.txt.select(5, 5))
+            copy("AB", second.txt[1])
+        with Rung(*(tag == "#" for tag in watch)):
+            out(Bool("Seen"))
+
+    values, _names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    assert [values[tag.name] for tag in watch] == ["A", "B", "x"]
+    assert bool(values[SC43.name]) is False
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_a_text_writes_the_tags_that_hold_the_addresses(engine, monkeypatch):
+    """A block mapped onto the bank, and a named slot, hold their addresses: a text
+    run over them writes those tags, not a tag named for the address."""
+    blocks = ClickBlocks()
+    txt = blocks.txt
+    msg = Block("Msg", TagType.CHAR, 1, 10)
+    msg.map_to(txt.select(101, 110))
+    txt.slot(996, name="Unit")
+    unit = txt[996]
+    watch = [txt[100], msg[1], msg[2], txt[995], unit, txt[997], txt[998]]
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("ABC", txt[100])
+            copy("DE", txt[995])
+            copy("FG", unit)
+        with Rung(*(tag == "#" for tag in watch)):
+            out(Bool("Seen"))
+
+    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    assert [values[tag.name] for tag in watch] == ["A", "B", "C", "D", "F", "G", BLANK_CHAR]
+    assert bool(values[SC43.name]) is False
+    assert not {"TXT101", "TXT102", "TXT996"} & names
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("bank_read_first", [False, True], ids=["fresh", "bank_read"])
+def test_a_text_into_a_mapped_block_ends_with_that_block(engine, bank_read_first, monkeypatch):
+    """Msg on TXT101..110 ends a text at Msg10, though a CLICK writes on into TXT111
+    (CLK_TEXT_PAST_BLOCK says so).  Reading the bank's address first, which makes
+    the bank the slot's block, changes nothing."""
+    blocks = ClickBlocks()
+    txt = blocks.txt
+    msg = Block("Msg", TagType.CHAR, 1, 10)
+    msg.map_to(txt.select(101, 110))
+    if bank_read_first:
+        assert txt[109] is msg[9]
+    watch = [msg[9], msg[10], txt[111]]
+    with Program(strict=False) as prog:
+        with Rung():
+            copy("ABC", msg[9])
+        with Rung(*(tag == "#" for tag in watch)):
+            out(Bool("Seen"))
+
+    values, _names = _scan(prog, engine, [*watch, SC43], monkeypatch)
+    assert [values[tag.name] for tag in watch] == ["A", "B", BLANK_CHAR]
+    assert bool(values[SC43.name]) is False

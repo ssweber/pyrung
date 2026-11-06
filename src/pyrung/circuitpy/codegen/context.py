@@ -278,8 +278,9 @@ class CodegenContext:
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
-    # Blocks a Copy writes several elements of from a fixed target: never compacted.
-    multi_element_store_blocks: set[int] = field(default_factory=set)
+    # Tags a Copy writes several elements from (a text, its digits): their block is
+    # never compacted, outside blockless mode.
+    multi_element_store_targets: set[str] = field(default_factory=set)
     # Blocks a rung condition indexes: their ``_cond_index_*`` helper reads an
     # address outside the block as 0 rather than raising.
     used_condition_index_blocks: set[int] = field(default_factory=set)
@@ -375,25 +376,24 @@ class CodegenContext:
             )
 
     def _note_multi_element_store(self, instr: Any) -> None:
-        """Keep the block of a Copy that writes elements from a fixed one on whole.
+        """Note the target of a Copy that writes elements from a fixed one on.
 
         A text and its digits go into the elements after the target, by address, so
-        that block's array holds every address (``build_compact_block_maps``).
+        the block that target lives in keeps every address (``build_compact_block_maps``).
         """
         if not isinstance(instr, CopyInstruction):
             return
         target = instr.target
         if isinstance(target, ImmediateRef):
             target = target.value
-        block = getattr(target, "_pyrung_block", None) if isinstance(target, Tag) else None
-        if block is None:
+        if not isinstance(target, Tag):
             return
         if instr.convert is not None or (isinstance(instr.source, str) and len(instr.source) > 1):
-            self.multi_element_store_blocks.add(id(block))
+            self.multi_element_store_targets.add(target.name)
 
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
-        self.multi_element_store_blocks.clear()
+        self.multi_element_store_targets.clear()
         self.dict_backed_tag_names.clear()
         self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
@@ -669,10 +669,19 @@ class CodegenContext:
     def build_compact_block_maps(self) -> None:
         """Build compact index mappings for blocks with only static access."""
         self.compact_block_map = {}
-        whole = set(self.multi_element_store_blocks)
-        for block_id, (bank_id, _addr_map) in self.block_alias.items():
-            if block_id in whole:
-                whole.add(bank_id)
+        # A block a multi-element store writes into keeps every address, for the
+        # elements after its target.  Blockless code stores those by name, and its
+        # template holds only the tags the program names, so it compacts as before.
+        # ``tag_block_addresses`` is alias-resolved: the block the slot is in.
+        whole = (
+            set()
+            if self.blockless
+            else {
+                self.tag_block_addresses[name][0]
+                for name in self.multi_element_store_targets
+                if name in self.tag_block_addresses
+            }
+        )
         for block_id in self.block_bindings:
             if (
                 block_id in self.used_indirect_blocks
