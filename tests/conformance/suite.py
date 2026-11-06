@@ -65,6 +65,7 @@ from tests.conformance.copy import (
     test_real_bits,
     test_real_text,
     test_text,
+    test_txt_end,
     test_word_floor,
     test_word_store,
 )
@@ -312,6 +313,7 @@ APART_GROUPS = [
     test_coil_timing.group,
     test_word_floor.group,
     test_flasher_off.group,
+    test_txt_end.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -336,8 +338,9 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow_timing": ApartPart(
         ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
     ),
-    # A fourth, of what the others left: a flasher's off phase of 0 or below.
-    "follow_extra": ApartPart(("flasher_off",)),
+    # A fourth, of what the others left: a flasher's off phase of 0 or below, and a Real's
+    # text running past TXT1000.
+    "follow_extra": ApartPart(("flasher_off", "txt_end")),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
