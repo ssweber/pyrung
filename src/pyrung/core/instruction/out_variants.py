@@ -3,13 +3,14 @@
 Each variant is its own class and none subclasses ``OutInstruction``: the
 analyses that dispatch on ``OutInstruction`` read it as "the coil equals its
 rung", which no variant is.  The variants keep their state in tags: the target
-bit and the owned Timers' accumulators (CLICK's TD).  The one exception is
-toggle's previous rung state, a memory key written every scan.  Timed phases
-carry the usual ``_frac:<Acc>`` remainder, in nanoseconds.
+bit and the owned Timers' accumulators (CLICK's TD).  The exceptions are
+memory keys written every scan: the rung's previous state (toggle, debounce,
+timed) and a flasher's phase.  Timed phases carry the usual ``_frac:<Acc>``
+remainder, in nanoseconds.
 
 None of them writes a Timer's ``Done`` bit (CLICK's T), ``EN`` or ``TT``.  A
-CLICK Out coil claims the whole timer number but reads its phases from the TDs
-alone and never turns T<n> on (hardware round 1, probe O6), so a contact on
+CLICK Out coil claims the whole timer number and never turns T<n> on
+(hardware round 1, probe O6), so a contact on
 that Timer's ``Done`` is always off.  The ``*_done`` fields only name the
 claimed timer, for the Click mapping checks.
 """
@@ -36,6 +37,9 @@ if TYPE_CHECKING:
     from pyrung.core.time_mode import TimeUnit
 
 _ACC_MAX = 32767
+
+# A flasher's phase (memory ``_flash_phase``).
+_FLASH_IDLE, _FLASH_ON, _FLASH_OFF = 0, 1, 2
 
 
 def _coil_tag(target: Tag | ImmediateRef) -> Tag:
@@ -110,13 +114,23 @@ class ToggleInstruction(Instruction):
 class DebounceInstruction(Instruction):
     """Debounce coil: the target follows the rung once it has held steady.
 
-    The on side times while the rung is true, the off side while it is false.
-    A side starts from 0 when the rung changes to it, and keeps its
-    accumulator while the other side times (CLICK keeps the on side's TD after
-    the rung falls, hardware round of 2026-11-05).  The rung's previous state
-    is memory.  The target turns on when the on side's accumulator reaches its
-    preset and off when the off side's does; between the two it holds.
-    Neither Timer's ``Done`` is written.
+    Two accumulators, one a side (hardware readings of 2026-11-06).  The on
+    side's counts while the rung is true: from 0 at a rise, held at a fall.
+    The off side's is 0 on every true scan and counts while the rung is
+    false, from power-up too.  The target turns on on a true scan whose on
+    accumulator, ticked, reaches its preset, and off on a false scan whose
+    off accumulator reached its preset before this scan's tick; between the
+    two it holds.  So the off side lags a scan: on the scan of the fall it
+    ticks and compares nothing, and it drops the target a scan after a TOF of
+    its preset would (``coil_timing/deb_off_against_tof``), a 0/0 debounce
+    filtering a one-scan dropout (``deb_zero/off_side_lag``).
+
+    The lag is taken in the compare, not the count: an off side that only
+    started ticking on the scan after the fall would read its TD a scan
+    short, under the 100 ms that ``coil_timing/off_td_held`` read (101).
+    The off TD read on the scan of the fall itself would tell the two apart:
+    a scan's time here, 0 under a count that starts late.  The rung's
+    previous state is memory.  Neither Timer's ``Done`` is written.
     """
 
     INERT_WHEN_DISABLED = False
@@ -154,24 +168,33 @@ class DebounceInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         rung_key = self.memory_key("_debounce_rung")
-        changed = bool(enabled) != bool(ctx.get_memory(rung_key, False))
+        was_enabled = bool(ctx.get_memory(rung_key, False))
         ctx.set_memory(rung_key, bool(enabled))
+        on_frac = f"_frac:{self.on_acc.name}"
+        off_frac = f"_frac:{self.off_acc.name}"
         if enabled:
-            acc, preset, held = self.on_acc, self.on_preset, self.off_acc
-        else:
-            acc, preset, held = self.off_acc, self.off_preset, self.on_acc
-        frac_key = f"_frac:{acc.name}"
-        if changed:
-            # The side the rung changed to starts from 0.
-            ctx.set_tags({acc.name: 0})
-            ctx.set_memory(frac_key, 0)
-        acc_value, frac = _tick(ctx, acc, self.unit)
-        ctx.set_memory(frac_key, frac)
-        held_frac = f"_frac:{held.name}"
-        ctx.set_memory(held_frac, ctx.get_memory(held_frac, 0))
-        tags: dict[str, Any] = {acc.name: acc_value}
-        if acc_value >= resolve_preset_ctx(preset, ctx):
-            tags[self.target.name] = bool(enabled)
+            if not was_enabled:
+                # A rise starts the on side from 0.
+                ctx.set_tags({self.on_acc.name: 0})
+                ctx.set_memory(on_frac, 0)
+            acc_value, frac = _tick(ctx, self.on_acc, self.unit)
+            ctx.set_memory(on_frac, frac)
+            ctx.set_memory(off_frac, 0)
+            tags: dict[str, Any] = {self.on_acc.name: acc_value, self.off_acc.name: 0}
+            if acc_value >= resolve_preset_ctx(self.on_preset, ctx):
+                tags[self.target.name] = True
+            ctx.set_tags(tags)
+            return
+        # The off side compares what it had reached before this scan, and not on the fall.
+        timed_out = not was_enabled and ctx.get_tag(self.off_acc.name, 0) >= resolve_preset_ctx(
+            self.off_preset, ctx
+        )
+        acc_value, frac = _tick(ctx, self.off_acc, self.unit)
+        ctx.set_memory(off_frac, frac)
+        ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
+        tags = {self.off_acc.name: acc_value}
+        if timed_out:
+            tags[self.target.name] = False
         ctx.set_tags(tags)
 
     def advance_profile(self) -> AdvanceProfile | None:
@@ -188,16 +211,26 @@ class DebounceInstruction(Instruction):
 class FlasherInstruction(Instruction):
     """Flasher coil: alternates on and off phases while the rung is true.
 
-    The on phase starts when the rung goes true.  The phase is read from the
-    accumulators: the off phase runs while the on side's has reached its preset
-    and the off side's has not, the on phase otherwise.  Each phase's
-    accumulator holds its final value until that phase starts again, from 0.
-    The rung going false turns the target off and freezes both accumulators;
-    going true again restarts with an on phase, both accumulators from 0
-    (hardware round of 2026-11-05: the off TD does not run on from where it
-    froze).  The first on phase counts the rung's first scan, as on_delay
-    does, so an on time of a scan or less (0 or below included) does not show
-    then; nor does an on phase of 0 or below that an off phase ends.
+    The phase is hidden state, a memory cell (hardware readings of
+    2026-11-06): 0 idle, 1 on, 2 off.  The rung false sets it idle, turns the
+    target off and freezes both accumulators.  A true rung on an idle phase
+    starts an on phase, both accumulators from 0 (the off TD does not run on
+    from where it froze, hardware round of 2026-11-05).  Each scan ticks the
+    running phase's accumulator; at or past its preset the other phase starts
+    and its accumulator is cleared.  The accumulator of the phase not running
+    holds.  A TD the ladder writes past the running phase's preset ends that
+    phase on its next tick (``td_write`` read it for both phases).  One
+    written to the phase not running stands until that phase starts again
+    and clears it: what the model implies, not read on a CLICK.  The target
+    is on in the on phase.  The first on phase counts the rung's first scan,
+    as on_delay does, so an on time of a scan or less does not show then.
+
+    An on or off preset of 0 or below holds the flasher reset: idle, dark,
+    both accumulators 0, from the first scan that reads it.  A CLICK read
+    that only after the fact: ``flasher_off`` read an off preset of 0 and -5
+    dark with both TDs 0 from 50 ms on, and ``coil_timing/flasher_on_zero``
+    the coil of an on preset of 0 dark.  That no first on phase shows before
+    the reset takes hold is pyrung's choice, not yet read on a CLICK.
     Neither Timer's ``Done`` is written.
     """
 
@@ -237,52 +270,46 @@ class FlasherInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         on_frac = f"_frac:{self.on_acc.name}"
         off_frac = f"_frac:{self.off_acc.name}"
-        idle_key = self.memory_key("_flash_idle")
+        phase_key = self.memory_key("_flash_phase")
         if not enabled:
             # Both accumulators (and their remainders) freeze where they are.
-            ctx.set_memory(idle_key, True)
+            ctx.set_memory(phase_key, _FLASH_IDLE)
             ctx.set_tags({self.target.name: False})
             return
-
-        tags: dict[str, Any] = {}
-        restarting = ctx.get_memory(idle_key, True)
-        ctx.set_memory(idle_key, False)
-        on_acc = ctx.get_tag(self.on_acc.name, 0)
-        off_acc = ctx.get_tag(self.off_acc.name, 0)
-        if restarting:
+        on_preset = resolve_preset_ctx(self.on_preset, ctx)
+        off_preset = resolve_preset_ctx(self.off_preset, ctx)
+        if on_preset <= 0 or off_preset <= 0:
+            # Held reset: idle, dark, both accumulators 0.
+            ctx.set_memory(phase_key, _FLASH_IDLE)
+            ctx.set_memory(on_frac, 0)
+            ctx.set_memory(off_frac, 0)
+            ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0, self.target.name: False})
+            return
+        phase = ctx.get_memory(phase_key, _FLASH_IDLE)
+        if phase == _FLASH_IDLE:
             # Coming back always starts an on phase, both accumulators from 0.
-            on_acc = off_acc = 0
+            phase = _FLASH_ON
             ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0})
             ctx.set_memory(on_frac, 0)
             ctx.set_memory(off_frac, 0)
-        on_preset = resolve_preset_ctx(self.on_preset, ctx)
-        off_phase = on_acc >= on_preset and off_acc < resolve_preset_ctx(self.off_preset, ctx)
-        if not off_phase:
-            acc_value, frac = _tick(ctx, self.on_acc, self.unit)
-            tags[self.on_acc.name] = acc_value
-            if acc_value >= on_preset:
-                lit = False
-                tags[self.off_acc.name] = 0
-                ctx.set_memory(on_frac, 0)
-                ctx.set_memory(off_frac, 0)
-            else:
-                lit = True
-                ctx.set_memory(on_frac, frac)
-                ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0))
+        if phase == _FLASH_ON:
+            acc, preset, other = self.on_acc, on_preset, self.off_acc
         else:
-            acc_value, frac = _tick(ctx, self.off_acc, self.unit)
-            tags[self.off_acc.name] = acc_value
-            if acc_value >= resolve_preset_ctx(self.off_preset, ctx):
-                # The on phase starts from 0: on unless its time is up already.
-                lit = on_preset > 0
-                tags[self.on_acc.name] = 0
-                ctx.set_memory(on_frac, 0)
-                ctx.set_memory(off_frac, 0)
-            else:
-                lit = False
-                ctx.set_memory(off_frac, frac)
-                ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
-        tags[self.target.name] = lit
+            acc, preset, other = self.off_acc, off_preset, self.on_acc
+        acc_value, frac = _tick(ctx, acc, self.unit)
+        tags: dict[str, Any] = {acc.name: acc_value}
+        if acc_value >= preset:
+            # The other phase starts, from 0.
+            phase = _FLASH_OFF if phase == _FLASH_ON else _FLASH_ON
+            tags[other.name] = 0
+            ctx.set_memory(on_frac, 0)
+            ctx.set_memory(off_frac, 0)
+        else:
+            ctx.set_memory(f"_frac:{acc.name}", frac)
+            other_frac = f"_frac:{other.name}"
+            ctx.set_memory(other_frac, ctx.get_memory(other_frac, 0))
+        ctx.set_memory(phase_key, phase)
+        tags[self.target.name] = phase == _FLASH_ON
         ctx.set_tags(tags)
 
     def advance_profile(self) -> AdvanceProfile | None:
