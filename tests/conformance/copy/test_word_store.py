@@ -1,40 +1,35 @@
 """What a Word holds after a store, and what comes out of one: the ``word_store`` group.
 
-Part ``copy`` (``suite.PARTS``).  pyrung wraps a Copy, Block copy or Fill into a Word
-modulo 65536 with no flag, where it clamps with SC43 into an Int or a Dint
-(``core/instruction/conversions.py``).  No CLICK has read that.  Expectations are
-what pyrung reads today, so a CLICK that reads otherwise is an answer.  A DH
-under test is preset to 0x1234, so an instruction that refuses reads apart from
-one that writes.  Results are classes (``probe_kit.class_of``), 0 for any other
-value; SC43 bits are read on the rung after each op.
+Part ``copy`` (``suite.PARTS``).  Read on a CLICK (2026-11-05): a Copy, Block copy or Fill into a
+Word from a register wraps below 0 and clamps past 65535, neither with a flag; a constant keeps its
+low 16 bits.  A Word copied into an Int keeps its bits, and into a DD or a DF is its value
+(``core/instruction/conversions.py``).  A DH under test is preset to 0x1234, so an instruction that
+refuses reads apart from one that writes.  Results are classes (``probe_kit.class_of``), 0 for any
+other value; SC43 bits are read on the rung after each op.
 
-- ``word_below_zero``: DS -1, DD -1, DF -1.6 copied into a Word.  Wrap (pyrung):
-  1, 1, 1 with no flag.  Clamp at 0 with SC43: 2, 2, 2, Result4 = 7.  A refusal
-  that leaves the DH: 4.  A DF that rounds: 3 (0xFFFE) in Result3, and its raw low
-  word (0xCCCD) reads 0.
-- ``word_above_top``: DD 70000, DD 65536, DF 70000.7.  Wrap (pyrung): 1, 1, 1 with
-  no flag (4464, 0, 4464).  Clamp with SC43: 2, 2, 2, Result4 = 7.  A DF that
-  rounds reads 3 (4465).  A DF's raw low word reads 0.
-- ``word_into_signed``: DH 0xFFFF and 0x8000 copied into an Int.  Clamp, as any
-  value past an Int does (pyrung): 32767, 32767, SC43 bits 1 and 2 in Result4.
-  The bits read as signed: -1, -32768, no flag.  The same DH into a DD (Result3)
-  and a DF (ErrorCode): 65535 is 1, -1 is 2.
-- ``block_into_word``: a Block copy into Words, element by element.  DS {-1} (Result1),
-  DD {70000} (Result2), DD {-1} (Result3); SC43 after each block in Result4.  Wrap
-  (pyrung): 1, 1, 1, 0.  Clamp with SC43: 2, 2, 2, 3 (a block of DS and a block of
-  DD).
-- ``block_from_word``: DH {0xFFFF, 0x8000} block copied into Ints.  Clamp (pyrung):
-  32767, 32767, SC43 on (Result3 = 1).  The bits: -1, -32768, 0.
-- ``fill_into_word``: a Fill from a register into Words.  DS -1, DD 70000, DF -1.6.
-  Wrap with no flag (pyrung): 1, 1, 1, 0.  Clamp: 2, 2, 2 with whichever flags.
-- ``word_literals`` (last of the group: the editor may refuse a constant out of a
-  Word's range at paste, and a refusal costs only this case): the constants -1 and
-  70000 into a Word by Copy (Result1, Result2) and by Fill (Result3, Result4), SC43
-  in ErrorCode bits 1, 2, 4, 8.  Wrap with no flag (pyrung): 1, 1, 1, 1, 0.  Clamp:
-  2, 2, 2, 2.
+- ``word_below_zero``: DS -1, DD -1, DF -1.6 copied into a Word.  Wrap (CLICK): 1, 1, 1 with no
+  flag.  Clamp at 0 with SC43: 2, 2, 2, Result4 = 7.  A refusal that leaves the DH: 4.  A DF that
+  rounds: 3 (0xFFFE) in Result3, and its raw low word (0xCCCD) reads 0.
+- ``word_above_top``: DD 70000, DD 65536, DF 70000.7.  Clamp with no flag (CLICK): 2, 2, 2,
+  Result4 = 0.  Wrap: 1, 1, 1 (4464, 0, 4464).  A DF that rounds reads 3 (4465).  A DF's raw low
+  word reads 0.
+- ``word_into_signed``: DH 0xFFFF and 0x8000 copied into an Int.  The bits read as signed (CLICK):
+  -1, -32768, no flag.  Clamp, as any value past an Int does: 32767, 32767, SC43 bits 1 and 2 in
+  Result4.  The same DH into a DD (Result3) and a DF (ErrorCode): 65535 is 1, -1 is 2.
+- ``block_into_word``: a Block copy into Words, element by element.  DS {-1} (Result1), DD {70000}
+  (Result2), DD {-1} (Result3); SC43 after each block in Result4.  CLICK: 1, 2, 1, 0, the Copy's
+  rule.  Wrap: 1, 1, 1, 0.  Clamp with SC43: 2, 2, 2, 3 (a block of DS and a block of DD).
+- ``block_from_word``: DH {0xFFFF, 0x8000} block copied into Ints.  The bits (CLICK): -1, -32768,
+  0.  Clamp: 32767, 32767, SC43 on (Result3 = 1).
+- ``fill_into_word``: a Fill from a register into Words.  DS -1, DD 70000, DF -1.6.  CLICK: 1, 2,
+  1, 0, the Copy's rule.  Wrap with no flag: 1, 1, 1, 0.  Clamp: 2, 2, 2 with whichever flags.
+- ``word_literals`` (last of the group: the editor may refuse a constant out of a Word's range at
+  paste, and a refusal costs only this case): the constants -1 and 70000 into a Word by Copy
+  (Result1, Result2) and by Fill (Result3, Result4), SC43 in ErrorCode bits 1, 2, 4, 8.  Wrap with
+  no flag (CLICK): 1, 1, 1, 1, 0.  Clamp: 2, 2, 2, 2.
 
-A Math into a Word is hex mode, in ``hex_math``.  Each case owns ten of DD810.., a
-few of DF434.. and of DH422..; DS4312..DS4315 are the Block copies' Ints.
+A Math into a Word is hex mode, in ``hex_math``.  Each case owns ten of DD810.., a few of DF434..
+and of DH422..; DS4312..DS4315 are the Block copies' Ints.
 """
 
 from __future__ import annotations
@@ -235,47 +230,47 @@ group = Group(
             probe="does a Copy below 0 into a Word wrap or clamp, and is SC43 raised",
         ),
         case(
-            "A Copy past 65535 into a Word wraps with no flag: DD 70000 stores 4464 (Result1 "
-            "= 1), DD 65536 stores 0 (Result2 = 1), DF 70000.7 truncates and stores 4464 "
-            "(Result3 = 1), and none raises SC43 (Result4 = 0)",
+            "A Copy past 65535 into a Word clamps with no flag: DD 70000, DD 65536 and DF "
+            "70000.7 store 65535 (Result1, Result2, Result3 = 2), and none raises SC43 "
+            "(Result4 = 0)",
             ladder=prove_word_above_top,
             init=init_word_above_top,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 0},
+            expect={"Result1": 2, "Result2": 2, "Result3": 2, "Result4": 0},
             probe="does a Copy past 65535 into a Word wrap or clamp, and is SC43 raised",
         ),
         case(
-            "A Word past 32767 clamps when copied into an Int: 0xFFFF and 0x8000 store 32767 "
-            "(Result1, Result2) with SC43 (Result4 = 3); into a DD (Result3 = 1) and a DF "
+            "A Word copied into an Int keeps its bits: 0xFFFF and 0x8000 store -1 and -32768 "
+            "(Result1, Result2) with no SC43 (Result4 = 0); into a DD (Result3 = 1) and a DF "
             "(ErrorCode = 1) 0xFFFF is 65535",
             ladder=prove_word_into_signed,
             init=init_word_into_signed,
-            expect={"Result1": 32767, "Result2": 32767, "Result3": 1, "Result4": 3, "ErrorCode": 1},
+            expect={"Result1": -1, "Result2": -32768, "Result3": 1, "Result4": 0, "ErrorCode": 1},
             probe="does a Word copy into an Int by value (clamp) or by its bits (-1)",
         ),
         case(
-            "A Block copy into Words wraps each element with no flag: DS -1 is 0xFFFF (Result1 "
-            "= 1), DD 70000 is 4464 (Result2 = 1), DD -1 is 0xFFFF (Result3 = 1), SC43 off "
-            "(Result4 = 0)",
+            "A Block copy into Words stores each element as a Copy does, with no flag: DS -1 "
+            "is 0xFFFF (Result1 = 1), DD 70000 clamps to 65535 (Result2 = 2), DD -1 is 0xFFFF "
+            "(Result3 = 1), SC43 off (Result4 = 0)",
             ladder=prove_block_into_word,
             init=init_block_into_word,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 0},
+            expect={"Result1": 1, "Result2": 2, "Result3": 1, "Result4": 0},
             probe="does a Block copy into Words wrap or clamp, and is SC43 raised",
         ),
         case(
-            "A Block copy of Words past 32767 into Ints clamps with SC43: 0xFFFF and 0x8000 "
-            "store 32767 (Result1, Result2), SC43 on (Result3 = 1)",
+            "A Block copy of Words into Ints keeps the bits: 0xFFFF and 0x8000 store -1 and "
+            "-32768 (Result1, Result2), SC43 off (Result3 = 0)",
             ladder=prove_block_from_word,
             init=init_block_from_word,
-            expect={"Result1": 32767, "Result2": 32767, "Result3": 1},
+            expect={"Result1": -1, "Result2": -32768, "Result3": 0},
             probe="does a Block copy from Words into Ints clamp or keep the bits",
         ),
         case(
-            "A Fill from a register into Words wraps with no flag: DS -1 is 0xFFFF (Result1 = "
-            "1), DD 70000 is 4464 (Result2 = 1), DF -1.6 is 0xFFFF (Result3 = 1), SC43 off "
-            "(Result4 = 0)",
+            "A Fill from a register into Words stores as a Copy does, with no flag: DS -1 is "
+            "0xFFFF (Result1 = 1), DD 70000 clamps to 65535 (Result2 = 2), DF -1.6 is 0xFFFF "
+            "(Result3 = 1), SC43 off (Result4 = 0)",
             ladder=prove_fill_into_word,
             init=init_fill_into_word,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 0},
+            expect={"Result1": 1, "Result2": 2, "Result3": 1, "Result4": 0},
             probe="does a Fill into Words wrap or clamp, and is SC43 raised",
         ),
         case(

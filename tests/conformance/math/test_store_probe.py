@@ -7,7 +7,8 @@ stores the ``bob/stores`` arc chose without a reading.  Each case probes as the
 it reads is off just before it, a flag after an op read by running it again;
 every case has a 40-scan window).  A random draw asserts its range, not a
 value.  Expectations are what pyrung reads today, so a CLICK that reads
-otherwise is an answer.
+otherwise is an answer; ``non_finite_into_word`` and ``real_into_text_and_fill``
+are what a CLICK read on 2026-11-05.
 
 - ``rand_int_cuts`` (probe): each constant bound into an Int is cut to 16 bits.
   RAND ( 65000 , 66000 ) is -536..464 (Result1; 65000 is -536, 66000 is 464)
@@ -39,19 +40,21 @@ otherwise is an answer.
   its code, 0 in all.
 - ``non_finite_into_word`` (probe): a Math of NaN into a Dint preset 99 writes 0
   (Result1 = 1; 2 is the preset left, 3 and 4 the Dint's limits, 5 any other)
-  and a Copy of +Inf and of -Inf into a Word preset 99 writes 0 (Result2,
-  Result3 = 1; 2 preset, 3 is 65535, 4 is 32767), none raising a flag
+  and a Copy of +Inf into a Word preset 99 writes 65535 (Result2 = 3; 1 is 0, 2
+  preset, 4 is 32768) and of -Inf 32768 (Result3 = 4), none raising a flag
   (Result4 = 0: SC43 and SC46 after the Math are bits 1 and 2, SC43 after the
   Copies bits 4 and 8).  A Math of NaN or an infinity into a Word, and a Math
   of an infinity into one, are not probed: CLICK's Math takes Word operands in
   hex mode only, which a Real cannot enter (CLK_CALC_MODE_MIXED).
 - ``real_into_text_and_fill`` (probe): a finite Real copied into a TXT as it is,
-  66.7 over a seeded ``Z``.  pyrung keeps the number: its text code is 0
-  (Result1) and a plain Copy of the TXT into an Int reads 66 (Result2); the
-  number rounded would read 67, truncated 66 (a character code), the digits of
-  its text 54 ('6'), and a refused or failed copy leaves ``Z`` (90).  A Fill of
-  40000 into Ints clamps to 32767 (Result3) with no flag, and the Real copy
-  raises none (Result4 = 0; bits 1 and 2).
+  66.7 over a seeded ``Z``, writes its digits, as ``to_text()`` does: the first
+  character's code is 54 ('6', Result1; the number kept would read 0) and a
+  plain Copy of the TXT into an Int reads the digit, 6 (Result2; the number
+  would read 66, rounded 67, and a refused or failed copy leaves ``Z``, 90).
+  The text is ten characters ("66.6999969" on a CLICK, a float32; pyrung's is
+  "66.7000000"), so it starts at TXT851.  A Fill of 40000 into Ints clamps to
+  32767 (Result3) and raises SC43 (bit 2 of Result4); the Real copy raises
+  none (bit 1).
 
 Not expressible on a CLICK, so not probed: a Copy whose source is an
 expression (CLK_EXPR_ONLY_IN_CALC; the clamp of an expression is a Math, which
@@ -59,7 +62,7 @@ wraps), a Math of NaN or an infinity into a Word (hex mode), run_function and a
 Modbus receive store (no instruction here reaches them).
 
 The cases own C1661..C1700 and C1781..C1800, DD611..DD640, DF421..DF430, DH411..DH416,
-TXT521..TXT545 and DS4499..DS4500 (``memory.OWNED``).
+TXT521..TXT545, TXT851..TXT865 and DS4499..DS4500 (``memory.OWNED``).
 """
 
 from __future__ import annotations
@@ -307,7 +310,7 @@ def prove_non_finite_into_word(slot):
     probe(slot, inf_down, SC43, slot.Result4, 8)
     end = _end(slot)
     dint_readings = ((0, 1), (99, 2), (2147483647, 3), (-2147483648, 4))
-    word_readings = ((0, 1), (99, 2), (65535, 3), (32767, 4))
+    word_readings = ((0, 1), (99, 2), (65535, 3), (32768, 4))
     _class_of(dint, dint_readings, slot.Result1, end)
     _class_of(word_up, word_readings, slot.Result2, end)
     _class_of(word_down, word_readings, slot.Result3, end)
@@ -321,8 +324,8 @@ def prove_real_into_text_and_fill(slot):
     _stage(slot, lambda: copy(66.7, real))
 
     def real_to_text():
-        copy("Z", txt[541])
-        copy(real, txt[541])
+        copy("Z", txt[851])
+        copy(real, txt[851])
 
     def clamping_fill():
         fill(40000, ds.select(4499, 4499))
@@ -330,8 +333,8 @@ def prove_real_into_text_and_fill(slot):
     probe(slot, real_to_text, SC43, slot.Result4, 1)
     probe(slot, clamping_fill, SC43, slot.Result4, 2)
     with Rung(*_end(slot)):
-        copy(txt[541], slot.Result1, convert=to_ascii)
-        copy(txt[541], slot.Result2)
+        copy(txt[851], slot.Result1, convert=to_ascii)
+        copy(txt[851], slot.Result2)
         copy(ds[4499], slot.Result3)
     done(slot, WINDOW)
 
@@ -401,24 +404,24 @@ group = Group(
             probe="Copy of -Inf and NaN to text",
         ),
         case(
-            "A Math of NaN into a Dint writes 0 (Result1 = 1) and a Copy of +Inf or -Inf "
-            "into a Word writes 0 (Result2, Result3 = 1), none raising SC43 or SC46 "
-            "(Result4 = 0)",
+            "A Math of NaN into a Dint writes 0 (Result1 = 1), a Copy of +Inf into a Word "
+            "writes 65535 (Result2 = 3) and of -Inf 32768 (Result3 = 4), none raising SC43 "
+            "or SC46 (Result4 = 0)",
             ladder=prove_non_finite_into_word,
             init=_init(5, dds=[(623, 623)], dfs=[(426, 428)], dhs=[(412, 413)]),
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 0},
+            expect={"Result1": 1, "Result2": 3, "Result3": 4, "Result4": 0},
             scans=SCANS,
             probe="Math of NaN into a Dint, Copy of +/-Inf into a Word",
         ),
         case(
-            "A finite Real copied into a TXT keeps the number: 66.7 reads text code 0 "
-            "(Result1) and 66 as a plain Copy into an Int (Result2); a Fill of 40000 into "
-            "Ints clamps to 32767 (Result3); neither raises SC43 (Result4 = 0)",
+            "A finite Real copied into a TXT writes its digits: 66.7 reads text code 54, '6' "
+            "(Result1), and 6 as a plain Copy into an Int (Result2); a Fill of 40000 into "
+            "Ints clamps to 32767 (Result3) and raises SC43, the Real copy none (Result4 = 2)",
             ladder=prove_real_into_text_and_fill,
             init=_init(
-                6, dfs=[(429, 429)], dhs=[(414, 415)], txts=[(541, 545)], dss=[(4499, 4499)]
+                6, dfs=[(429, 429)], dhs=[(414, 415)], txts=[(851, 865)], dss=[(4499, 4499)]
             ),
-            expect={"Result1": 0, "Result2": 66, "Result3": 32767, "Result4": 0},
+            expect={"Result1": 54, "Result2": 6, "Result3": 32767, "Result4": 2},
             scans=SCANS,
             probe="finite Real copied into a TXT; Fill that clamps",
         ),

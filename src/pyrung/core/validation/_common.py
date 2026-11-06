@@ -412,12 +412,16 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     """What a forloop's count says about its body running, or None if it never does.
 
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
-    no iteration when ``count & 0xFFFF`` is 0 (:func:`for_loop_iterations`), so
-    a body item needs ``count != 0``.  That is exact for a 16-bit count; a wider
-    one (a ``Dint`` holding 65536) can be nonzero and still skip the body, so
-    there it is only a necessary condition (``exact`` False).  While
-    ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every count runs the body.  A
-    constant count that runs no iteration never runs it (None).
+    no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
+    body item needs ``count != 0``.  That is exact for a 16-bit count.  A Dint,
+    read whole, is 0 exactly when it is too, so ``count != 0`` would be exact
+    for it as well; it stays inexact (``exact`` False) only because marking it
+    exact changes what :func:`_inexact_entry_subroutines` feeds (simplified
+    forms, the stuck-bit validator, pilot's corrections), which a later step
+    takes on.  A REAL (0.5 truncates to 0) and an expression are inexact on
+    their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero every
+    count runs the body.  A constant count that runs no iteration never runs it
+    (None).
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations

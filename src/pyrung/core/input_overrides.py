@@ -266,14 +266,13 @@ class TagsRungsReach:
         current: Mapping[str, Any],
         rebuilt: dict[str, Any],
         *,
-        preserve_all: bool,
         preserve_retentive: bool,
     ) -> None:
-        """Add to *rebuilt* the reached slots a reset keeps the value of.
+        """Add to *rebuilt* the reached retentive slots a reset keeps the value of.
 
         One it does not keep is left out: it holds its default, and stays lazy.
         """
-        if not preserve_all and not preserve_retentive:
+        if not preserve_retentive:
             return
         slots = self._slots_by_name()
         named = self._named()
@@ -287,7 +286,7 @@ class TagsRungsReach:
                 retentive = named[name].retentive
             else:
                 continue
-            if preserve_all or retentive:
+            if retentive:
                 rebuilt[name] = value
 
     def walk(self) -> _RungsWalked:

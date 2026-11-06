@@ -37,6 +37,7 @@ from pyrung.core.condition import (
     IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
+    text_window_of,
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -182,6 +183,7 @@ def render_expr(expr: Any) -> str:
 
 def render_condition(cond: Condition) -> str:
     """Render a leaf/compound :class:`Condition` as source text."""
+    cond = text_window_of(cond)
     if (
         isinstance(cond, (CompareEq, CompareNe))
         and cond.tag.type is TagType.BOOL

@@ -4,7 +4,10 @@ Hardware round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an
 Out coil never sets its Timer's done bit T<n>, its phases come from the TDs
 alone (``tests/conformance/coils/test_out.py``).  Round 2 (2026-10-30) read O4: a
 flasher with its rung false keeps both TDs frozen, then restarts with an on
-phase.
+phase.  The round of 2026-11-05 read the TDs after the rung falls: a timed
+coil's and a debounce's on side are kept, a flasher's restart clears its off
+TD, and a preset of 0 or below gives a flasher or a timed coil no pulse
+(``tests/conformance/coils/test_out_more.py``, ``test_flasher_td.py``).
 """
 
 import pytest
@@ -102,7 +105,7 @@ def test_only_toggle_takes_an_immediate_target(build):
 
 
 class TestDebounce:
-    def test_each_side_times_like_on_delay(self, runner_factory):
+    def test_each_side_times_from_0_and_keeps_its_td(self, runner_factory):
         Valve = Bool("Valve")
         with Program() as logic:
             with Rung(In):
@@ -118,9 +121,9 @@ class TestDebounce:
             (False, 20, False, 0, False),
             (True, 30, False, 0, False),
             (True, 40, False, 0, False),  # O2: the TD keeps counting, as on_delay's does
-            (True, 0, False, 10, False),
-            (False, 0, False, 20, False),
-            (False, 10, False, 0, False),
+            (True, 40, False, 10, False),  # the on side's TD is kept
+            (False, 40, False, 20, False),
+            (False, 10, False, 20, False),  # each side starts from 0 when the rung changes
         ]
 
     def test_zero_presets_follow_the_rung(self, runner_factory):
@@ -190,7 +193,7 @@ class TestFlasher:
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(
             runner,
-            [1] * 11 + [0, 1],
+            [1] * 11 + [0, 1, 1, 1, 1],
             "Beacon",
             "OT3_Done",
             "OT3_Acc",
@@ -212,7 +215,10 @@ class TestFlasher:
             (True, False, 0, False, 20),
             (True, False, 10, False, 20),
             (False, False, 10, False, 20),  # O4: both TDs freeze
-            (True, False, 10, False, 20),  # a full on phase again, from 0
+            (True, False, 10, False, 0),  # a full on phase again, both TDs from 0
+            (True, False, 20, False, 0),
+            (False, False, 30, False, 0),
+            (False, False, 30, False, 10),
         ]
 
     def test_needs_both_phases(self):
@@ -234,9 +240,11 @@ class TestFlasher:
 
 
 class TestShortPhases:
-    """A phase no longer than a scan still shows for one scan."""
+    """The first on phase counts the rung's first scan, as on_delay does: one no longer
+    than a scan does not show.  A preset of 0 or below gives no pulse (hardware,
+    ``out_more/zero_and_below``)."""
 
-    def test_flasher_starts_on_with_an_on_time_under_a_scan(self, runner_factory):
+    def test_flasher_shows_an_on_time_under_a_scan_only_after_an_off_phase(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):
@@ -244,10 +252,24 @@ class TestShortPhases:
 
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(runner, [1] * 8, "Beacon")
-        assert [r[0] for r in rows] == [True, False, False, True, False, False, False, True]
+        assert [r[0] for r in rows] == [False, False, False, True, False, False, False, True]
+
+    @pytest.mark.parametrize("on_preset", [0, -5])
+    def test_flasher_with_no_on_time_never_shows(self, runner_factory, on_preset):
+        Beacon = Bool("Beacon")
+        OnTime = Int("OnTime", default=on_preset)
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], OnTime), off=(T[4], 20))
+            with Rung(In):
+                flasher(Bool("Both"), on=(T[5], 0), off=(T[6], 0))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1] * 8 + [0] + [1] * 4, "Beacon", "Both")
+        assert rows == [(False, False)] * 13
 
     @pytest.mark.parametrize("maintained", [False, True])
-    def test_timed_pulse_under_a_scan_shows_once(self, runner_factory, maintained):
+    def test_timed_pulse_under_a_scan_does_not_show(self, runner_factory, maintained):
         Horn = Bool("Horn")
         with Program() as logic:
             with Rung(In):
@@ -255,13 +277,25 @@ class TestShortPhases:
 
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(runner, [1, 0, 0, 1, 1], "Horn", "OT5_Acc", "OT5_Done")
+        # Maintained, it follows the rung once its (spent) on time is up.
         assert rows == [
-            (True, 10, False),
-            (False, 0, False),
-            (False, 0, False),
-            (True, 10, False),
+            (maintained, 10, False),
+            (False, 10, False),
+            (False, 10, False),
+            (maintained, 10, False),
             (maintained, 10, False),
         ]
+
+    @pytest.mark.parametrize("preset", [0, -5])
+    def test_timed_preset_of_0_or_below_gives_no_pulse(self, runner_factory, preset):
+        Horn = Bool("Horn")
+        OnTime = Int("OnTime", default=preset)
+        with Program() as logic:
+            with Rung(In):
+                timed(Horn, T[5], OnTime)
+
+        runner = runner_factory(logic, dt=0.010)
+        assert _trace(runner, [1, 1, 0, 1, 0], "Horn") == [(False,)] * 5
 
 
 class TestTimed:
@@ -278,9 +312,9 @@ class TestTimed:
             (True, False, 20),
             (True, False, 30),  # O5: an edge during the on time does not restart it
             (False, False, 40),  # O6: timed out, and the Done stays off
-            (False, False, 0),
-            (False, False, 0),
-            (False, False, 0),
+            (False, False, 40),  # the TD is kept with the rung false
+            (False, False, 40),
+            (False, False, 40),
         ]
 
     def test_not_maintained_needs_a_fresh_edge(self, runner_factory):
@@ -298,8 +332,8 @@ class TestTimed:
             (False, 20, False),
             (False, 20, False),
             (False, 20, False),
-            (False, 0, False),
-            (True, 10, False),
+            (False, 20, False),  # kept with the rung false
+            (True, 10, False),  # a new edge starts from 0
         ]
 
     def test_maintained_follows_the_rung_after_the_on_time(self, runner_factory):

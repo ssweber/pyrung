@@ -10,7 +10,8 @@ Every coil's rung is gated on ``Cmd``, so the reset drops each coil's input.
 A debounce coil then turns off only when its off side times out, so those
 cases are ``ready`` once the coil is off, and ``keep`` the off side's timer:
 its TD keeps counting while the input stays off, from power-up on, so it never
-matches a fresh PLC's.
+matches a fresh PLC's.  They keep the on side's TD too, and a timed coil its
+TD: a CLICK keeps each after the rung falls (``out_more``).
 
 The cases are the probes O1-O6 of ``scratchpad/click-v4/RESEARCH.md``.  Hardware
 round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an Out coil
@@ -177,7 +178,7 @@ group = Group(
             "preset)",
             ladder=prove_debounce_td_keeps_counting,
             ready=lambda slot: ~c[1811],
-            keep=[t[311], td[311]],
+            keep=[td[301], t[311], td[311]],
             expect={"Result1": 1, "Result2": 1},
             scans=50,
         ),
@@ -187,7 +188,7 @@ group = Group(
             "(Result2 = 0) and on later (Result1 = 1)",
             ladder=prove_debounce_bounce_restarts_on_side,
             ready=lambda slot: ~c[1821],
-            keep=[t[304], td[304]],
+            keep=[td[303], t[304], td[304]],
             expect={"Result1": 1, "Result2": 0},
             scans=80,
         ),
@@ -206,6 +207,7 @@ group = Group(
             "1), then off for good until the rung goes false (Result2 = 0)",
             ladder=prove_timed_needs_fresh_edge,
             expect={"Result1": 1, "Result2": 0},
+            keep=[td[309]],
             scans=50,
         ),
         case(
@@ -213,7 +215,7 @@ group = Group(
             "phase is done (Result2 = 1) leaves T<n> off (Result1 = 0)",
             ladder=prove_out_coil_sets_timer_done,
             ready=lambda slot: ~c[1851],
-            keep=[t[312], td[312]],
+            keep=[td[310], t[312], td[312]],
             expect={"Result1": 0, "Result2": 1},
             scans=40,
         ),

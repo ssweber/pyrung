@@ -95,11 +95,16 @@ class RestartReport:
         verb = "survives" if len(needed) == 1 else "survive"
         wanted = ", ".join(f"{tag}={value!r}" for tag, value in self.clear.items())
         scans = "scan" if self.clear_scans == 1 else "scans"
+        # Written, not cleared: a tag's default need not be zero.
+        if len(needed) == 1:
+            advice = f"Write {next(iter(needed))} by hand while stopped, or make it non-retentive."
+        else:
+            advice = "Write those by hand while stopped, or make them non-retentive."
         lines = [
             f"Restart: alone it falls short, because {_values(needed)} {verb} it.",
             f"  With {wanted} written while stopped, a restart reaches it in "
             f"{self.clear_scans} {scans}.",
-            "  Clear those by hand while stopped, or make them non-retentive.",
+            f"  {advice}",
         ]
         if self.clear_untried:
             lines.append("  how() ran out of time checking, so not all of them may be needed.")

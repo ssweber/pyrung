@@ -324,7 +324,8 @@ def _evaluate_copy_compatibility(
                 )
 
     # --- Converter / bank compatibility ---
-    converter = getattr(instruction, "convert", None)
+    # A plain Copy across text converts on its own; the bank check above covers it.
+    converter = getattr(instruction, "authored_convert", getattr(instruction, "convert", None))
     if isinstance(converter, CopyConverter):
         compat = CONVERTER_COMPATIBILITY.get(converter.mode)
         if compat is not None:

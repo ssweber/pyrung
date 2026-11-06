@@ -804,7 +804,9 @@ def _exact_value_sets(
                 if source_values is None:
                     grown = None
                     break
-                grown.update(_store_copy_value_to_tag_type(v, tag) for v in source_values)
+                source_tag = graph.tags.get(item)
+                kind = None if source_tag is None else source_tag.type
+                grown.update(_store_copy_value_to_tag_type(v, tag, kind) for v in source_values)
             if grown is None or len(grown) > _TAG_COMPARED_DOMAIN_CAP:
                 del values[name]
                 changed = True
@@ -1070,10 +1072,14 @@ def _tag_compared_names(
 def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
-    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+    from pyrung.core.instruction.conversions import (
+        _store_copy_value_to_tag_type,
+        copy_source_kind,
+    )
     from pyrung.core.tag import ImmediateRef, Tag
 
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
+    source = copy_source_kind(value)
     if isinstance(value, Tag):
         if value.readonly:
             value = value.default
@@ -1083,7 +1089,7 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE
-    return _store_copy_value_to_tag_type(value, target)
+    return _store_copy_value_to_tag_type(value, target, source)
 
 
 def _literal_write_values(
@@ -2456,6 +2462,10 @@ def _through_the_store(
     inverse = tuple(raw for raw in raws if _is_number(raw))
     answered = len(inverse) == len(raws)
 
+    # A Word's store from a DINT or REAL clamps above and wraps below, and a bit takes a
+    # number's low bit: more than one way to a value, not worked out.
+    if store is not None and store.kind in ("word", "bit") and source_tag.type != TagType.BOOL:
+        return _Hop(inverse, False)
     if store is None or store.kind != "wrap":
         if source_tag.type != TagType.REAL:
             return _Hop(inverse, answered)
@@ -2636,7 +2646,7 @@ def _backward_propagate_comparison_boundaries(
                 store = (
                     None
                     if target_tag is None
-                    else copy_store_transform(target_tag.type)
+                    else copy_store_transform(target_tag.type, source_tag.type)
                     if calc_mode is None
                     else calc_store_transform(target_tag.type, calc_mode)
                 )

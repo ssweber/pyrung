@@ -211,7 +211,7 @@ runner.reboot()
 
 Simulates a power cycle. Tag behavior depends on battery:
 
-- Battery present (default): all tags preserve
+- Battery present (default): retentive tags preserve, the rest reset to defaults, as on STOP→RUN
 - Battery absent: all tags reset to defaults
 
 Runtime scope resets the same as STOP→RUN. Runner returns in RUN mode.
@@ -220,6 +220,8 @@ Runtime scope resets the same as STOP→RUN. Runner returns in RUN mode.
 runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
+
+`battery_present = False` is the worst case. A real CLICK keeps its retentive memory through a short outage even without a battery: a capacitor holds it for a few days, and SC27 reports when it ran out. `sys.battery_present` maps to SC203, which mirrors the project's Battery Backup Setup setting; a CLICK cannot detect its battery.
 
 ## Inspecting state
 

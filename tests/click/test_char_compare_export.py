@@ -74,3 +74,17 @@ def test_numeric_order_compare_is_not_flagged():
     assert CLK_TEXT_ORDER_COMPARE not in {
         f.code for f in (*report.errors, *report.warnings, *report.hints)
     }
+
+
+@pytest.mark.parametrize("op", ["==", "!="])
+def test_a_txt_against_a_longer_literal_exports_as_written(op):
+    # pyrung compares it over TXT1 and TXT2, as a CLICK does; the ladder keeps the one compare.
+    hit, other = Bool("Hit"), Bool("Other")
+    with Program(strict=False) as prog:
+        with rung(other, _OPS[op](txt[1], "AB")):
+            out(hit)
+    mapping = TagMap({hit: c[1], other: c[2]}, include_system=False)
+    report = validate_click_program(prog, mapping, mode="strict")
+    assert not report.errors
+    bundle = pyrung_to_ladder(prog, mapping)
+    assert tuple(bundle.main_rows[1][1:3]) == ("C2", f'TXT1{op}"AB"')

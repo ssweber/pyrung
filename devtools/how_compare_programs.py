@@ -25,6 +25,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
     truth      what stepping says against a proof or a decline: true and false CANNOT_REACH,
                long held waits, an opaque avoid mid-coast, And and range-written slots
     composite  several targets, And(), relational targets
+    rescue     programs that reach only through the last resort today; a fix to the pilot
+               shows as the same answer with no last_resort on the row
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -54,6 +56,7 @@ from pyrung import (  # noqa: E402
     Rung,
     TagType,
     Timer,
+    calc,
     copy,
     fill,
     latch,
@@ -1381,3 +1384,90 @@ _add(
     "truth/joint goal on a pointer slot",
     _joint_on_a_slot(lambda bank, index: copy(7, bank[index])),
 )
+
+
+# --------------------------------------------------------------------------- rescue
+# Each reaches on dev only because the last resort tried a move the trace gave no reason for
+# (tests/core/analysis/test_pilot_last_resort.py and the field-order reconnect).
+
+
+def _rescue_oscillator():
+    """A count the program runs for itself: only waiting reaches it."""
+    osc, count, hit = Bool("Osc"), Int("Count"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung(~osc):
+            out(osc)
+        with Rung(osc):
+            calc(count + 1, count)
+        with Rung(count == 40):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit), kwargs=dict(max_scans=3000))
+
+
+def _rescue_wait_on_a_bit():
+    """Go is blocked until the free-running timer first finishes and drops Block."""
+    timer, block, hit, go = Timer.clone("T"), Bool("Block"), Bool("Hit"), Bool("Go")
+    with Program(strict=False) as prog:
+        with Rung(~timer.Done):
+            out(block)
+        with Rung():
+            on_delay(timer, 1, "s")
+        with Rung(block):
+            reset(hit)
+        with Rung(go, ~block):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit), kwargs=dict(max_scans=3000))
+
+
+def _rescue_at_the_rung():
+    """truth/enable moved mid-scan before Go is pressed: the plan has to press it."""
+    go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
+    feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
+    watch = Timer.clone("W")
+    with Program(strict=False) as prog:
+        with Rung():
+            reset(enable)
+        with Rung(~enable, feedback):
+            on_delay(watch, 3000)
+        with Rung(go):
+            latch(enable)
+        with Rung(watch.Done):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    Harness(plc).install()
+    plc.step()
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit), kwargs=dict(max_scans=30000))
+
+
+def _rescue_reconnect(cut):
+    """The field-order reconnect from a retained step 98: the pilot holds NetworkAvailable only
+    as an exploratory hypothesis and stops."""
+
+    def build():
+        if ROOT not in sys.path:
+            sys.path.append(ROOT)
+        from tests.core.analysis import test_pilot_scan_zero_sequence_route_acceptance as acc
+        from tests.fixtures import pilot_scan_zero_sequence_route as f_route
+
+        logic = acc._field_order_reconnect_logic() if cut else f_route.logic
+        plc = acc._retained_98(logic)
+        step = f_route.SequenceStep
+        return dict(
+            plc=plc,
+            targets=(step == 10,),
+            goal=lambda tags: tags.get(step.name) == 10,
+            kwargs=dict(max_scans=120),
+        )
+
+    return build
+
+
+_add("rescue", "rescue/oscillator count", _rescue_oscillator)
+_add("rescue", "rescue/wait on a bit a timer drops", _rescue_wait_on_a_bit)
+_add("rescue", "rescue/at the rung, Go not pressed", _rescue_at_the_rung)
+_add("rescue", "rescue/field-order reconnect cut", _rescue_reconnect(cut=True))
+_add("rescue", "rescue/field-order reconnect full", _rescue_reconnect(cut=False))

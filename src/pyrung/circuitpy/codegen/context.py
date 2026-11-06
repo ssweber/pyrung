@@ -258,6 +258,8 @@ class CodegenContext:
         return ctx
 
     slot_bindings: list[SlotBinding] = field(default_factory=list)
+    # A proof_metadata kernel's capped For loops: (where, count, tags), by index.
+    for_cap_sites: list[tuple[str, str, tuple[str, ...]]] = field(default_factory=list)
     block_bindings: dict[int, BlockBinding] = field(default_factory=dict)
     scalar_tags: dict[str, Tag] = field(default_factory=dict)
     referenced_tags: dict[str, Tag] = field(default_factory=dict)

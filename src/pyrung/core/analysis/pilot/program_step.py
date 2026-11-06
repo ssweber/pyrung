@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
 from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
+from pyrung.core.analysis.pilot.avoid import _avoid_weighed_names
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode
@@ -280,6 +281,57 @@ def _input_receipts(
             )
         )
     return tuple(handoffs), frozenset(direct)
+
+
+def _numeric(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def read_frontier_motion(
+    plc: Any,
+    pilot_rungs: Sequence[Any],
+    frontier: Sequence[tuple[str, Any]],
+    *,
+    avoid_pred: Any = None,
+    scans: int = 4,
+) -> tuple[str, Any, Any] | None:
+    """A frontier value the unchanged program closes on by itself, as a projection shows.
+
+    No instruction need own the motion: a calc fed its own result moves a tag as a timer
+    does.  Only a numeric frontier counts, and only one whose distance to its wanted value
+    never grows over the projected scans and ends smaller; a wrap or a step away is no
+    reading.  A value that moves every other scan is why it is more than one scan.
+
+    Returns ``(tag, before, after)``, or None.  Nothing is installed on *plc*.
+    """
+    wanted = [(tag, value) for tag, value in frontier if _numeric(value)]
+    if not wanted:
+        return None
+    fork = fork_with_pilot_rungs(plc, pilot_rungs)
+    start = dict(fork.state.tags)
+    candidates = {tag: abs(value - start[tag]) for tag, value in wanted if _numeric(start.get(tag))}
+    candidates = {tag: distance for tag, distance in candidates.items() if distance > 0}
+    if not candidates:
+        return None
+    goal = dict(wanted)
+    for _ in range(max(1, scans)):
+        fork.step()
+        tags = dict(fork.state.tags)
+        if _avoid_weighed_names(avoid_pred, tags):
+            return None
+        for tag, last in list(candidates.items()):
+            now = tags.get(tag)
+            distance = abs(goal[tag] - now) if _numeric(now) else None
+            if distance is None or distance > last:
+                del candidates[tag]
+            else:
+                candidates[tag] = distance
+        if not candidates:
+            return None
+    for tag, wanted_value in wanted:
+        if tag in candidates and candidates[tag] < abs(wanted_value - start[tag]):
+            return tag, start[tag], fork.state.tags.get(tag)
+    return None
 
 
 def read_program_step(

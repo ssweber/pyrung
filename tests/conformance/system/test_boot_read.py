@@ -14,11 +14,15 @@ none.
 - ``what_survives``: on its first scan, the group records which sentinels the last run left (a mask,
   in a register the first scan writes).  Result1, written directly: C 1, TD 2, CTD 4, DS 8, DD 16,
   DF 32, DH 64, TXT 128, T of a done TON 256, CT of a done counter 512.  Result2, a TD written by
-  a pointer: 1.  Result3 is SC203, the battery: 1 present.  Run fresh: 0, 0.  pyrung has a CLICK
-  keep all (1023, 1) over a reboot with a battery and none (0, 0) without it, and over STOP->RUN
-  keep the retentive blocks (``DEFAULT_RETENTIVE``: CT, CTD, DS, DD, DH, DF, TXT = 4 + 8 + 16 + 32 +
-  64 + 128 + 512 = 764, and 0) and clear the others.  TD and C with a battery are the
-  known question: pyrung's ``preserve_all`` keeps a non-retentive block's slot too.
+  a pointer: 1.  Result3 is SC203, ``_Battery_Installed``: 1 where the project's Battery Backup
+  Setup box is ticked.  It is a setting that travels with the project, not a detection (a CLICK
+  cannot detect its battery).  Run fresh: 0, 0.  Over STOP->RUN a CLICK keeps the retentive blocks
+  (``DEFAULT_RETENTIVE``: CT, CTD, DS, DD, DH, DF, TXT = 4 + 8 + 16 + 32 + 64 + 128 + 512 = 764,
+  and 0) and clears the others, C, TD, T and the pointer TD.  A power cycle with the battery in
+  reads the same, 764, 0, and so does a short one with it out, since a capacitor holds memory for
+  a few days (SC27 says when it ran out).  pyrung's ``reboot()`` reads 764, 0 with
+  ``battery_present`` and 0, 0 without it, the worst case: the capacitor gone too.  Answered for
+  this project's default retention settings.
 - ``first_scan_edges``: rungs true from the first scan, outside the ``Cmd`` gate, each captured by
   the first scan (``keep``).  Result1 by bit, 1 where it acted on the first scan: toggle 1, one-shot
   Copy 2, one-shot Out 4, a timed coil 8, one-shot For 16, an event drum's rising event 32, a shift's
@@ -31,11 +35,11 @@ none.
 
 ``for_wide``:
 
-- ``count_forms``: a For's count from a DD past 16 bits.  65537 runs 1 (Result1 = 1, the low word), 2
-  for 65537, and 3 for 1 scan at the watchdog (a separate reading: the run stops).  65536 runs none
-  (Result2 = 1), 2 for 65536.  A DD counts, since an Int would wrap back onto 1.  A TD at 3 (Result3)
-  and a CTD at 3 (Result4) as counts.  Whole, those two For loops take about 2.2 s, and the case
-  starts them 1 s after its ``Cmd``.
+- ``count_forms``: a For's count from a DD past 16 bits is read whole (hardware 2026-11-05): 65537
+  runs 65537 (Result1 = 2; 1 for the low word's 1), 65536 runs 65536 (Result2 = 2; 1 for none).
+  A DD counts, since an Int would wrap back onto 1.  A TD at 3 (Result3) and a CTD at 3 (Result4)
+  count 3.  Whole, those two For loops take about 2.2 s, and the case starts them 1 s after its
+  ``Cmd``.
 
 ``flag_scan``, ahead of ``store_probe`` so that no flag it raises reaches a reader's scan:
 
@@ -59,11 +63,19 @@ The cases own what ``memory.OWNED`` lists under these groups.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance._ladder import emit_case
+from pyrung.conformance._runner import DT, _fire, _reset
+from pyrung.conformance._slot import make_slot
 from pyrung.core import (
+    PLC,
     Or,
+    Program,
     Rung,
     calc,
+    call,
     copy,
     count_up,
     event_drum,
@@ -74,10 +86,12 @@ from pyrung.core import (
     on_delay,
     out,
     shift,
+    subroutine,
     system,
     timed,
     toggle,
 )
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import (
     ClickCounter,
@@ -250,7 +264,7 @@ boot_group = Group(
                 "Result2": between(0, 1),
                 "Result3": between(0, 1),
             },
-            probe="battery on a non-retentive block: run after each boot step (AGENTS.md)",
+            probe="what a boot keeps: run after each boot step (AGENTS.md)",
         ),
         case(
             "A rung true on the first scan: what acted (Result1, by bit), SD9 on the first scan "
@@ -336,13 +350,12 @@ wide_group = Group(
     "for_wide",
     [
         case(
-            "A For's count past 16 bits takes the low word: DD 65537 runs 1 (Result1 = 1), DD 65536 "
-            "none (Result2 = 1); a TD (Result3 = 3) and a CTD (Result4 = 3) count",
+            "A For reads a DD count whole: DD 65537 runs 65537 (Result1 = 2), DD 65536 runs 65536 "
+            "(Result2 = 2); a TD (Result3 = 3) and a CTD (Result4 = 3) count",
             ladder=prove_count_forms,
             init=init_count_forms,
             scans=120,
-            expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 3},
-            probe="a For count past 16 bits, and from a TD and a CTD",
+            expect={"Result1": 2, "Result2": 2, "Result3": 3, "Result4": 3},
         ),
     ],
 )
@@ -511,3 +524,40 @@ def test_flag_scan():
 
 def test_rtc_set():
     assert_all_passed(run(rtc_group))
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC], ids=["interpreter", "kernel"])
+@pytest.mark.parametrize(
+    ("boot", "battery", "after"),
+    [
+        ("reboot", True, (764, 0, 1)),
+        ("reboot", False, (0, 0, 0)),
+        ("stop_run", True, (764, 0, 1)),
+    ],
+)
+def test_what_survives_reads_through_a_boot(engine, boot, battery, after):
+    # The hardware ladder, run, booted, and run again, as AGENTS.md's procedure does.
+    (survives,) = [x for x in boot_group.cases if x.id == "what_survives"]
+    slot = make_slot(1, name=boot_group.title)
+    with Program(strict=False) as logic:
+        for _ in range(boot_group.calls):
+            with Rung():
+                call(boot_group.subroutine)
+        with subroutine(boot_group.subroutine):
+            emit_case("boot_read", survives, slot, 1)
+    plc = engine(logic, dt=DT)
+    plc.battery_present = battery
+
+    def read():
+        _reset(plc, slot, [1])
+        _fire(plc, slot, [survives], [1])
+        tags = plc.current_state.tags
+        return tuple(tags.get(getattr(slot[1], f).name) for f in ("Result1", "Result2", "Result3"))
+
+    assert read() == (0, 0, int(battery))
+    if boot == "reboot":
+        plc.reboot()
+    else:
+        plc.stop()
+        plc.start()
+    assert read() == after

@@ -120,7 +120,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(611, 641),
         "DF": range(421, 430),
         "DH": range(411, 417),
-        "TXT": range(521, 546),
+        # TXT851..: a Real's text is ten characters, more than TXT541..545 holds.
+        "TXT": (range(521, 546), range(851, 866)),
         "DS": range(4499, 4500),
     },
     # The fault-flag model's unmeasured choices (tests/conformance/system/test_flag_probe.py,

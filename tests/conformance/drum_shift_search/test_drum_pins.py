@@ -3,18 +3,20 @@
 Three groups: ``drum_pins`` (part ``drum2``), ``drum_branch`` (``drum3``), ``drum_limits`` (``drum1``).  The cases
 ask what no recording in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
 ``test_drum_jump.py``, ``test_drum_settle.py``, ``test_drum_close.py`` or
-``test_drum_idle.py`` separates.  An expectation here is a ``range`` over the candidates,
-so neither answer is asserted, whichever routine pyrung has; a run over Modbus prints
-the reading (``read <case> ...``) and a CLICK's goes in ``readings.toml``, and the reading is
-the answer.  What pyrung reads in-process says nothing about a CLICK.  An exact expectation in these cases is a control: it
-must read that way under every candidate.
+``test_drum_idle.py`` separates.  ``drum_pins`` and ``drum_limits`` were read on a CLICK
+on 2026-11-05 and expect what it read.  A ``drum_branch`` expectation is a ``range`` over
+the candidates, so neither answer is asserted, whichever routine pyrung has; a run over
+Modbus prints the reading (``read <case> ...``) and a CLICK's goes in ``readings.toml``, and
+the reading is the answer.  What pyrung reads in-process says nothing about a CLICK.  An
+exact expectation in those cases is a control: it must read that way under every candidate.
 
 Snapshots as in ``test_drum_settle``: two digits a drum, ``S`` then ``4 * flag + 2 * B +
 A``, the first drum named above the other.  On a 3-step drum row 1 is 11, row 2 is 22 and
 row 3 is 33; complete with the outputs off is 14, 24 or 34.
 
 ``drum_pins``, Q1: a pin and the step's own end on one scan.  M1: the pin's move takes
-the scan.  M2: the drum's own logic runs first, then the pins.
+the scan.  M2: the drum's own logic runs first, then the pins.  The CLICK read M1 in every
+case, and 9 for ``acc_jog_completing``'s control.
 
 =======================  ===========  ===========  ============================
 Case                     M1           M2           Read
@@ -49,7 +51,8 @@ A jump that is not on the last step does not separate them: step 1's end and a j
 read 33 under both, a jump to 1 reads 11 under both.
 
 Q2: a paused forward jog with the flag on.  A jog forward with the flag on writes the
-row when the rung is true (``drum_settle/after_jump_jog_alone``).  With the rung false:
+row when the rung is true (``drum_settle/after_jump_jog_alone``).  With the rung false the
+CLICK read "never":
 
 ======================  ============  ============  ==================
 Row written             at the jog    at the return  never
@@ -66,7 +69,7 @@ Reading at the return   2626          2626           2424
 - ``paused_flag_moves``: a jump with the flag on while paused: 1414 at the jump and 1414 at
   the return, or the return writes the row, 1515 (Result2, Result3).  A jog on the last
   step with the flag on while paused: 2424 both times, or the return writes the row, 2626
-  (Result4, ErrorCode).
+  (Result4, ErrorCode).  The CLICK read 1414 and 2424: the return writes no row.
 
 ``drum_branch``, the routine's other branches:
 
@@ -117,14 +120,16 @@ Reading at the return   2626          2626           2424
 - ``preset_from_ds``: a preset in a DS lowered below Acc on a step: read live, the step ends
   that scan, 2222, read at entry it does not, 1111 (Result2, a time drum over a time & event
   drum).  Preset DS 0 (Result3) and -5 (Result4): the time drum's step ends on the next
-  scan (2), or never (1).  Nothing has read a DS preset on a drum.
+  scan (2), or never (1).  The CLICK read 1111, 1 and 1: read at entry, and 0 or below never
+  ends the step.  An Out coil's DS preset reads live (``out_more/preset_mid_phase``).
 - ``units``: a time drum in seconds beside a free TON: Result2 is Acc after 2100 ms, 2 in
   seconds, 2100 if the unit does not reach the drum.  Result3 is the same in minutes, 0, or
-  2100 likewise.  Result4 is the seconds drum on scan 3, 0 unless it starts at 1.
+  2100 likewise.  Result4 is the seconds drum on scan 3, 0 unless it starts at 1.  The
+  CLICK read 2, 0 and 0.
 - ``single_step``: 1-step drums.  A time drum's end (Result2 on scan 3) and an event drum's
   (Result3 on scan 5) complete them, 1411 then 1414; a jog completes an event-only time &
-  event drum, 14 (Result4), or does nothing, 11.  If CLICK's editor refuses a 1-step drum at
-  paste, that is the answer and the case comes out.
+  event drum, 14 (Result4), or does nothing, 11.  The editor took a 1-step drum, and the
+  CLICK read 1411, 1414 and 14.
 
 Not asked: 16 steps and 16 outputs are the editor's limits, static; a drum twice called in
 one scan is ``call_more/called_twice``.
@@ -846,131 +851,84 @@ group = Group(
     [
         case(
             "Q1: step 1's event and a jog on one scan, an event drum over a time & event drum, "
-            "3 steps, control 1111 (Result1): 2222 if the jog takes the scan, 3333 if own logic "
-            "runs first (Result2, next scan Result3)",
+            "3 steps, control 1111 (Result1): the jog takes the scan, 2222 (Result2, next scan "
+            "Result3)",
             ladder=prove_event_and_jog,
             scans=SCANS,
-            expect={
-                "Result1": 1111,
-                "Result2": between(1111, 3333),
-                "Result3": between(1111, 3333),
-            },
-            probe="Q1: a pin and the step's own end on one scan",
+            expect={"Result1": 1111, "Result2": 2222, "Result3": 2222},
         ),
         case(
             "Q1: Acc past step 1's preset and a jog on one scan, a time drum over a timed time "
-            "& event drum with its event on, control 1111 (Result1): 2222 or 3333 "
-            "(Result2, Result3)",
+            "& event drum with its event on, control 1111 (Result1): the jog takes the scan, "
+            "2222 (Result2, Result3)",
             ladder=prove_time_and_jog,
             scans=SCANS,
-            expect={
-                "Result1": 1111,
-                "Result2": between(1111, 3333),
-                "Result3": between(1111, 3333),
-            },
-            probe="Q1: a pin and the step's own end on one scan",
+            expect={"Result1": 1111, "Result2": 2222, "Result3": 2222},
         ),
         case(
-            "Q1: on 2 steps own logic lands on the last, so a jog there completes: 2222 if the "
-            "jog takes the scan, 2424 if own logic runs first (Result2, Result3), control 1111 "
-            "(Result1)",
+            "Q1: on 2 steps own logic would land on the last and a jog there complete, 2424; "
+            "the jog takes the scan, 2222 (Result2, Result3), control 1111 (Result1)",
             ladder=prove_end_and_jog_on_last,
             scans=SCANS,
-            expect={
-                "Result1": 1111,
-                "Result2": between(1111, 2424),
-                "Result3": between(1111, 2424),
-            },
-            probe="Q1: a pin and the step's own end on one scan",
+            expect={"Result1": 1111, "Result2": 2222, "Result3": 2222},
         ),
         case(
             "Q1: on the last step, time up and a jump to step 1 on one scan, control 2222 "
-            "(Result1): 1111 if the jump takes the scan, 1414 if the drum completes first "
-            "(Result2, Result3), Acc hundreds (Result4)",
+            "(Result1): the jump takes the scan, 1111 (Result2, Result3), and clears Acc, 0 "
+            "hundreds (Result4)",
             ladder=prove_last_time_and_jump,
             init=restoring(_EXTRA[0]),
             scans=SCANS,
-            expect={
-                "Result1": 2222,
-                "Result2": between(1111, 2424),
-                "Result3": between(1111, 2424),
-                "Result4": between(0, 301),
-            },
-            probe="Q1: a pin and the step's own end on one scan",
+            expect={"Result1": 2222, "Result2": 1111, "Result3": 1111, "Result4": 0},
         ),
         case(
             "Q1: on the last step, its event and a jump to step 1 on one scan, control 2222 "
-            "(Result1): 1111 if the jump takes the scan, 1414 if the drum completes first "
-            "(Result2, Result3)",
+            "(Result1): the jump takes the scan, 1111 (Result2, Result3)",
             ladder=prove_last_event_and_jump,
             init=restoring(_EXTRA[1]),
             scans=SCANS,
-            expect={
-                "Result1": 2222,
-                "Result2": between(1111, 2424),
-                "Result3": between(1111, 2424),
-            },
-            probe="Q1: a pin and the step's own end on one scan",
+            expect={"Result1": 2222, "Result2": 1111, "Result3": 1111},
         ),
         case(
             "Q1: Acc 900 staged on the scan of a jog that completes the drum, the rung true: "
-            "Acc - 900 is 0 if the jog takes the scan, a scan's time if own logic ticks first "
-            "(Result2 time drum, Result4 time & event); a drum with no jog shows a scan's time "
-            "(Result3; 0 on a scan under a ms, and then 0 above tells nothing); 2422 (ErrorCode)",
+            "the jog takes the scan, Acc - 900 is 0 (Result2 time drum, Result4 time & event); "
+            "a drum with no jog shows a scan's time, above 0 (Result3); 2422 (ErrorCode)",
             ladder=prove_acc_jog_completing,
             scans=SCANS,
             expect={
-                "Result2": between(0, 900),
-                "Result3": between(0, 900),
-                "Result4": between(0, 900),
+                "Result2": 0,
+                "Result3": range(1, 901),
+                "Result4": 0,
                 "ErrorCode": 2422,
             },
-            probe="Q1: does a jog-completing scan tick Acc first",
         ),
         case(
             "Q2: a paused forward jog with the flag on, 2 steps, a time drum over a time & "
-            "event drum jumped to step 1 with the flag on, control 1414 (Result1): at the jog "
-            "2424 or 2626 (Result2), at the return (Result3), the scan after (Result4)",
+            "event drum jumped to step 1 with the flag on, control 1414 (Result1): the row is "
+            "never written, 2424 at the jog (Result2), at the return (Result3), the scan after "
+            "(Result4)",
             ladder=prove_paused_jog_with_flag,
             init=restoring(_EXTRA[2]),
             scans=WIDE_SCANS,
-            expect={
-                "Result1": 1414,
-                "Result2": between(2424, 2626),
-                "Result3": between(2424, 2626),
-                "Result4": between(2424, 2626),
-            },
-            probe="Q2: does a paused jog with the flag on write the row, at the jog or the return",
+            expect={"Result1": 1414, "Result2": 2424, "Result3": 2424, "Result4": 2424},
         ),
         case(
             "Q2: the same to a step that is not the last, an event drum over a time drum on 3 "
-            "steps, control 1414 (Result1): 2424 or 2626 at the jog (Result2), at the return "
-            "(Result3), the scan after (Result4)",
+            "steps, control 1414 (Result1): 2424 at the jog (Result2), at the return (Result3), "
+            "the scan after (Result4)",
             ladder=prove_paused_jog_with_flag_mid,
             init=restoring(_EXTRA[3]),
             scans=WIDE_SCANS,
-            expect={
-                "Result1": 1414,
-                "Result2": between(2424, 2626),
-                "Result3": between(2424, 2626),
-                "Result4": between(2424, 2626),
-            },
-            probe="Q2: does a paused jog with the flag on write the row, at the jog or the return",
+            expect={"Result1": 1414, "Result2": 2424, "Result3": 2424, "Result4": 2424},
         ),
         case(
-            "A jump with the flag on while paused: 1414 at the jump (Result2) and at the return "
-            "(Result3), 1515 if the return writes the row; a jog on the last step with the flag "
-            "on while paused: 2424 (Result4) and at the return (ErrorCode), 2626 likewise",
+            "A return writes no row a paused move left with the flag on: a jump, 1414 at the "
+            "jump (Result2) and at the return (Result3); a jog on the last step, 2424 (Result4) "
+            "and at the return (ErrorCode)",
             ladder=prove_paused_flag_moves,
             init=restoring(_EXTRA[4]),
             scans=WIDE_SCANS,
-            expect={
-                "Result2": between(1414, 2424),
-                "Result3": between(1414, 2424),
-                "Result4": between(2424, 2626),
-                "ErrorCode": between(2424, 2626),
-            },
-            probe="does a return write a row a paused move left, with the flag on",
+            expect={"Result2": 1414, "Result3": 1414, "Result4": 2424, "ErrorCode": 2424},
         ),
     ],
 )
@@ -1115,44 +1073,28 @@ limits_group = Group(
     "drum_limits",
     [
         case(
-            "A preset in a DS lowered below Acc: read live, the step ends that scan, 2222; read "
-            "at entry, 1111 (Result2); preset DS 0 (Result3) and -5 (Result4) end step 1 at once, "
-            "2 on scan 4, or never, 1",
+            "A preset in a DS is read at step entry: lowered below Acc mid-step it does not "
+            "end the step, 1111 (Result2); preset DS 0 (Result3) and -5 (Result4) never end "
+            "step 1, 1 on scan 4",
             ladder=prove_preset_from_ds,
             init=restoring(_EXTRA[11], _EXTRA[12], _EXTRA[13]),
             scans=SCANS,
-            expect={
-                "Result2": between(1111, 2222),
-                "Result3": between(0, 2),
-                "Result4": between(0, 2),
-            },
-            probe="a drum's preset from a DS: live or latched; 0 and negative",
+            expect={"Result2": 1111, "Result3": 1, "Result4": 1},
         ),
         case(
-            "A time drum in seconds beside a free TON: Acc after 2100 ms is 2 in seconds, 2100 "
-            "if the unit does not reach it (Result2); in minutes 0 (Result3); on scan 3 still 0 "
-            "(Result4)",
+            "A time drum in seconds beside a free TON: Acc after 2100 ms is 2 in seconds "
+            "(Result2); in minutes 0 (Result3); on scan 3 still 0 (Result4)",
             ladder=prove_units,
             scans=300,
-            expect={
-                "Result2": between(1, 2200),
-                "Result3": between(0, 2200),
-                "Result4": between(0, 100),
-            },
-            probe="a drum's unit other than ms; none recorded",
+            expect={"Result2": 2, "Result3": 0, "Result4": 0},
         ),
         case(
             "A 1-step drum: a time drum's end completes it, 1411 (Result2 on scan 3), an event "
-            "drum's, 1414 (Result3 on scan 5), a jog on a time & event drum completes it, 14, or "
-            "not, 11 (Result4).  Refused at paste is an answer",
+            "drum's, 1414 (Result3 on scan 5), and a jog completes a time & event drum, 14 "
+            "(Result4)",
             ladder=prove_single_step,
             scans=SCANS,
-            expect={
-                "Result2": between(1111, 1414),
-                "Result3": between(1111, 1414),
-                "Result4": between(11, 14),
-            },
-            probe="does a 1-step drum work; a paste refusal answers it",
+            expect={"Result2": 1411, "Result3": 1414, "Result4": 14},
         ),
     ],
 )

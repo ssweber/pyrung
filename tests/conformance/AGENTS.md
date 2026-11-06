@@ -125,11 +125,11 @@ The harness writes `Cmd = 1` only after it reads `Ready = 1` with `Cmd = 0` and 
 
 Reset with the instructions' own semantics, not by poking registers an instruction owns:
 
-- **Timers** (TON, Out coils): the case's rungs are gated on `Cmd != 0`, so the rung goes false and the instruction resets itself. A debounce coil turns off only once its off side times out: `ready=lambda slot: ~c[1811]`.
+- **Timers** (TON, Out coils): the case's rungs are gated on `Cmd != 0`, so the rung goes false and the instruction resets itself. A debounce coil turns off only once its off side times out: `ready=lambda slot: ~c[1811]`. A timed coil's TD and a debounce's on-side TD are kept after the rung falls, so `keep` them; the next edge starts each from 0.
 - **Counters, RTON, drums, shift registers**: tie the reset input to the reset, `count_up(ct, 100).reset(slot.Cmd == 0)`, `time_event_drum(...).reset(slot.Cmd == 0)`.
 - **Latched or toggled bits, and bits driven from inside a loop**: `reset(c[1801])` in `init`.
 - **Staged registers** (a case's raw DS/DD/DF/DH): `fill(0, ds.select(4401, 4402))` or `copy(0, df[1])` in `init`.
-- **A flasher's TDs** only freeze with its rung false, so `keep` them, unless a reading depends on one; then `copy(0, td[n])` in `init`, since nothing else reaches it (`out_more/preset_mid_phase`: where the last run stopped decided what the coil read).
+- **A flasher's TDs** only freeze with its rung false, so `keep` them; the restart clears both, so a reading does not depend on where the last run stopped (`flasher_td/frozen_off_td_at_lowered_preset`).
 - **Edge history and one-shots** need nothing: they rearm on the scans the rung is false. Not inside a loop whose For rung is false: CLICK skips that body, so nothing in it rearms (`loop/body_oneshot_holds_while_for_false`).
 
 **A reset must not depend on an open probe.** If what CLICK does is the question a case asks, the reset cannot rely on pyrung's answer. F2 (a false For rung skips its body, answered on a CLICK) is why the `loop` edge, timer, counter and one-shot cases keep their For rung true and gate a body rung instead, so their resets are scanned.
@@ -375,7 +375,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] forloop body sees its own prior-iteration writes (`loop/loop_runs_n_times`)
 - [ ] forloop loop.idx indirect addressing
 - [x] forloop over a Real count: CLICK's editor refuses one, and a pasted one stops the PLC on its watchdog (in-process only; `for_count/non_finite_count`)
-- [x] forloop dynamic count == 0: no iteration (answered on hardware; 65536 was the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only)
+- [x] forloop dynamic count == 0: no iteration (answered on hardware; 65536 was the other reading) (`loop/zero_count`); -1 runs 65535 (unsigned 16-bit) (`loop/negative_count_reads_unsigned`, in-process only); a DD count is read whole, 65536 runs 65536 (answered on hardware; `for_wide/count_forms`); a negative DD count is not read yet
 - [x] forloop (`loop` group, F1-F14, F17-F19): a false For rung skips its body (F2); count read as unsigned 16-bit (F3); count read once (F4); body-rung contacts per iteration (F5); edges inside a loop (F6, answered, pending S3); timers accumulate per iteration (F7); counters count edges across iterations (F8, answered); Break leaves the innermost loop (F9) after the earlier body rungs (F10); Continue skips the rest of one iteration (F11, F12); a Break contact sees same-iteration writes (F13); a one-shot re-arms on an iteration its rung is false (F14); a body one-shot holds while its For rung is false (F17); an edge contact's memory across iterations of one scan (F18, answered, pending S3); a timer and a counter in a skipped body hold, reset unscanned (F19, answered)
 - [ ] forloop inner one-shot: does CLICK reject it (C0111) or ignore it (F15); a loop in a called subroutine counts toward depth 3 (F16, probe at depth exactly 3, `loop_call/loop_in_called_subroutine`; depth 4 is refused by the exporter, so CLICK's own C010D is not probed); body-rung contacts per iteration around a call (`loop_call/body_contact_after_call`)
 
@@ -424,7 +424,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] toggle flips once per OFF->ON and holds (O1) (`out/toggle_flips_once_per_edge`)
 - [x] debounce TD keeps counting past its preset while steady (O2); a bounce restarts the timing side (O3) (`out/debounce_td_keeps_counting`, `out/debounce_bounce_restarts_on_side`)
 - [x] flasher with its rung false: TDs kept and frozen, and the restart is a fresh on phase (O4, answered on hardware round 2; `out/flasher_restarts_with_on_phase`)
-- [ ] flasher restarted with its off TD frozen mid-phase, its on preset then lowered below the on TD: the off phase runs on from the frozen TD or from 0 (`flasher_td/frozen_off_td_at_lowered_preset`, part `text_flasher`, unread on hardware; pyrung: from the frozen TD)
+- [x] flasher restarted with its off TD frozen mid-phase, its on preset then lowered below the on TD: the off phase runs on from the frozen TD or from 0 (`flasher_td/frozen_off_td_at_lowered_preset`, part `text_flasher`; read on hardware 2026-11-05: from 0, the restart clears it)
 - [x] timed (not maintained) needs a fresh edge after timing out (O5) (`out/timed_needs_fresh_edge`)
 - [x] Out coil variants never set the phase timer's T bit (O6) (`out/out_coil_sets_timer_done`)
 
@@ -507,6 +507,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
   - a completed drum's own time and event do nothing, its Acc holds, a correction keeps Acc (answered on hardware 2026-11-02; `drum_settle/after_jump_jog_alone`, `acc_in_completed_drum`, `event_drum_after_completion`, `correction_with_acc_staged`)
   - whether the return scan times, whether the flag itself stops a drum, what a return writes after a jog back or a jump, a return scan's jog, jump and last step, Acc by kind of time & event step (`drum_close/return_scan_ticks`, `flag_cleared_from_outside`, `flag_set_from_outside`, `return_after_jog_back`, `return_after_jump`, `return_scan_moves`, `te_acc_by_step_kind`)
   - a drum not reached keeps its rung memory, in an uncalled subroutine and in a skipped For body (`drum_idle/uncalled_subroutine`, `drum_idle/drum_in_skipped_loop`); STOP to RUN clearing it is not probed: the harness cannot switch the PLC's mode
+- [x] a pin and a step's own end on one scan: the pin's move takes the scan (answered on hardware 2026-11-05, part `drum2`; `drum_pins`); a drum's DS preset is read at step entry and one of 0 or below never ends its step, a drum in seconds and minutes, a 1-step drum (answered, part `drum1`; `drum_limits/preset_from_ds`, `drum_limits/units`, `drum_limits/single_step`)
 - [x] search hit / miss / continuous (`search/hit_returns_address`, `search/miss_writes_minus_one`, `search/continuous_walks`)
 - [x] search returns the register number of the match, -1 on miss (`search/hit_returns_address`, `search/miss_writes_minus_one`)
 - [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, answered: `search/continuous_cursor_outside_range`)

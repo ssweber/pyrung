@@ -155,7 +155,7 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
             valid_ranges=valid_ranges,
             address_formatter=_click_address_formatter,
         )
-    return Block(
+    block = Block(
         name=name,
         type=tag_type,
         start=start,
@@ -164,6 +164,13 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
         valid_ranges=valid_ranges,
         address_formatter=_click_address_formatter,
     )
+    # Read on a CLICK: a Copy from a pointer past these banks leaves its destination.
+    # Past DD it reads 0 (``faults/pointer_past_bank_lands``).
+    block._past_end_keeps = name in _PAST_END_KEEPS
+    return block
+
+
+_PAST_END_KEEPS = frozenset({"DS", "DH", "DF", "TXT"})
 
 
 class ClickBlockSet(NamedTuple):

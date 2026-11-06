@@ -8,7 +8,7 @@ import struct
 from typing import Any
 
 from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_value
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 _DINT_MIN = -2147483648
 
@@ -22,20 +22,60 @@ _INT_MIN = -32768
 _INT_MAX = 32767
 
 
-def copy_store_transform(tag_type: Any) -> StoreTransform | None:
-    """Destination conversion used by copy, blockcopy, and fill."""
+#: A store's source that is a constant written in the instruction (``copy(70000, Word)``).
+LITERAL = "literal"
+
+_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL})
+
+
+def copy_source_kind(source: Any) -> Any:
+    """What a Copy, Block copy or Fill store depends on of its *source* operand.
+
+    The source's ``TagType`` for a tag or a pointer, :data:`LITERAL` for a constant,
+    and ``None`` for anything else (an expression), which stores as a register does.
+    """
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(source, ImmediateRef):
+        source = source.value
+    if isinstance(source, Tag):
+        return source.type
+    if isinstance(source, (IndirectRef, IndirectExprRef)):
+        return source.block.type
+    if isinstance(source, (bool, int, float, str)):
+        return LITERAL
+    return None
+
+
+def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | None:
+    """Destination conversion used by copy, blockcopy, and fill.
+
+    *source* is :func:`copy_source_kind` of the source.  ``None`` (not known, or not a
+    Copy: a patch, a receive) keeps the plain store: a Word wraps, a bit is truthy.
+    From a known source, CLICK's rules:
+
+    - Into a Word, a constant keeps its low 16 bits (70000 is 4464).  From a DINT or
+      a REAL, past 65535 it clamps and below 0 keeps the low 16 bits (``"word"``).
+    - Into an Int, a Word keeps its bits (0xFFFF is -1); anything else clamps.
+    - Into a bit, a number's low bit (``"bit"``: 2 is off).
+    """
     from pyrung.core.tag import TagType
 
     if tag_type is TagType.INT:
+        if source is TagType.WORD:
+            return StoreTransform("wrap", _INT_MIN, _INT_MAX)
         return StoreTransform("clamp", _INT_MIN, _INT_MAX)
     if tag_type is TagType.DINT:
         return StoreTransform("clamp", _DINT_MIN, _DINT_MAX)
     if tag_type is TagType.WORD:
+        if source in (TagType.DINT, TagType.REAL):
+            return StoreTransform("word", 0, 0xFFFF)
         return StoreTransform("wrap", 0, 0xFFFF)
     if tag_type is TagType.REAL:
         return StoreTransform("real")
     if tag_type is TagType.BOOL:
-        return StoreTransform("bool")
+        return StoreTransform("bool" if source is None else "bit")
     if tag_type is TagType.CHAR:
         return StoreTransform("char")
     return None
@@ -73,8 +113,14 @@ def _int_to_float_bits(n: int) -> float:
 
 
 def _float_to_int_bits(f: float) -> int:
-    """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer."""
-    return struct.unpack("<I", struct.pack("<f", float(f)))[0]
+    """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer.
+
+    A NaN is 0xFFFFFFFF, whichever NaN it is: what a CLICK's DF holds for one.
+    """
+    f = float(f)
+    if f != f:
+        return 0xFFFFFFFF
+    return struct.unpack("<I", struct.pack("<f", f))[0]
 
 
 def _ascii_char_from_code(code: int) -> str:
@@ -128,8 +174,9 @@ def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> d
 
 
 def _format_int_text(value: int, width: int, suppress_zero: bool, *, signed: bool = True) -> str:
+    """A number's text; *signed* False for a Word, which is hex (0xAB is "AB" or "00AB")."""
     if suppress_zero:
-        return str(value)
+        return str(value) if signed else f"{value:X}"
     if not signed:
         return f"{value:0{width}X}"
     if value < 0:
@@ -210,22 +257,22 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
     )
 
 
-def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
+def _store_copy_value_to_tag_type(value: Any, tag: Tag, source: Any = None) -> Any:
     """Store value using copy/blockcopy/fill conversion semantics.
 
-    - INT and DINT use saturating clamp.
-    - Other destination types preserve current conversion behavior.
+    *source* is :func:`copy_source_kind` of the source (see :func:`copy_store_transform`).
     """
-    storage = copy_store_transform(tag.type)
+    storage = copy_store_transform(tag.type, source)
     return value if storage is None else store_value(value, storage)
 
 
-def _copy_clamps(value: Any, tag: Tag) -> bool:
-    """True when a Copy of the number *value* into *tag* stops at a limit.
+def _copy_clamps(value: Any, tag: Tag, source: Any = None) -> bool:
+    """True when a Copy of the number *value* into *tag* stops at a limit, raising SC43.
 
-    Only an INT or DINT clamps.  +/-Inf clamps; NaN stores 0 and does not.
+    Only an INT or DINT clamps with the flag; a Word's clamp raises none.  +/-Inf
+    clamps; NaN stores 0 and does not.
     """
-    storage = copy_store_transform(tag.type)
+    storage = copy_store_transform(tag.type, source)
     if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):
         return False
     if isinstance(value, float) and not math.isfinite(value):

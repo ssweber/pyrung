@@ -36,7 +36,7 @@ test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
 
 test-pilot:
-	uv run pytest tests/core/analysis/ -k "pilot" -q
+	uv run pytest tests/core/analysis/ -k "pilot" -q $(PYTEST_PARALLEL)
 
 test-tumbler:
 	uv run pytest tests/tumbler/ -q

@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator
 from dataclasses import replace
 from typing import Any
 
-from pyrung.core.kernel import ReplayKernel
+from pyrung.core.kernel import ForIterationsBeyondCap, ReplayKernel
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 from . import _ExploreContext
@@ -26,7 +26,7 @@ from .kernel import (
     _snapshot_kernel,
     _step_kernel,
 )
-from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig
+from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig, _for_iterations_intractable
 from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
 from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT, UnmodeledRead, UnmodeledSystemRead
 
@@ -280,6 +280,15 @@ def _bfs_explore(
         if predicates is None:
             return overflow
         return [overflow for _ in predicates]
+    except ForIterationsBeyondCap as exc:
+        refused = _for_iterations_intractable(
+            exc,
+            len(context.stateful_dims) + len(context.nondeterministic_dims),
+            context.journal,
+        )
+        if predicates is None:
+            return refused
+        return [refused for _ in predicates]
     except UnmodeledRead as exc:
         assert predicates is not None
         if isinstance(exc, UnmodeledSystemRead):

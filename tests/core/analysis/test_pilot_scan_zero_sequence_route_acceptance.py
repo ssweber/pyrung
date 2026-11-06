@@ -383,13 +383,14 @@ def test_field_order_reconnect_is_reachable_by_hand(make_logic: Any) -> None:
 
 
 @_FIELD_ORDER_LOGICS
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="the pilot never tries a nonzero ServiceStatusInput"
-)
 def test_field_order_reconnect_reaches_step_10(make_logic: Any) -> None:
-    plan = _retained_98(make_logic()).how(fixture.SequenceStep == 10, max_scans=30)
+    """The pilot alone stops: it holds the reconnect only as an exploratory hypothesis, or has
+    nothing left.  The last resort presses it, and how() asked again finds the rest."""
+    plan = _retained_98(make_logic()).how(fixture.SequenceStep == 10, max_scans=120)
 
     assert plan.reachable, plan.reason
+    assert plan.last_resort.tag == fixture.NetworkAvailable.name
+    assert plan.replay().state.tags[fixture.SequenceStep.name] == 10
 
 
 def test_field_order_route_reaches_the_terminal_step() -> None:

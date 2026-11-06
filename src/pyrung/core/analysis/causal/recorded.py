@@ -1806,7 +1806,7 @@ def _replayed_writer_proves_value(
     ):
         try:
             source = fire_view.get_tag(instr.source.name)
-            stored = _store_copy_value_to_tag_type(source, instr.dest)
+            stored = _store_copy_value_to_tag_type(source, instr.dest, instr.source.type)
             return _values_match(stored, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False

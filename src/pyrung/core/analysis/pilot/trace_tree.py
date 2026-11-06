@@ -231,6 +231,10 @@ class TraceNode:
     # A counter-input transition (release or establish) carries the count it
     # serves; verification rejects a step that loses it (see ``CounterEdge``).
     counter_edge: CounterEdge | None = None
+    # The writer is the instruction that owns this channel and gets there by holding its
+    # conditions (a timer's Done): they must last until this value, not until the first
+    # nested boundary under them.
+    holds_own_conditions: bool = False
 
     def iter_nodes(
         self,
@@ -366,7 +370,7 @@ class TraceNode:
         if (
             child_until is None
             and self.writer_rung is not None
-            and len(unsatisfied_children) > 1
+            and (len(unsatisfied_children) > 1 or self.holds_own_conditions)
             and any(
                 any(node.advance is not None and not node.satisfied for node in child.leaves())
                 for child in unsatisfied_children

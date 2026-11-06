@@ -52,6 +52,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     is_action,
     is_composite_action,
 )
+from pyrung.core.analysis.pilot.program_step import read_frontier_motion
 from pyrung.core.analysis.pilot.route_options import (
     _compass_route_actions,
     _compass_route_plan,
@@ -89,6 +90,7 @@ _STUCK_TRACE_GUARD = "trace_guard"
 def _read_trace_disposition(
     frame: Any,
     ctx: Any,
+    state: Any = None,
 ) -> _candidate_read.ContinuationRead | _candidate_read.CandidateDiagnosis:
     """Explain an actionless trace as positive continuation or exhaustion.
 
@@ -121,13 +123,14 @@ def _read_trace_disposition(
             ("trace", "satisfied"),
         )
 
-    # Writer found, all conditions satisfied (empty children) — the output
-    # instruction just hasn't fired yet. This readiness has the same meaning at
-    # every trace depth: a timer result can make a nested Step writer ready one
-    # scan before the outer target writer observes Step. Let the loop coast.
+    # Writer found, all conditions satisfied (no children, or only satisfied ones)
+    # — the output instruction just hasn't fired yet. This readiness has the same
+    # meaning at every trace depth: a timer result can make a nested Step writer
+    # ready one scan before the outer target writer observes Step, and a coil above
+    # the timer whose Done it reads sees that Done on the next scan. Let the loop coast.
     if any(
         node.writer_rung is not None
-        and not node.children
+        and all(child.satisfied for child in node.children)
         and not node.satisfied
         and not node.is_steerable
         for node in tree.iter_nodes()
@@ -149,11 +152,30 @@ def _read_trace_disposition(
             return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
         return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_GUARD)
 
-    for n in dead_ends:
-        if ctx.pdg.writers_of.get(n.tag):
-            return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_OPAQUE)
+    opaque = [n for n in dead_ends if ctx.pdg.writers_of.get(n.tag)]
+    if not opaque:
+        return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
 
-    return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
+    # The trace stopped at a program-written value it cannot read further, but the program
+    # may be moving that value itself: a calc fed its own result, or any motion no advance
+    # profile describes.  An unchanged projection in which it closes on the wanted value is
+    # the positive reading; without one this stays a stop.
+    if state is not None:
+        motion = read_frontier_motion(
+            state.work,
+            state.pilot_rungs,
+            tuple((n.tag, n.value) for n in opaque if not n.relational),
+            avoid_pred=getattr(ctx, "avoid_pred", None),
+        )
+        if motion is not None:
+            tag, before, after = motion
+            return _candidate_read.ContinuationRead(
+                _candidate_read.ContinuationKind.SELF_ADVANCING,
+                f"the unchanged program moves {tag} from {before!r} to {after!r}, "
+                "toward the traced value",
+                ("trace", "projected-advance"),
+            )
+    return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_OPAQUE)
 
 
 # ---------------------------------------------------------------------------
@@ -1032,7 +1054,7 @@ def _assemble_candidate_read(
         and learned_batch is None
         and not crossing_batches
     ):
-        disposition = _read_trace_disposition(frame, ctx)
+        disposition = _read_trace_disposition(frame, ctx, state)
         if isinstance(disposition, _candidate_read.ContinuationRead):
             continuation = disposition
         else:
