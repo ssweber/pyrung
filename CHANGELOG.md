@@ -267,6 +267,7 @@
   - `how()` reruns the plan with each piece of temporary logic left out, then with a Set of its value instead
   - it keeps the simpler plan only when that plan reaches the goal on the same scan and meets nothing in `avoid=`
   - logic that holds an input False is tried as a Set first, so a command the plan lets go of stays let go of
+  - a Set isn't tried when another Set the plan prints comes less than a second before or after it. Sets on one scan count as one. A release whose Set comes that soon may be left out, so its command stays pressed
   - the plan's text and `plan.replay()` describe the same run
 
 ### Fixes

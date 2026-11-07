@@ -11,14 +11,20 @@ wait ends.  A check that raises on a try's state ends that try, not how(): that 
 plan's, and the plan the drive found stands.
 
 A release (logic holding an input False) is tried as a Set first, so a command the plan lets go
-of stays let go of.  A note on the relation an install satisfies goes with its Set: the relation
-is the requirement, the value an example.  An install of several rungs with notes stays, since
-its notes don't say which is whose.
+of stays let go of.  When that Set comes too soon for a person (below), the release is tried left
+out, and the command may stay pressed.  A note on the relation an install satisfies goes with
+its Set: the relation is the requirement, the value an example.  An install of several rungs
+with notes stays, since its notes don't say which is whose.
+
+A person can't make two moves less than a second apart.  So a Set isn't tried when another Set
+the text prints comes less than a second before or after it.  Sets on one scan count as one move,
+since one Data View write makes them all.  The logic is then tried only left out, as for an input
+nothing can Set.
 
 The text leaves out a patch of an input logic holds.  So logic over an input the recording
-patches to its value where the logic goes in is only ever that Set, and logic over an input it
-patches on another scan the logic is in stays: without it, the replay would make a patch the
-text doesn't name.
+patches to its value where the logic goes in is only ever that Set (or stays, when the Set comes
+too soon), and logic over an input it patches on another scan the logic is in stays: without
+it, the replay would make a patch the text doesn't name.
 
 The kept plan is that new run, so what it says and what it replays are one recording.
 """
@@ -46,6 +52,10 @@ from pyrung.core.coast_run import memo_of
 # Each try runs the whole plan again.  A plan's own scans mostly run in the guarded loop, so a
 # try costs a small part of the search that found it; this keeps a slow one from costing more.
 _WALL_S = 2.0
+
+# A person needs about a second between two moves, so the trim hands them no Set closer than that
+# to another Set the plan prints.
+_HUMAN_FLOOR_S = 1.0
 
 _Change = Mapping[tuple[Any, ...], str]
 
@@ -297,6 +307,25 @@ def _joined_waits(steps: list[PlanStep], joins: set[int]) -> tuple[PlanStep, ...
     return tuple(joined)
 
 
+def _too_fast(plan: Plan, change: _Change) -> bool:
+    """Whether a Set in *change* comes less than a second from another Set the plan prints."""
+    dt = plan.dt
+    if not dt:
+        return False
+    least = _HUMAN_FLOOR_S / dt - 1e-9
+    sets = {
+        step.scan
+        for step in plan.journal
+        if step.kind == "force"
+        for rung in step.rungs
+        if change.get(_rung_identity(rung)) == "set"
+    }
+    printed = {
+        step.scan for step in _journal(plan.journal, change) if step.kind in ("patch", "pulse")
+    }
+    return any(other != scan and abs(other - scan) < least for scan in sets for other in printed)
+
+
 def _hold_log(hold_log: tuple[Any, ...], change: _Change) -> tuple[Any, ...]:
     entries = []
     for entry in hold_log:
@@ -378,6 +407,8 @@ def trim_holds(
             if _left(own) <= 0:
                 break
             trial = {**change, key: what}
+            if what == "set" and _too_fast(plan, trial):
+                continue
             tried = _drive(plan, timeline, trial, goal, avoid, own)
             if tried is not None:
                 change, fork = trial, tried

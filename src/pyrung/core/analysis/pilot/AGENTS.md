@@ -36,10 +36,15 @@ module.
   the anchor is watched again once the plan has left it. An avoid check raising
   on a try's state ends that try only: the state is not the returned plan's. A
   release (a hold of False) is tried as a Set before a drop, so a momentary
-  command stays let go of. A one-rung install's lever notes move to its Set; a
-  noted install of several rungs is not trimmed. The text hides a patch of a
-  held input (`_controlled_at`), so a hold whose input the recording patches to
-  its value where it goes in is only ever that Set, and one whose input is
+  command stays let go of. A person can't make two moves less than a second
+  apart (`_HUMAN_FLOOR_S`), so a Set isn't tried when another printed Set
+  comes less than a second before or after it. Sets on one scan count as one
+  move. The hold is then tried only as a drop, as for an input that can't be
+  Set, so a release may be dropped and its command stay pressed. A one-rung
+  install's lever notes move to its Set; a noted install of several rungs is
+  not trimmed. The text hides a patch of a held input (`_controlled_at`), so a
+  hold whose input the recording patches to its value where it goes in is only
+  ever that Set, or stays when that Set comes too soon. One whose input is
   patched on another scan it is in stays.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
   unreachability, over every write to the tags involved and not one traced route
