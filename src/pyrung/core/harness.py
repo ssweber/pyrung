@@ -243,13 +243,14 @@ class Harness:
 
     def install(self) -> None:
         """Put the plant on the runner, a feedback whose enable is on as long since settled."""
-        self._install(settle=True)
+        self._install(settle=False)
+        self._settle()
 
-    def _install(self, *, settle: bool, carry: Collection[CoilWiring] = ()) -> None:
+    def _install(self, *, settle: bool) -> None:
         """Without *settle* a feedback stays as the state has it, its timers counting from there.
 
-        A coil in *carry* is not settled either.  A reload passes the coils the old harness
-        ran (:meth:`_coil_wiring`), so those carry on from the state.
+        An install that puts overrides in after this settles once they are in, with
+        :meth:`_settle`.
         """
         if self._installed:
             return
@@ -262,7 +263,7 @@ class Harness:
         self._seed_plant_defaults()
         self._carry_counts_to_current_units()
         if settle:
-            self._seed_bool_state(frozenset(carry))
+            self._settle()
         self._install_monitors()
         self._plc._harness = self
 
@@ -352,13 +353,15 @@ class Harness:
         couplings = [*self._bool_couplings, *self._profile_couplings]
         return frozenset(_wiring(c) for c in couplings if c.rung_memory_key)
 
-    def _settle_links(self, fb_names: Collection[str], carry: Collection[CoilWiring] = ()) -> None:
-        """Settle the couplings on *fb_names*, as :meth:`install` settles its own.
+    def _settle(self, carry: Collection[CoilWiring] = (), skip: Collection[str] = ()) -> None:
+        """Settle each coupling that runs, as long since settled under the enable it reads.
 
-        The DAP adds its bench links right after an install, through
-        :meth:`set_overrides`, which settles nothing.
+        Every install settles here once, after its overrides are in.  A coupling an override
+        replaced is gone by then, so its feedback is seeded for the coil that runs.  A coil
+        in *carry* carries on from the state, as a reload passes the coils the old harness
+        ran (:meth:`_coil_wiring`).  A feedback in *skip* is not settled either.
         """
-        self._seed_bool_state(frozenset(carry), only=frozenset(fb_names))
+        self._seed_bool_state(frozenset(carry), frozenset(skip))
 
     def unlink(self, tags: list[str]) -> None:
         """Remove couplings for the named feedback tags.
@@ -1047,7 +1050,7 @@ class Harness:
             self._plc._edit_tip_tags(seed)
 
     def _seed_bool_state(
-        self, carry: frozenset[CoilWiring], only: frozenset[str] | None = None
+        self, carry: frozenset[CoilWiring], skip: frozenset[str] = frozenset()
     ) -> None:
         """Seed each bool coil whose enable is already on as if it had settled long ago.
 
@@ -1059,8 +1062,8 @@ class Harness:
 
         A coil in *carry* ran before the reload that installs it.  It carries on from
         its memory, so a running pulse or delay runs out.  Whether a key is in the state
-        decides nothing, because an absent key reads as its default.  With *only*, just
-        the couplings on those feedbacks settle.
+        decides nothing, because an absent key reads as its default.  A coupling on a
+        feedback in *skip* does not settle.
         """
         seed: dict[str, Any] = {}
         memory: dict[str, Any] = {}
@@ -1068,7 +1071,7 @@ class Harness:
         snap = state.tags
 
         def settles(c: _BoolCoupling | _ProfileCoupling) -> bool:
-            if only is not None and c.fb_name not in only:
+            if c.fb_name in skip:
                 return False
             if _wiring(c) in carry:
                 return False

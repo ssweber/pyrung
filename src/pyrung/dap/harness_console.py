@@ -16,13 +16,13 @@ from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 
 
-def install_harness(adapter: Any, carry: Collection[CoilWiring] = ()) -> Harness:
+def install_harness(adapter: Any) -> Harness:
     """Install a harness on the current runner, even one with no declared couplings.
 
-    Each coil in *carry* carries on from the state, unsettled.
+    Nothing is settled yet.  The caller settles once the bench links are in.
     """
     harness = Harness(adapter._require_runner_locked())
-    harness._install(settle=True, carry=carry)
+    harness._install(settle=False)
     harness.on_patches_applied = _make_patch_listener(adapter)
     adapter._harness = harness
     return harness
@@ -39,8 +39,10 @@ def try_auto_install(adapter: Any, carry: Collection[CoilWiring] = ()) -> str | 
     if adapter._runner is None:
         return None
 
-    harness = install_harness(adapter, carry)
-    notes = fit_to_harness_locked(adapter, harness, carry)
+    harness = install_harness(adapter)
+    notes = fit_to_harness_locked(adapter, harness)
+    # The one settle, over the couplings that run with the bench links in.
+    harness._settle(carry)
 
     summary = harness.coupling_summary()
     n_bool = len(summary["bool_couplings"])

@@ -342,6 +342,34 @@ def test_a_harness_install_after_remove_settles_a_bench_link(
     assert _horn_bits(adapter, "Spare", 8) == settled
 
 
+@pytest.mark.parametrize("link", ["link Horn Motor toggle", "link Horn Motor timed=30ms"])
+@pytest.mark.parametrize("how", ["harness remove and install", "reload"])
+def test_a_bench_link_over_a_declared_coupling_settles_as_the_bench_link(
+    tmp_path: Path, link: str, how: str
+):
+    """The install settles the coil that runs, not the declared on-delay the link replaces.
+
+    Motor goes on, off and on, so the link leaves Horn off with Motor on.  Seeded for the
+    on-delay, Horn would turn on at install and stay on under the new coil.
+    """
+    horn = "Bool('Horn', physical=Physical('H', on_delay='20ms'), link='Motor')"
+    adapter, out, _script_path = _setup(tmp_path, _coil_script(horn))
+    resp, _ = _repl(adapter, out, link, seq=10)
+    assert resp["success"] is True
+    for seq, motor in enumerate((True, False, True), start=11):
+        adapter._runner.patch({"Motor": motor})
+        _repl(adapter, out, "step 5", seq=seq)
+    assert adapter._runner.current_state.tags["Horn"] is False
+    if how == "reload":
+        resp, _ = _repl(adapter, out, "reload", seq=20)
+    else:
+        _repl(adapter, out, "harness remove", seq=20)
+        resp, _ = _repl(adapter, out, "harness install", seq=21)
+    assert resp["success"] is True
+    assert adapter._runner.current_state.tags["Horn"] is False
+    assert _horn_bits(adapter, "Horn", 8) == "........"
+
+
 def _relink_script(enable: str) -> str:
     return (
         "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
