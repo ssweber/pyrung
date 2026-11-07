@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import collections
 import functools
 import subprocess
 import sys
@@ -480,19 +481,56 @@ def test_two_copied_functions_of_a_module_share_its_names() -> None:
 class _CopiesItsOwnWay:
     """Copies itself through copy.deepcopy(), which hands back the function it holds."""
 
-    def __init__(self, step: Any) -> None:
-        self.step = step
+    def __init__(self, **parts: Any) -> None:
+        self.__dict__.update(parts)
 
     def __deepcopy__(self, memo: dict[int, Any]) -> Any:
-        new = _CopiesItsOwnWay.__new__(_CopiesItsOwnWay)
+        new = type(self).__new__(type(self))
         new.__dict__ = deepcopy(self.__dict__, memo)
         return new
+
+
+class _CopiesWithoutTheMemo(_CopiesItsOwnWay):
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        new = type(self).__new__(type(self))
+        new.__dict__ = deepcopy(self.__dict__)
+        return new
+
+
+class _SlotBesideADict:
+    __slots__ = ("step", "__dict__")
+
+
+def _in_a_slot_beside_a_dict(step: Any) -> Any:
+    holder = _SlotBesideADict()
+    holder.step = step
+    return holder
+
+
+@pytest.mark.parametrize(
+    "hide",
+    [
+        pytest.param(lambda step: collections.deque([step]), id="deque"),
+        pytest.param(functools.partial, id="partial"),
+        pytest.param(_in_a_slot_beside_a_dict, id="slot beside a dict"),
+        pytest.param(lambda step: [step, [object() for _ in range(25_000)]], id="past 20000"),
+    ],
+)
+def test_an_own_deepcopy_that_keeps_a_function_anywhere_is_not_asked(hide: Any) -> None:
+    holder = _CopiesItsOwnWay(part=hide(_counting_step([0])))
+    assert fold_check._isolated(lambda _s: holder.part, _plc()) is None
+
+
+def test_an_own_deepcopy_that_copies_the_runner_is_not_asked() -> None:
+    plc = _plc()
+    holder = _CopiesWithoutTheMemo(runners=collections.deque([plc]))
+    assert fold_check._isolated(lambda _s: holder.runners[0], plc) is None
 
 
 def test_an_own_deepcopy_that_keeps_the_function_is_not_asked() -> None:
     plc = _plc()
     k = [0]
-    holder = _CopiesItsOwnWay(_counting_step(k))
+    holder = _CopiesItsOwnWay(step=_counting_step(k))
     before = fold_check.STATS["predicate skipped: not copyable"]
     fold_check._checked("run_until", plc, _stepper(plc, 9), lambda s: holder.step(None, s))
     assert fold_check.STATS["predicate skipped: not copyable"] == before + 1

@@ -56,6 +56,7 @@ prints every mismatch of the session with its test and the differing fields.
 from __future__ import annotations
 
 import copyreg
+import gc
 import os
 import threading
 import types
@@ -826,7 +827,8 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
     state it had when the folded run began.  So it is copied before the folded run starts,
     cell by cell.  The runner itself is shared, not copied.  A class is not copied either, so
     a function reached only through a class (a ``__call__`` or another method) still reads and
-    writes the real module-level names.  An uncopyable predicate is not asked.
+    writes the real module-level names, class attributes and closure cells.  An uncopyable
+    predicate is not asked.
     """
     try:
         return _PrivateCopy(plc).of(predicate)
@@ -840,10 +842,21 @@ class _PrivateCopy:
     Python 3.14's ``copy.deepcopy()`` returns a function unchanged before it reads its dispatch
     table, so no hook can make it clone one.  This copier walks the predicate itself instead.  It
     rebuilds other objects through the pickle protocol (``copyreg.dispatch_table``,
-    ``__reduce_ex__(4)``), as ``deepcopy()`` does.  An object's own ``__deepcopy__`` is used only
-    where its copy keeps no function of the original and holds no copied runner.  A module is
-    shared with the run, so it cannot be copied.
+    ``__reduce_ex__(4)``), as ``deepcopy()`` does.  A module is shared with the run, so it
+    cannot be copied.
+
+    An object's own ``__deepcopy__`` is checked after it runs.  Its copy is refused if it
+    reaches any of these:
+
+    - a function this copier did not make
+    - a bound method whose function is not its class's own
+    - a builtin bound to an object that was not copied
+    - a runner other than the one shared
+    - more than ``MAX_WALK`` objects
     """
+
+    # The most objects the check of an own ``__deepcopy__`` walks before it refuses the copy.
+    MAX_WALK = 20_000
 
     _LEAVES = frozenset(
         {
@@ -923,45 +936,50 @@ class _PrivateCopy:
         return self._rebuilt(obj)
 
     def _own_deepcopy(self, obj: Any, copier: Callable[[dict[int, Any]], Any]) -> Any:
-        """*obj*'s own ``__deepcopy__``, refused where its copy still runs the original's code.
+        """*obj*'s own ``__deepcopy__``, refused where its copy still reaches the original's code.
 
-        That copy goes through ``copy.deepcopy()``, which neither clones a function nor knows
-        the runner.  So the shared objects go into the memo first, and a copy that keeps a
-        function of the original or holds a copied runner is refused.
+        That copy goes through ``copy.deepcopy()``, which never clones a function.  So a function
+        in it that this copier did not make is the user's own.  The check walks the copy through
+        ``gc.get_referents()`` and refuses a copy too large to walk.
         """
-        stops = (self.plc_type, *self.shared)
-        before = list(_reachable(obj, None, stops))
-        for o in before:
-            if self._is_shared(o):
-                self.memo.setdefault(id(o), o)
+        made = {id(v) for v in self.memo.values()}
         new = copier(self.memo)
+        name = type(obj).__name__
         if new is obj and callable(obj):
-            raise TypeError(f"{type(obj).__name__}.__deepcopy__ returns the callable itself")
-        live = {i for o in before for i in self._code_ids(o)}
-        runners = {id(o) for o in before if type(o) is self.plc_type}
-        for o in _reachable(new, None, stops):
-            if live.intersection(self._code_ids(o)):
-                raise TypeError(
-                    f"{type(obj).__name__}.__deepcopy__ keeps a function of the original"
-                )
-            if type(o) is self.plc_type and id(o) not in runners:
-                raise TypeError(f"{type(obj).__name__}.__deepcopy__ copies the runner")
+            raise TypeError(f"{name}.__deepcopy__ returns the callable itself")
+        copied = {id(v) for v in self.memo.values()}
+        seen: set[int] = set()
+        todo = [new]
+        while todo:
+            o = todo.pop()
+            if id(o) in seen or id(o) in made:
+                continue
+            seen.add(id(o))
+            if len(seen) > self.MAX_WALK:
+                raise TypeError(f"{name}.__deepcopy__ made a copy too large to check")
+            if type(o) is self.plc_type:
+                raise TypeError(f"{name}.__deepcopy__ copies the runner")
+            if isinstance(o, (type, types.ModuleType, *self.shared)):
+                continue
+            if isinstance(o, types.FunctionType):
+                raise TypeError(f"{name}.__deepcopy__ keeps a function of the original")
+            if isinstance(o, types.MethodType):
+                if not _defined_on_its_class(o):
+                    raise TypeError(f"{name}.__deepcopy__ keeps a method of the original")
+                todo.append(o.__self__)
+                continue
+            if isinstance(o, (types.BuiltinFunctionType, types.MethodWrapperType)):
+                owner = o.__self__
+                if not (
+                    owner is None
+                    or isinstance(owner, (type, types.ModuleType))
+                    or self._is_shared(owner)
+                    or id(owner) in copied
+                ):
+                    raise TypeError(f"{name}.__deepcopy__ keeps a builtin bound to the original")
+                continue
+            todo.extend(gc.get_referents(o))
         return new
-
-    @staticmethod
-    def _code_ids(obj: Any) -> list[int]:
-        """The ids by which *obj* runs code that can hold state (a function or a bound method)."""
-        if isinstance(obj, types.FunctionType):
-            return [id(obj)]
-        if isinstance(obj, types.MethodType):
-            if _defined_on_its_class(obj):
-                return [id(obj)]
-            return [id(obj), id(obj.__func__)]
-        if isinstance(obj, types.BuiltinFunctionType) and not isinstance(
-            obj.__self__, (types.NoneType, types.ModuleType)
-        ):
-            return [id(obj)]
-        return []
 
     def _function(self, fn: types.FunctionType) -> types.FunctionType:
         cells = None
