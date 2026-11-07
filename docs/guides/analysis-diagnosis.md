@@ -196,13 +196,7 @@ plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, t
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-Momentary commands are treated as actions, not just settled states. `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable can't be read as a condition. So `how()` checks it only:
-
-- at the end of each command it tries
-- on the snapshots it keeps
-- on the scans of a wait that run one at a time
-
-It doesn't check the scans that a long wait runs in compiled form. Use condition syntax when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+Momentary commands are treated as actions, not just settled states. `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable is checked only on some scans, not on every one. Use a condition when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
 
 Pass more than one condition, as a tuple or list, for a **union of exclusions**. Each is avoided independently.
 
@@ -214,7 +208,7 @@ To express a composite prohibition, write `avoid=And(A, B)`. It avoids only the 
 
 When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
-`how()` can't tell whether a state is safe if an `avoid=` callable raises on it. That covers the start state and any scan of a command `how()` tries, even one that fails. `how()` then returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the callable's exception as its cause. A state may be missing some tags, because a system tag appears only after the first scan and a block slot only once something writes it. So read tags with `snapshot.get(name, default)`.
+If an `avoid=` callable raises, `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the callable's exception as its cause. A state may not have every tag yet, so read tags with `snapshot.get(name, default)`.
 
 ### The route taken
 
@@ -244,9 +238,7 @@ The route report is the same for any concrete value target, not just `Bool == Tr
 plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
 ```
 
-A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Plan.route`.
-
-A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently, because there's nothing to report. Its `Plan.route` is `None`.
+`Plan.route` is `None` for a relational target (`State > 5`), and for a fork that is only a choice of inputs (`Or(Auto, Manual)`).
 
 ## In a debug session
 

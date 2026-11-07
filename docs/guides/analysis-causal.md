@@ -34,9 +34,6 @@ step.enablers               # [EnablingCondition(Fault, value=False, held_since=
 
 **Trigger** means the contact transitioned and flipped the rung. **Enabler** means it was already in the right state. It is necessary, but it is not what changed. The engine figures out which is which automatically.
 
-!!! note "How attribution works"
-    The engine converts each rung's condition into a series-parallel (SP) tree, then applies a four-rule post-order walk to identify which contacts mattered for the evaluation. Intersecting "mattered" with the transition log produces the trigger/enabler split.
-
 Recorded steps use `fidelity="full"`. Historical states outside the recent-state cache are reconstructed from retained history, so `history_budget` affects analysis cost rather than the answer. When an interpreted replay journal is available, the chain also preserves exact same-scan occurrence ordering. When several writes hit one tag in a scan, or a parent and a subroutine interleave, the chain names the writer that actually produced the committed value.
 
 ## Recorded effect — what did this cause?

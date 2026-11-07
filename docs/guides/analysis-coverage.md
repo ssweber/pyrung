@@ -41,11 +41,14 @@ for finding in plc.query.wait_edges_without_escape():
 
 A step that only advances when something outside the program arrives is a *wait edge*. If nothing else can fire while the step waits, the machine sits there looking fine. This survey is static, so it needs no history. It reports the absence of an escape the program can fire unaided.
 
-One rule decides both the advance and the escapes. A guard clause on a tag whose value the ladder cannot set on its own holds only if the tag's resting value already satisfies it. That makes the advance a wait (`i_RotateFB` may never arrive). It also disqualifies escapes gated the same way. A timeout switched off by a register nobody set fails for this reason, and so does an abort waiting on a button nobody pressed. An escape whose step-range guard excludes the waiting step also fails, for a separate reason.
+The survey reads a tag that nothing in the program sets at its resting value. An escape doesn't count if:
 
-The survey deliberately does not guess *why* nobody sets a tag. A config register someone should have set at commissioning and a button someone would press look the same in a declaration. `Bool("EnableLimit")` is an ordinary way to write a config flag. So the survey reports the fact it proved ("nothing sets this") and leaves the intent to you.
+- its guard needs such a tag to change, like a timeout enabled by a config register nobody set, or an abort waiting on a button
+- its step guard leaves out the waiting step
 
-It reports the design decision. It never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces as the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint, so `logic.check()` picks it up with no extra call.
+A config register and a button look the same in a declaration. So the survey reports "nothing sets this" and leaves the reason to you.
+
+The survey never edits the program. The same finding is the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint, so `logic.check()` reports it with no extra call.
 
 **Reach.** It recognizes step machines that advance by `math(Step + 1, Step)` or by copying a constant into it (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read, such as a `fall()`-gated advance, an `Or` guard or a drum. It does not guess.
 
