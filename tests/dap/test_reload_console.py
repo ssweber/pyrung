@@ -321,6 +321,55 @@ def test_a_harness_install_after_remove_settles(tmp_path: Path, physical: str, s
     assert _horn_bits(adapter, "Horn", 8) == settled
 
 
+@pytest.mark.parametrize(
+    ("link", "settled"),
+    [("link Spare Motor toggle", "########"), ("link Spare Motor timed=500ms", "........")],
+    ids=["toggle", "timed"],
+)
+def test_a_harness_install_after_remove_settles_a_bench_link(
+    tmp_path: Path, link: str, settled: str
+):
+    """The bench links the install puts back settle too, so a held Motor fires none of them."""
+    adapter, out, _script_path = _setup(tmp_path, _coil_script("Bool('Horn')"))
+    resp, _ = _repl(adapter, out, link, seq=10)
+    assert resp["success"] is True
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, "step 80", seq=11)
+    _repl(adapter, out, "harness remove", seq=12)
+    _repl(adapter, out, "step 3", seq=13)
+    resp, _ = _repl(adapter, out, "harness install", seq=14)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Spare", 8) == settled
+
+
+def _relink_script(enable: str) -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "\n"
+        "motor = Bool('Motor')\n"
+        "pump = Bool('Pump', default=True)\n"
+        f"fb = Bool('Fb', physical=Physical('X', toggle=True), link='{enable}')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(motor, pump):\n"
+        "        out(Bool('Echo'))\n"
+        "    with Rung(fb):\n"
+        "        out(Bool('Seen'))\n"
+        "\n"
+        "runner = PLC(prog, dt=0.01)\n"
+    )
+
+
+def test_a_reload_that_links_a_coil_to_another_enable_settles_it(tmp_path: Path):
+    """Fb's coil saw Motor off.  Pump is on, so carrying that memory on would flip Fb."""
+    adapter, out, script_path = _setup(tmp_path, _relink_script("Motor"))
+    _repl(adapter, out, "step 5", seq=10)
+    script_path.write_text(_relink_script("Pump"), encoding="utf-8")
+    resp, _ = _repl(adapter, out, "reload", seq=11)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Fb", 6) == "......"
+
+
 def _feedback_script(fb: str, physical: str) -> str:
     return (
         "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"

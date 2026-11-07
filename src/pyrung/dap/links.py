@@ -16,7 +16,7 @@ Console verbs: ``link``, ``unlink``, ``restore``, ``links``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -186,12 +186,14 @@ def sync_harness_locked(adapter: Any) -> None:
     _changed(adapter)
 
 
-def fit_to_harness_locked(adapter: Any, harness: Any) -> list[str]:
+def fit_to_harness_locked(adapter: Any, harness: Any, carry: Collection[Any] = ()) -> list[str]:
     """Fit the bench links to a freshly installed harness (launch, reload, replay).
 
     Drops a bench link the program now declares the same way (it reached the
     project), a cut whose declared link is gone, and a link that no longer
     validates against the reloaded program.  Returns a note per dropped entry.
+    The links it keeps settle as the harness's own couplings did, except the coils
+    in *carry*, which a reload carries on.
     """
     runner = adapter._require_runner_locked()
     declared = {c.fb_name: c for c in harness.declared()}
@@ -215,7 +217,9 @@ def fit_to_harness_locked(adapter: Any, harness: Any) -> list[str]:
             continue
         kept[fb] = entry
     adapter._bench_links = kept
-    harness.set_overrides(active_overrides(adapter))
+    overrides = active_overrides(adapter)
+    harness.set_overrides(overrides)
+    harness._settle_links([fb for fb, c in overrides.items() if c is not None], carry)
     _changed(adapter)
     return notes
 

@@ -169,6 +169,14 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
 _NS_PER_MS = 1_000_000
 
 
+CoilWiring = tuple[str, str, int | str | None]
+"""A coil's memory key, the enable it reads, and the value of it that counts as on."""
+
+
+def _wiring(c: _BoolCoupling | _ProfileCoupling) -> CoilWiring:
+    return (c.rung_memory_key, c.en_name, c.trigger_value)
+
+
 def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
     """A plant timer's carry, in ns as the timer keeps it.  A saved float is of its unit."""
     carry = state.memory.get(f"_frac:{acc_name}", 0) or 0
@@ -237,11 +245,11 @@ class Harness:
         """Put the plant on the runner, a feedback whose enable is on as long since settled."""
         self._install(settle=True)
 
-    def _install(self, *, settle: bool, carry: Collection[str] = ()) -> None:
+    def _install(self, *, settle: bool, carry: Collection[CoilWiring] = ()) -> None:
         """Without *settle* a feedback stays as the state has it, its timers counting from there.
 
-        A coil whose memory key is in *carry* is not settled either.  A reload passes the
-        keys it kept, so those coils carry on from the state.
+        A coil in *carry* is not settled either.  A reload passes the coils the old harness
+        ran (:meth:`_coil_wiring`), so those carry on from the state.
         """
         if self._installed:
             return
@@ -335,10 +343,22 @@ class Harness:
         if drop:
             self._plc._edit_tip_tags({}, drop_memory=drop)
 
-    def _coil_memory_keys(self) -> frozenset[str]:
-        """The memory key of each coil this harness runs, for a reload to carry on."""
+    def _coil_wiring(self) -> frozenset[CoilWiring]:
+        """Each coil this harness runs, for a reload to carry on.
+
+        A coil is its memory key with the enable it reads.  A reload that links a
+        feedback to another enable, or to another value of it, settles the coil afresh.
+        """
         couplings = [*self._bool_couplings, *self._profile_couplings]
-        return frozenset(c.rung_memory_key for c in couplings if c.rung_memory_key)
+        return frozenset(_wiring(c) for c in couplings if c.rung_memory_key)
+
+    def _settle_links(self, fb_names: Collection[str], carry: Collection[CoilWiring] = ()) -> None:
+        """Settle the couplings on *fb_names*, as :meth:`install` settles its own.
+
+        The DAP adds its bench links right after an install, through
+        :meth:`set_overrides`, which settles nothing.
+        """
+        self._seed_bool_state(frozenset(carry), only=frozenset(fb_names))
 
     def unlink(self, tags: list[str]) -> None:
         """Remove couplings for the named feedback tags.
@@ -1026,7 +1046,9 @@ class Harness:
         if seed:
             self._plc._edit_tip_tags(seed)
 
-    def _seed_bool_state(self, carry: frozenset[str]) -> None:
+    def _seed_bool_state(
+        self, carry: frozenset[CoilWiring], only: frozenset[str] | None = None
+    ) -> None:
         """Seed each bool coil whose enable is already on as if it had settled long ago.
 
         A debounce's feedback is on and its on side has counted its preset.  A timed
@@ -1035,9 +1057,10 @@ class Harness:
         first scan is no rise.  Without this the first scans would show the device off
         while it is commanded on, or a timed or toggle coil would fire at install.
 
-        A coil whose memory key is in *carry* ran before the reload that installs it.
-        It carries on from its memory, so a running pulse or delay runs out.  Whether a
-        key is in the state decides nothing, because an absent key reads as its default.
+        A coil in *carry* ran before the reload that installs it.  It carries on from
+        its memory, so a running pulse or delay runs out.  Whether a key is in the state
+        decides nothing, because an absent key reads as its default.  With *only*, just
+        the couplings on those feedbacks settle.
         """
         seed: dict[str, Any] = {}
         memory: dict[str, Any] = {}
@@ -1045,7 +1068,9 @@ class Harness:
         snap = state.tags
 
         def settles(c: _BoolCoupling | _ProfileCoupling) -> bool:
-            if c.rung_memory_key in carry:
+            if only is not None and c.fb_name not in only:
+                return False
+            if _wiring(c) in carry:
                 return False
             en_raw = snap.get(c.en_name, False)
             return en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
