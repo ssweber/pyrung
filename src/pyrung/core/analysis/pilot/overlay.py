@@ -426,8 +426,9 @@ def _pilot_rule_note(rung: PilotRung, plc: Any) -> str | None:
     The folded condition is exact but hard to read, and the operation is what makes a row's
     conditions make sense.  A rule with no operation gets no note: its row says it all.
     """
-    from pyrung.core.condition import _as_condition
+    from pyrung.core.condition import Condition, _as_condition
     from pyrung.core.synthesis import _condition_complement
+    from pyrung.core.tag import Tag
     from pyrung.core.validation.render import operand_name, render_condition
 
     operation = rung.operation
@@ -444,9 +445,13 @@ def _pilot_rule_note(rung: PilotRung, plc: Any) -> str | None:
         start, held = word.capitalize(), f"held {word}"
     else:
         start, held = f"Set to {operand_name(rung.value)}", "held there"
+    boundary = operation.until
     try:
-        until = f" until {render_condition(_atom_condition(plc, operation.until))}"
+        if not isinstance(boundary, (Condition, Tag)):
+            boundary = _atom_condition(plc, boundary)
+        until = f" until {render_condition(_as_condition(boundary))}"
     except (KeyError, ValueError):
+        # A boundary naming a tag the build can't see: the note says the rest.
         until = ""
     return f"{start}{until}, and {held} while {render_condition(running)}."
 
