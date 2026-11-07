@@ -30,9 +30,9 @@ docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plu
 [presets]
 # prove and pilot are subsets of test and fold, so only fast names them.
 default = ["lint", "fold-new", "test", "soundness", "fold"]
-fast = ["lint", "fold-new", "prove", "pilot"]
-heavy = ["lint", "fold-new", "test", "soundness", "fold", "conf", "conf-cp"]
-train = ["lint", "test", "soundness", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]
+fast = ["lint", "docs", "fold-new", "prove", "pilot"]
+heavy = ["lint", "docs", "fold-new", "test", "soundness", "fold", "conf", "conf-cp"]
+train = ["lint", "docs", "test", "soundness", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]
 
 # PreToolUse hook (hook.py). Regexes are searched in the shell command text.
 [hook]
