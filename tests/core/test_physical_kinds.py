@@ -174,7 +174,8 @@ class TestMisuse:
 
     def test_two_kinds_names_both_keys(self):
         with pytest.raises(ValueError) as caught:
-            Physical("Fb", flasher_on="8ms", flasher_off="8ms", ramp_on=1.0)
+            # ty refuses this call too, through the overload per kind.
+            Physical("Fb", flasher_on="8ms", flasher_off="8ms", ramp_on=1.0)  # ty: ignore[no-matching-overload]
         assert str(caught.value) == (
             "Physical 'Fb': flasher_on (flasher) and ramp_on (ramp) are keys of two kinds. "
             "A feedback has one kind."

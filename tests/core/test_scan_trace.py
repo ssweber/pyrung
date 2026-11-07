@@ -676,9 +676,7 @@ def test_long_preset_lands_on_the_stepped_scan_at_production_settings() -> None:
 
 def test_a_harness_plant_runs_in_the_loop_as_part_of_the_scan(fine_loop: None) -> None:
     """A plant is a second kernel function, before the input drain: it is traced too."""
-    Plant = Real(
-        "TrPlant", physical=Physical("TrSensor", ramp_on=1.0, ramp_off=-0.5), link="TrRun"
-    )
+    Plant = Real("TrPlant", physical=Physical("TrSensor", ramp_on=1.0, ramp_off=-0.5), link="TrRun")
 
     def fill_program() -> None:
         with Rung(Run):

@@ -159,6 +159,17 @@
 - A `copy()` that writes text across several elements (`to_text()`, a `Real` or a string literal into a TXT, `to_value`, `to_ascii`) fills what fits in its block, and drops the rest with no flag. Into a tag mapped with a TagMap or `Tag.map_to`, it keeps writing from the mapped address on. CLICK validation warns:
   - when the text always runs past the end of its bank (`CLK_TEXT_PAST_BANK`)
   - when the text runs past the end of a block mapped inside the bank, since a CLICK keeps writing past it (`CLK_TEXT_PAST_BLOCK`)
+- `Physical` takes one flat keyword per value, and each keyword is also its nickname-comment key:
+  - `Pulse`, `Ramp`, `Approach` and `profile=` are removed, and importing them raises `ImportError`. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` or `Physical(name, approach_to=180, approach_rate=0.3)`
+  - `ramp_off` left out is 0, which holds the value when the enable drops
+  - a time given as a bare number raises. Write it with units, such as `"500ms"`
+  - an `approach_to` string that looks like a number raises. Pass the number
+  - keywords of two kinds in one `Physical` raise
+  - `timed=` (with optional `maintained=True`) and `toggle=True` are new kinds. The comment parser reads them. A `Harness` raises `NotImplementedError` for them for now
+  - comments read `flasher_on=8ms, flasher_off=8ms`, `ramp_on=0.8, ramp_off=-0.05` and `approach_to=180, approach_rate=0.3`, and a `profile=` comment raises
+  - the DAP `link` command and `pyrungLink` request take the same keys (`flasherOn`, `rampOn`, `approachTo` and so on in a request), and `pyrungListLinks` rows carry `kind` and `keys` in place of `profile`
+
+  Run "Upgrade project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
 
 ### Features
 

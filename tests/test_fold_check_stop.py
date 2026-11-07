@@ -1685,7 +1685,9 @@ def test_a_fork_is_compared_under_a_force(installed) -> None:
 
 def test_a_fork_is_compared_under_a_plant(installed) -> None:
     fold_check.install()
-    temp = Real("Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Go")
+    temp = Real(
+        "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Go"
+    )
     with Program(strict=False) as program:
         with Rung():
             copy(temp, Real("Shown"))

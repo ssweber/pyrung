@@ -57,6 +57,7 @@ T, Win = Timer.clone("T"), Timer.clone("Win")
 
 _FRESH = itertools.count()
 
+
 def _ramp(on: float, off: float = 0.0) -> dict[str, Any]:
     return {"ramp_on": on, "ramp_off": off}
 
@@ -500,9 +501,7 @@ def _on_an_accumulator(
                 on_delay(T, 40, "s")
         plc = PLC(prog, dt=0.010)
         harness = Harness(plc)
-        harness.set_overrides(
-            {feedback: Coupling("Enable", feedback, Physical("S", **profile))}
-        )
+        harness.set_overrides({feedback: Coupling("Enable", feedback, Physical("S", **profile))})
         harness.install()
         return plc
 

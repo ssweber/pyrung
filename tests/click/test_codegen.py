@@ -3880,8 +3880,7 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert (
-            "Pressure_physical = Physical('Pressure', approach_to=100.0, approach_rate=0.3)"
-            in code
+            "Pressure_physical = Physical('Pressure', approach_to=100.0, approach_rate=0.3)" in code
         )
         assert (
             "df.slot(101, name='Pressure', physical=Pressure_physical,"

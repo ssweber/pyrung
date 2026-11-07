@@ -87,6 +87,7 @@ def _flasher(name, on, off):
         old: dict[str, Any] = {"profile": pulse(on_dwell=on, off_dwell=off)}
         return Physical(name, **old)
 
+
 FS = system.sys.first_scan
 FAULT = "fault.out_of_range"
 

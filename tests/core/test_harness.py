@@ -1339,9 +1339,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
         plc = PLC(logic, dt=0.01)
         harness = Harness(plc)
         harness.install()
-        coupling = Coupling(
-            "En", "Temp", Physical("T", approach_to="Sp", approach_rate=0.3), None
-        )
+        coupling = Coupling("En", "Temp", Physical("T", approach_to="Sp", approach_rate=0.3), None)
         assert link_problem(plc, coupling) is None
         with pytest.warns(UserWarning, match="no rung names"):
             harness.set_overrides({"Temp": coupling})
