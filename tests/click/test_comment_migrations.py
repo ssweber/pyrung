@@ -10,6 +10,7 @@ from pyclickplc.banks import DataType
 from pyrung.click import TagMap
 from pyrung.click.tag_map import (
     MIGRATIONS,
+    OldCommentFormError,
     comment_needs_upgrade,
     old_form_tokens,
     parse_tag_meta,
@@ -61,7 +62,7 @@ def test_each_migration_rewrites_its_form(old, new, number):
 
 @pytest.mark.parametrize(("old", "new", "number"), OLD_AND_NEW)
 def test_the_parser_refuses_the_old_form_and_reads_the_new(old, new, number):
-    with pytest.raises(ValueError, match='Run "Upgrade project" in clicknick') as caught:
+    with pytest.raises(ValueError, match='Run "Upgrade Project" in clicknick') as caught:
         parse_tag_meta(old)
     assert "upgrade_comment()" in str(caught.value)
     assert str(caught.value).isascii()
@@ -112,7 +113,7 @@ def test_an_old_form_no_migration_reads_is_listed_and_left_alone(comment, token)
     assert comment_needs_upgrade(comment)
     assert pending_migrations(comment) == ()
     assert old_form_tokens(upgrade_comment(comment)) == (token,)
-    with pytest.raises(ValueError, match="Upgrade project"):
+    with pytest.raises(ValueError, match="Upgrade Project"):
         parse_tag_meta(comment)
 
 
@@ -136,7 +137,7 @@ def test_a_bad_comment_in_a_nickname_file_names_the_row(tmp_path):
         )
     }
     pyclickplc.write_csv(path, records)
-    with pytest.raises(ValueError, match=r"^OvenTemp at DF5: .*Upgrade project"):
+    with pytest.raises(ValueError, match=r"^OvenTemp at DF5: .*Upgrade Project"):
         TagMap.from_nickname_file(path)
 
 
@@ -169,3 +170,48 @@ def test_migrations_are_numbered_in_order():
     assert [m.number for m in MIGRATIONS] == list(range(1, len(MIGRATIONS) + 1))
     for migration in MIGRATIONS:
         assert migration.title.isascii()
+
+
+def test_the_old_form_error_is_a_value_error_an_editor_can_recognise():
+    with pytest.raises(OldCommentFormError) as caught:
+        parse_tag_meta("[link=Heat, profile=ramp:up=1]")
+    assert isinstance(caught.value, ValueError)
+    assert caught.value.code == "OLD_COMMENT_FORM"
+    assert caught.value.token == "profile=ramp:up=1"
+    assert caught.value.row is None
+
+
+def test_a_nickname_file_keeps_the_old_form_error_class_and_names_the_row(tmp_path):
+    path = tmp_path / "old.csv"
+    records = {
+        get_addr_key("DF", 5): AddressRecord(
+            memory_type="DF",
+            address=5,
+            nickname="OvenTemp",
+            comment="[link=Heat, profile=ramp:up=0.8|down=-0.05] Oven",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.FLOAT,
+        )
+    }
+    pyclickplc.write_csv(path, records)
+    with pytest.raises(OldCommentFormError, match=r"^OvenTemp at DF5: ") as caught:
+        TagMap.from_nickname_file(path)
+    assert caught.value.row == "OvenTemp at DF5"
+    assert caught.value.token.startswith("profile=")
+
+
+def test_the_kinds_table_is_public():
+    import pyrung
+
+    for name in (
+        "PHYSICAL_KEYS",
+        "PHYSICAL_KINDS",
+        "FeedbackType",
+        "PhysicalKey",
+        "PhysicalKind",
+        "kind_of_keys",
+        "physical_kind",
+    ):
+        assert name in pyrung.__all__
+        assert hasattr(pyrung, name)

@@ -61,7 +61,17 @@ from pyrung.core.memory_block import (
     SlotView,
     WordBlock,
 )
-from pyrung.core.physical import Physical, parse_duration
+from pyrung.core.physical import (
+    PHYSICAL_KEYS,
+    PHYSICAL_KINDS,
+    FeedbackType,
+    Physical,
+    PhysicalKey,
+    PhysicalKind,
+    kind_of_keys,
+    parse_duration,
+    physical_kind,
+)
 from pyrung.core.program import (
     And,
     ForbiddenControlFlowError,
@@ -165,6 +175,13 @@ __all__ = [
     "normalize_unit",
     # Physical feedback
     "Physical",
+    "PHYSICAL_KEYS",
+    "PHYSICAL_KINDS",
+    "FeedbackType",
+    "PhysicalKey",
+    "PhysicalKind",
+    "kind_of_keys",
+    "physical_kind",
     "parse_duration",
     # Autoharness
     "Coupling",

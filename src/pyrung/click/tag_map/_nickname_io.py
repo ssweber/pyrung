@@ -24,7 +24,7 @@ from pyclickplc.validation import validate_nickname
 from pyrung.core import Block, Physical, Tag
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
-from ._errors import SystemNicknameRepair, SystemNicknameRepairRequired
+from ._errors import OldCommentFormError, SystemNicknameRepair, SystemNicknameRepairRequired
 from ._parsers import (
     _HARDWARE_BLOCK_CACHE,
     TagMeta,
@@ -128,6 +128,8 @@ def _naming(row: AddressRecord) -> Iterator[None]:
         prefix = f"{_row_label(row)}: "
         if str(exc).startswith(prefix):
             raise
+        if isinstance(exc, OldCommentFormError):
+            raise OldCommentFormError(exc.token, _row_label(row)) from exc
         raise ValueError(f"{prefix}{exc}") from exc
 
 
