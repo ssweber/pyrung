@@ -479,3 +479,24 @@ case = "for_dd_minus/minus_one_count"
 hash = "354a0eb0e644"
 on = "2026-11-06"
 read = { Result1 = 1, Result2 = 1, Result3 = 0 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-07"
+step = "load 2026-11-07"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-07"
+step = "load 2026-11-07"
+read = { Result1 = 95, Result2 = 0, Result3 = 35, Result4 = 1 }
+
+[[reading]]
+case = "rtc_set/date_and_time_apply"
+hash = "efe7146a9620"
+on = "2026-11-07"
+step = "load 2026-11-07"
+read = { Result1 = 1, Result2 = 1, Result3 = 11, Result4 = 1, ErrorCode = 1 }

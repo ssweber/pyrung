@@ -119,10 +119,11 @@
 "faults/rand_unequal_bounds" = { hash = "89b6e2943fd8", on = "2026-11-05" }
 "faults/rand_wide_bounds_flags" = { hash = "b6d7b184a0bc", on = "2026-11-05" }
 "faults/real_intermediate_range" = { hash = "571af57a341f", on = "2026-11-05" }
-"flag_scan/math_flags_over_a_scan" = { hash = "3ebb134b9fe5", on = "2026-11-05" }
+"flag_scan/math_flags_over_a_scan" = { hash = "3ebb134b9fe5", on = "2026-11-07" }
 "for_more/clock_edges_in_a_body" = { hash = "c08350dd4748", on = "2026-11-05" }
 "for_more/oneshot_and_edges" = { hash = "a4c1e11033f3", on = "2026-11-05" }
 "for_more/timers_at_limits" = { hash = "30c1ce3bc455", on = "2026-11-05" }
+"for_wide/count_forms" = { hash = "13f61c73db35", on = "2026-11-07" }
 "hex_math/rotates_and_bits" = { hash = "e99dab058aaa", on = "2026-11-05" }
 "loop/body_oneshot_holds_while_for_false" = { hash = "c320f1d7a513", on = "2026-11-05" }
 "loop/body_rung_contact_per_iteration" = { hash = "6cab715db8c3", on = "2026-11-05" }
