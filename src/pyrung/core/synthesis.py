@@ -309,9 +309,9 @@ def conditional_hold_rung(
     later active rule wins, and with no rule active ``dest`` keeps its value.
     Every guard means the state the bracket starts from.  The rules compile
     like :func:`guarded_copy_rung`'s, so a liveness oscillator's "drive True
-    while ``dest != True``" + "drive False while ``dest != False``" is two
-    bits read off ``dest`` before one ``out(dest)`` writes it, and ``dest``
-    flips every scan.  Values must be constants, as there.
+    while ``dest != True``" + "drive False while ``dest != False``" is one row
+    that reads ``dest`` before it writes it, and ``dest`` flips every scan.
+    Values must be constants, as there.
 
     A single rule is better expressed by :func:`copy_hold_rung`; this is for the
     multi-rule (oscillating) case.
@@ -348,6 +348,11 @@ def guarded_copy_rung(
       other destination has one ``copy`` per bit, in rule order, so the last
       active rule writes last.  A Boolean destination given any other value
       gets a reset row above its copies, so it is off when no rule is on.
+    * A destination with two or more rules gets one row and no bits when its rules
+      merge into one exact series of contacts with no ``Or``, and none of them reads
+      another destination of the rung.  That row is the ``out(dest)`` the bits would
+      power, with each bit's guard in its place.  Any other destination takes a single
+      ``copy`` only when all its rules give the same value.
     * A destination with one rule is one row on its guard.  It sits above
       every destination its guard reads.  Its rule takes a bit instead in
       these cases:
@@ -730,11 +735,13 @@ def _guarded_rows(
     rules: list[tuple[Tag, Any, Any]],
     *,
     keep: bool,
+    merge: bool = True,
 ) -> Rung:
     """Compile ordered ``(dest, value, guard)`` rules to one rung.
 
     ``keep`` leaves a destination with no active rule at its value; otherwise a
     Boolean destination returns to ``False``.  See :func:`guarded_copy_rung`.
+    ``merge=False`` keeps every bit, so a test can check a merged row against its bits.
     """
     from pyrung.core.condition import BitCondition, _as_condition
     from pyrung.core.instruction.coils import OutInstruction, ResetInstruction
@@ -785,6 +792,42 @@ def _guarded_rows(
             return _rung_holding(None, ResetInstruction(dest))
         return _rung_holding(None if power is _ALWAYS else power, OutInstruction(dest))
 
+    def merged_row(name: str, group: _DestRules, kept: list[tuple[Any, Any]]) -> Rung | None:
+        """The tag's rules as one row of contacts in series, or None when they need bits.
+
+        A row reads its contacts when the scan reaches it, after the rows above have
+        written.  So the row stands in for the bits only when it reads no other tag the
+        rung writes.
+        """
+        others = set(groups) - {name}
+        if any(_static_reads(guard) & others for _value, guard in kept):
+            return None
+        dest = group.dest
+        if group.coil:
+            power: Any = BitCondition(dest) if keep else _NEVER
+            for value, guard in kept:
+                if value:
+                    power = _condition_or(power, guard)
+                elif power is not _NEVER:
+                    negated = _condition_complement(guard)
+                    if negated is None:
+                        return None
+                    power = _condition_and(power, negated)
+            power = _simplified(_flattened(power))
+            return coil_row(dest, power) if _is_series(power) else None
+        value = kept[0][0]
+        if dest.type == TagType.BOOL or any(
+            type(other) is not type(value) or other != value for other, _guard in kept
+        ):
+            return None
+        guard: Any = _NEVER
+        for _value, rule_guard in kept:
+            guard = _condition_or(guard, rule_guard)
+        guard = _simplified(_flattened(guard))
+        if not _is_series(guard):
+            return None
+        return copy_hold_rung(value=value, dest=dest, guard=_none_if_always(guard))
+
     # A destination goes above every destination its guard reads.  A destination on bits reads
     # only its bits, which sit above them all.  A cycle is broken at the earliest destination in
     # rule order.
@@ -825,6 +868,11 @@ def _guarded_rows(
             if row is not None:
                 writer_rows.append(row)
                 continue
+        if merge and len(kept) > 1:
+            row = merged_row(name, group, kept)
+            if row is not None:
+                writer_rows.append(row)
+                continue
 
         counts: dict[str, int] = {}
         conditions: list[tuple[Any, Any]] = []
@@ -860,6 +908,41 @@ def _guarded_rows(
     for row in (*bit_rows, *writer_rows):
         outer.add_branch(row)
     return outer
+
+
+def _is_series(condition: Any) -> bool:
+    """True when *condition* is contacts and plain compares in series, with no ``Or``.
+
+    Only these lower to the exact simplifier, so a series of them was simplified exactly.
+    """
+    from pyrung.core.condition import (
+        AllCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+    )
+    from pyrung.core.tag import Tag
+
+    if condition is _ALWAYS or condition is _NEVER:
+        return True
+    contacts = (BitCondition, NormallyClosedCondition, IntTruthyCondition)
+    compares = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
+    parts = condition.conditions if type(condition) is AllCondition else (condition,)
+    return all(
+        (type(part) in contacts and isinstance(part.tag, Tag))
+        or (
+            type(part) in compares
+            and isinstance(part.tag, Tag)
+            and isinstance(part.value, (Tag, bool, int, float, str))
+        )
+        for part in parts
+    )
 
 
 def _none_if_always(condition: Any) -> Any:

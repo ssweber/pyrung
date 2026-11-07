@@ -271,7 +271,8 @@
 - A `how()` plan prints its temporary logic as the rows that ran, in pyrung source:
   - a tag the logic sets under one condition gets one row, an `out()` for a Bool (it printed a `latch()` or `reset()` per rule)
   - a condition that reads a tag the logic writes earlier goes on a bit instead
-  - a tag the logic sets under two or more conditions gets one bit per condition, such as `__on1__HoldSensor`, `__off1__HoldSensor` or `__set1__Speed`, and the bit rows run first
+  - a tag the logic sets under two or more conditions gets one row when its conditions merge into contacts in series with no `Or`, such as `with rung(State == 6, ~RotateSensor): out(RotateSensor)`
+  - otherwise the tag gets one bit per condition, such as `__on1__HoldSensor`, `__off1__HoldSensor` or `__set1__Speed`, and the bit rows run first
   - a non-Bool tag gets one `copy()` per bit, in order
   - the bits stay in `plan.fork`'s tags after the logic is removed. The debugger doesn't list them
   - conditions leave out terms that can't change them

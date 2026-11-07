@@ -225,16 +225,13 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        # Each rule decides its own bit from the state before the input is written, so the
+        # The two rules merge into one row that reads the input before it writes it, so the
         # input flips every scan.
         assert (
-            "   with rung(Sts_StateCurrent == 6, ~RotateSensor):\n"
-            "     out(__on1__RotateSensor)\n"
-            "   with rung(Sts_StateCurrent == 6, RotateSensor):\n"
-            "     out(__off1__RotateSensor)\n"
-            "   with rung(__on1__RotateSensor, ~__off1__RotateSensor):\n"
-            "     out(RotateSensor)\n"
-        ) in text
+            "   with rung(Sts_StateCurrent == 6, ~RotateSensor):\n     out(RotateSensor)\n" in text
+        )
+        assert "__on1__" not in text
+        assert "Decide first" not in text
         assert "reset(RotateSensor)" not in text
         assert "Temporary logic in effect: step 1." in text
         assert "holds: RotateSensor" not in text
@@ -374,8 +371,11 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        assert "3. Remove some of the temporary logic from step 2. Until now it ran as:" in text
-        assert "out(__off1__Go)" in text
+        assert (
+            "3. Remove some of the temporary logic from step 2. Until now it ran as:\n"
+            "   with rung(State == 6, State != 7):\n"
+            "     out(Go)\n"
+        ) in text
         assert "   From here on it runs as:\n   with rung(State == 6):\n     out(Go)" in text
         # The rule left in is printed by the removal, so the wait names that step.
         assert "Temporary logic in effect: step 3." in text
