@@ -510,6 +510,8 @@ def _starts_tag_meta(first: str) -> bool:
         or first in _PHYSICAL_FLAG_TOKENS
         or first.startswith("choices=")
         or any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
+        # A flag given a value is metadata written wrong, so the parser can say so.
+        or any(first.startswith(f"{name}=") for name in _PHYSICAL_FLAG_TOKENS)
         or first.startswith(_OLD_FORM_TOKENS)
     )
 

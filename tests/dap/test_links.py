@@ -187,6 +187,32 @@ class TestConsole:
         assert response["success"] is False
         assert "has no response" in response["message"]
 
+    def test_link_takes_the_flasher_keys(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        _say(adapter, out, "link Spare Motor flasher_on=10ms flasher_off=10ms")
+        assert "flasher_on=10ms flasher_off=10ms" in _say(adapter, out, "links")
+        _say(adapter, out, "patch Cmd true")
+        seen = set()
+        for _ in range(6):
+            _say(adapter, out, "run 10ms")
+            seen.add(_tag(adapter, "Spare"))
+        assert seen == {True, False}
+
+    def test_link_reads_a_bare_flag(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        response = _repl(adapter, out, "link Spare Motor toggle")
+        assert response["success"] is False
+        assert "toggle feedback (Spare) does not run in the harness yet" in response["message"]
+        response = _repl(adapter, out, "link Spare Motor toggle=1")
+        assert response["success"] is False
+        assert "toggle is a bare flag" in response["message"]
+
+    def test_link_refuses_keys_of_two_kinds(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        response = _repl(adapter, out, "link Spare Motor on_delay=1s flasher_on=1s")
+        assert response["success"] is False
+        assert "keys of two kinds" in response["message"]
+
     def test_link_rejects_unknown_keys(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)
         response = _repl(adapter, out, "link Spare Motor delay=1s")
@@ -325,6 +351,47 @@ class TestRequests:
         response = _response(_request(adapter, out, "pyrungRestoreLink", {"feedback": "Spare"}))
         assert response["success"] is False
         assert response["message"] == "Spare has no bench change"
+
+    def test_link_request_takes_each_kind_as_fields(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        body = _ok(
+            adapter,
+            out,
+            "pyrungLink",
+            {"feedback": "Spare", "enable": "Motor", "flasherOn": "10ms", "flasherOff": "20ms"},
+        )
+        assert body["command"] == "link Spare Motor flasher_on=10ms flasher_off=20ms"
+        row = next(row for row in _rows(adapter, out) if row["feedback"] == "Spare")
+        assert (row["kind"], row["flasherOn"], row["flasherOff"]) == ("flasher", "10ms", "20ms")
+
+        body = _ok(
+            adapter,
+            out,
+            "pyrungLink",
+            {"feedback": "State", "enable": "Motor", "approachTo": 50, "approachRate": 0.5},
+        )
+        assert body["command"] == "link State Motor approach_to=50 approach_rate=0.5"
+
+    def test_link_request_refuses_the_old_profile_field(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        response = _response(
+            _request(
+                adapter,
+                out,
+                "pyrungLink",
+                {"feedback": "Spare", "enable": "Motor", "profile": "ramp:up=1"},
+            )
+        )
+        assert response["success"] is False
+        assert "pyrungLink.profile was removed" in response["message"]
+
+        response = _response(
+            _request(
+                adapter, out, "pyrungLink", {"feedback": "Spare", "enable": "Motor", "toggle": True}
+            )
+        )
+        assert response["success"] is False
+        assert "does not run in the harness yet" in response["message"]
 
     def test_set_links_changes_nothing_when_an_entry_is_unknown(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)

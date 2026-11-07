@@ -905,13 +905,13 @@ class TestPointerReadsStayInTheLoop:
         self._folds(_banked(reader))
 
     def test_a_settled_plant(self) -> None:
-        self._folds(_banked(_compare_through, approach_to=0.0, approach_rate=0.3))
+        self._folds(_banked(_compare_through, profile=_approach(0.0, 0.3)))
 
     def test_a_plant_at_rest(self) -> None:
         self._folds(_banked(_compare_through, enable=False))
 
     def test_a_settled_plant_under_a_coast(self) -> None:
-        make = _banked(_compare_through, approach_to=0.0, approach_rate=0.3, toggle=True)
+        make = _banked(_compare_through, profile=_approach(0.0, 0.3), toggle=True)
         plc = make()
         _reached, stats = _coast(plc, _hit, predicate_reads=frozenset({"Hit"}))
         assert stats["stretched_scans"] > 2_500
