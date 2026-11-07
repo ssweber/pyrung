@@ -448,6 +448,8 @@ def _simplified(condition: Any) -> Any:
             return And(terms) if kind is AllCondition else Or(terms)
         if kind not in plain + compares or isinstance(part.tag, ImmediateRef):
             raise _NotExact
+        if kind in compares and not isinstance(part.value, (Tag, bool, int, float, str)):
+            raise _NotExact
         if (
             kind in (CompareEq, CompareNe)
             and part.tag.type == TagType.BOOL
@@ -456,9 +458,6 @@ def _simplified(condition: Any) -> Any:
             # A Bool compared to a constant is a contact, and prints as one: one key for both.
             closed = part.value is (kind is CompareEq)
             part = BitCondition(part.tag) if closed else NormallyClosedCondition(part.tag)
-            kind = type(part)
-        if kind in compares and not isinstance(part.value, (Tag, bool, int, float, str)):
-            raise _NotExact
         atom = _condition_to_expr(part)
         originals.setdefault(_expr_key(atom), part)
         return atom
