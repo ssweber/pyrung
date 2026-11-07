@@ -349,10 +349,10 @@ def guarded_copy_rung(
       active rule writes last.  A Boolean destination given any other value
       gets a reset row above its copies, so it is off when no rule is on.
     * A destination with two or more rules gets one row and no bits when its rules
-      merge into one exact series of contacts with no ``Or``, and none of them reads
-      another destination of the rung.  That row is the ``out(dest)`` the bits would
-      power, with each bit's guard in its place.  Any other destination takes a single
-      ``copy`` only when all its rules give the same value.
+      simplify exactly to contacts in series with no ``Or``.  None of the rules may read
+      another destination of the rung.  A Boolean destination's row is the
+      ``out(dest)`` its bits would power, with each bit's guard in the bit's place.  Any
+      other destination merges into one ``copy`` only when all its rules give one value.
     * A destination with one rule is one row on its guard.  It sits above
       every destination its guard reads.  Its rule takes a bit instead in
       these cases:
