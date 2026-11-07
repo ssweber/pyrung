@@ -111,6 +111,9 @@ MAX_WAIT_AFTER_SHORT = 64
 MAX_WAIT_AFTER_NONE = 256
 # A stretch this long paid for its entry into the kernel.
 PAYING_STRETCH = 16
+# A coast compiles a kernel or traces a new path only with this many loop scans of room left.
+# A shorter stretch saves less time than a compile or a trace costs.
+TRACE_ROOM = PAYING_STRETCH
 
 
 @dataclass(eq=False)
@@ -201,8 +204,11 @@ def memo_of(plc: PLC) -> CoastMemo:
     return memo
 
 
-def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
-    """The kernel of this runner's program and overlay.  A fork need not compile it again."""
+def _kernel_for(plc: PLC, memo: CoastMemo, *, may_compile: bool = True) -> CompiledKernel | None:
+    """The kernel of this runner's program and overlay.  A fork need not compile it again.
+
+    With *may_compile* false, a kernel compiled before or None.
+    """
     cached = plc._compiled_replay_kernel
     if cached is False:
         return None
@@ -217,6 +223,8 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
         memo.kernels[key] = entry
         plc._compiled_replay_kernel = entry[0]
         return entry[0]
+    if not may_compile:
+        return None
     kernel = plc._compiled_replay_supported_kernel()
     memo.compiles += 1
     if kernel is None:
@@ -930,7 +938,10 @@ def _try_stretch(
                         "no known path covers the next scan",
                         guard_failed=True,
                     )
-            loop.learn(previous or (kept[-1] if kept else None))
+            if limit - total >= TRACE_ROOM:
+                loop.learn(previous or (kept[-1] if kept else None))
+            elif run is not None:
+                jit_stats.add_decline("trace: too little room left to pay for it")
             loop.finish()
             return total, loop.learned
         if previous is not None:
@@ -1136,7 +1147,11 @@ def _coast_until(
                 continue
             watched = monitored | {str(name) for name in traced}
         if kernel is None:
-            kernel = _kernel_for(plc, memo)
+            kernel = _kernel_for(plc, memo, may_compile=limit >= TRACE_ROOM)
+            if kernel is None and limit < TRACE_ROOM and plc._compiled_replay_kernel is None:
+                if run is not None:
+                    jit_stats.add_decline("attempt: too little room left to pay for a compile")
+                continue
             if kernel is None:
                 can_loop = False
                 if run is not None:
