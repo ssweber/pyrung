@@ -22,7 +22,7 @@ def install_harness(adapter: Any) -> Harness:
     Nothing is settled yet.  The caller settles once the bench links are in.
     """
     harness = Harness(adapter._require_runner_locked())
-    harness._install(settle=False)
+    harness._install()
     harness.on_patches_applied = _make_patch_listener(adapter)
     adapter._harness = harness
     return harness
