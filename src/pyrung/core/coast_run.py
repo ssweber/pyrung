@@ -51,7 +51,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-from pyrung.core import compiled_run, scan_trace
+import time
+
+from pyrung.core import compiled_run, jit_stats, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.compiled_run import _BoundsWatch, _install, _kernel_cannot_say_what_it_adds
 from pyrung.core.read_trace import _FIELD_READ, _READ_ALL, _traced_call
@@ -65,11 +67,14 @@ from pyrung.core.scan_trace import (
     ScanLoop,
     ScanTrace,
     _record_block_writes,
+    _source_of,
     attempted_stores,
     coast_loop,
     coast_moves,
+    exit_of,
     moving_tags,
     same,
+    start_counting_exit,
 )
 from pyrung.core.scan_trace import _current_value as _cell_value
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
@@ -237,6 +242,7 @@ class _CoastLoop(ScanLoop):
     """One stretch's use of a kernel's paths: entry, tracing and the self check."""
 
     _keep_plans = True
+    _real_scans_are = "self check"
 
     def __init__(
         self,
@@ -733,7 +739,10 @@ def _loop_of(
     if loop is None:
         plan = path.trace.plan
         assert plan is not None
+        started = time.perf_counter()
         function, moves, _source = coast_loop(plan, replay._block_index_names, key[0], key[1])
+        if jit_stats.ACTIVE:
+            jit_stats.add_cost("loop write", time.perf_counter() - started)
         loop = _Loop(function, moves, tuple(sorted(key[0] | key[1])))
         if len(path.loops) >= MAX_LOOPS_PER_PATH:
             path.loops.pop(next(iter(path.loops)))
@@ -749,6 +758,7 @@ def _try_stretch(
     reads: frozenset[str] | None,
     watched: frozenset[str],
     limit: int,
+    run: jit_stats.Run | None = None,
 ) -> tuple[int, _Path | None]:
     """Run loop scans from the tip while a known path covers each.
 
@@ -758,11 +768,17 @@ def _try_stretch(
     """
     overrides = plc._input_overrides
     if overrides.pending_patches or overrides.forces:
+        if run is not None:
+            jit_stats.add_decline("attempt: a pending patch or a force")
         return 0, None
     if _kernel_cannot_say_what_it_adds(plc, kernel):
+        if run is not None:
+            jit_stats.add_decline("attempt: a tag not in the state may get its default")
         return 0, None
     paths = _paths_for(memo, kernel)
     if paths.off is not None:
+        if run is not None:
+            jit_stats.add_decline(f"attempt: the kernel's paths are off ({paths.off})")
         return 0, None
     start = plc._state
     replay = CompiledPLC(
@@ -776,9 +792,13 @@ def _try_stretch(
     replay.rtc_applied = []
     constrained = plc._constrained_tags
     if constrained and _BoundsWatch(replay, constrained).violated():
+        if run is not None:
+            jit_stats.add_decline("attempt: a value already out of its bounds")
         return 0, None
     loop = _CoastLoop(replay, kernel, paths, constrained, memo)
     if loop._off is not None:
+        if run is not None:
+            jit_stats.add_decline(f"run declined: {loop._off}")
         return 0, None
 
     declared = reads if reads is not None else frozenset()
@@ -801,10 +821,12 @@ def _try_stretch(
     previous: _Path | None = None
     burst = 0
     segments: list[_Segment] = []
+    # While the jit counters count: what ended the last firing, and whether a guard did.
+    left_by: tuple[str, bool] | None = None
 
     def fire(path: _Path) -> int:
         """Fire *path* for what its loop allows, or not at all."""
-        nonlocal total, burst
+        nonlocal total, burst, left_by
         looped = loops.get(id(path), False)
         if looped is False:
             looped = (
@@ -825,6 +847,8 @@ def _try_stretch(
         if sizes:
             room = min(room, sizes[burst % len(sizes)])
             burst += 1
+        if run is not None:
+            start_counting_exit(looped.function)
         used, timestamp = looped.function(
             state_kernel.tags,
             state_kernel.blocks,
@@ -837,6 +861,14 @@ def _try_stretch(
             stop,
         )
         if used:
+            if run is not None:
+                if left_by is not None and left_by[1]:
+                    jit_stats.add_handover(left_by[0])
+                left_by = (
+                    exit_of(looped.function, _source_of(kernel))
+                    if used < room
+                    else ("its scan limit", False)
+                )
             segments.append(
                 _Segment(
                     path,
@@ -853,10 +885,12 @@ def _try_stretch(
         return used
 
     kept = paths.paths
+    blocked = None
     while total < limit and not asked_to_stop:
         if memo.check_limits is not None:
             memo.check_limits()
-        if loop._blocked() is not None:
+        blocked = loop._blocked()
+        if blocked is not None:
             break
         fired: _Path | None = None
         if previous is not None:
@@ -885,6 +919,18 @@ def _try_stretch(
             if total:
                 _record_segments(plc, segments, paths)
                 _land(plc, replay)
+            if run is not None:
+                if not total:
+                    jit_stats.add_decline("attempt: no known path covers the scan")
+                elif left_by is not None and left_by[1]:
+                    run.stretch(start.scan_id + 1, total, left_by[0], guard_failed=True)
+                else:
+                    run.stretch(
+                        start.scan_id + 1,
+                        total,
+                        "no known path covers the next scan",
+                        guard_failed=True,
+                    )
             loop.learn(previous or (kept[-1] if kept else None))
             loop.finish()
             return total, loop.learned
@@ -906,6 +952,17 @@ def _try_stretch(
     if total:
         _record_segments(plc, segments, paths)
         _land(plc, replay)
+    if run is not None:
+        if total >= limit:
+            ended = "the run's end"
+        elif asked_to_stop:
+            ended = "the stop predicate asked"
+        else:
+            ended = f"a scan the loop cannot run ({blocked})"
+        if total:
+            run.stretch(start.scan_id + 1, total, ended, guard_failed=False)
+        else:
+            jit_stats.add_decline(f"attempt: {ended}")
     return total, None
 
 
@@ -942,6 +999,29 @@ def coast_until(
     scans ``kernel_scans`` leaves).  *on_kernel_scan* and ``kernel_scans`` have each
     interpreted scan and the landing, which a stretch may have run.
     """
+    options = (predicate_reads, stats, on_kernel_scan, loop_scans_per_unit)
+    if not jit_stats.ACTIVE:
+        return _coast_until(plc, predicate, budget, *options, None)
+    run = jit_stats.Run("coast_until()")
+    start_scan = plc.state.scan_id
+    try:
+        return _coast_until(plc, predicate, budget, *options, run)
+    finally:
+        end = plc.state.scan_id
+        run.end(end + 1)
+        jit_stats.add_scans("interpreted", end - start_scan - run.loop_scans)
+
+
+def _coast_until(
+    plc: PLC,
+    predicate: Callable[[Any], bool],
+    budget: int,
+    predicate_reads: frozenset[str] | None,
+    stats: dict[str, int] | None,
+    on_kernel_scan: Callable[[int], None] | None,
+    loop_scans_per_unit: int,
+    run: jit_stats.Run | None,
+) -> bool:
     start_scan = plc.state.scan_id
     kernel_scans = 0
     stretches = 0
@@ -987,6 +1067,10 @@ def coast_until(
     # Nothing in a loop scan writes these, and a reader must still see them change.
     if can_loop and _moves_without_a_write(monitored | (predicate_reads or frozenset())):
         can_loop = False
+        if run is not None:
+            jit_stats.add_decline("interpreted: a watched tag moves without a write")
+    elif not can_loop and run is not None:
+        jit_stats.add_decline(f"interpreted: {_why_interpreted(plc, kernel)}")
     wait = ENTRY_WAIT
     since = 0
     fails = 0
@@ -1038,6 +1122,8 @@ def coast_until(
                 _hit, traced = _traced_call(predicate, plc)
             except Exception:
                 can_loop = False
+                if run is not None:
+                    jit_stats.add_decline("interpreted: tracing the stop predicate's reads raised")
                 continue
             if (
                 _READ_ALL in traced
@@ -1045,10 +1131,12 @@ def coast_until(
                 or _moves_without_a_write(traced)
             ):
                 wait = min(wait * 2, MAX_WAIT_AFTER_NONE)
+                if run is not None:
+                    jit_stats.add_decline("attempt: the stop predicate reads what a loop cannot watch")
                 continue
             watched = monitored | {str(name) for name in traced}
         assert kernel is not None
-        used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit)
+        used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, run)
         if used:
             stretches += 1
             paused = plc._consume_pause_request()
@@ -1065,6 +1153,18 @@ def coast_until(
             fails += 1
             wait = min(ENTRY_WAIT * 2**fails, MAX_WAIT_AFTER_NONE)
     return finish(bool(predicate(plc.state)))
+
+
+def _why_interpreted(plc: PLC, kernel: CompiledKernel | None) -> str:
+    if plc._program is None:
+        return "no program"
+    if plc._replay_mode:
+        return "replay mode"
+    if plc._time_mode != TimeMode.FIXED_STEP:
+        return "not fixed-step time"
+    if kernel is None and plc._compiled_replay_kernel is False:
+        return "no kernel"
+    return "a breakpoint"
 
 
 def work_charged(logical_scans: int, kernel_scans: int, loop_scans_per_unit: int) -> int:

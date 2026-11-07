@@ -3259,6 +3259,7 @@ class PLC:
 
     def _compiled_replay_supported_kernel(self) -> CompiledKernel | None:
         from pyrung.circuitpy.codegen import compile_kernel
+        from pyrung.core import jit_stats
 
         cached = self._compiled_replay_kernel
         if isinstance(cached, CompiledKernel):
@@ -3284,6 +3285,7 @@ class PLC:
         split_after = (
             len(syn.plant) + len(syn.holds) if (syn is not None and not syn.is_empty()) else None
         )
+        started = time.perf_counter()
         try:
             kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
         except Exception as exc:
@@ -3298,6 +3300,9 @@ class PLC:
                 )
             self._compiled_replay_kernel = False
             return None
+        finally:
+            if jit_stats.ACTIVE:
+                jit_stats.add_cost("compile", time.perf_counter() - started)
         if kernel.has_io_gaps:
             self._compiled_replay_kernel = False
             return None

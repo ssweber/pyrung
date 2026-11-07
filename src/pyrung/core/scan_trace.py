@@ -80,6 +80,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.circuitpy.codegen._helpers import _HELPER_DEFS
+from pyrung.core import jit_stats
 from pyrung.core.bounds import TagConstraint, _check_one
 from pyrung.core.compiled_plc import _KernelRuntimeContext, _TrackedList
 from pyrung.core.condition import (
@@ -309,10 +310,10 @@ class KernelSource:
             if isinstance(value, (*_SCALAR_TYPES, tuple, frozenset)):
                 self.constants[target.id] = value
         self.step_functions = tuple(
-            self.functions[name]
-            for name in ("_kernel_step_pre", "_kernel_step")
-            if name in self.functions
+            self.functions[name] for name in _STEP_FUNCTION_NAMES if name in self.functions
         )
+        self._kernel_source = kernel.source
+        self._snippets: dict[tuple[int, int], str] = {}
         self.scalar_writes, self.opaque_tag_writes = _scalar_writes(tree)
         # A kernel global loaded from a tag at the top of a scan is its working copy.
         self.working_copies: dict[str, str] = {
@@ -328,7 +329,36 @@ class KernelSource:
             and isinstance(statement.value.slice, ast.Constant)
         }
 
+    def snippet(self, guard: _Guard) -> str:
+        """Where *guard* came from, as the jit counters show it: function, line and text."""
+        if guard.why:
+            return guard.why
+        key = (guard.line, guard.inner)
+        found = self._snippets.get(key)
+        if found is None:
+            lines = self._kernel_source.splitlines()
+            if not guard.line:
+                found = "the end of the scan, on a moving bit"
+            else:
+                found = self._line_of(lines, guard.line)
+                if guard.inner and guard.inner != guard.line:
+                    found += f" (in {self._line_of(lines, guard.inner)})"
+            self._snippets[key] = found
+        return found
 
+    def _line_of(self, lines: list[str], line: int) -> str:
+        name = next(
+            (
+                name
+                for name, function in self.functions.items()
+                if function.node.lineno <= line <= (function.node.end_lineno or line)
+            ),
+            "?",
+        )
+        return f"{name}:{line}: {lines[line - 1].strip()}"
+
+
+_STEP_FUNCTION_NAMES = ("_kernel_step_pre", "_kernel_step")
 _NOT_LITERAL = object()
 
 
@@ -581,6 +611,11 @@ class _Op:
 class _Guard:
     leave_if: str
     uses: tuple[str, ...]
+    # Where it came from, for the jit counters: the kernel source line of the step function's
+    # statement and of the innermost statement (0 if none), or a reason a coast wrote it.
+    line: int = 0
+    inner: int = 0
+    why: str = ""
 
 
 # --- Stop predicates ----------------------------------------------------------
@@ -691,6 +726,9 @@ class _Tracer:
         self._known_truth: dict[str, bool] = {}
         self._own_lists: dict[int, list[Any]] = {}
         self._temp_count = 0
+        # The statement being traced, in the step function and innermost, for _Guard.
+        self._line = 0
+        self._inner = 0
         self._statements: dict[type, Callable[[Any, _Frame], None]] = {
             ast.Assign: self._assign,
             ast.AugAssign: self._augmented_assign,
@@ -736,6 +774,7 @@ class _Tracer:
                 self._enter(function, state_arguments)
         except _KernelRaised as raised:
             raise Decline(f"scan raises {type(raised.original).__name__}") from raised
+        self._line = self._inner = 0
         for key, cell in self.cells.items():
             if key in self.entries and self._is_moving(key) and cell is not self.entries[key]:
                 raise Decline("scan writes a moving tag")
@@ -753,10 +792,14 @@ class _Tracer:
         return _Value(None)
 
     def _block(self, statements: list[ast.stmt], frame: _Frame) -> None:
+        step = frame.function.node.name in _STEP_FUNCTION_NAMES
         for statement in statements:
             handler = self._statements.get(type(statement))
             if handler is None:
                 raise Decline(f"statement {type(statement).__name__}")
+            self._inner = statement.lineno
+            if step:
+                self._line = statement.lineno
             handler(statement, frame)
 
     def _eval(self, node: ast.expr, frame: _Frame) -> _Value:
@@ -869,7 +912,7 @@ class _Tracer:
 
     def _guard(self, leave_if: str, operands: tuple[_Value, ...]) -> None:
         uses = tuple(v.local for v in operands if v.local is not None)
-        self.ops.append(_Guard(leave_if, uses))
+        self.ops.append(_Guard(leave_if, uses, self._line, self._inner))
 
     def _truth(self, value: _Value) -> bool:
         """Decide on *value*: its truth now, and a guard to keep it."""
@@ -1610,9 +1653,12 @@ def _loop_function(
             "                rtc_now, rtc_from, rtc_until = rtc_fields(ts)",
         ]
     lines += [f"            {line}" for line in refresh]
+    guard_list: list[_Guard] = []
     for op in body:
         if isinstance(op, _Guard):
-            lines.append(f"            if {op.leave_if}: break")
+            # Only a guard that fails writes EXIT, so the scans that pass pay nothing for it.
+            lines.append(f"            if {op.leave_if}: EXIT[0] = {len(guard_list)}; break")
+            guard_list.append(op)
         else:
             lines.append(f"            {op.target} = {op.expression}")
     if commit_targets:
@@ -1623,20 +1669,52 @@ def _loop_function(
     ]
     if seen:
         lines += [f"            seen[{name!r}] = {tracer.entry_locals[key]}" for name, key in seen]
-        lines.append("            if stop(): break")
+        lines.append(f"            if stop(): EXIT[0] = {_LEFT_ON_STOP}; break")
     lines += [
         "    except Exception:",
-        "        pass",  # As a failed guard: the real scan runs this iteration.
+        # As a failed guard: the real scan runs this iteration.
+        f"        EXIT[0] = {_LEFT_ON_RAISE}",
     ]
     if stores:
         lines.append("    if used:")
         lines += [f"        {store}" for store in stores]
     lines.append("    return used, ts")
     source = "\n".join(lines)
-    namespace: dict[str, Any] = {"clock_high": clock_high, "math": math}
+    namespace: dict[str, Any] = {
+        "clock_high": clock_high,
+        "math": math,
+        "EXIT": [_LEFT_AT_LIMIT],
+        "GUARDS": tuple(guard_list),
+    }
     namespace.update({f"K{i}": value for i, value in enumerate(tracer.loop_constants)})
     exec(compile(source, "<scan loop>", "exec"), namespace)  # noqa: S102
     return namespace["_scan_loop"], source, body
+
+
+# What a loop function writes in its EXIT when no guard failed.
+_LEFT_AT_LIMIT = -1
+_LEFT_ON_RAISE = -2
+_LEFT_ON_STOP = -3
+
+
+def start_counting_exit(function: Callable[..., Any]) -> None:
+    """Clear what *function* says ended its last call.  The jit counters call this."""
+    function.__globals__["EXIT"][0] = _LEFT_AT_LIMIT
+
+
+def exit_of(function: Callable[..., Any], source: KernelSource) -> tuple[str, bool]:
+    """What ended *function*'s last call, and whether it was a guard or a raise.
+
+    Ask only after :func:`start_counting_exit` and a call that ran fewer scans than its limit.
+    """
+    left = function.__globals__["EXIT"][0]
+    if left >= 0:
+        return f"a guard at {source.snippet(function.__globals__['GUARDS'][left])}", True
+    if left == _LEFT_ON_RAISE:
+        return "an operation raised", True
+    if left == _LEFT_ON_STOP:
+        return "the stop predicate asked", False
+    return "its scan limit", False
 
 
 def _live_operations(ops: list[_Op | _Guard], live: set[str]) -> list[_Op | _Guard]:
@@ -1810,7 +1888,9 @@ def _coast_guards(
         free_to_move = name not in watched and cell.local is not None
         if free_to_move and type(after) is int and type(before) is int:
             delta = after - before
-            guards.append(_Guard(f"{new} - {old} != {delta!r}", uses))
+            guards.append(
+                _Guard(f"{new} - {old} != {delta!r}", uses, why=f"{name} moves by other than {delta}")
+            )
             if delta:
                 moved.append((name, delta))
             else:
@@ -1819,20 +1899,24 @@ def _coast_guards(
             # Nothing says how far a Real moves, only whether it does, and a scan that holds
             # it is another path: a record of it says "moved" on every scan it runs.
             if after == before:
-                guards.append(_Guard(f"{new} != {old}", uses))
+                guards.append(_Guard(f"{new} != {old}", uses, why=f"{name} starts moving"))
                 held.append(name)
             else:
-                guards.append(_Guard(f"{new} == {old}", uses))
+                guards.append(_Guard(f"{new} == {old}", uses, why=f"{name} stops moving"))
                 free.append(name)
         elif name in watched or same(after, before) or after == before:
             # Equal across types too: 0 to False on an Int driven by out() is no transition.
-            guards.append(_Guard(f"{old} != {new}", uses))
+            why = f"watched {name} changes" if name in watched else f"{name} changes"
+            guards.append(_Guard(f"{old} != {new}", uses, why=why))
             if cell.local is not None and same(after, before):
                 held.append(name)
         else:
-            guards.append(_Guard(f"{old} != {plan._atom(_Value(before))}", (old,)))
+            flip = f"{name} flips other than {before!r} to {after!r}"
+            guards.append(_Guard(f"{old} != {plan._atom(_Value(before))}", (old,), why=flip))
             if cell.local is not None:
-                guards.append(_Guard(f"{new} != {plan._atom(_Value(after))}", (cell.local,)))
+                guards.append(
+                    _Guard(f"{new} != {plan._atom(_Value(after))}", (cell.local,), why=flip)
+                )
             flips.append((name, before, after))
     return guards, CoastMoves(tuple(moved), tuple(free), tuple(flips), tuple(held)), seen_cells
 
@@ -1865,6 +1949,12 @@ class ScanLoop:
     """One run's guarded loop.  Ask :meth:`advance` before every real scan."""
 
     _keep_plans = False
+    # The jit counters' record of this run's stretches.  The run sets it while they count.
+    jit: jit_stats.Run | None = None
+    # What the jit counters call this loop's real scans.
+    _real_scans_are = "compiled"
+    # The stretch the last firing left open, as [first scan, scans run], while counting.
+    _open: list[int] | None = None
 
     def __init__(
         self,
@@ -1976,8 +2066,17 @@ class ScanLoop:
             self._mismatch(f"its guards passed where the real scan {reason}", pending)
 
     def finish(self) -> None:
-        """Add this run to :data:`TOTALS`."""
+        """Add this run to :data:`TOTALS`, and to the jit counters while they count."""
         TOTALS.update(self.counts)
+        if jit_stats.ACTIVE:
+            self._close_open("the run's end")
+            for key, n in self.counts.items():
+                if key == "real scans":
+                    jit_stats.add_scans(self._real_scans_are, n)
+                elif key.startswith(("decline: ", "run declined: ")):
+                    jit_stats.add_decline(key, n)
+                elif key not in ("loop scans", "trace microseconds"):
+                    jit_stats.add_event(key, n)
 
     # -- Entry ------------------------------------------------------------------
 
@@ -2031,6 +2130,8 @@ class ScanLoop:
 
     def _fire(self, trace: ScanTrace, limit: int) -> int:
         kernel = self._replay._kernel
+        if self.jit is not None:
+            start_counting_exit(trace.loop)
         used, timestamp = trace.loop(
             kernel.tags,
             kernel.blocks,
@@ -2041,11 +2142,33 @@ class ScanLoop:
             self._rtc_fields,
         )
         if used:
+            if self.jit is not None:
+                self._count_firing(trace, kernel.scan_id + 1, used, limit)
             kernel.scan_id += used
             kernel.timestamp = timestamp
             _record_block_writes(trace, kernel.blocks)
             self.counts["loop scans"] += used
         return used
+
+    def _count_firing(self, trace: ScanTrace, first: int, used: int, limit: int) -> None:
+        """Firings in a row make one stretch, which a failed guard ends."""
+        stretch = self._open
+        if stretch is not None and stretch[0] + stretch[1] == first:
+            stretch[1] += used
+        else:
+            self._close_open("its scan limit, and no loop took the next scan")
+            stretch = self._open = [first, used]
+        if used < limit:
+            self._open = None
+            left_by, failed = exit_of(trace.loop, _source_of(self._artifact))
+            assert self.jit is not None
+            self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=failed)
+
+    def _close_open(self, left_by: str) -> None:
+        stretch = self._open
+        if stretch is not None and self.jit is not None:
+            self._open = None
+            self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=False)
 
     def _after_firing(self, used: int, limit: int) -> None:
         if used >= min(limit, UNPRODUCTIVE_BELOW):
@@ -2094,7 +2217,10 @@ class ScanLoop:
             self._note_decline(f"tracer error: {type(exc).__name__}")
             return
         finally:
-            self.counts["trace microseconds"] += int((time.perf_counter() - started) * 1e6)
+            spent = time.perf_counter() - started
+            self.counts["trace microseconds"] += int(spent * 1e6)
+            if jit_stats.ACTIVE:
+                jit_stats.add_cost("trace", spent)
         self.counts["traces"] += 1
         self._begin_self_check(trace)
 
