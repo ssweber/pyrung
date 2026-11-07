@@ -60,7 +60,7 @@ from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
 from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
-from pyrung.core.synthesis import plant_timer
+from pyrung.core.synthesis import coil_timer
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import ImmediateRef, InputTag, TagType
 from pyrung.core.time_mode import TimeMode
@@ -216,10 +216,12 @@ def _contact(atoms: list[Any], tag: str, form: str) -> bool:
     return any(isinstance(atom, Atom) and atom.tag == tag and atom.form == form for atom in atoms)
 
 
-def _plant_delay_ms(declared_ms: int | None) -> int:
-    """How long the plant really takes: its timer rounds up to a whole unit of what it counts."""
-    preset, _unit, unit_ms = plant_timer(declared_ms or 0)
-    return preset * unit_ms
+def _plant_delays_ms(physical: Any) -> tuple[int, int]:
+    """How long the plant's debounce takes each way, rounded up to the one unit both sides count in."""
+    on_preset, off_preset, _unit, unit_ms = coil_timer(
+        physical.on_delay_ms or 0, physical.off_delay_ms or 0
+    )
+    return on_preset * unit_ms, off_preset * unit_ms
 
 
 class _LinkProof:
@@ -349,7 +351,7 @@ class _LinkProof:
                 return frozenset({(coupling.en_name, coupling.fb_name)})
         return None
 
-    def _opposed_delay(self, atoms: list[Any], coupling: Coupling) -> int | None:
+    def _opposed_delay(self, atoms: list[Any], coupling: Coupling) -> float | None:
         """How long the plant lets these contacts hold the feedback against its enable, if bounded.
 
         Only an on/off delay coupling has that bound. A flasher has no resting value.
@@ -372,10 +374,12 @@ class _LinkProof:
         resting = _contact(atoms, coupling.en_name, off_form)
         fb_high = _contact(atoms, fb, "xic")
         fb_low = _contact(atoms, fb, "xio")
+        on_ms, off_ms = _plant_delays_ms(coupling.physical)
         if driving and not resting and fb_low and not fb_high:
-            return _plant_delay_ms(coupling.physical.on_delay_ms)
+            return on_ms
         if resting and not driving and fb_high and not fb_low:
-            return _plant_delay_ms(coupling.physical.off_delay_ms)
+            # The debounce's off side compares a scan after the fall.
+            return off_ms + facts.dt_ms
         return None
 
     def _read_as_the_plant_reads(self, en: str) -> bool:

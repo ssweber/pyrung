@@ -1,13 +1,9 @@
 """Autoharness: automatic feedback synthesis from Physical + link= declarations.
 
-A bool coupling is **dwell**: feedback responds to a *sustained* command, never
-a sub-``on_delay`` glitch.  It is lowered to a real on-delay (``TON``) and
-off-delay (``TOF``) timer pair — the same public primitives a hand-written
-program would use — executed once per pre-scan as a synthesis overlay.  The
-``TON`` rises only after the enable has been held for ``on_delay``; feeding its
-done bit through a ``TOF`` keeps the feedback asserted for ``off_delay`` after
-the enable drops.  No private transport-delay heap: a glitch resets the
-accumulator, so feedback that was never sustained is never fabricated.
+Each feedback runs as the one CLICK coil the device behaves like, in a plant rung
+scanned before the program.  A bool feedback with ``on_delay``/``off_delay`` is a
+``debounce`` coil under its enable, and one with ``flasher_on``/``flasher_off`` is a
+``flasher`` coil.  The ramp and approach kinds are ``math`` rows.
 """
 
 from __future__ import annotations
@@ -20,9 +16,10 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.physical import Physical
 from pyrung.core.synthesis import (
     TIMER_ACC_MAX,
+    coil_timer,
     plant_acc_name,
     plant_acc_registers,
-    plant_timer,
+    plant_unit_ms,
 )
 from pyrung.core.tag import TagType
 
@@ -42,18 +39,12 @@ class Coupling:
 
 @dataclass
 class _BoolCoupling:
-    """A bool feedback lowered to a real on-delay/off-delay timer pair (dwell).
+    """A bool feedback that runs as a debounce coil under its enable.
 
-    The on-delay (``ton``) rises only after the enable has been sustained for
-    ``on_delay``; the off-delay (``tof``), driven by the on-delay's done bit,
-    keeps the feedback asserted for ``off_delay`` after the enable drops.  The
-    feedback tag *is* the off-delay's done bit, so the only register the program
-    reads is ``Fb``; ``ton_acc`` / ``tof_acc`` are the timers' internal
-    accumulators.
-
-    The timer *instructions* themselves live in the runner's synthesis overlay
-    (``plc._synthesis.plant``); this record keeps only the metadata and the
-    overlay tag names it needs for seeding and pending-count reporting.
+    The coil itself lives in the runner's synthesis overlay
+    (``plc._synthesis.plant``).  This record keeps the names of the coil's
+    accumulators and of its memory of the rung, which seeding and
+    :meth:`Harness.pending_ms` read.
     """
 
     en_name: str
@@ -62,9 +53,9 @@ class _BoolCoupling:
     off_delay_ms: int
     physical: Physical
     trigger_value: int | str | None = None
-    ton_done_name: str = ""
-    ton_acc_name: str = ""
-    tof_acc_name: str = ""
+    on_acc_name: str = ""
+    off_acc_name: str = ""
+    rung_memory_key: str = ""
 
 
 @dataclass
@@ -205,10 +196,9 @@ class Harness:
 
     Walks all known tags to find link= couplings and lowers each to plant rungs
     scanned pre-logic (the input-read phase): an ``on_delay``/``off_delay``
-    ``Physical`` becomes an on-delay/off-delay timer pair (bool dwell), and the
-    other kinds become calc/timer rungs — ``ramp_on``/``approach_to`` drive an
-    analog register, ``flasher_on``/``flasher_off`` a bool pulse train.  No Python
-    tick, no monitors.
+    ``Physical`` becomes a ``debounce`` coil, a ``flasher_on``/``flasher_off`` one a
+    ``flasher`` coil, and ``ramp_on``/``approach_to`` ``math`` rows on an analog
+    register.  No Python tick, no monitors.
 
     The couplings found in the program are the *declared* ones.  Overrides
     (:meth:`set_overrides`) replace or cut a declared coupling, or add one,
@@ -352,7 +342,8 @@ class Harness:
         feedback no timer has counted for starts cold: under a held enable the feedback
         follows after its on-delay, as freshly wired hardware would.  A coupling
         replaced, or cut and linked again, keeps the time its timers have counted,
-        whatever unit the new delays count in.
+        whatever unit the new delays count in.  If its enable turned on while it was
+        cut, it counts its on-delay from 0.
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
@@ -391,15 +382,17 @@ class Harness:
                 stacklevel=3,
             )
 
-    def _plant_timers(self) -> Iterator[tuple[str, str, int]]:
-        """``(stem, feedback, delay in ms)`` of each plant timer the couplings run."""
+    def _plant_timers(self) -> Iterator[tuple[str, str, str]]:
+        """``(stem, feedback, unit)`` of each plant timer the couplings run."""
         for c in self._bool_couplings:
-            yield "__cpl_on", c.fb_name, c.on_delay_ms
-            yield "__cpl_off", c.fb_name, c.off_delay_ms
+            unit = coil_timer(c.on_delay_ms, c.off_delay_ms)[2]
+            yield "__cpl_on", c.fb_name, unit
+            yield "__cpl_off", c.fb_name, unit
         for c in self._profile_couplings:
             if c.physical.kind == "flasher":
-                yield "__pls_on", c.fb_name, c.physical.flasher_on_ms or 0
-                yield "__pls_off", c.fb_name, c.physical.flasher_off_ms or 0
+                unit = coil_timer(c.physical.flasher_on_ms or 0, c.physical.flasher_off_ms or 0)[2]
+                yield "__pls_on", c.fb_name, unit
+                yield "__pls_off", c.fb_name, unit
 
     def _carry_counts_to_current_units(self) -> None:
         """Move a count sitting in another unit's register to the one its timer uses now.
@@ -415,16 +408,16 @@ class Harness:
         if self._other_unit_registers is None:
             self._other_unit_registers = tuple(
                 name
-                for stem, fb_name, delay_ms in self._plant_timers()
+                for stem, fb_name, unit in self._plant_timers()
                 for name, _unit_ms in plant_acc_registers(stem, fb_name)
-                if name != plant_acc_name(stem, fb_name, delay_ms)
+                if name != plant_acc_name(stem, fb_name, unit)
             )
         if not any(name in state.tags for name in self._other_unit_registers):
             return
         tags: dict[str, Any] = {}
         memory: dict[str, Any] = {}
-        for stem, fb_name, delay_ms in self._plant_timers():
-            current = plant_acc_name(stem, fb_name, delay_ms)
+        for stem, fb_name, unit in self._plant_timers():
+            current = plant_acc_name(stem, fb_name, unit)
             counted_ns: dict[str, Any] = {}
             for name, unit_ms in plant_acc_registers(stem, fb_name):
                 unit_ns = unit_ms * _NS_PER_MS
@@ -436,8 +429,7 @@ class Harness:
             for name in counted_ns:
                 tags[name] = 0
                 memory[f"_frac:{name}"] = 0
-            _preset, _unit, unit_ms = plant_timer(delay_ms)
-            new_count, new_frac = divmod(max(counted_ns.values()), unit_ms * _NS_PER_MS)
+            new_count, new_frac = divmod(max(counted_ns.values()), plant_unit_ms(unit) * _NS_PER_MS)
             if new_count > TIMER_ACC_MAX:
                 new_count, new_frac = TIMER_ACC_MAX, 0
             tags[current] = new_count
@@ -455,8 +447,9 @@ class Harness:
     def pending_ms(self) -> dict[str, int]:
         """Simulated ms left before each mid-transition bool feedback flips.
 
-        Keyed by feedback name; a feedback that agrees with its enable is
-        absent. Rising, the on-delay is counting; falling, the off-delay is.
+        Keyed by feedback name.  A feedback that agrees with its enable is absent.
+        On a rise the on side counts.  On a fall the off side counts, and the
+        debounce drops the feedback a scan after that count is done.
         """
         state = self._plc.current_state
         snap = state.tags
@@ -464,15 +457,27 @@ class Harness:
         for c in self._bool_couplings:
             if not self._bool_mid_transition(c, snap):
                 continue
-            if snap.get(c.fb_name, False):
-                delay_ms, acc_name = c.off_delay_ms, c.tof_acc_name
-            else:
-                delay_ms, acc_name = c.on_delay_ms, c.ton_acc_name
-            preset, _unit, unit_ms = plant_timer(delay_ms)
+            on_preset, off_preset, _unit, unit_ms = coil_timer(c.on_delay_ms, c.off_delay_ms)
             unit_ns = unit_ms * _NS_PER_MS
-            remaining_ns = (preset - int(snap.get(acc_name, 0) or 0)) * unit_ns
-            remaining_ns -= _carry_ns(state, acc_name, unit_ns)
-            left[c.fb_name] = max(0, round(remaining_ns / _NS_PER_MS))
+            # The coil sees an enable change on the next scan.  It counts that side
+            # from 0.  The debounce clears its on side at a rise, and its off side is
+            # 0 on every true scan.
+            seen = bool(state.memory.get(c.rung_memory_key, False)) != bool(
+                snap.get(c.fb_name, False)
+            )
+            if snap.get(c.fb_name, False):
+                preset, acc_name, scan_ns = (
+                    off_preset,
+                    c.off_acc_name,
+                    round(self._plc._dt * 1_000 * _NS_PER_MS),
+                )
+            else:
+                preset, acc_name, scan_ns = on_preset, c.on_acc_name, 0
+            remaining_ns = preset * unit_ns
+            if seen:
+                remaining_ns -= int(snap.get(acc_name, 0) or 0) * unit_ns
+                remaining_ns -= _carry_ns(state, acc_name, unit_ns)
+            left[c.fb_name] = round((max(0, remaining_ns) + scan_ns) / _NS_PER_MS)
         return left
 
     @property
@@ -510,12 +515,11 @@ class Harness:
         so ``how(Fb >= threshold)`` learns "hold En, coast N scans" without
         running anything.
 
-        Bool couplings are real synthesized on/off-delay instructions. They do
-        not belong to the user's :class:`Program`, so a program-only walk cannot
-        see them; expose their own profiles here instead of making consumers
-        understand synthesis-private accumulator names. An analog coupling is
-        a per-scan profile tick with no instruction owner, so its adapter also
-        lives here.
+        A bool coupling is a debounce coil, and the coil's own profile holds the
+        enable at the value wanted.  The coil is not in the user's
+        :class:`Program`, so a walk of the program alone cannot find it.  A
+        flasher coil has no profile and an analog coupling has no instruction to
+        give one, so their profiles are built here.
         """
         synthesis = self._plc._synthesis
         if synthesis is not None:
@@ -572,9 +576,9 @@ class Harness:
     def _pulse_profile(self, c: _ProfileCoupling) -> Any | None:
         """The next edge of a bool pulse train: keep the enable on and it comes.
 
-        Its toggle rungs are the plant's and the program has no writer for ``Fb``, so without
+        Its flasher coil is the plant's and the program has no writer for ``Fb``, so without
         this a trace reads the feedback as a dead end.  No scalar is exposed: the dwells are
-        the plant's business.
+        the plant's business.  A dwell of 0 keeps ``Fb`` off, so there is no plan to turn it on.
         """
         from pyrung.core.condition import BitCondition, CompareEq
         from pyrung.core.crossing import Eq
@@ -590,8 +594,16 @@ class Harness:
             else BitCondition(en_tag)
         )
 
+        spec = c.physical
+        on_preset, off_preset, _unit, _ = coil_timer(
+            spec.flasher_on_ms or 0, spec.flasher_off_ms or 0
+        )
+        dark = on_preset <= 0 or off_preset <= 0
+
         def plan(constraint: Any, snapshot: Any) -> AdvanceStep | None:
             if not isinstance(constraint, Eq) or len(constraint.values) != 1:
+                return None
+            if dark and bool(next(iter(constraint.values))):
                 return None
             return AdvanceStep(until=constraint, holds=(demand,), progress=demand)
 
@@ -731,19 +743,16 @@ class Harness:
             )
 
     def _refresh_synthesis(self) -> None:
-        """(Re)build the bool-feedback plant rungs into the runner's overlay.
+        """(Re)build the plant rungs into the runner's overlay.
 
-        Each bool coupling lowers to a real on-delay/off-delay timer pair, built
-        by :func:`pyrung.core.synthesis.bool_feedback_rungs` and placed in
-        ``plc._synthesis.plant`` — the rungs the runner scans *before* the user
-        program (the pre-logic input-read: feedback is an input reflecting the
-        previous commit's command).  The on-delay accumulates while the enable
-        matches (``on_delay`` preset, in ms); the off-delay, driven by its done
-        bit, holds the feedback for ``off_delay`` after the enable drops.  Presets
-        are the declared delays, in ms unless one is too long for it (see
-        :func:`~pyrung.core.synthesis.plant_timer`), so a held enable
-        crosses after ``ceil(delay_ms / dt_ms)`` scans (``delay_ms == 0`` ⇒ the program
-        sees the feedback next scan, from the scan boundary).
+        Each bool coupling is a debounce coil, built by
+        :func:`pyrung.core.synthesis.bool_feedback_rungs` and placed in
+        ``plc._synthesis.plant``, the rungs the runner scans *before* the user
+        program.  So the feedback is an input that reflects the previous scan's
+        command.  Presets are the declared delays, in ms unless one is too long
+        for it (see :func:`~pyrung.core.synthesis.coil_timer`), so a held enable
+        turns the feedback on after ``ceil(on_delay_ms / dt_ms)`` scans
+        (``on_delay_ms == 0`` gives the program the feedback the next scan).
 
         Idempotent — used at install, on each fork (fresh instructions reading the
         fork's tags; accumulator *state* rides the inherited committed state), and
@@ -751,7 +760,12 @@ class Harness:
         installed on the same overlay.
         """
         from pyrung.core.condition import BitCondition, CompareEq, CompareNe
-        from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
+        from pyrung.core.site_memory import (
+            PLANT_NAMESPACE,
+            _first_tag_name,
+            bind_sites,
+            instruction_memory,
+        )
         from pyrung.core.synthesis import (
             Synthesis,
             analog_approach_rung,
@@ -763,6 +777,7 @@ class Harness:
         from pyrung.core.tag import Bool, Int, Real
 
         plant: list[Any] = []
+        coils: list[tuple[_BoolCoupling, Any]] = []
         for c in self._bool_couplings:
             en_tag = self._plc._known_tags_by_name.get(c.en_name)
             if en_tag is None:
@@ -772,26 +787,26 @@ class Harness:
                 if c.trigger_value is not None
                 else BitCondition(en_tag)
             )
-            ton_done = Bool(f"__cpl_ond__{c.fb_name}", retentive=False)
-            ton_acc = Int(plant_acc_name("__cpl_on", c.fb_name, c.on_delay_ms), retentive=False)
-            tof_acc = Int(plant_acc_name("__cpl_off", c.fb_name, c.off_delay_ms), retentive=False)
+            unit = coil_timer(c.on_delay_ms, c.off_delay_ms)[2]
+            on_acc = Int(plant_acc_name("__cpl_on", c.fb_name, unit), retentive=False)
+            off_acc = Int(plant_acc_name("__cpl_off", c.fb_name, unit), retentive=False)
             fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
                 fb_tag = Bool(c.fb_name)
-            c.ton_done_name = ton_done.name
-            c.ton_acc_name = ton_acc.name
-            c.tof_acc_name = tof_acc.name
-            plant.extend(
-                bool_feedback_rungs(
-                    enable=enable,
-                    fb_tag=fb_tag,
-                    ton_done=ton_done,
-                    ton_acc=ton_acc,
-                    tof_acc=tof_acc,
-                    on_delay_ms=c.on_delay_ms,
-                    off_delay_ms=c.off_delay_ms,
-                )
+            c.on_acc_name = on_acc.name
+            c.off_acc_name = off_acc.name
+            rungs = bool_feedback_rungs(
+                enable=enable,
+                fb_tag=fb_tag,
+                on_done=Bool(f"__cpl_ond__{c.fb_name}", retentive=False),
+                on_acc=on_acc,
+                off_done=Bool(f"__cpl_offd__{c.fb_name}", retentive=False),
+                off_acc=off_acc,
+                on_delay_ms=c.on_delay_ms,
+                off_delay_ms=c.off_delay_ms,
             )
+            coils.append((c, rungs[0]._instructions[0]))
+            plant.extend(rungs)
 
         for c in self._profile_couplings:
             spec = c.physical
@@ -836,24 +851,18 @@ class Harness:
                         dt_tag=system.sys.dt,
                     )
                 )
-            else:  # flasher — bool pulse train
+            else:  # flasher, a flasher coil
                 on_ms = spec.flasher_on_ms or 0
                 off_ms = spec.flasher_off_ms or 0
+                unit = coil_timer(on_ms, off_ms)[2]
                 plant.extend(
                     pulse_feedback_rungs(
                         enable=enable,
-                        disable=disable,
                         fb_tag=fb_tag,
                         on_done=Bool(f"__pls_ond__{c.fb_name}", retentive=False),
-                        on_acc=Int(
-                            plant_acc_name("__pls_on", c.fb_name, on_ms),
-                            retentive=False,
-                        ),
+                        on_acc=Int(plant_acc_name("__pls_on", c.fb_name, unit), retentive=False),
                         off_done=Bool(f"__pls_offd__{c.fb_name}", retentive=False),
-                        off_acc=Int(
-                            plant_acc_name("__pls_off", c.fb_name, off_ms),
-                            retentive=False,
-                        ),
+                        off_acc=Int(plant_acc_name("__pls_off", c.fb_name, unit), retentive=False),
                         on_dwell_ms=on_ms,
                         off_dwell_ms=off_ms,
                     )
@@ -863,6 +872,15 @@ class Harness:
             self._plc._synthesis = Synthesis()
         # Plant rungs keep their memory under their own ``plant:`` site keys.
         bind_sites(plant, namespace=PLANT_NAMESPACE)
+        # An instruction's place in the plant moves when a link before it is added
+        # or cut, so each one that keeps memory is keyed by the tag it drives.  Then
+        # a fork from before the change, or a reinstall, reads its own memory.
+        for rung in plant:
+            for instr in rung._instructions:
+                if instruction_memory(instr):
+                    instr._state_key = f"{PLANT_NAMESPACE}:fb.{_first_tag_name(instr)}"
+        for c, coil in coils:
+            c.rung_memory_key = coil.memory_key("_debounce_rung")
         self._plc._synthesis.plant = plant
         # The overlay changed, so caches that snapshot it are stale: the soft-exec
         # replay kernel + its bracketed compilation unit, rebuilt lazily on next use.
@@ -893,30 +911,26 @@ class Harness:
             self._plc._edit_tip_tags(seed)
 
     def _seed_bool_state(self) -> None:
-        """Seed each bool timer to the steady state implied by its current enable.
+        """Seed each debounce whose enable is already on as if it had settled long ago.
 
-        A fresh timer's accumulators are 0 (cold), but a coupling whose enable is
-        already on represents a feedback that settled long ago — so pre-load the
-        on-delay accumulator past its preset *and* assert its done bit and the
-        feedback register.  Without seeding, the pre-logic plant on the first scan
-        would read a cold accumulator (``0``) and drive ``Fb`` ``False`` even
-        though the enable is already on; seeding the accumulator past preset (and
-        ``Fb`` itself) makes an ``En``-already-True coupling steady from cold, as
-        if it had settled before the program started.
+        The feedback is on, the on side has counted its preset, and the coil saw its
+        rung true on the last scan.  Without this the first scans would show the device
+        off while it is commanded on.
         """
         seed: dict[str, Any] = {}
+        memory: dict[str, Any] = {}
         snap = self._plc.current_state.tags
         for c in self._bool_couplings:
-            if not c.ton_acc_name:
+            if not c.on_acc_name:
                 continue
             en_raw = snap.get(c.en_name, False)
             en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
             if en_on:
-                seed[c.ton_acc_name] = plant_timer(c.on_delay_ms)[0]
-                seed[c.ton_done_name] = True
+                seed[c.on_acc_name] = coil_timer(c.on_delay_ms, c.off_delay_ms)[0]
                 seed[c.fb_name] = True
+                memory[c.rung_memory_key] = True
         if seed:
-            self._plc._edit_tip_tags(seed)
+            self._plc._edit_tip_tags(seed, memory=memory)
 
     def _install_monitors(self) -> None:
         # Analog couplings are declarative specs lowered to plant rungs (their

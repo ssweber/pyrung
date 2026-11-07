@@ -208,6 +208,7 @@ def test_the_install_gives_each_plant_tag_its_default() -> None:
     assert {name: value for name, value in plc.state.tags.items() if name.startswith("__cpl_")} == {
         "__cpl_ond__Fb": False,
         "__cpl_on__Fb": 0,
+        "__cpl_offd__Fb": False,
         "__cpl_off__Fb": 0,
     }
 
@@ -368,7 +369,12 @@ def _stop_and_run(plc: PLC) -> None:
 
 
 _RESETS = [_reboot, _reboot_without_battery, _stop_and_run]
-_PLANT_AT_DEFAULTS = {"__cpl_ond__Fb": False, "__cpl_on__Fb": 0, "__cpl_off__Fb": 0}
+_PLANT_AT_DEFAULTS = {
+    "__cpl_ond__Fb": False,
+    "__cpl_on__Fb": 0,
+    "__cpl_offd__Fb": False,
+    "__cpl_off__Fb": 0,
+}
 
 
 def _mid_dwell(plc: PLC) -> PLC:

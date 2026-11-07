@@ -25,7 +25,7 @@ from pyrung.core import (
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.harness import _parse_link_spec, format_link_spec, link_problem
 from pyrung.core.physical import Physical
-from pyrung.core.synthesis import plant_acc_name, plant_timer
+from pyrung.core.synthesis import coil_timer, plant_acc_name, plant_timer
 
 # --- Fixtures: Physical declarations ---
 
@@ -131,14 +131,17 @@ class TestBoolAutoharness:
 
         # Drop En — off_delay=10ms, dt=10ms → 1 dt of dwell.  The pre-logic plant
         # reads the *previous* commit's En, so the scan En falls the plant still
-        # sees it high (Fb holds); it sees the drop next scan, then the off-delay
-        # clears Fb — one input-read scan later than the command.
+        # sees it high (Fb holds).  It sees the drop next scan, where the debounce's
+        # off side counts but compares nothing, and clears Fb the scan after.
         plc.patch({Cmd: False})
         plc.step()  # En falls (committed); plant still saw it high → Fb holds
         assert _fb(plc, dev[1].En) is False
         assert _fb(plc, dev[1].Fb) is True
 
-        plc.step()  # plant sees En low; off-delay clears Fb
+        plc.step()  # the plant sees En low and the off side counts 10 ms
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # the off side was done before this scan: Fb clears
         assert _fb(plc, dev[1].Fb) is False
 
     def test_asymmetric_delay(self):
@@ -500,8 +503,21 @@ class TestDelaysPastTheMillisecondRange:
 
     def test_a_delay_in_the_millisecond_range_keeps_its_timer(self):
         plc, _Cmd, _Fb = _long_delay_plc(Physical("Fast", on_delay="32s500ms"))
-        ton = plc._synthesis.plant[0]._instructions[0]
-        assert (ton.preset, ton.unit.name) == (32_500, "Tms")
+        coil = plc._synthesis.plant[0]._instructions[0]
+        assert (coil.on_preset, coil.unit.name) == (32_500, "Tms")
+
+    @pytest.mark.parametrize(
+        ("on_ms", "off_ms", "expected"),
+        [
+            (100, 50, (100, 50, "Tms", 1)),
+            (0, 0, (0, 0, "Tms", 1)),
+            (100, 40_000, (1, 40, "Ts", 1_000)),
+            (32_768, 32_767, (33, 33, "Ts", 1_000)),
+        ],
+    )
+    def test_both_sides_of_a_coil_count_in_one_unit(self, on_ms, off_ms, expected):
+        """A CLICK coil has one unit, so the shorter side rounds up to it."""
+        assert coil_timer(on_ms, off_ms) == expected
 
     def test_pending_ms_counts_down_past_the_millisecond_range(self):
         plc, Cmd, Fb = _long_delay_plc(Physical("Slow", on_delay="60s"), dt=0.25)
@@ -635,25 +651,26 @@ class TestALinkChangedAcrossUnits:
         assert self._scans_to_flip(plc, Fb) == left_s * 4
 
     @pytest.mark.parametrize(
-        ("first", "then", "holds"),
+        ("first", "then"),
         [
-            ("10s", "5s", True),  # same unit, the control
-            ("40s", "5s", True),
-            ("60s", "5s", True),
-            ("60s", "40s", True),  # same unit, the control
-            ("5s", "10s", False),  # same unit, the control
-            ("5s", "60s", False),
-            ("5s", "40s", False),
-            ("40s", "60s", False),  # same unit, the control
+            ("10s", "5s"),  # same unit, the control
+            ("40s", "5s"),
+            ("60s", "5s"),
+            ("60s", "40s"),  # same unit, the control
+            ("5s", "10s"),  # same unit, the control
+            ("5s", "60s"),
+            ("5s", "40s"),
+            ("40s", "60s"),  # same unit, the control
         ],
     )
-    def test_settled_feedback_holds_only_if_it_has_counted_the_new_delay(self, first, then, holds):
+    def test_settled_feedback_holds_whatever_the_new_delay(self, first, then):
+        """A debounce never turns its target off while its rung is true."""
         plc, _En, Fb = self._linked(first, default=True)
         plc.run(4)
         assert _fb(plc, Fb) is True
         self._relink(plc, on_delay=then)
         plc.run(2)
-        assert _fb(plc, Fb) is holds
+        assert _fb(plc, Fb) is True
 
     def test_a_fresh_harness_given_the_same_links_keeps_an_off_delay_counting(self):
         """How how()'s fork rebuilds the plant: an empty old accumulator gives nothing."""
@@ -681,13 +698,16 @@ class TestALinkChangedAcrossUnits:
         self._relink(plc, on_delay="60s")  # counts 5 s + 1 s in seconds
         plc.run(4)
         plc.force(En, False)
-        plc.run(2)  # the seconds timer drops to 0 with its enable
+        plc.run(2)  # the debounce keeps its on count when its enable falls
         plc.unforce(En)
         self._relink(plc, on_delay="5s")
-        assert plc.current_state.tags["__cpl_on__Fb"] == 0
+        assert plc.current_state.tags["__cpl_on__Fb"] == 7_250
         assert plc.current_state.tags["__cpl_on_Ts__Fb"] == 0
         plc.run(2)
         assert _fb(plc, Fb) is False
+        # The next rise counts from 0: the kept count does not shorten it.
+        plc.patch({En: True})
+        assert self._scans_to_flip(plc, Fb) == 1 + 5 * 4
 
     def test_an_off_delay_carries(self):
         plc, En, Fb = self._linked("0ms")
@@ -712,9 +732,9 @@ class TestALinkChangedAcrossUnits:
         plc = PLC(logic, dt=0.25)
         Harness(plc).install()
         plc.patch({En: True})
-        plc.run(5)  # part way through the first low dwell
-        assert _fb(plc, Fb) is False
-        count = plc.current_state.tags["__pls_off__Fb"]
+        plc.run(5)  # part way through the first on phase
+        assert _fb(plc, Fb) is True
+        count = plc.current_state.tags["__pls_on__Fb"]
         assert count > 0
         self._relink(plc, flasher_on="60s", flasher_off="60s")
         assert self._scans_to_flip(plc, Fb) == pytest.approx((60_000 - count) // 250, abs=2)
@@ -923,7 +943,7 @@ class TestALinkChangedAcrossUnits:
     def test_a_reload_across_units_continues_a_running_off_delay(self):
         same_unit, Fb = self._after_a_reload_to("10s", "5s")
         left = self._scans_to_flip(same_unit, Fb)
-        assert left == 13  # the control
+        assert left == 14  # the control
 
         narrowed, Fb = self._after_a_reload_to("60s", "5s")
         assert self._scans_to_flip(narrowed, Fb) == left
@@ -1004,8 +1024,9 @@ class TestHowAroundALinkChange:
 
     def test_how_answers_when_the_scan_it_starts_from_made_the_target(self):
         plc, Alarm = self._program("5s")
-        self._relink(plc, "10s")
-        plc.step()
+        # Fb now follows ~En, so the debounce drops it a scan after it sees the change.
+        plc._harness.set_overrides({"Fb": Coupling("En", "Fb", Physical("S", on_delay="10s"), 0)})
+        plc.run(2)
         assert plc.current_state.tags["Alarm"] is True
 
         plan = plc.how(Alarm, wall_clock_s=30, max_scans=2_000)
@@ -1162,7 +1183,7 @@ class TestADirectInstallSettles:
     @staticmethod
     def _assert_settled(tags):
         assert tags["Fb"] is True
-        assert tags[plant_acc_name("__cpl_on", "Fb", 5000)] == plant_timer(5000)[0]
+        assert tags[plant_acc_name("__cpl_on", "Fb", "Tms")] == coil_timer(5000, 0)[0]
 
     def test_from_cold(self):
         program, _En, Lost = self._program(default=True)
@@ -1492,7 +1513,10 @@ class TestTriggerValueAutoharness:
         plc.step()  # off-edge commits; the plant still saw SORTING → Fb holds
         assert _fb(plc, dev[1].Fb) is True
 
-        plc.step()  # plant sees the leave; off_delay=10ms (1 dt) clears Fb
+        plc.step()  # the plant sees the leave and the off side counts 10 ms (1 dt)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # and clears Fb the scan after
         assert _fb(plc, dev[1].Fb) is False
 
     def test_non_matching_transition_no_effect(self):

@@ -193,7 +193,8 @@ def test_a_reload_continues_a_running_off_delay(
     while runner.current_state.tags["Fb"] and scans < 400:
         runner.step()
         scans += 1
-    assert scans == 14 + extra_scans
+    # The debounce's off side compares a scan after the fall: 15 (14 under an off-delay timer).
+    assert scans == 15 + extra_scans
 
 
 AMBIENT_SCRIPT = (

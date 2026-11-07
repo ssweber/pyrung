@@ -128,6 +128,19 @@
   - a `flasher` tracks its phase itself rather than working it out from its `Acc` values. If the ladder writes the running phase's `Acc` past its preset, that phase ends on the next tick, and the other phase's `Acc` keeps its value
   - an on or off preset of 0 or less (including a register holding -5) keeps a `flasher` off with both `Acc` values at 0, and a `timed` coil gives no pulse
   - the rung's first scan counts toward the first phase, as with `on_delay`, so a `timed` pulse or a first `flasher` on phase of one scan or less no longer shows
+- Harness bool feedback runs as the CLICK coil it behaves like, so a feedback edge can come a scan or more earlier or later:
+  - `Physical(on_delay=, off_delay=)` runs as a `debounce` on its link
+  - a command dip shorter than `off_delay` keeps `Fb` on (it dropped `Fb`)
+  - after the command drops, `Fb` turns off one scan later than it did
+  - `Physical(flasher_on=, flasher_off=)` runs as a `flasher`
+  - its `Fb` goes high the scan after its enable turns on (it waited out the off time first)
+  - its first high phase is one scan short
+  - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
+  - both delays of one `Physical` count in the same unit, and so do `flasher_on` and `flasher_off`
+  - an `off_delay` over 32.767 s rounds `on_delay` up to whole seconds too
+  - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
+
+  Update tests that count scans to a feedback edge.
 - `system.sys.scan_clock_toggle` (SC3) is on when the scan counter (SD9) is even, starting on the first scan. It was a scan behind, off on the first scan. `rise()` of it now fires on scan 0 and `fall()` on scan 1.
 - `math()` cuts each whole-number constant in its formula to 16 bits, whatever the destination, as CLICK's Math does. So `math(DD1 / 65536, DD2)` divides by 0 (writing 0 with `fault.division_error`), and `math(2 * 40000, DD2)` writes -51072. Values read from tags aren't affected. Dividing by a constant that cuts to 0 is an error-level `MATH_DIV_ZERO` finding, and CLICK validation reports any constant past 16 bits as `CLK_MATH_WIDE_CONSTANT`. Copy the constant into a `DD` tag on a rung above and use the tag.
 - The verifier treats timers as black boxes. `always()`, `never()` and `reachable_states()` let an enabled on-delay, a disabled off-delay, a drum step or an Out coil's phase finish on any scan. So a `Proven` holds for any scan time and any preset. Every `Counterexample` is replayed on a `PLC` before it is reported, except one that only needs the clocks, the scan counter or the RTC to change, which carries a caveat instead. What changes:
