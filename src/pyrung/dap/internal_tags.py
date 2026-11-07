@@ -4,11 +4,11 @@ pyrung adds tags of its own to a running program:
 
 - ``__frz{n}__{dest}``: the freeze bit of a synthesis bracket
   (``pyrung.core.synthesis``).
-- ``__cpl_ond__``, ``__cpl_on__``, ``__cpl_off__``, ``__cpl_armed__``
-  ``{feedback}``: the delay timers of a harness coupling
-  (``pyrung.core.harness``).
+- ``__cpl_ond__``, ``__cpl_on__``, ``__cpl_offd__``, ``__cpl_off__``,
+  ``__cpl_armed__`` ``{feedback}``: the debounce timers of a harness coupling,
+  and a ramp's arm bit (``pyrung.core.harness``).
 - ``__pls_ond__``, ``__pls_on__``, ``__pls_offd__``, ``__pls_off__``
-  ``{feedback}``: the timers of a harness pulse (``pyrung.core.harness``).
+  ``{feedback}``: the flasher timers of a harness pulse (``pyrung.core.harness``).
 - ``on`` and ``off`` above with a unit (``__cpl_on_Ts__{feedback}``): the same
   timer, for a delay too long to count in milliseconds.
 
@@ -25,7 +25,7 @@ from typing import TypeVar
 _V = TypeVar("_V")
 
 _INTERNAL_TAG_PREFIX = re.compile(
-    r"__(?:frz\d+|cpl_(?:ond|armed|(?:on|off)(?:_T[smhd])?)"
+    r"__(?:frz\d+|cpl_(?:ond|offd|armed|(?:on|off)(?:_T[smhd])?)"
     r"|pls_(?:ond|offd|(?:on|off)(?:_T[smhd])?))__(?=.)",
     re.DOTALL,
 )
