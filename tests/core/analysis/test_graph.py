@@ -147,7 +147,7 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "with rung(Sts_StateCurrent != 6):" in text
-        assert "latch(DoorClosed)" in text
+        assert "out(DoorClosed)" in text
         assert "(found during investigation)" in text
         assert "force DoorClosed" not in text
 
@@ -225,10 +225,14 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        assert "with rung(And(Sts_StateCurrent == 6, ~RotateSensor)):" in text
-        assert "latch(RotateSensor)" in text
-        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor)):" in text
-        assert "reset(RotateSensor)" in text
+        # The two rules merge into one row that reads the input before it writes it, so the
+        # input flips every scan.
+        assert (
+            "   with rung(Sts_StateCurrent == 6, ~RotateSensor):\n     out(RotateSensor)\n" in text
+        )
+        assert "__on1__" not in text
+        assert "Decide first" not in text
+        assert "reset(RotateSensor)" not in text
         assert "Temporary logic in effect: step 1." in text
         assert "holds: RotateSensor" not in text
 
@@ -267,8 +271,7 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        assert "with rung(And(~WatchdogDone, ~RotateSensor)):" in text
-        assert "latch(RotateSensor)" in text
+        assert "with rung(~WatchdogDone, ~RotateSensor):\n     out(RotateSensor)" in text
         assert "Temporary logic in effect: step 1." in text
         assert "Keep: RotateSensor=True" not in text
         assert "Oscillate: RotateSensor" not in text
@@ -315,10 +318,139 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "2. Remove temporary logic from step 1:" in text
-        assert "with rung(State == 6):\n     latch(Go)" in text
-        assert "3. Install temporary logic" in text
-        assert "with rung(State == 6):\n     reset(Go)" in text
+        assert "with rung(State == 6):\n     out(Go)" in text
+        # A lone False rule holds Go off for as long as it is in: its condition never mattered.
+        assert "3. Install temporary logic:\n   with rung():\n     reset(Go)" in text
         assert "Temporary logic in effect: step 3." in text
+
+    def test_a_removal_and_new_logic_on_one_scan_read_the_same_from_a_recording(self):
+        # The recording fills in the rows that ran, so the removal's rows after it are the new
+        # logic's.  They are not logic the removal kept.
+        State = Int("State")
+        old = PilotRung("Go", True, State == 6)
+        replacement = PilotRung("Go", False, State == 6)
+        was = ("with rung(State == 6):", "  out(Go)")
+        now = ("with rung():", "  reset(Go)")
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(old,), logic=was),
+                PlanStep("revoke", 2, 0, (), "", rungs=(old,), logic=was, kept_logic=now),
+                PlanStep("force", 2, 0, (), "", rungs=(replacement,), logic=now),
+                PlanStep("coast", 3, 5, (), "", rungs=(replacement,)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "2. Remove temporary logic from step 1:" in text
+        assert "Remove some of the temporary logic" not in text
+        assert "3. Install temporary logic:\n   with rung():\n     reset(Go)" in text
+        assert "This replaces the logic for Go from step 1" not in text
+        assert "Temporary logic in effect: step 3." in text
+
+    def test_a_removal_that_leaves_some_of_a_tags_rules_in_shows_its_logic_before_and_after(self):
+        State = Int("State")
+        on = PilotRung("Go", True, State == 6)
+        off = PilotRung("Go", False, State == 7)
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(on,)),
+                PlanStep("force", 2, 0, (), "", rungs=(off,)),
+                PlanStep("revoke", 3, 0, (), "", rungs=(off,)),
+                PlanStep("coast", 4, 5, (), "", rungs=(on,)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert (
+            "3. Remove some of the temporary logic from step 2. Until now it ran as:\n"
+            "   with rung(State == 6, State != 7):\n"
+            "     out(Go)\n"
+        ) in text
+        assert "   From here on it runs as:\n   with rung(State == 6):\n     out(Go)" in text
+        # The rule left in is printed by the removal, so the wait names that step.
+        assert "Temporary logic in effect: step 3." in text
+
+    def test_a_removal_the_recording_shows_logic_left_after_reads_as_partial(self):
+        # The rule left in went in before the plan's first step, so only the recording knows it.
+        State = Int("State")
+        off = PilotRung("Go", False, State == 7)
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep(
+                    "revoke",
+                    3,
+                    0,
+                    (),
+                    "",
+                    rungs=(off,),
+                    logic=("with rung(State == 6, State != 7):", "  out(Go)"),
+                    kept_logic=("with rung(State == 6):", "  out(Go)"),
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert (
+            "1. Remove some of the temporary logic. Until now it ran as:\n"
+            "   with rung(State == 6, State != 7):\n"
+            "     out(Go)\n"
+            "   From here on it runs as:\n"
+            "   with rung(State == 6):\n"
+            "     out(Go)"
+        ) in text
+
+    def test_logic_whose_conditions_are_never_true_says_it_writes_nothing(self):
+        from pyrung import And
+
+        State = Int("State")
+        never = PilotRung("Speed", 3, And(State == 6, State != 6))
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(never,)),
+                PlanStep("revoke", 2, 0, (), "", rungs=(never,)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert (
+            "1. Install temporary logic for Speed."
+            " None of its conditions can be true, so it writes nothing."
+        ) in text
+        assert "2. Remove temporary logic for Speed from step 1. It wrote nothing." in text
+
+        both = PilotRung("Rate", 4, And(State == 6, State != 6))
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(PlanStep("force", 1, 0, (), "", rungs=(never, both)),),
+        )
+
+        assert (
+            "1. Install temporary logic for Speed, Rate."
+            " None of their conditions can be true, so it writes nothing."
+        ) in str(plan)
 
     def test_wait_lists_the_manual_accumulator_edit_for_a_jump_ahead(self):
         plan = Plan(

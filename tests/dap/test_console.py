@@ -746,8 +746,8 @@ class TestCausalVerbs:
         )
 
         assert result == (
-            " Yes -- with rung(And(~ProgressTest_WatchdogDone, "
-            "~ProgressTest_Sensor)): latch(ProgressTest_Sensor).\n"
+            " Yes -- with rung(~ProgressTest_WatchdogDone, "
+            "~ProgressTest_Sensor): out(ProgressTest_Sensor).\n"
         )
 
     def test_how_progress_prints_working_theory_corrective_rung(self):
@@ -778,7 +778,7 @@ class TestCausalVerbs:
         )
 
         assert result == (
-            " Yes -- with rung(ProgressTest_TheoryRunning): latch(ProgressTest_TheorySail).\n"
+            " Yes -- with rung(ProgressTest_TheoryRunning): out(ProgressTest_TheorySail).\n"
         )
 
     def test_how_progress_groups_corrections_on_their_exact_rung(self):
@@ -808,7 +808,7 @@ class TestCausalVerbs:
 
         assert result == (
             " Yes -- with rung(ProgressTest_State == 6): "
-            "latch(ProgressTest_Door); latch(ProgressTest_LintDoor).\n"
+            "out(ProgressTest_Door); out(ProgressTest_LintDoor).\n"
         )
 
     def test_how_progress_keeps_intrascan_investigation_grounded_in_the_channel(self):
@@ -873,9 +873,8 @@ class TestCausalVerbs:
         assert result == (
             " Yes.\n"
             "  Remove temporary logic: with rung(ProgressTest_RevokeState == 6): "
-            "latch(ProgressTest_RevokeGo).\n"
-            "  Replace with: with rung(ProgressTest_RevokeState == 6): "
-            "reset(ProgressTest_RevokeGo).\n"
+            "out(ProgressTest_RevokeGo).\n"
+            "  Replace with: with rung(): reset(ProgressTest_RevokeGo).\n"
         )
 
     def test_how_progress_surfaces_exploratory_inputs_as_guidance(self):

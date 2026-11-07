@@ -596,9 +596,6 @@ class _PilotProgressFormatter:
         return rendered[-1] if rendered else ""
 
     def _confirmed_corrections(self, data: dict[str, Any]) -> list[str]:
-        from pyrung.core.analysis.graph import _format_synthesis_instruction
-        from pyrung.core.validation.render import render_condition
-
         investigation = data.get("investigation", {})
         confirmed = investigation.get("confirmed_detail", ())
         if not confirmed:
@@ -611,23 +608,16 @@ class _PilotProgressFormatter:
             if exact_rungs:
                 confirmed = ({"holds": exact_rungs},)
         steady: list[str] = []
-        by_guard: dict[str, list[str]] = {}
+        logic: list[Any] = []
         for hypothesis in confirmed:
             for proposal in hypothesis.get("holds", ()):
                 if hasattr(proposal, "dest"):
-                    guard = render_condition(proposal.guard)
-                    instruction = _format_synthesis_instruction(proposal)
-                    instructions = by_guard.setdefault(guard, [])
-                    if instruction not in instructions:
-                        instructions.append(instruction)
+                    logic.append(proposal)
                 else:
                     assignment = f"{proposal[0]}={_pilot_value(proposal[1])}"
                     if assignment not in steady:
                         steady.append(assignment)
-        corrections = [
-            f"with rung({guard}): {'; '.join(instructions)}"
-            for guard, instructions in by_guard.items()
-        ]
+        corrections = self._render_rungs(logic)
         if steady:
             corrections.insert(0, f"keep {', '.join(steady)}")
         for tag, value in data.get("released_holds", ()):
@@ -635,21 +625,25 @@ class _PilotProgressFormatter:
         return corrections
 
     def _render_rungs(self, rungs: Any) -> list[str]:
-        """Render exact temporary logic as compact, source-shaped operations."""
-        from pyrung.core.analysis.graph import _format_synthesis_instruction
-        from pyrung.core.validation.render import render_condition
+        """The temporary logic built as the plan text builds it, one line per rung."""
+        from pyrung.core.analysis.graph import rules_logic
+        from pyrung.core.analysis.pilot.world_key import _rung_identity
 
-        by_guard: dict[str, list[str]] = {}
-        for rung in rungs:
-            guard = render_condition(rung.guard)
-            instruction = _format_synthesis_instruction(rung)
-            instructions = by_guard.setdefault(guard, [])
-            if instruction not in instructions:
-                instructions.append(instruction)
-        return [
-            f"with rung({guard}): {'; '.join(instructions)}"
-            for guard, instructions in by_guard.items()
-        ]
+        unique = list({_rung_identity(rung): rung for rung in rungs}.values())
+        compact: list[str] = []
+        for line in rules_logic(tuple(unique)):
+            if line.startswith("comment("):
+                # One line per rung leaves no room for its comment.  The plan text prints it.
+                continue
+            if line.startswith("  ") and compact and compact[-1].startswith("with rung("):
+                compact[-1] = (
+                    f"{compact[-1]} {line.strip()}"
+                    if compact[-1].endswith(":")
+                    else f"{compact[-1]}; {line.strip()}"
+                )
+            else:
+                compact.append(line.strip())
+        return compact
 
     def format(self, event: Any) -> str | None:
         kind = event.kind

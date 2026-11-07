@@ -267,7 +267,17 @@
   - `how()` reruns the plan with each piece of temporary logic left out, then with a Set of its value instead
   - it keeps the simpler plan only when that plan reaches the goal on the same scan and meets nothing in `avoid=`
   - logic that holds an input False is tried as a Set first, so a command the plan lets go of stays let go of
+  - a Set isn't tried when another Set the plan prints comes less than a second before or after it. Sets on one scan count as one. A release whose Set comes that soon may be left out, so its command stays pressed
   - the plan's text and `plan.replay()` describe the same run
+- A `how()` plan prints its temporary logic as the rows that ran, in pyrung source:
+  - a tag the logic sets under one condition gets one row, an `out()` for a Bool (it printed a `latch()` or `reset()` per rule)
+  - a condition that reads a tag the logic writes earlier goes on a bit instead
+  - a tag the logic sets under two or more conditions gets one row when its conditions merge into contacts in series with no `Or` and they read no other tag the logic writes, such as `with rung(State == 6, ~RotateSensor): out(RotateSensor)`
+  - otherwise the tag gets one bit per condition, such as `__on1__HoldSensor`, `__off1__HoldSensor` or `__set1__Speed`, and the bit rows run first
+  - a non-Bool tag gets one `copy()` per bit, in order
+  - the bits stay in `plan.fork`'s tags after the logic is removed. The debugger doesn't list them
+  - conditions leave out terms that can't change them
+  - a step that rebuilds a tag's logic says which step it replaces
 
 ### Fixes
 
@@ -370,7 +380,7 @@
   - a plain contact right after an `Or` merge on the merge cell (`T:X003`), which saves a column
 
   A bare number in hex-mode Math imports as hex, as CLICK reads it, and a compare constant outside 0..65535 is refused.
-- The debugger no longer lists the tags pyrung adds itself (`__frz{n}__`, `__cpl_...__`, `__pls_...__`) in tag values, the Variables Tags scope, scan-frame changes or `pyrungTagChanges`.
+- The debugger no longer lists the tags pyrung adds itself (`__on{n}__`, `__off{n}__`, `__set{n}__`, `__cpl_...__`, `__pls_...__`) in tag values, the Variables Tags scope, scan-frame changes or `pyrungTagChanges`.
 - In the debugger, the trace shown during Continue keeps each branch's own state when one helper builds two branches (they shared one). It also decorates nested branches at any depth.
 - In compiled runs and generated CircuitPython, a box placed directly in a `forloop()` body (not in a body rung) reads its pins (`.reset()`, `.jump()` and so on) before it writes, as `PLC` does. A drum's jump pin no longer reads the step the drum has just corrected.
 - A drum reads its jump step when the scan reaches it, before it moves, everywhere. If the drum itself writes the step tag, the jump goes to the value the tag held when the scan reached the drum (it took the value the drum had just written).
