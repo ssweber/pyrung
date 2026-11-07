@@ -186,11 +186,3 @@ __all__ = [
     "to_text",
     "to_binary",
 ]
-
-
-def __getattr__(name: str) -> object:
-    if name in ("Pulse", "Ramp", "Approach"):
-        from pyrung.core.physical import removed_name_error
-
-        raise removed_name_error(__name__, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -61,7 +61,7 @@ from pyrung.core.memory_block import (
     SlotView,
     WordBlock,
 )
-from pyrung.core.physical import Physical, parse_duration, removed_name_error
+from pyrung.core.physical import Physical, parse_duration
 from pyrung.core.program import (
     And,
     ForbiddenControlFlowError,
@@ -294,9 +294,3 @@ __all__ = [
     "rro",
     "randint",
 ]
-
-
-def __getattr__(name: str) -> object:
-    if name in ("Pulse", "Ramp", "Approach"):
-        raise removed_name_error(__name__, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

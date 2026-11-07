@@ -160,7 +160,8 @@
   - when the text always runs past the end of its bank (`CLK_TEXT_PAST_BANK`)
   - when the text runs past the end of a block mapped inside the bank, since a CLICK keeps writing past it (`CLK_TEXT_PAST_BLOCK`)
 - `Physical` takes one flat keyword per value, and each keyword is also its nickname-comment key:
-  - `Pulse`, `Ramp` and `Approach` are removed, and importing one raises `ImportError`. `Physical(profile=...)` raises `TypeError`. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` or `Physical(name, approach_to=180, approach_rate=0.3)`
+  - `Pulse`, `Ramp` and `Approach` are removed. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")` for a `Pulse`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` for a `Ramp` and `Physical(name, approach_to=180, approach_rate=0.3)` for an `Approach`.
+  - `Physical(profile=...)` raises `TypeError`. Give the keywords of one kind instead.
   - `ramp_off` left out is 0, which holds the value when the enable drops
   - a time given as a bare number raises. Write it with units, such as `"500ms"`
   - an `approach_to` string that looks like a number raises. Pass the number

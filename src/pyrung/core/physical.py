@@ -16,13 +16,10 @@ parser, the comment writer and clicknick's annotation dialogs, so a key is descr
 
 from __future__ import annotations
 
-import dis
 import math
 import re
-import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from types import FrameType
 from typing import Any, Literal, overload
 
 _DURATION_TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*(ms|min|s|m|h|d)")
@@ -445,52 +442,6 @@ def kind_of_keys(keys: Iterable[str], *, owner: str | None = None) -> PhysicalKi
     if missing:
         raise ValueError(f"{prefix}{', '.join(given)} needs {' or '.join(missing)}.")
     return kind
-
-
-#: Names that left the public API, and what to write instead.
-REMOVED_NAMES: dict[str, str] = {
-    "Pulse": "Physical(name, flasher_on='8ms', flasher_off='8ms')",
-    "Ramp": "Physical(name, ramp_on=0.8, ramp_off=-0.05)",
-    "Approach": "Physical(name, approach_to=180, approach_rate=0.3)",
-}
-
-
-class RemovedNameError(AttributeError):
-    """An old feedback class read as an attribute. ``hasattr()`` sees it as missing."""
-
-
-class RemovedNameImportError(ImportError):
-    """An old feedback class named in ``from ... import``."""
-
-
-_IMPORT_FROM = dis.opmap["IMPORT_FROM"]
-
-
-def _in_import_from(frame: FrameType | None) -> bool:
-    try:
-        return frame is not None and frame.f_code.co_code[frame.f_lasti] == _IMPORT_FROM
-    except (AttributeError, IndexError):
-        return False
-
-
-def removed_name_error(module: str, name: str) -> AttributeError | ImportError:
-    """The error a module ``__getattr__`` raises for an old feedback class.
-
-    It is an ``AttributeError`` so ``hasattr()`` and ``getattr(m, name, None)`` work. Python
-    turns an ``AttributeError`` inside ``from m import name`` into its own "cannot import
-    name" error, which drops this message, so that statement gets an ``ImportError``.
-    """
-    message = f"{module}.{name} was removed. Write {REMOVED_NAMES[name]} instead."
-    # Frame 0 is this function and frame 1 the module __getattr__ that called it.
-    if _in_import_from(sys._getframe(2)):
-        return RemovedNameImportError(message, name=name)
-    return RemovedNameError(message, name=name)
-
-
-def __getattr__(name: str) -> Any:
-    if name in REMOVED_NAMES:
-        raise removed_name_error(__name__, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _is_set(value: Any) -> bool:
