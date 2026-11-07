@@ -29,10 +29,13 @@ docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plu
 
 [presets]
 # prove and pilot are subsets of test and fold, so only fast names them.
-default = ["lint", "fold-new", "test", "soundness", "fold"]
+# fold reruns all of test's tests under --fold-check (about 20 min against test's 7), so only a jit
+# change runs it (AGENTS.md, make test-fold): train-jit and the jit file rule in the bob profile.
+default = ["lint", "fold-new", "test", "soundness"]
 fast = ["lint", "docs", "fold-new", "prove", "pilot"]
-heavy = ["lint", "docs", "fold-new", "test", "soundness", "fold", "conf", "conf-cp"]
-train = ["lint", "docs", "test", "soundness", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]
+heavy = ["lint", "docs", "fold-new", "test", "soundness", "conf", "conf-cp"]
+train = ["lint", "docs", "fold-new", "test", "soundness", "tumbler", "conf", "conf-cp", "hypothesis"]
+train-jit = ["lint", "docs", "test", "soundness", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]
 
 # PreToolUse hook (hook.py). Regexes are searched in the shell command text.
 [hook]

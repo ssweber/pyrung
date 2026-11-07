@@ -102,7 +102,7 @@ the orchestrator or builder runs it and the reviewer reads the output.)
 The builder brief for a `how()`/history branch says: build the programs that show the change
 (long waits, a mid-count, an entry requirement) into `how_compare_programs.py`, run the tool on
 the base and the branch. The reviewer checks that the set has them. The gate list for the
-branch is `lint,tumbler,fold` at least. Bound every compare run (machine budget below).
+branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bound every compare run (machine budget below).
 
 ## Models
 
@@ -118,9 +118,15 @@ branch is `lint,tumbler,fold` at least. Bound every compare run (machine budget 
   (`tumbler`, `prove`, `pilot`, `soundness`) stay in one process: user, 2026-11-03, pilot is intensive.
 - Stage commands, timeouts and presets are in `devtools/mergeq/mergeq.toml`; measured
   durations are in each job's `done/<id>.json` (a full train should now take ~39 min, was 96).
-- A branch touching `scan_trace.py`, `compiled_run.py` or `coast_run.py` gates on
-  `lint,tumbler,fold`, not `fast` (`fold` includes the prove and pilot tests): `fast` has no tumbler, and a change to the run's
-  fast path broke a pilot golden past READY once.
+- Only a jit change runs the `fold` stage (user, 2026-11-07, for iteration speed). A jit change
+  touches `scan_trace.py`, `compiled_run.py`, `coast_run.py`, `kernel.py`, `read_trace.py`,
+  `tests/fold_check.py`, or how timers, counters or clocks compute. A branch that only uses
+  timers or adds rungs is not one.
+  - A jit branch gates on `lint,tumbler,fold`, not `fast`. `fold` includes the prove and pilot
+    tests, and `fast` has no tumbler. A change to the run's fast path broke a pilot golden past
+    READY once.
+  - A train holding a jit branch gates on `train-jit`. Every other train gates on `train`, which
+    has no `fold` but runs `fold-new` on the files the train adds.
 - A branch landing outside a train still gates on the `test` stage if it changes anything under
   `src/`: a codegen fix gated on lint, prove, pilot, tumbler and conf-cp turned two `tests/core`
   tests red on dev once, and it stayed red until the next `test` run (2026-11-02).
@@ -130,7 +136,7 @@ branch is `lint,tumbler,fold` at least. Bound every compare run (machine budget 
   (no memory bound) and allows ruff/ty read-only forms. For an investigation that must not run
   tests, spawn `bob-investigator` (read-only: no tests, no scripts) instead of a reviewer.
 - A branch that adds a test file gets it checked under `--fold-check` by the `fold-new` stage in
-  `fast`, `default` and `heavy` (before `test`), so the file does not first meet lockstep in the
+  `fast`, `default`, `heavy` and `train` (before `test`). The file then meets lockstep without a
   full `fold` stage. Builders run `pytest --fold-check --fold-check-allow-vacuous <new file>` themselves (the flag
   judges mismatches only, as the stage does).
 - Any run that exercises pilot or the prover, scratch scripts included, has a memory and time bound

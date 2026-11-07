@@ -14,7 +14,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite
-- `make test-fold` — the suite with every run in the guarded loop checked against a stepped twin, scan by scan (`--fold-check`, `tests/fold_check.py`); run after loop, timer, counter or clock changes
+- `make test-fold` — the whole suite again, with every long run checked scan by scan against plain stepping (`--fold-check`, `tests/fold_check.py`). Long runs go through the jit, the guarded loop over the compiled kernel. Only a change to the jit needs this run, for iteration speed. That covers `core/scan_trace.py`, `coast_run.py`, `compiled_run.py`, `kernel.py`, `read_trace.py`, `tests/fold_check.py`, and how timers, counters or clocks compute. A program that only uses timers does not need it.
 - `make test-fold-new` — only the test files this branch adds, under `--fold-check` (mergeq's `fold-new` stage; judges mismatches, not vacuity)
 - `make test-conformance` — conformance cases over Modbus TCP against the local soft PLC (`PLC=host[:port]` for a real CLICK, `TARGET=circuitpy` for the generated P1AM-200 code run locally, `GROUP=name` for some groups); `make conformance-export OUT=dir` writes the CLICK project
 - `make test-integration` — integration tests (needs hardware/network)
