@@ -17,14 +17,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.physical import (
-    Approach,
-    Physical,
-    ProfileSpec,
-    Pulse,
-    Ramp,
-    profile_to_token,
-)
+from pyrung.core.physical import Physical
 from pyrung.core.synthesis import (
     TIMER_ACC_MAX,
     plant_acc_name,
@@ -76,10 +69,10 @@ class _BoolCoupling:
 
 @dataclass
 class _ProfileCoupling:
+    """A flasher, ramp or approach feedback, lowered to plant rungs from its ``physical``."""
+
     en_name: str
     fb_name: str
-    # A declarative analog spec (``Ramp`` / ``Approach``), lowered to plant rungs.
-    profile: ProfileSpec
     physical: Physical
     trigger_value: int | str | None = None
 
@@ -146,7 +139,7 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
     """Why *coupling* cannot run as an override on *plc*, or ``None`` if it can.
 
     Both ends must be known tags, the feedback must suit the response (bool
-    for on/off delay and pulse, numeric for ramp and approach), and nothing
+    for on/off delay and flasher, numeric for ramp and approach), and nothing
     in the program may write the feedback: plant rungs and logic would fight
     over it every scan.
     """
@@ -160,11 +153,13 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
         return f"{coupling.fb_name} cannot drive itself"
     if fb_tag.readonly:
         return f"{coupling.fb_name} is readonly"
+    if coupling.physical.kind in _NOT_YET_RUN:
+        return _not_yet_text(coupling.physical)
     if coupling.physical.feedback_type == "bool":
         if fb_tag.type != TagType.BOOL:
             return (
                 f"{coupling.fb_name} is {fb_tag.type.value}; "
-                "on_delay/off_delay and pulse drive a bool feedback"
+                "on_delay/off_delay and flasher drive a bool feedback"
             )
     elif fb_tag.type in (TagType.BOOL, TagType.CHAR):
         return f"{coupling.fb_name} is {fb_tag.type.value}; ramp and approach drive a number"
@@ -175,6 +170,13 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
 
 
 _NS_PER_MS = 1_000_000
+
+#: Kinds ``Physical`` and the comment parser take whose plant rungs come in a later step.
+_NOT_YET_RUN = frozenset({"timed", "toggle"})
+
+
+def _not_yet_text(physical: Physical) -> str:
+    return f"{physical.kind} feedback ({physical.name}) does not run in the harness yet"
 
 
 def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
@@ -202,10 +204,11 @@ class Harness:
     """Automatic feedback harness driven by Physical + link= declarations.
 
     Walks all known tags to find link= couplings and lowers each to plant rungs
-    scanned pre-logic (the input-read phase): a timing ``Physical`` becomes an
-    on-delay/off-delay timer pair (bool dwell), and a declarative profile spec
-    becomes calc/timer rungs — ``Ramp``/``Approach`` drive an analog register,
-    ``Pulse`` drives a bool pulse train.  No Python tick, no monitors.
+    scanned pre-logic (the input-read phase): an ``on_delay``/``off_delay``
+    ``Physical`` becomes an on-delay/off-delay timer pair (bool dwell), and the
+    other kinds become calc/timer rungs — ``ramp_on``/``approach_to`` drive an
+    analog register, ``flasher_on``/``flasher_off`` a bool pulse train.  No Python
+    tick, no monitors.
 
     The couplings found in the program are the *declared* ones.  Overrides
     (:meth:`set_overrides`) replace or cut a declared coupling, or add one,
@@ -370,16 +373,16 @@ class Harness:
             self._install_monitors()
 
     def _warn_of_unknown_setpoints(self) -> None:
-        """Say so when an ``Approach`` will run toward a tag nothing has given a value.
+        """Warn when ``approach_to`` names a tag that nothing gives a value.
 
         It can be meant: an ambient temperature a test patches is in no rung.  A name
         already in the state has its value, whoever wrote it, and is not unknown.
         """
         plc = self._plc
         for c in self._profile_couplings:
-            if not isinstance(c.profile, Approach) or not isinstance(c.profile.toward, str):
+            name = c.physical.approach_to
+            if not isinstance(name, str):
                 continue
-            name = c.profile.toward
             if name in plc._state.tags or plc._tag_known_or_reached(name) is not None:
                 continue
             warnings.warn(
@@ -394,9 +397,9 @@ class Harness:
             yield "__cpl_on", c.fb_name, c.on_delay_ms
             yield "__cpl_off", c.fb_name, c.off_delay_ms
         for c in self._profile_couplings:
-            if isinstance(c.profile, Pulse):
-                yield "__pls_on", c.fb_name, c.profile.on_dwell_ms
-                yield "__pls_off", c.fb_name, c.profile.off_dwell_ms
+            if c.physical.kind == "flasher":
+                yield "__pls_on", c.fb_name, c.physical.flasher_on_ms or 0
+                yield "__pls_off", c.fb_name, c.physical.flasher_off_ms or 0
 
     def _carry_counts_to_current_units(self) -> None:
         """Move a count sitting in another unit's register to the one its timer uses now.
@@ -523,7 +526,9 @@ class Harness:
                         yield profile
         for c in self._profile_couplings:
             profile = (
-                self._pulse_profile(c) if isinstance(c.profile, Pulse) else self._analog_profile(c)
+                self._pulse_profile(c)
+                if c.physical.kind == "flasher"
+                else self._analog_profile(c)
             )
             if profile is not None:
                 yield profile
@@ -533,26 +538,27 @@ class Harness:
     ) -> tuple[Callable[[float], float], int] | None:
         """The ``(rate_per_scan, direction)`` an analog coupling advances at while enabled.
 
-        A :class:`~pyrung.core.physical.Ramp` gives the exact declared ``up`` rate
-        (analytic).  An :class:`~pyrung.core.physical.Approach` is first-order — its
-        slope depends on the current value — so ``rate_per_scan`` raises and the
-        resolver falls to the empirical (fork-and-run) tier.  ``None`` when there is
-        no usable static read (a zero-rate ramp).
+        A ramp gives the exact declared ``ramp_on`` rate (analytic).  An approach is
+        first-order — its slope depends on the current value — so ``rate_per_scan``
+        raises and the resolver falls to the empirical (fork-and-run) tier.  ``None``
+        when there is no usable static read (a zero-rate ramp).
         """
-        spec = c.profile
-        if isinstance(spec, Ramp):
-            if spec.up == 0.0:
+        physical = c.physical
+        if physical.kind == "ramp":
+            up = physical.ramp_on or 0.0
+            if up == 0.0:
                 return None
-            per_second = abs(spec.up)
-            direction = 1 if spec.up > 0 else -1
+            per_second = abs(up)
+            direction = 1 if up > 0 else -1
             return (lambda step_dt: per_second * step_dt), direction
 
-        if not isinstance(spec, Approach):
-            return None  # a bool Pulse has no analog accumulator profile
+        if physical.kind != "approach":
+            return None  # a bool flasher has no analog accumulator profile
 
         # Approach: nonlinear, so the analytic rate is undefined — measure it.
         fb_now = float(self._plc.current_state.tags.get(c.fb_name, 0.0))
-        toward = spec.toward
+        toward = physical.approach_to
+        assert toward is not None
         target = (
             float(self._plc.current_state.tags.get(toward, 0.0))
             if isinstance(toward, str)
@@ -597,8 +603,8 @@ class Harness:
         """Build the continuous :class:`AdvanceProfile` for one analog coupling.
 
         ``accumulator`` is the Fb register itself (the consumer reads
-        ``Fb <cmp> threshold``, matched via the accumulator).  A ``Ramp`` yields an
-        exact analytic ``rate_per_scan``; an ``Approach`` yields a raising rate, so
+        ``Fb <cmp> threshold``, matched via the accumulator).  A ramp yields an
+        exact analytic ``rate_per_scan``; an approach yields a raising rate, so
         ``scans_until`` returns ``None`` and the resolver measures empirically.
         """
         from pyrung.core.condition import BitCondition, CompareEq
@@ -709,14 +715,13 @@ class Harness:
         *,
         trigger_value: int | str | None = None,
     ) -> None:
-        # Route by *how* the feedback is declared, not its Fb type: any declarative
-        # profile spec (Ramp / Approach / Pulse) lowers via the profile path; a
-        # timing-only Physical (on_delay/off_delay) is a bool dwell coupling.
-        if physical.profile is not None:
+        # Route by the kind, not the Fb type: a flasher, ramp or approach lowers via
+        # the profile path, and on_delay/off_delay is a bool dwell coupling.
+        if physical.kind in _NOT_YET_RUN:
+            raise NotImplementedError(_not_yet_text(physical))
+        if physical.kind != "delay":
             self._profile_couplings.append(
-                _ProfileCoupling(
-                    en_name, fb_name, physical.profile, physical, trigger_value=trigger_value
-                )
+                _ProfileCoupling(en_name, fb_name, physical, trigger_value=trigger_value)
             )
         else:
             on_ms = physical.on_delay_ms or 0
@@ -791,20 +796,20 @@ class Harness:
             )
 
         for c in self._profile_couplings:
-            spec = c.profile
+            spec = c.physical
             en_tag = self._plc._known_tags_by_name.get(c.en_name)
             if en_tag is None:
                 continue
             fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
-                fb_tag = Bool(c.fb_name) if isinstance(spec, Pulse) else Real(c.fb_name)
+                fb_tag = Bool(c.fb_name) if spec.kind == "flasher" else Real(c.fb_name)
             if c.trigger_value is not None:
                 enable = CompareEq(en_tag, c.trigger_value)
                 disable = CompareNe(en_tag, c.trigger_value)
             else:
                 enable = BitCondition(en_tag)
                 disable = ~en_tag
-            if isinstance(spec, Ramp):
+            if spec.kind == "ramp":
                 armed = Bool(f"__cpl_armed__{c.fb_name}", retentive=False)
                 plant.extend(
                     analog_feedback_rungs(
@@ -813,12 +818,12 @@ class Harness:
                         fb_tag=fb_tag,
                         armed=armed,
                         dt_tag=system.sys.dt,
-                        up=spec.up,
-                        down=spec.down,
+                        up=spec.ramp_on or 0.0,
+                        down=spec.ramp_off or 0.0,
                     )
                 )
-            elif isinstance(spec, Approach):  # first-order lag toward a constant/setpoint tag
-                toward = spec.toward
+            elif spec.kind == "approach":  # first-order lag toward a constant/setpoint tag
+                toward = spec.approach_to
                 toward_operand: Any = toward
                 if isinstance(toward, str):
                     toward_operand = self._tag_rungs_know(toward)
@@ -829,11 +834,13 @@ class Harness:
                         enable=enable,
                         fb_tag=fb_tag,
                         toward=toward_operand,
-                        rate=spec.rate,
+                        rate=spec.approach_rate or 0.0,
                         dt_tag=system.sys.dt,
                     )
                 )
-            else:  # Pulse — bool pulse train (astable flasher)
+            else:  # flasher — bool pulse train
+                on_ms = spec.flasher_on_ms or 0
+                off_ms = spec.flasher_off_ms or 0
                 plant.extend(
                     pulse_feedback_rungs(
                         enable=enable,
@@ -841,16 +848,16 @@ class Harness:
                         fb_tag=fb_tag,
                         on_done=Bool(f"__pls_ond__{c.fb_name}", retentive=False),
                         on_acc=Int(
-                            plant_acc_name("__pls_on", c.fb_name, spec.on_dwell_ms),
+                            plant_acc_name("__pls_on", c.fb_name, on_ms),
                             retentive=False,
                         ),
                         off_done=Bool(f"__pls_offd__{c.fb_name}", retentive=False),
                         off_acc=Int(
-                            plant_acc_name("__pls_off", c.fb_name, spec.off_dwell_ms),
+                            plant_acc_name("__pls_off", c.fb_name, off_ms),
                             retentive=False,
                         ),
-                        on_dwell_ms=spec.on_dwell_ms,
-                        off_dwell_ms=spec.off_dwell_ms,
+                        on_dwell_ms=on_ms,
+                        off_dwell_ms=off_ms,
                     )
                 )
 
@@ -951,7 +958,8 @@ class Harness:
                 {
                     "en": c.en_name,
                     "fb": c.fb_name,
-                    "profile": profile_to_token(c.profile),
+                    "kind": c.physical.kind,
+                    "keys": ", ".join(c.physical.tokens()),
                     "trigger_value": c.trigger_value,
                 }
                 for c in self._profile_couplings

@@ -50,7 +50,7 @@ def try_auto_install(adapter: Any) -> str | None:
     if n_bool:
         parts.append(f"{n_bool} bool")
     if n_profile:
-        parts.append(f"{n_profile} profile")
+        parts.append(f"{n_profile} flasher/ramp/approach")
     banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
     if adapter._bench_links:
         banner += (
@@ -143,7 +143,7 @@ def _harness_status(adapter: Any) -> ConsoleResult:
     for ac in summary["profile_couplings"]:
         tv = ac.get("trigger_value")
         en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]
-        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}")
+        lines.append(f"  {ac['kind']}  {en_label} -> {ac['fb']}  ({ac['keys']})")
 
     pending = summary["pending_patches"]
     if pending:

@@ -352,7 +352,7 @@ class _LinkProof:
     def _opposed_delay(self, atoms: list[Any], coupling: Coupling) -> int | None:
         """How long the plant lets these contacts hold the feedback against its enable, if bounded.
 
-        Only a timing coupling has that bound: a profile (``Pulse``) has no resting value.
+        Only an on/off delay coupling has that bound: a flasher has no resting value.
         """
         facts = self.facts
         fb = coupling.fb_name
@@ -360,7 +360,7 @@ class _LinkProof:
         if (
             facts.dt_ms is None
             or trigger not in (None, 0)
-            or coupling.physical.profile is not None
+            or coupling.physical.kind != "delay"
             or fb in facts.overridden
             or facts.pdg.writers_of.get(fb)
             or facts._writable_through_pointer(fb)

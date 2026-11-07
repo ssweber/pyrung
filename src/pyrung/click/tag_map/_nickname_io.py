@@ -21,7 +21,6 @@ from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, Physical, Tag
-from pyrung.core.physical import parse_profile_spec, profile_to_token
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
 from ._errors import SystemNicknameRepair, SystemNicknameRepairRequired
@@ -73,18 +72,12 @@ def _tag_meta_from_hints(
     physical_obj = cast(Physical | None, physical)
     link_text = cast(str | None, link)
     physical_name: str | None = None
-    on_delay: str | None = None
-    off_delay: str | None = None
-    profile: str | None = None
+    response: dict[str, str | bool] = {}
     system: str | None = None
     if physical_obj is not None:
         if owner_name is None or physical_obj.name != owner_name:
             physical_name = physical_obj.name
-        on_delay = physical_obj.on_delay
-        off_delay = physical_obj.off_delay
-        profile = (
-            profile_to_token(physical_obj.profile) if physical_obj.profile is not None else None
-        )
+        response = physical_obj.comment_text()
         system = physical_obj.system
     if (
         choices is None
@@ -109,31 +102,20 @@ def _tag_meta_from_hints(
         lock=lk,
         physical=physical_name,
         link=link_text,
-        on_delay=on_delay,
-        off_delay=off_delay,
-        profile=profile,
         system=system,
         min=cast(int | float | None, min),
         max=cast(int | float | None, max),
         uom=cast(str | None, uom),
+        **response,  # ty: ignore[invalid-argument-type]
     )
 
 
 def _tag_meta_has_physical_details(meta: TagMeta | None) -> bool:
-    return bool(
-        meta is not None
-        and (meta.on_delay is not None or meta.off_delay is not None or meta.profile is not None)
-    )
+    return meta is not None and bool(meta.physical_values())
 
 
 def _physical_from_meta_details(meta: TagMeta, *, name: str) -> Physical:
-    return Physical(
-        name,
-        on_delay=meta.on_delay,
-        off_delay=meta.off_delay,
-        profile=parse_profile_spec(meta.profile) if meta.profile is not None else None,
-        system=meta.system,
-    )
+    return Physical.from_text(name, meta.physical_values(), system=meta.system)
 
 
 def tag_map_from_nickname_file(
