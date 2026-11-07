@@ -1124,6 +1124,17 @@ def _coast_until(
         if not can_loop or since < wait or limit < 2:
             continue
         since = 0
+        if kernel is None:
+            kernel = _kernel_for(plc, memo, may_compile=limit >= TRACE_ROOM)
+            if kernel is None and limit < TRACE_ROOM and plc._compiled_replay_kernel is None:
+                if run is not None:
+                    jit_stats.add_decline("attempt: too little room left to pay for a compile")
+                continue
+            if kernel is None:
+                can_loop = False
+                if run is not None:
+                    jit_stats.add_decline("interpreted: no kernel")
+                continue
         reads = predicate_reads
         watched = monitored
         if reads is None:
@@ -1146,17 +1157,6 @@ def _coast_until(
                     )
                 continue
             watched = monitored | {str(name) for name in traced}
-        if kernel is None:
-            kernel = _kernel_for(plc, memo, may_compile=limit >= TRACE_ROOM)
-            if kernel is None and limit < TRACE_ROOM and plc._compiled_replay_kernel is None:
-                if run is not None:
-                    jit_stats.add_decline("attempt: too little room left to pay for a compile")
-                continue
-            if kernel is None:
-                can_loop = False
-                if run is not None:
-                    jit_stats.add_decline("interpreted: no kernel")
-                continue
         used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, run)
         if used:
             stretches += 1

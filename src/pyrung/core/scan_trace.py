@@ -613,7 +613,8 @@ class _Guard:
     leave_if: str
     uses: tuple[str, ...]
     # Where the jit counters say it came from.  The lines are the kernel source lines of the
-    # step function's statement and of the innermost one, 0 if none.  A coast's guard has a why.
+    # step function's statement and of the innermost one, 0 if none.  A guard a coast adds has
+    # no line, so it says in *why* what it watches.
     line: int = 0
     inner: int = 0
     why: str = ""
