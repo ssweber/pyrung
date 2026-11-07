@@ -202,7 +202,7 @@ def test_a_nickname_file_keeps_the_old_form_error_class_and_names_the_row(tmp_pa
 
 
 def test_the_kinds_table_is_public():
-    import pyrung
+    import pyrung.core
 
     for name in (
         "PHYSICAL_KEYS",
@@ -213,5 +213,5 @@ def test_the_kinds_table_is_public():
         "kind_of_keys",
         "physical_kind",
     ):
-        assert name in pyrung.__all__
-        assert hasattr(pyrung, name)
+        assert name in pyrung.core.__all__
+        assert hasattr(pyrung.core, name)

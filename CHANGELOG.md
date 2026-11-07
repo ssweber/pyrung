@@ -189,8 +189,13 @@
 
 ### Features
 
-- `pyrung` exports the table of physical kinds: `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
-- A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`, a `ValueError` with `code == "OLD_COMMENT_FORM"`. A nickname-file load keeps the class and names the row.
+- `pyrung.core` exports the table of physical kinds, the keys each `Physical(...)` kind takes. The names are `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
+- A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`:
+  - it is a `ValueError`, so existing `except ValueError` clauses still catch it
+  - its `code` is `"OLD_COMMENT_FORM"`
+  - a nickname-file load keeps the class and names the row in the message
+
+  Match on the class or the code to offer "Upgrade Project".
 - Harness feedback has two new kinds, which run as the CLICK coils of the same names:
   - `Physical(name, timed="200ms")` turns the feedback on for that time at each rise of its enable. With `maintained=True` it also stays on while the enable stays on
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable

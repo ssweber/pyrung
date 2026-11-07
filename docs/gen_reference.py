@@ -73,13 +73,6 @@ PAGES: tuple[ReferencePage, ...] = (
         symbols=(
             "pyrung.PLC",
             "pyrung.Physical",
-            "pyrung.PHYSICAL_KEYS",
-            "pyrung.PHYSICAL_KINDS",
-            "pyrung.FeedbackType",
-            "pyrung.PhysicalKey",
-            "pyrung.PhysicalKind",
-            "pyrung.kind_of_keys",
-            "pyrung.physical_kind",
             "pyrung.Harness",
             "pyrung.Coupling",
             "pyrung.system",
