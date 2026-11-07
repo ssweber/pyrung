@@ -166,7 +166,7 @@ The debug console reports long-running work as it happens:
 ```
 Trying CmdStart=True... done.
   State jumped 6 -> 10 Checking... unexpected.
-  Preventable? Yes -- with rung(State == 3): latch(DoorClosed).
+  Preventable? Yes -- with rung(State == 3): out(DoorClosed).
 ```
 
 ### Condition syntax
