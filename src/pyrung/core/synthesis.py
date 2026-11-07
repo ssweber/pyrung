@@ -748,6 +748,8 @@ def _guarded_rows(
     from pyrung.core.tag import Bool, TagType
 
     groups: dict[str, _DestRules] = {}
+    # Each guard's reads, by the guard's id.  The layout below asks for them more than once.
+    guard_reads: dict[int, set[str]] = {}
     for index, (dest, value, guard) in enumerate(rules):
         if not isinstance(value, (bool, int, float, str)):
             raise TypeError(
@@ -758,7 +760,8 @@ def _guarded_rows(
         guard = _ALWAYS if guard is None else _simplified(_flattened(_as_condition(guard)))
         # The bracket writes its rule bits by name, so a tag of the same name would be
         # overwritten under the rule that reads or drives it.
-        for name in sorted({dest.name, *_static_reads(guard)}):
+        guard_reads[id(guard)] = _static_reads(guard)
+        for name in sorted({dest.name, *guard_reads[id(guard)]}):
             if _is_rule_bit(name):
                 raise ValueError(
                     f"how() names a bit of its temporary logic {name!r}, the same name as "
@@ -800,7 +803,7 @@ def _guarded_rows(
         rung writes.
         """
         others = set(groups) - {name}
-        if any(_static_reads(guard) & others for _value, guard in kept):
+        if any(guard_reads[id(guard)] & others for _value, guard in kept):
             return None
         dest = group.dest
         if group.coil:
@@ -832,7 +835,7 @@ def _guarded_rows(
     # only its bits, which sit above them all.  A cycle is broken at the earliest destination in
     # rule order.
     reads = {
-        name: _static_reads(deciding[name][0][1]) if len(deciding[name]) == 1 else set()
+        name: guard_reads[id(deciding[name][0][1])] if len(deciding[name]) == 1 else set()
         for name in groups
     }
     order: list[str] = []
@@ -856,7 +859,7 @@ def _guarded_rows(
         group = groups[name]
         dest = group.dest
         kept = deciding[name]
-        reads_a_write = len(kept) == 1 and bool(_static_reads(kept[0][1]) & written)
+        reads_a_write = len(kept) == 1 and bool(guard_reads[id(kept[0][1])] & written)
         written.add(name)
         if not kept:
             if not keep and dest.type == TagType.BOOL:
