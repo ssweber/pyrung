@@ -357,6 +357,36 @@ class TestInstallWithTheEnableOn:
         assert _bits(_scan(plc, 6)) == "......"
 
 
+_SETTLED = [
+    (Physical("Lamp", toggle=True), "........"),
+    (Physical("Horn", timed="50ms"), "........"),
+    (Physical("Horn", timed="50ms", maintained=True), "########"),
+    (Physical("Dev", on_delay="50ms"), "########"),
+]
+_SETTLED_IDS = ["toggle", "timed", "timed-maintained", "on-delay"]
+
+
+class TestAReinstallSettles:
+    """An install after an uninstall settles a held enable, as a first install does."""
+
+    @pytest.mark.parametrize(("physical", "settled"), _SETTLED, ids=_SETTLED_IDS)
+    def test_an_enable_turned_on_while_uninstalled(self, physical: Physical, settled: str) -> None:
+        plc, En, _Fb = _linked(physical)
+        plc.run(5)  # each coil remembers its rung as off
+        harness = plc._harness
+        assert harness is not None
+        harness.uninstall()
+        plc.patch({En: True})
+        plc.run(100)
+        Harness(plc).install()
+        assert _bits(_scan(plc, 8)) == settled
+
+    @pytest.mark.parametrize(("physical", "settled"), _SETTLED, ids=_SETTLED_IDS)
+    def test_a_first_install_settles_the_same(self, physical: Physical, settled: str) -> None:
+        plc, _En, _Fb = _linked(physical, enabled=True)
+        assert _bits(_scan(plc, 8)) == settled
+
+
 def _scan(plc: PLC, scans: int) -> list[bool]:
     seen = []
     for _ in range(scans):

@@ -289,6 +289,87 @@ def test_a_reload_leaves_a_plant_coil_as_it_was(
     assert reloaded[-1][:2] == last
 
 
+def _horn_bits(adapter: DAPAdapter, fb: str, scans: int) -> str:
+    seen = ""
+    for _ in range(scans):
+        adapter._runner.step()
+        seen += "#" if adapter._runner.current_state.tags[fb] else "."
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("physical", "settled"),
+    [
+        ("toggle=True", "........"),
+        ("timed='50ms'", "........"),
+        ("timed='50ms', maintained=True", "########"),
+        ("on_delay='50ms'", "########"),
+    ],
+    ids=["toggle", "timed", "timed-maintained", "on-delay"],
+)
+def test_a_harness_install_after_remove_settles(tmp_path: Path, physical: str, settled: str):
+    """An enable turned on while the harness was off is held, not a rise."""
+    horn = f"Bool('Horn', physical=Physical('H', {physical}), link='Motor')"
+    adapter, out, _script_path = _setup(tmp_path, _coil_script(horn))
+    _repl(adapter, out, "step 5", seq=10)
+    resp, _ = _repl(adapter, out, "harness remove", seq=11)
+    assert resp["success"] is True
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, "step 100", seq=12)
+    resp, _ = _repl(adapter, out, "harness install", seq=13)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Horn", 8) == settled
+
+
+def _feedback_script(fb: str, physical: str) -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "\n"
+        "motor = Bool('Motor')\n"
+        f"fb = Bool('{fb}', physical=Physical('X', {physical}), link='Motor')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(motor):\n"
+        "        out(Bool('Echo'))\n"
+        "    with Rung(fb):\n"
+        "        out(Bool('Seen'))\n"
+        "\n"
+        "runner = PLC(prog, dt=0.01)\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("middle", "last", "settled"),
+    [
+        (("Fb2", "toggle=True"), ("Fb", "toggle=True"), "........"),
+        (("Fb", "toggle=True"), ("Fb", "timed='50ms'"), "........"),
+    ],
+    ids=["rename-and-back", "kind-change-and-back"],
+)
+def test_a_reload_back_to_a_coil_settles_it(
+    tmp_path: Path, middle: tuple[str, str], last: tuple[str, str], settled: str
+):
+    """A coil whose memory went stale on the way does not read it after a reload back.
+
+    The first program runs with Motor off, so its coil remembers its rung as off.
+    Motor turns on under the program between.  Read back, the stale memory would turn
+    that held Motor into a rise.
+    """
+    first = ("Fb", last[1])
+    adapter, out, script_path = _setup(tmp_path, _feedback_script(*first))
+    _repl(adapter, out, "step 3", seq=10)
+    script_path.write_text(_feedback_script(*middle), encoding="utf-8")
+    resp, _ = _repl(adapter, out, "reload", seq=11)
+    assert resp["success"] is True
+    assert "harness coil memory value(s) had no matching coupling" in resp["body"]["result"]
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, "step 3", seq=12)
+    script_path.write_text(_feedback_script(*last), encoding="utf-8")
+    resp, _ = _repl(adapter, out, "reload", seq=13)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Fb", 8) == settled
+
+
 AMBIENT_SCRIPT = (
     "from pyrung.core import Bool, PLC, Physical, Program, Real, Rung, out\n"
     "\n"

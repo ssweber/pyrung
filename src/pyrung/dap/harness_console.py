@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.core.harness import Harness
+from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 
 
@@ -156,6 +157,8 @@ def _harness_install(adapter: Any) -> ConsoleResult:
         return ConsoleResult("Harness already installed; use `harness remove` first")
 
     adapter._require_runner_locked()
+    # A scan paused mid-way began before the install and would commit over its seeding.
+    execution_flow.invalidate_mid_scan(adapter)
     banner = try_auto_install(adapter)
     if banner is None:
         return ConsoleResult("No Physical+link= couplings found; nothing to install")
@@ -165,5 +168,6 @@ def _harness_install(adapter: Any) -> ConsoleResult:
 def _harness_remove(adapter: Any) -> ConsoleResult:
     if adapter._harness is None:
         return ConsoleResult("Harness not installed")
+    execution_flow.invalidate_mid_scan(adapter)
     uninstall_harness(adapter)
     return ConsoleResult("Harness removed")

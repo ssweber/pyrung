@@ -310,10 +310,25 @@ class Harness:
             self._plc._compiled_replay_kernel = None
             self._plc._soft_exec_program_cache = None
             self._plc._causal_lineage.invalidate_current_epoch()
+        self._forget_plant_state()
         self._bool_couplings.clear()
         self._profile_couplings.clear()
         self._declared.clear()
         self._overrides.clear()
+
+    def _forget_plant_state(self) -> None:
+        """Clear each coil's memory of its rung, so a later install settles afresh.
+
+        Kept, a coil that ran with its enable off would take an enable turned on since
+        as a rise when installed again.  The timer counts stay.  An install with the
+        enable on settles them, and with it off a running delay runs out.  A reload
+        builds a new harness without this, so its coils carry on.
+        """
+        from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
+
+        drop = [name for name in self._plc._state.memory if f":{PLANT_FEEDBACK_SITE}" in name]
+        if drop:
+            self._plc._edit_tip_tags({}, drop_memory=drop)
 
     def unlink(self, tags: list[str]) -> None:
         """Remove couplings for the named feedback tags.

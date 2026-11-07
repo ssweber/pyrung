@@ -1238,8 +1238,9 @@ def remap_site_memory_report(
     Memory of a site of *old* moves to the site of *new* that
     :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
     sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
-    for the new program.  A harness coil's memory (``plant:fb.{name}``) is kept.  Edge memory (``_edge:e{N}``) is site memory like any
-    other.  A site left unmatched still carries its input memory to an edited
+    for the new program.  A harness coil's memory (``plant:fb.{name}``) is kept.
+    Edge memory (``_edge:e{N}``) is site memory like any other.  A site left
+    unmatched still carries its input memory to an edited
     counterpart (:func:`_match_input_memory`), and a drum its latched preset
     unless the latched step's preset was edited.  Other memory (timer carries,
     system memory) is kept as is, except that a carry is cut to below one unit of
