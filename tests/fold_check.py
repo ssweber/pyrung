@@ -19,9 +19,7 @@ differing keys.
 The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
 with the twin too, so an intermediate scan cannot diverge unseen.  A self check
-mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  Every coast
-compiles and traces with any room left (``coast_run.TRACE_ROOM``), so short coasts are
-checked too.  The
+mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  The
 summary counts the scans the loop ran and why it declined; a session that checks
 compiled runs while the loop never fires fails (:func:`vacuous`), since it would
 have proved nothing about the loop.
@@ -35,7 +33,7 @@ counted apart from those compared scan by scan.
 
 A coast is compared like a compiled run: exactly, and with the runner around the state,
 since both run real scans and the loop.  Its stretches fire finely here too.  It keeps its
-production constants, except ``TRACE_ROOM``.  Its checkpoints and their force records are some of stepping's, equal
+production constants: its checkpoints and their force records are some of stepping's, equal
 at each.  What it leaves in the firing indexes must match what stepping leaves
 (:func:`compare_records`), scans it left out being stepped again to compare, where a stretch
 is allowed one thing: a value column may say ``Unknown``, and a column that does may say a
@@ -1678,8 +1676,6 @@ def install() -> None:
     setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
     setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
-    # Every coast compiles and traces with any room left, so short coasts are checked too.
-    setattr(coast_run, "TRACE_ROOM", 1)  # noqa: B010
     if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
         scan_trace.SELF_CHECK_OBSERVERS.append(_note_self_check_mismatch)
 

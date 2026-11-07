@@ -1848,8 +1848,7 @@ class TestACoastStoppedByTheLedger:
         plc = _timed()
         memo = coast_run.memo_of(plc)
         memo.work_left = lambda: 5
-        # No loop, so it counts.
-        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
+        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a: None)  # no loop, so it counts
         stats: dict[str, int] = {}
         coast_run.coast_until(plc, lambda _s: False, budget=100, stats=stats)
         assert stats["out_of_work"] == 1

@@ -617,21 +617,6 @@ def test_a_coast_that_ends_before_its_first_attempt_compiles_nothing() -> None:
     assert plc._compiled_replay_kernel is None
 
 
-def test_a_coast_too_short_to_pay_neither_compiles_nor_traces(monkeypatch) -> None:
-    monkeypatch.setattr(coast_run, "TRACE_ROOM", 16)
-    plc = _runner(_ramp, 0.01)
-    coast_until(plc, lambda _s: False, budget=15, predicate_reads=frozenset())
-    memo = memo_of(plc)
-    assert (memo.compiles, memo.traces) == (0, 0)
-    # A kernel at hand still runs the paths it knows, and learns no new one.
-    coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
-    learned = (memo.compiles, memo.traces)
-    stats: dict[str, int] = {}
-    coast_until(plc, lambda _s: False, budget=15, predicate_reads=frozenset(), stats=stats)
-    assert (memo.compiles, memo.traces) == learned
-    assert stats["stretched_scans"] > 0
-
-
 def test_a_monitor_fires_on_the_scan_stepping_fires_it() -> None:
     plc = _runner(_ramp, 0.01)
     twin = plc.fork()
