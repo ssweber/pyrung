@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import ast
+import collections
+import functools
 import subprocess
 import sys
 import threading
+import types
+from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -376,6 +380,175 @@ def test_a_counting_predicate_is_judged_from_its_own_copy() -> None:
     # The folded run's own calls are not made here; the copy is taken first and
     # the real closure is untouched afterwards.
     fold_check._checked("run_until", plc, _stepper(plc, 5), predicate)
+    assert k == [0]
+
+
+def test_a_function_held_in_an_object_is_copied_too() -> None:
+    plc = _plc()
+    k = [0]
+
+    def count(_s) -> bool:
+        k[0] += 1
+        return k[0] >= 5
+
+    holder = SimpleNamespace(steps=[count])
+    fold_check._checked("run_until", plc, _stepper(plc, 5), lambda s: holder.steps[0](s))
+    assert k == [0]
+
+
+def _counting_step(k: list[int]) -> Any:
+    def count(_self: Any, s: Any) -> bool:
+        k[0] += 1
+        return s.tags["N"] >= 5
+
+    return count
+
+
+def test_a_bound_method_of_a_closure_is_copied_too() -> None:
+    plc = _plc()
+    k = [0]
+    method = types.MethodType(_counting_step(k), SimpleNamespace())
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
+    ):
+        fold_check._checked("run_until", plc, _stepper(plc, 9), method)
+    assert k == [0]
+
+
+def test_a_bound_builtin_is_bound_to_the_copy() -> None:
+    plc = _plc()
+    seen: list[Any] = []
+    add = seen.append
+
+    def predicate(s: Any) -> bool:
+        add(s.scan_id)
+        return s.tags["N"] >= 5
+
+    fold_check._checked("run_until", plc, _stepper(plc, 5), predicate)
+    assert seen == []
+
+
+class _Slotted:
+    __slots__ = ("step",)
+
+
+def test_a_function_in_a_slot_is_copied_too() -> None:
+    plc = _plc()
+    k = [0]
+    holder = _Slotted()
+    holder.step = _counting_step(k)
+    fold_check._checked("run_until", plc, _stepper(plc, 5), lambda s: holder.step(None, s))
+    assert k == [0]
+
+
+def test_a_cycle_through_a_tuple_and_a_list_is_kept() -> None:
+    plc = _plc()
+    ring: list[Any] = []
+    link = (ring,)
+    ring.append(link)
+
+    def predicate(s: Any) -> bool:
+        return link[0][0] is link and s.tags["N"] >= 5
+
+    with (
+        fold_check.deliberate(),
+        pytest.raises(FoldMismatch, match="stop predicate true at scan 5, folded run stopped at 9"),
+    ):
+        fold_check._checked("run_until", plc, _stepper(plc, 9), predicate)
+
+
+_BUMPS = 0
+
+
+def _bump() -> None:
+    global _BUMPS
+    _BUMPS += 1
+
+
+def _bumped(_s: Any) -> bool:
+    _bump()
+    return _BUMPS >= 1
+
+
+def test_two_copied_functions_of_a_module_share_its_names() -> None:
+    copied = fold_check._isolated(_bumped, _plc())
+    assert copied is not None
+    assert copied(None) is True
+    assert _BUMPS == 0
+
+
+class _CopiesItsOwnWay:
+    """Copies itself through copy.deepcopy(), which hands back the function it holds."""
+
+    def __init__(self, **parts: Any) -> None:
+        self.__dict__.update(parts)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        new = type(self).__new__(type(self))
+        new.__dict__ = deepcopy(self.__dict__, memo)
+        return new
+
+
+class _CopiesWithoutTheMemo(_CopiesItsOwnWay):
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        new = type(self).__new__(type(self))
+        new.__dict__ = deepcopy(self.__dict__)
+        return new
+
+
+class _SlotBesideADict:
+    __slots__ = ("step", "__dict__")
+
+
+def _in_a_slot_beside_a_dict(step: Any) -> Any:
+    holder = _SlotBesideADict()
+    holder.step = step
+    return holder
+
+
+@pytest.mark.parametrize(
+    "hide",
+    [
+        pytest.param(lambda step: collections.deque([step]), id="deque"),
+        pytest.param(functools.partial, id="partial"),
+        pytest.param(_in_a_slot_beside_a_dict, id="slot beside a dict"),
+        pytest.param(lambda step: [step, [object() for _ in range(25_000)]], id="past 20000"),
+    ],
+)
+def test_an_own_deepcopy_that_keeps_a_function_anywhere_is_not_asked(hide: Any) -> None:
+    holder = _CopiesItsOwnWay(part=hide(_counting_step([0])))
+    assert fold_check._isolated(lambda _s: holder.part, _plc()) is None
+
+
+def test_an_own_deepcopy_that_copies_the_runner_is_not_asked() -> None:
+    plc = _plc()
+    holder = _CopiesWithoutTheMemo(runners=collections.deque([plc]))
+    assert fold_check._isolated(lambda _s: holder.runners[0], plc) is None
+
+
+def test_an_own_deepcopy_that_keeps_the_function_is_not_asked() -> None:
+    plc = _plc()
+    k = [0]
+    holder = _CopiesItsOwnWay(step=_counting_step(k))
+    before = fold_check.STATS["predicate skipped: not copyable"]
+    fold_check._checked("run_until", plc, _stepper(plc, 9), lambda s: holder.step(None, s))
+    assert fold_check.STATS["predicate skipped: not copyable"] == before + 1
+    assert k == [0]
+
+
+def test_an_own_deepcopy_returning_the_callable_is_not_asked() -> None:
+    plc = _plc()
+    k = [0]
+
+    @functools.cache
+    def predicate(s: Any) -> bool:
+        k[0] += 1
+        return False
+
+    before = fold_check.STATS["predicate skipped: not copyable"]
+    fold_check._checked("run_until", plc, _stepper(plc, 5), predicate)
+    assert fold_check.STATS["predicate skipped: not copyable"] == before + 1
     assert k == [0]
 
 
