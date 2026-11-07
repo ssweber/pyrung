@@ -563,6 +563,7 @@ def test_an_own_deepcopy_that_keeps_a_function_anywhere_is_not_asked(hide: Any) 
         pytest.param(lambda: _Counter().bump, id="a method"),
         pytest.param(lambda: [0].append, id="a builtin"),
         pytest.param(lambda: weakref.ref(_kept(_Counter())), id="a weak reference"),
+        pytest.param(lambda: weakref.proxy(_kept(_Counter())), id="a weak proxy"),
         pytest.param(lambda: types, id="a module"),
     ],
 )
@@ -578,6 +579,31 @@ def test_an_own_deepcopy_of_a_method_binds_it_to_the_copy() -> None:
     assert copied is not None
     assert copied(None) is True
     assert counter.n == 0
+
+
+class _HoldsAWeakMethod:
+    def __init__(self) -> None:
+        self.counter = _Counter()
+        self.bump = weakref.WeakMethod(self.counter.bump)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        new = type(self).__new__(type(self))
+        new.counter = deepcopy(self.counter, memo)
+        new.bump = weakref.WeakMethod(new.counter.bump)
+        return new
+
+
+def test_an_own_deepcopy_may_keep_a_weak_method_of_its_copy() -> None:
+    holder = _HoldsAWeakMethod()
+
+    def predicate(_s: Any) -> bool:
+        bump = holder.bump()
+        return bump is not None and bump() > 0
+
+    copied = fold_check._isolated(predicate, _plc())
+    assert copied is not None
+    assert copied(None) is True
+    assert holder.counter.n == 0
 
 
 def test_an_own_deepcopy_that_copies_the_runner_is_not_asked() -> None:

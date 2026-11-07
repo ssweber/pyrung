@@ -19,7 +19,9 @@ differing keys.
 The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
 with the twin too, so an intermediate scan cannot diverge unseen.  A self check
-mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  The
+mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  Every coast
+compiles and traces with any room left (``coast_run.TRACE_ROOM``), so short coasts are
+checked too.  The
 summary counts the scans the loop ran and why it declined; a session that checks
 compiled runs while the loop never fires fails (:func:`vacuous`), since it would
 have proved nothing about the loop.
@@ -33,7 +35,7 @@ counted apart from those compared scan by scan.
 
 A coast is compared like a compiled run: exactly, and with the runner around the state,
 since both run real scans and the loop.  Its stretches fire finely here too.  It keeps its
-production constants: its checkpoints and their force records are some of stepping's, equal
+production constants, except ``TRACE_ROOM``.  Its checkpoints and their force records are some of stepping's, equal
 at each.  What it leaves in the firing indexes must match what stepping leaves
 (:func:`compare_records`), scans it left out being stepped again to compare, where a stretch
 is allowed one thing: a value column may say ``Unknown``, and a column that does may say a
@@ -851,7 +853,7 @@ class _PrivateCopy:
     - a function this copier did not make
     - a bound method whose function is not its class's own
     - a method or a builtin bound to an object that was not copied
-    - a live weak reference to an object that was not copied
+    - a live weak reference or weak proxy to an object that was not copied
     - a module
     - a runner other than the one shared
     - more than ``MAX_WALK`` objects
@@ -943,7 +945,13 @@ class _PrivateCopy:
         That copy usually goes through ``copy.deepcopy()``, which never clones a function.  So a
         function in it that this copier did not make is the user's own.  The check walks the copy
         through ``gc.get_referents()`` and refuses a copy too large to walk.  It follows a weak
-        reference too, which ``gc.get_referents()`` does not.
+        reference or a weak proxy too, which ``gc.get_referents()`` does not.
+
+        Some refusals fail closed and refuse a copy that would have been private.  A method, a
+        weak reference or a weak proxy in the copy must point to one of the copies in the memo,
+        or to the copy itself.  So the check refuses one that points to an object the copy made
+        without putting it in the memo.  It refuses a weak proxy to a shared object too, since a
+        proxy does not say what it points to.
         """
         made = {id(v) for v in self.memo.values()}
         new = copier(self.memo)
@@ -961,6 +969,12 @@ class _PrivateCopy:
             seen.add(id(o))
             if len(seen) > self.MAX_WALK:
                 raise TypeError(f"{name}.__deepcopy__ made a copy too large to check")
+            if isinstance(o, weakref.ProxyTypes):
+                # Checked first, since isinstance() asks a proxy's target for its class.
+                target = self._proxied(o, new, name)
+                if target is not None:
+                    todo.append(target)
+                continue
             if type(o) is self.plc_type:
                 raise TypeError(f"{name}.__deepcopy__ copies the runner")
             if isinstance(o, (type, *self.shared)):
@@ -974,6 +988,15 @@ class _PrivateCopy:
             if isinstance(o, weakref.ref):
                 referent = o()
                 if referent is None or self._is_shared(referent):
+                    continue
+                if isinstance(referent, types.MethodType):
+                    # A WeakMethod makes a new bound method on each call.
+                    if not (
+                        _defined_on_its_class(referent)
+                        and self._bound_to_a_copy(referent.__self__, copied)
+                    ):
+                        raise TypeError(f"{name}.__deepcopy__ keeps a method bound to the original")
+                    todo.append(referent.__self__)
                     continue
                 if id(referent) not in copied:
                     raise TypeError(f"{name}.__deepcopy__ keeps a weak reference to the original")
@@ -992,6 +1015,17 @@ class _PrivateCopy:
                 continue
             todo.extend(gc.get_referents(o))
         return new
+
+    def _proxied(self, proxy: Any, new: Any, name: str) -> Any:
+        """The copy *proxy* points to, None for a dead one, or TypeError for any other."""
+        try:
+            proxy.__class__  # noqa: B018
+        except ReferenceError:
+            return None
+        for candidate in (*self.memo.values(), new):
+            if any(ref is proxy for ref in weakref.getweakrefs(candidate)):
+                return candidate
+        raise TypeError(f"{name}.__deepcopy__ keeps a weak proxy to an object it did not copy")
 
     def _bound_to_a_copy(self, owner: Any, copied: set[int]) -> bool:
         return (
