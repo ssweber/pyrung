@@ -10,7 +10,7 @@ ramp and approach kinds are ``math`` rows.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -237,8 +237,12 @@ class Harness:
         """Put the plant on the runner, a feedback whose enable is on as long since settled."""
         self._install(settle=True)
 
-    def _install(self, *, settle: bool) -> None:
-        """Without *settle* a feedback stays as the state has it, its timers counting from there."""
+    def _install(self, *, settle: bool, carry: Collection[str] = ()) -> None:
+        """Without *settle* a feedback stays as the state has it, its timers counting from there.
+
+        A coil whose memory key is in *carry* is not settled either.  A reload passes the
+        keys it kept, so those coils carry on from the state.
+        """
         if self._installed:
             return
         self._installed = True
@@ -250,7 +254,7 @@ class Harness:
         self._seed_plant_defaults()
         self._carry_counts_to_current_units()
         if settle:
-            self._seed_bool_state()
+            self._seed_bool_state(frozenset(carry))
         self._install_monitors()
         self._plc._harness = self
 
@@ -317,18 +321,24 @@ class Harness:
         self._overrides.clear()
 
     def _forget_plant_state(self) -> None:
-        """Clear each coil's memory of its rung, so a later install settles afresh.
+        """Clear each coil's memory of its rung, so no later coil reads it.
 
-        Kept, a coil that ran with its enable off would take an enable turned on since
-        as a rise when installed again.  The timer counts stay.  An install with the
-        enable on settles them, and with it off a running delay runs out.  A reload
-        builds a new harness without this, so its coils carry on.
+        An install settles its coils whatever the state holds.  A link added after it
+        is not settled.  Were the memory kept, that link would read the old coil's
+        memory, and an enable already on might not fire it (see :meth:`set_overrides`).
+        The timer counts stay.  An install with the enable on settles them, and with it off
+        a running delay runs out.
         """
         from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
 
         drop = [name for name in self._plc._state.memory if f":{PLANT_FEEDBACK_SITE}" in name]
         if drop:
             self._plc._edit_tip_tags({}, drop_memory=drop)
+
+    def _coil_memory_keys(self) -> frozenset[str]:
+        """The memory key of each coil this harness runs, for a reload to carry on."""
+        couplings = [*self._bool_couplings, *self._profile_couplings]
+        return frozenset(c.rung_memory_key for c in couplings if c.rung_memory_key)
 
     def unlink(self, tags: list[str]) -> None:
         """Remove couplings for the named feedback tags.
@@ -1016,7 +1026,7 @@ class Harness:
         if seed:
             self._plc._edit_tip_tags(seed)
 
-    def _seed_bool_state(self) -> None:
+    def _seed_bool_state(self, carry: frozenset[str]) -> None:
         """Seed each bool coil whose enable is already on as if it had settled long ago.
 
         A debounce's feedback is on and its on side has counted its preset.  A timed
@@ -1025,8 +1035,9 @@ class Harness:
         first scan is no rise.  Without this the first scans would show the device off
         while it is commanded on, or a timed or toggle coil would fire at install.
 
-        A coil whose memory is already in the state ran before, as on a reload or a
-        reinstall.  It carries on from that memory, so a running pulse or delay runs out.
+        A coil whose memory key is in *carry* ran before the reload that installs it.
+        It carries on from its memory, so a running pulse or delay runs out.  Whether a
+        key is in the state decides nothing, because an absent key reads as its default.
         """
         seed: dict[str, Any] = {}
         memory: dict[str, Any] = {}
@@ -1034,7 +1045,7 @@ class Harness:
         snap = state.tags
 
         def settles(c: _BoolCoupling | _ProfileCoupling) -> bool:
-            if c.rung_memory_key in state.memory:
+            if c.rung_memory_key in carry:
                 return False
             en_raw = snap.get(c.en_name, False)
             return en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)

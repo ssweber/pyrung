@@ -8,6 +8,7 @@ across reloads. Console verbs: ``harness status``, ``harness install``,
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 from pyrung.core.harness import Harness
@@ -15,16 +16,19 @@ from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 
 
-def install_harness(adapter: Any) -> Harness:
-    """Install a harness on the current runner, even one with no declared couplings."""
+def install_harness(adapter: Any, carry: Collection[str] = ()) -> Harness:
+    """Install a harness on the current runner, even one with no declared couplings.
+
+    Each coil whose memory key is in *carry* carries on from the state, unsettled.
+    """
     harness = Harness(adapter._require_runner_locked())
-    harness.install()
+    harness._install(settle=True, carry=carry)
     harness.on_patches_applied = _make_patch_listener(adapter)
     adapter._harness = harness
     return harness
 
 
-def try_auto_install(adapter: Any) -> str | None:
+def try_auto_install(adapter: Any, carry: Collection[str] = ()) -> str | None:
     """Install the harness for the program's couplings plus the bench links.
 
     Returns a banner string for the debug console, or ``None`` if there are
@@ -35,7 +39,7 @@ def try_auto_install(adapter: Any) -> str | None:
     if adapter._runner is None:
         return None
 
-    harness = install_harness(adapter)
+    harness = install_harness(adapter, carry)
     notes = fit_to_harness_locked(adapter, harness)
 
     summary = harness.coupling_summary()

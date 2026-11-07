@@ -382,6 +382,24 @@ class TestAReinstallSettles:
         assert _bits(_scan(plc, 8)) == settled
 
     @pytest.mark.parametrize(("physical", "settled"), _SETTLED, ids=_SETTLED_IDS)
+    def test_a_coil_key_at_its_default_does_not_stop_the_settle(
+        self, physical: Physical, settled: str
+    ) -> None:
+        """An absent key and a key at its default are the same state, so both settle."""
+        En = Bool("En", default=True)
+        Fb = Bool("Fb", physical=physical, link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.010)
+        prefix = {"toggle": "_toggle", "timed": "_timed_rung", "delay": "_debounce_rung"}
+        plc._edit_tip_tags({}, memory={f"{prefix[physical.kind]}:plant:fb.Fb": False})
+        Harness(plc).install()
+        assert _bits(_scan(plc, 8)) == settled
+
+    @pytest.mark.parametrize(("physical", "settled"), _SETTLED, ids=_SETTLED_IDS)
     def test_a_first_install_settles_the_same(self, physical: Physical, settled: str) -> None:
         plc, _En, _Fb = _linked(physical, enabled=True)
         assert _bits(_scan(plc, 8)) == settled

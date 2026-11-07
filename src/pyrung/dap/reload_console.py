@@ -194,10 +194,14 @@ def _reload_locked(
     adapter._miner_accepted.clear()
     adapter._miner_suppressed.clear()
 
+    # Each coil the old harness ran carries on from the memory the reload kept.  A coil
+    # new to the program, or one of a harness removed before the reload, settles.
+    old_harness = adapter._harness
+    carry = old_harness._coil_memory_keys() if old_harness is not None else frozenset()
     adapter._harness = None
     from pyrung.dap.harness_console import try_auto_install
 
-    banner = try_auto_install(adapter)
+    banner = try_auto_install(adapter, carry=carry)
     stale = _drop_coil_memory_no_coupling_owns(reloaded)
     if stale:
         warnings.append(
