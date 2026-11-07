@@ -850,7 +850,9 @@ class _PrivateCopy:
 
     - a function this copier did not make
     - a bound method whose function is not its class's own
-    - a builtin bound to an object that was not copied
+    - a method or a builtin bound to an object that was not copied
+    - a live weak reference to an object that was not copied
+    - a module
     - a runner other than the one shared
     - more than ``MAX_WALK`` objects
     """
@@ -938,16 +940,18 @@ class _PrivateCopy:
     def _own_deepcopy(self, obj: Any, copier: Callable[[dict[int, Any]], Any]) -> Any:
         """*obj*'s own ``__deepcopy__``, refused where its copy still reaches the original's code.
 
-        That copy goes through ``copy.deepcopy()``, which never clones a function.  So a function
-        in it that this copier did not make is the user's own.  The check walks the copy through
-        ``gc.get_referents()`` and refuses a copy too large to walk.
+        That copy usually goes through ``copy.deepcopy()``, which never clones a function.  So a
+        function in it that this copier did not make is the user's own.  The check walks the copy
+        through ``gc.get_referents()`` and refuses a copy too large to walk.  It follows a weak
+        reference too, which ``gc.get_referents()`` does not.
         """
         made = {id(v) for v in self.memo.values()}
         new = copier(self.memo)
         name = type(obj).__name__
         if new is obj and callable(obj):
             raise TypeError(f"{name}.__deepcopy__ returns the callable itself")
-        copied = {id(v) for v in self.memo.values()}
+        # An object bound to a method or a builtin must be one of the copies, or the copy itself.
+        copied = {id(v) for v in self.memo.values()} | {id(new)}
         seen: set[int] = set()
         todo = [new]
         while todo:
@@ -959,27 +963,43 @@ class _PrivateCopy:
                 raise TypeError(f"{name}.__deepcopy__ made a copy too large to check")
             if type(o) is self.plc_type:
                 raise TypeError(f"{name}.__deepcopy__ copies the runner")
-            if isinstance(o, (type, types.ModuleType, *self.shared)):
+            if isinstance(o, (type, *self.shared)):
                 continue
+            if isinstance(o, types.ModuleType):
+                raise TypeError(
+                    f"{name}.__deepcopy__ keeps module {o.__name__}, shared with the run"
+                )
             if isinstance(o, types.FunctionType):
                 raise TypeError(f"{name}.__deepcopy__ keeps a function of the original")
+            if isinstance(o, weakref.ref):
+                referent = o()
+                if referent is None or self._is_shared(referent):
+                    continue
+                if id(referent) not in copied:
+                    raise TypeError(f"{name}.__deepcopy__ keeps a weak reference to the original")
+                todo.append(referent)
+                continue
             if isinstance(o, types.MethodType):
                 if not _defined_on_its_class(o):
                     raise TypeError(f"{name}.__deepcopy__ keeps a method of the original")
+                if not self._bound_to_a_copy(o.__self__, copied):
+                    raise TypeError(f"{name}.__deepcopy__ keeps a method bound to the original")
                 todo.append(o.__self__)
                 continue
             if isinstance(o, (types.BuiltinFunctionType, types.MethodWrapperType)):
-                owner = o.__self__
-                if not (
-                    owner is None
-                    or isinstance(owner, (type, types.ModuleType))
-                    or self._is_shared(owner)
-                    or id(owner) in copied
-                ):
+                if not self._bound_to_a_copy(o.__self__, copied):
                     raise TypeError(f"{name}.__deepcopy__ keeps a builtin bound to the original")
                 continue
             todo.extend(gc.get_referents(o))
         return new
+
+    def _bound_to_a_copy(self, owner: Any, copied: set[int]) -> bool:
+        return (
+            owner is None
+            or isinstance(owner, (type, types.ModuleType))
+            or self._is_shared(owner)
+            or id(owner) in copied
+        )
 
     def _function(self, fn: types.FunctionType) -> types.FunctionType:
         cells = None

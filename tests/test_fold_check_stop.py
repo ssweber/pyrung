@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import types
+import weakref
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -497,6 +498,13 @@ class _CopiesWithoutTheMemo(_CopiesItsOwnWay):
         return new
 
 
+class _CopiesShallowly(_CopiesItsOwnWay):
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        new = type(self).__new__(type(self))
+        new.__dict__ = dict(self.__dict__)
+        return new
+
+
 class _SlotBesideADict:
     __slots__ = ("step", "__dict__")
 
@@ -507,18 +515,69 @@ def _in_a_slot_beside_a_dict(step: Any) -> Any:
     return holder
 
 
+# Boxes a weak reference points to, kept alive for the test that reads them.
+_ALIVE: list[Any] = []
+
+
+def _kept(obj: Any) -> Any:
+    _ALIVE.append(obj)
+    return obj
+
+
+class _Box:
+    def __init__(self, step: Any) -> None:
+        self.step = step
+
+
+def _behind_a_weak_reference(step: Any) -> Any:
+    return weakref.ref(_kept(_Box(step)))
+
+
+class _Counter:
+    def __init__(self) -> None:
+        self.n = 0
+
+    def bump(self) -> int:
+        self.n += 1
+        return self.n
+
+
 @pytest.mark.parametrize(
     "hide",
     [
         pytest.param(lambda step: collections.deque([step]), id="deque"),
         pytest.param(functools.partial, id="partial"),
         pytest.param(_in_a_slot_beside_a_dict, id="slot beside a dict"),
+        pytest.param(_behind_a_weak_reference, id="behind a weak reference"),
         pytest.param(lambda step: [step, [object() for _ in range(25_000)]], id="past 20000"),
     ],
 )
 def test_an_own_deepcopy_that_keeps_a_function_anywhere_is_not_asked(hide: Any) -> None:
     holder = _CopiesItsOwnWay(part=hide(_counting_step([0])))
     assert fold_check._isolated(lambda _s: holder.part, _plc()) is None
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param(lambda: _Counter().bump, id="a method"),
+        pytest.param(lambda: [0].append, id="a builtin"),
+        pytest.param(lambda: weakref.ref(_kept(_Counter())), id="a weak reference"),
+        pytest.param(lambda: types, id="a module"),
+    ],
+)
+def test_an_own_copy_that_keeps_what_the_original_holds_is_not_asked(part: Any) -> None:
+    holder = _CopiesShallowly(part=part())
+    assert fold_check._isolated(lambda _s: holder.part, _plc()) is None
+
+
+def test_an_own_deepcopy_of_a_method_binds_it_to_the_copy() -> None:
+    counter = _Counter()
+    holder = _CopiesItsOwnWay(bump=counter.bump)
+    copied = fold_check._isolated(lambda _s: holder.bump() > 0, _plc())
+    assert copied is not None
+    assert copied(None) is True
+    assert counter.n == 0
 
 
 def test_an_own_deepcopy_that_copies_the_runner_is_not_asked() -> None:
