@@ -85,7 +85,7 @@ def parse_number(text: str) -> float:
 
 
 def parse_number_or_tag(text: str) -> float | str:
-    """A target as a comment writes it: numeric text is a number, other text a tag name."""
+    """A target as a comment writes it. Numeric text is a number, and other text a tag name."""
     stripped = text.strip()
     if not stripped:
         raise ValueError("expected a number or a tag name, got nothing")
@@ -103,8 +103,8 @@ def format_number(value: float) -> str:
 
 
 FeedbackType = Literal["bool", "analog"]
-#: How a key's value is written: a time with units, a number, a number or a tag name, or a
-#: bare flag.
+#: How a key's value is written. A ``flag`` is the bare key, and a ``duration`` a time with
+#: units.
 ValueType = Literal["duration", "number", "number_or_tag", "flag"]
 
 

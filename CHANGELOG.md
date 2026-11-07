@@ -166,8 +166,9 @@
   - an `approach_to` string that looks like a number raises. Pass the number
   - keywords of two kinds in one `Physical` raise
   - `timed=` (with optional `maintained=True`) and `toggle=True` are new kinds. The comment parser reads them. A `Harness` raises `NotImplementedError` for them for now
-  - comments read `flasher_on=8ms, flasher_off=8ms`, `ramp_on=0.8, ramp_off=-0.05` and `approach_to=180, approach_rate=0.3`, and a `profile=` comment raises
-  - the DAP `link` command and `pyrungLink` request take the same keys (`flasherOn`, `rampOn`, `approachTo` and so on in a request), and `pyrungListLinks` rows carry `kind` and `keys` in place of `profile`
+  - comments read `flasher_on=8ms, flasher_off=8ms`, `ramp_on=0.8, ramp_off=-0.05` and `approach_to=180, approach_rate=0.3`. A `profile=` comment raises
+  - the DAP `link` command takes the same keys. The `pyrungLink` request takes them in camelCase (`flasherOn`, `rampOn`, `approachTo`)
+  - `pyrungListLinks` rows carry `kind`, `keys` and a field per key in place of `profile`
 
   Run "Upgrade project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
 

@@ -713,8 +713,8 @@ class Harness:
         *,
         trigger_value: int | str | None = None,
     ) -> None:
-        # Route by the kind, not the Fb type: a flasher, ramp or approach lowers via
-        # the profile path, and on_delay/off_delay is a bool dwell coupling.
+        # Route by the kind, not the Fb type. A flasher, ramp or approach takes the
+        # profile path. An on/off delay is a bool dwell coupling.
         if physical.kind in _NOT_YET_RUN:
             raise NotImplementedError(_not_yet_text(physical))
         if physical.kind != "delay":

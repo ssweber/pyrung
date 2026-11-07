@@ -352,7 +352,7 @@ class _LinkProof:
     def _opposed_delay(self, atoms: list[Any], coupling: Coupling) -> int | None:
         """How long the plant lets these contacts hold the feedback against its enable, if bounded.
 
-        Only an on/off delay coupling has that bound: a flasher has no resting value.
+        Only an on/off delay coupling has that bound. A flasher has no resting value.
         """
         facts = self.facts
         fb = coupling.fb_name

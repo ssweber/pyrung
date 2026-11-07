@@ -42,7 +42,7 @@ PRESSURE     = Physical("Pressure",     approach_to=100.0, approach_rate=0.3)
 ENCODER      = Physical("Encoder",      flasher_on="8ms", flasher_off="8ms")
 ```
 
-A `Physical` takes the keywords of one kind. `on_delay`/`off_delay` suit simple delayed transitions (contactors, limit switches). `flasher_on`/`flasher_off` make a Bool pulse train. `ramp_on`/`ramp_off` and `approach_to`/`approach_rate` drive analog registers. Times are strings with units, such as `"5ms"`, `"2s"` or `"1s500ms"`, and a bare number raises. Rates are numbers per second. The same keywords go in a CLICK nickname comment: `[link=Heat, ramp_on=0.5, ramp_off=-0.05]`.
+A `Physical` takes the keywords of one kind. `on_delay`/`off_delay` suit simple delayed transitions (contactors, limit switches). `flasher_on`/`flasher_off` make a Bool pulse train. `ramp_on`/`ramp_off` and `approach_to`/`approach_rate` drive analog registers. Times are strings with units, such as `"2s"` or `"1s500ms"`. A bare number raises. Rates are numbers per second. The same keywords go in a CLICK nickname comment: `[link=Heat, ramp_on=0.5, ramp_off=-0.05]`.
 
 ## Linking feedback to commands
 
