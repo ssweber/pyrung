@@ -311,9 +311,23 @@ def test_guarded_copy_refuses_a_value_that_is_not_a_constant() -> None:
         conditional_hold_rung(dest=sel, rules=[(3, gate), (src, None)])
 
 
-def test_only_the_decide_first_rows_carry_a_comment() -> None:
+def test_guarded_copy_refuses_a_tag_named_like_one_of_its_bits() -> None:
+    # The bracket would write its own bit over the user's tag of the same name.
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    d, gate = Bool("D"), Bool("Gate")
+    with pytest.raises(ValueError, match="'__on1__D' is named like a bit"):
+        guarded_copy_rung([(d, True, gate), (d, False, BitCondition(Bool("__on1__D")))])
+    with pytest.raises(ValueError, match="'__set2__X' is named like a bit"):
+        guarded_copy_rung([(Int("__set2__X"), 3, gate)])
+    # A name the bracket never gives a bit is the user's own.
+    guarded_copy_rung([(d, True, BitCondition(Bool("__on__D")))])
+
+
+def test_only_the_bit_rows_carry_a_comment() -> None:
     # The comment is set on the rows the build adds, so the text says why they are there.
-    # A writer row's code says what it does on its own.
+    # A writer row's code says what it does on its own.  Each rule of Sel has its own bit.  Its
+    # copies run in rule order, so the last one on writes last.
     from pyrung.core.condition import CompareEq, CompareNe
     from pyrung.core.synthesis import bracket_lines, guarded_copy_rung
 
@@ -328,12 +342,12 @@ def test_only_the_decide_first_rows_carry_a_comment() -> None:
     assert bracket_lines(rung) == (
         decide,
         "with rung(Sel != 3):",
-        "  out(__frz0__Sel)",
+        "  out(__set1__Sel)",
         "with rung(Sel == 3):",
-        "  out(__frz1__Sel)",
-        "with rung(~__frz1__Sel, __frz0__Sel):",
+        "  out(__set2__Sel)",
+        "with rung(__set1__Sel):",
         "  copy(3, Sel)",
-        "with rung(__frz1__Sel):",
+        "with rung(__set2__Sel):",
         "  copy(0, Sel)",
         "with rung(B):",
         "  out(A)",

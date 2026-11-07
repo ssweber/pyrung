@@ -419,16 +419,23 @@ def _build_plan_journal(
 def with_logic(fork: Any, step: PlanStep) -> PlanStep:
     """*step* with the temporary logic it put in or took out, printed from the rung that ran.
 
-    An install prints the logic from its own scan on, a removal the logic it ended.  Only the
-    rows writing the step's inputs print, with any decide-first rows they read.
+    An install prints the logic from its own scan on.  A removal prints the logic it ended, and
+    the logic from its scan on, which is not empty when some of a tag's rules stay in.  Only the
+    rows writing the step's inputs print, with the rule bits they read.
     """
     from pyrung.core.synthesis import bracket_lines
 
     if fork is None or step.kind not in ("force", "revoke") or not step.rungs:
         return step
-    ran = pilot_logic_at(fork, step.scan - 1 if step.kind == "revoke" else step.scan)
-    logic = () if ran is None else bracket_lines(ran, {rung.dest for rung in step.rungs})
-    return replace(step, logic=logic)
+    dests = {rung.dest for rung in step.rungs}
+
+    def printed(scan: int) -> tuple[str, ...]:
+        ran = pilot_logic_at(fork, scan)
+        return () if ran is None else bracket_lines(ran, dests)
+
+    if step.kind == "force":
+        return replace(step, logic=printed(step.scan))
+    return replace(step, logic=printed(step.scan - 1), kept_logic=printed(step.scan))
 
 
 def _iteration_payload(

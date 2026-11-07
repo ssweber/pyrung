@@ -23,6 +23,7 @@ program.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -307,9 +308,9 @@ def conditional_hold_rung(
     later active rule wins, and with no rule active ``dest`` keeps its value.
     Every guard means the state the bracket starts from.  The rules compile
     like :func:`guarded_copy_rung`'s, so a liveness oscillator's "drive True
-    while ``dest != True``" + "drive False while ``dest != False``" is one
-    ``out(dest)`` whose condition reads ``dest`` before writing it, and
-    ``dest`` flips every scan.  Values must be constants, as there.
+    while ``dest != True``" + "drive False while ``dest != False``" is two
+    bits read off ``dest`` before one ``out(dest)`` writes it, and ``dest``
+    flips every scan.  Values must be constants, as there.
 
     A single rule is better expressed by :func:`copy_hold_rung`; this is for the
     multi-rule (oscillating) case.
@@ -320,7 +321,7 @@ def conditional_hold_rung(
 def guarded_copy_rung(
     rules: list[tuple[Tag, Any, Condition | Tag]],
 ) -> Rung:
-    """Build one rung from ordered guarded writes: the last active write wins.
+    """Build one rung from ordered guarded writes.  The last active write wins.
 
     A Boolean destination returns to ``False`` when none of its rules is
     active; a non-Boolean destination keeps its prior (plant-supplied) value.
@@ -333,21 +334,32 @@ def guarded_copy_rung(
 
     Each instruction reads its conditions when the scan reaches it, as in any
     user rung, so the rung is laid out so that no guard reads an earlier write
-    of the bracket:
+    of the bracket.  Decide first, then act, as a ladder programmer would:
 
-    * Each destination has one writer.  A Boolean destination whose values
-      are all ``True``/``False`` (or ``1``/``0``) is one ``out(dest)`` whose
-      condition folds the ordered rules (a ``True`` rule ORs its guard in, a
-      ``False`` rule ANDs its complement in).  Any other destination has one
-      ``copy`` per distinct value, guarded by "the last active rule has this
-      value", so its copies are exclusive.
-    * A destination whose guards read another destination sits above that
-      destination's writer.
-    * A guard that would still read an earlier write (a cycle between
-      destinations, a multi-copy destination whose guards read itself, or a
-      complement with no contact form) is first solved onto an internal
-      ``__frz{n}__{dest}`` bit at the top of the rung, and the writers read
-      that bit instead: decide first, then act, as a ladder programmer would.
+    * A destination with two or more rules gives each rule a bit of its own,
+      ``__on{n}__{dest}`` or ``__off{n}__{dest}`` for a Boolean value and
+      ``__set{n}__{dest}`` for any other, numbered from 1 by kind in rule
+      order.  Every bit row sits at the top of the rung, above every
+      destination row, so each bit reads the state the bracket starts from.
+    * A Boolean destination whose values are all ``True``/``False`` (or
+      ``1``/``0``) is then one ``out(dest)`` over its bits (a ``True`` rule
+      ORs its bit in, a ``False`` rule ANDs the bit's complement in).  Any
+      other destination has one ``copy`` per bit, in rule order, so the last
+      active rule writes last.  A Boolean destination given any other value
+      gets a reset row above its copies, so it is off when no rule is on.
+    * A destination with one rule is one row on its guard.  It sits above
+      every destination its guard reads.  Its rule takes a bit instead in
+      these cases:
+
+      - its guard would still read an earlier write (a cycle between
+        destinations)
+      - its destination is a Boolean given another value, whose reset row
+        comes first
+      - it is a kept ``False`` rule whose guard has no exact complement
+
+    * A rule that can never decide the value is left out.  That is every rule
+      before an unguarded one, and a ``False`` rule before every ``True`` rule
+      of a Boolean destination.
     """
     return _guarded_rows(list(rules), keep=False)
 
@@ -365,7 +377,7 @@ def _condition_or(term: Any, rest: Any) -> Any:
         return rest
     if rest is _NEVER:
         return term
-    # One flat Or, not an Or inside an Or: the same logic, and it prints as one contact list.
+    # One flat Or prints as one contact list.  An Or inside an Or is the same logic.
     return AnyCondition(*_flat(AnyCondition, term), *_flat(AnyCondition, rest))
 
 
@@ -386,7 +398,7 @@ def _flat(kind: type, condition: Any) -> tuple[Any, ...]:
 
 
 class _NotExact(Exception):
-    """A contact the simplifier can't treat as a plain value: the condition is left as it is."""
+    """A contact the simplifier can't treat as a plain value.  The condition is left as it is."""
 
 
 _EXACT_FLIPS = {
@@ -404,12 +416,20 @@ _EXACT_FLIPS = {
 def _simplified(condition: Any) -> Any:
     """*condition* without terms that cannot change it, or *condition* as it was.
 
-    Combining rules leaves terms a ladder programmer would cut: a contact already required
-    beside an Or that contains it, a branch needing a contact the rest of the rung has open.
-    Only exact rules are used (``simplified.simplify``, and inside an And each part may assume
-    the contacts beside it hold, inside an Or that they don't), so the rung does the same.  A
-    condition holding an edge contact (it keeps memory of its own), an immediate contact, an
-    indirect or computed compare, or anything opaque is left alone.
+    Combining rules leaves terms a ladder programmer would cut.  Two examples are a contact
+    already required beside an Or that contains it, and a branch that needs a contact the rest
+    of the rung has open.  Only exact rules are used, so the rung does the same:
+
+    - the rules of ``simplified.simplify``
+    - inside an And, each part may assume the contacts beside it are closed
+    - inside an Or, each part may assume the contacts beside it are open
+
+    These leave the condition as it was:
+
+    - an edge contact, which keeps memory of its own
+    - an immediate contact
+    - an indirect or computed compare
+    - anything opaque
     """
     from pyrung.core.analysis.simplified import (
         And,
@@ -440,6 +460,8 @@ def _simplified(condition: Any) -> Any:
     plain = (BitCondition, NormallyClosedCondition, IntTruthyCondition)
     compares = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
     originals: dict[tuple[Any, ...], Any] = {}
+    # Ordered compares that may see a NaN.  Each is false when its opposite is false too.
+    unflippable: set[tuple[Any, ...]] = set()
 
     def lower(part: Any) -> Any:
         kind = type(part)
@@ -455,16 +477,18 @@ def _simplified(condition: Any) -> Any:
             and part.tag.type == TagType.BOOL
             and isinstance(part.value, bool)
         ):
-            # A Bool compared to a constant is a contact, and prints as one: one key for both.
+            # A Bool compared to a constant is a contact and prints as one, so both get one key.
             closed = part.value is (kind is CompareEq)
             part = BitCondition(part.tag) if closed else NormallyClosedCondition(part.tag)
         atom = _condition_to_expr(part)
         originals.setdefault(_expr_key(atom), part)
+        if kind in compares and kind not in (CompareEq, CompareNe) and not _nan_free(part):
+            unflippable.add(_expr_key(atom))
         return atom
 
     def flip(atom: Any) -> tuple[Any, ...] | None:
         form = _EXACT_FLIPS.get(atom.form)
-        if form is None:
+        if form is None or _expr_key(atom) in unflippable:
             return None
         return _expr_key(Atom(atom.tag, form, atom.operand, operand_is_tag=atom.operand_is_tag))
 
@@ -510,7 +534,7 @@ def _simplified(condition: Any) -> Any:
 
 
 def _flattened(condition: Any) -> Any:
-    """*condition* with no And directly inside an And, nor Or inside an Or: the same logic."""
+    """*condition* as the same logic with no And directly inside an And, nor Or inside an Or."""
     from pyrung.core.condition import AllCondition, AnyCondition
 
     kind = type(condition)
@@ -522,13 +546,36 @@ def _flattened(condition: Any) -> Any:
     return kind(*parts)
 
 
+def _nan_free(compare: Any) -> bool:
+    """True when neither side of *compare* can be NaN.
+
+    ``R < 5`` and ``R >= 5`` are both False when ``R`` holds NaN, so one is the other's
+    complement only when no side is a ``Real``.
+    """
+    from pyrung.core.tag import ImmediateRef, Tag, TagType
+
+    def plain(operand: Any) -> bool:
+        if isinstance(operand, ImmediateRef):
+            operand = operand.value
+        if isinstance(operand, Tag):
+            return operand.type != TagType.REAL
+        if isinstance(operand, float):
+            return operand == operand
+        return isinstance(operand, int)
+
+    return plain(compare.tag) and plain(compare.value)
+
+
 def _condition_complement(condition: Any) -> Any | None:
     """The exact complement of *condition* in contact form, or ``None``.
 
-    Compares, contacts and INT truthiness have a complement contact; ``And`` and
-    ``Or`` complement by De Morgan; a condition may supply ``_complement()``.
-    Edge contacts (they keep memory of their own) and anything else opaque have
-    no complement here, so the caller freezes them onto a bit instead.
+    Compares, contacts and INT truthiness have a complement contact.  ``And`` and
+    ``Or`` complement by De Morgan, and a condition may supply ``_complement()``.
+    These have none, so the caller puts the rule on a bit instead:
+
+    - an edge contact, which keeps memory of its own
+    - an ordered compare that reads a ``Real``, which may hold NaN
+    - anything else opaque
     """
     from pyrung.core.condition import (
         AllCondition,
@@ -559,6 +606,8 @@ def _condition_complement(condition: Any) -> Any | None:
     }
     kind = type(condition)
     if kind in complements:
+        if kind not in (CompareEq, CompareNe) and not _nan_free(condition):
+            return None
         return complements[kind](condition.tag, condition.value)
     if kind is BitCondition:
         return NormallyClosedCondition(condition.tag)
@@ -588,44 +637,54 @@ def _static_reads(condition: Any) -> set[str]:
     return _extract_tag_names(condition, {})
 
 
-def _value_key(value: Any) -> Any:
-    return ("const", value)
-
-
 def _is_bool_constant(value: Any) -> bool:
     return isinstance(value, bool) or (type(value) is int and value in (0, 1))
 
 
 @dataclass
 class _DestRules:
-    """One destination's ordered ``(rule index, value, guard)`` rules."""
+    """One destination's ordered ``(value, guard)`` rules."""
 
     dest: Tag
-    rules: list[tuple[int, Any, Any]]
+    rules: list[tuple[Any, Any]]
 
     @property
     def coil(self) -> bool:
         from pyrung.core.tag import TagType
 
         return self.dest.type == TagType.BOOL and all(
-            _is_bool_constant(value) for _index, value, _guard in self.rules
+            _is_bool_constant(value) for value, _guard in self.rules
         )
 
-    def row_count(self, *, keep: bool) -> int:
-        from pyrung.core.tag import TagType
+    def deciding(self, *, keep: bool) -> list[tuple[Any, Any]]:
+        """The rules that can decide the value, in order."""
+        rules = [(value, guard) for value, guard in self.rules if guard is not _NEVER]
+        unguarded = [index for index, (_value, guard) in enumerate(rules) if guard is _ALWAYS]
+        if unguarded:
+            # An unguarded rule is always on, so no earlier rule is ever the last one on.
+            rules = rules[unguarded[-1] :]
+        if self.coil and not keep:
+            # A coil with no rule on is off anyway.  So a False rule before every True one
+            # changes nothing.
+            first_on = next((index for index, (value, _g) in enumerate(rules) if value), None)
+            rules = [] if first_on is None else rules[first_on:]
+        return rules
 
-        if self.coil:
-            return 1
-        values = {_value_key(value) for _index, value, _guard in self.rules}
-        if not keep and self.dest.type == TagType.BOOL:
-            values.add(_value_key(False))
-        return len(values)
+    def bit_kind(self, value: Any) -> str:
+        return (_ON if value else _OFF) if self.coil else _SET
 
-    def reads(self) -> set[str]:
-        found: set[str] = set()
-        for _index, _value, guard in self.rules:
-            found |= _static_reads(guard)
-        return found
+
+_ON, _OFF, _SET = "on", "off", "set"
+# The debugger hides the same names (``pyrung.dap.internal_tags``).
+RULE_BIT_PREFIX = rf"__(?:{_ON}|{_OFF}|{_SET})\d+__"
+_RULE_BIT = re.compile(rf"{RULE_BIT_PREFIX}(?=.)", re.DOTALL)
+_DECIDE_FIRST_COMMENT = (
+    "Decide first, so the rows below read the state from before this logic wrote."
+)
+
+
+def _is_rule_bit(name: str | None) -> bool:
+    return name is not None and _RULE_BIT.match(name) is not None
 
 
 def _guarded_rows(
@@ -638,7 +697,7 @@ def _guarded_rows(
     ``keep`` leaves a destination with no active rule at its value; otherwise a
     Boolean destination returns to ``False``.  See :func:`guarded_copy_rung`.
     """
-    from pyrung.core.condition import BitCondition, NormallyClosedCondition, _as_condition
+    from pyrung.core.condition import BitCondition, _as_condition
     from pyrung.core.instruction.coils import OutInstruction, ResetInstruction
     from pyrung.core.tag import Bool, TagType
 
@@ -650,14 +709,50 @@ def _guarded_rows(
                 "a constant (bool, int, float or str); a tag or expression value would "
                 "be read after earlier writes of the bracket"
             )
+        guard = _ALWAYS if guard is None else _simplified(_flattened(_as_condition(guard)))
+        # The bracket writes its rule bits by name, so a tag of the same name would be
+        # overwritten under the rule that reads or drives it.
+        for name in sorted({dest.name, *_static_reads(guard)}):
+            if _is_rule_bit(name):
+                raise ValueError(
+                    f"synthesis bracket rule {index} for {dest.name}: tag {name!r} is named "
+                    "like a bit the bracket adds. Rename it."
+                )
         group = groups.setdefault(dest.name, _DestRules(dest, []))
-        group.rules.append(
-            (index, value, _ALWAYS if guard is None else _flattened(_as_condition(guard)))
-        )
-    reads = {name: group.reads() for name, group in groups.items()}
+        group.rules.append((value, guard))
+    deciding = {name: group.deciding(keep=keep) for name, group in groups.items()}
 
-    # A destination goes above every destination its guards read.  A cycle is
-    # broken at the earliest destination in rule order.
+    def single_row(group: _DestRules, value: Any, guard: Any) -> Rung | None:
+        """The one row a lone rule needs, or None when its guard must go on a bit."""
+        dest = group.dest
+        if not group.coil:
+            if not keep and dest.type == TagType.BOOL:
+                # Its reset comes before its copy, so the copy's guard goes on a bit.
+                return None
+            return copy_hold_rung(value=value, dest=dest, guard=_none_if_always(guard))
+        power: Any = BitCondition(dest) if keep else _NEVER
+        if value:
+            power = _condition_or(power, guard)
+        elif power is not _NEVER:
+            negated = _condition_complement(guard)
+            if negated is None:
+                return None
+            power = _condition_and(power, negated)
+        return coil_row(dest, power)
+
+    def coil_row(dest: Tag, power: Any) -> Rung:
+        power = _simplified(power)
+        if power is _NEVER:
+            return _rung_holding(None, ResetInstruction(dest))
+        return _rung_holding(None if power is _ALWAYS else power, OutInstruction(dest))
+
+    # A destination goes above every destination its guard reads.  A destination on bits reads
+    # only its bits, which sit above them all.  A cycle is broken at the earliest destination in
+    # rule order.
+    reads = {
+        name: _static_reads(deciding[name][0][1]) if len(deciding[name]) == 1 else set()
+        for name in groups
+    }
     order: list[str] = []
     pending = list(groups)
     while pending:
@@ -672,74 +767,64 @@ def _guarded_rows(
         order.append(ready)
         pending.remove(ready)
 
-    frozen: dict[int, Any] = {}
-    frozen_rows: list[Rung] = []
+    bit_rows: list[Rung] = []
     writer_rows: list[Rung] = []
-
-    def freeze(index: int, dest: Tag, guard: Any) -> Any:
-        bit = frozen.get(id(guard))
-        if bit is None:
-            tag = Bool(f"{_FREEZE_PREFIX}{index}__{dest.name}", retentive=False)
-            row = _rung_holding(guard, OutInstruction(tag))
-            row.comment = _FREEZE_COMMENT
-            frozen_rows.append(row)
-            bit = frozen[id(guard)] = BitCondition(tag)
-        return bit
-
-    def complement(index: int, dest: Tag, guard: Any) -> Any:
-        negated = _condition_complement(guard)
-        if negated is not None:
-            return negated
-        return NormallyClosedCondition(freeze(index, dest, guard).tag)
-
     written: set[str] = set()
     for name in order:
         group = groups[name]
         dest = group.dest
-        unsafe = set(written)
-        if group.row_count(keep=keep) > 1:
-            unsafe.add(name)
-        guards = [
-            (index, value, freeze(index, dest, guard) if _static_reads(guard) & unsafe else guard)
-            for index, value, guard in group.rules
-        ]
+        kept = deciding[name]
+        reads_a_write = len(kept) == 1 and bool(_static_reads(kept[0][1]) & written)
+        written.add(name)
+        if not kept:
+            if not keep and dest.type == TagType.BOOL:
+                # No rule can turn it on, so it is off for as long as the logic is in.
+                writer_rows.append(_rung_holding(None, ResetInstruction(dest)))
+            continue
+        if len(kept) == 1 and not reads_a_write:
+            row = single_row(group, *kept[0])
+            if row is not None:
+                writer_rows.append(row)
+                continue
+
+        counts: dict[str, int] = {}
+        conditions: list[tuple[Any, Any]] = []
+        for value, guard in kept:
+            if guard is _ALWAYS:
+                conditions.append((value, _ALWAYS))
+                continue
+            kind = group.bit_kind(value)
+            counts[kind] = counts.get(kind, 0) + 1
+            bit = Bool(f"__{kind}{counts[kind]}__{dest.name}", retentive=False)
+            row = _rung_holding(guard, OutInstruction(bit))
+            row.comment = _DECIDE_FIRST_COMMENT
+            bit_rows.append(row)
+            conditions.append((value, BitCondition(bit)))
 
         if group.coil:
             power: Any = BitCondition(dest) if keep else _NEVER
-            for index, value, guard in guards:
+            for value, condition in conditions:
                 if value:
-                    power = _condition_or(guard, power)
+                    power = _condition_or(power, condition)
                 elif power is not _NEVER:
-                    power = _condition_and(complement(index, dest, guard), power)
-            power = _simplified(power)
-            if power is _NEVER:
-                writer_rows.append(_rung_holding(None, ResetInstruction(dest)))
-            else:
-                condition = None if power is _ALWAYS else power
-                writer_rows.append(_rung_holding(condition, OutInstruction(dest)))
-        else:
-            buckets: dict[Any, list[Any]] = {}
-            if not keep and dest.type == TagType.BOOL:
-                buckets[_value_key(False)] = [False, _ALWAYS]
-            for index, value, guard in guards:
-                key = _value_key(value)
-                buckets.setdefault(key, [value, _NEVER])
-                for bucket_key, bucket in buckets.items():
-                    if bucket_key == key:
-                        bucket[1] = _condition_or(guard, bucket[1])
-                    elif bucket[1] is not _NEVER:
-                        bucket[1] = _condition_and(complement(index, dest, guard), bucket[1])
-            for value, power in buckets.values():
-                power = _simplified(power)
-                if power is not _NEVER:
-                    condition = None if power is _ALWAYS else power
-                    writer_rows.append(copy_hold_rung(value=value, dest=dest, guard=condition))
-        written.add(name)
+                    power = _condition_and(power, _condition_complement(condition))
+            writer_rows.append(coil_row(dest, power))
+            continue
+        if not keep and dest.type == TagType.BOOL:
+            writer_rows.append(_rung_holding(None, ResetInstruction(dest)))
+        for value, condition in conditions:
+            writer_rows.append(
+                copy_hold_rung(value=value, dest=dest, guard=_none_if_always(condition))
+            )
 
     outer = Rung()
-    for row in (*frozen_rows, *writer_rows):
+    for row in (*bit_rows, *writer_rows):
         outer.add_branch(row)
     return outer
+
+
+def _none_if_always(condition: Any) -> Any:
+    return None if condition is _ALWAYS else condition
 
 
 def _row_target(instruction: Any) -> Any:
@@ -768,11 +853,11 @@ def _render_row(row: Rung) -> tuple[str, str]:
 def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str, ...]:
     """The rows of a rung built here, as pyrung source, read off the rung itself.
 
-    Printing the rung that runs is what keeps the text honest: nothing re-reads the rules it
-    was built from.  With *writes*, only the rows writing those tags are printed, and above them
-    the decide-first rows whose bits they read.  A row's comment prints above it, once for a run
-    of rows with the same comment.  Rows that share a condition print under one ``with rung(...)``
-    line unless a comment comes between them.
+    The text comes from the rung that runs, not from the rules it was built from, so the two
+    cannot disagree.  With *writes*, only the rows writing those tags are printed, and above them
+    the bit rows they read.  A row's comment prints above it, once for a run of rows with the
+    same comment.  Rows that share a condition print under one ``with rung(...)`` line unless a
+    comment comes between them.
     """
     rows = list(rung._branches)
     if writes is not None:
@@ -786,8 +871,7 @@ def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str,
         rows = [
             row
             for row in rows
-            if id(row) in kept_ids
-            or ((_row_writes(row) or "").startswith(_FREEZE_PREFIX) and _row_writes(row) in reads)
+            if id(row) in kept_ids or (_is_rule_bit(_row_writes(row)) and _row_writes(row) in reads)
         ]
     lines: list[str] = []
     previous: str | None = None
@@ -804,10 +888,6 @@ def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str,
             previous = header
         lines.append(f"  {code}")
     return tuple(lines)
-
-
-_FREEZE_PREFIX = "__frz"
-_FREEZE_COMMENT = "Decide first, so the rows below read the state from before this logic wrote."
 
 
 def function_rung(

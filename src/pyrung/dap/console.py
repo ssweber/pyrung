@@ -633,7 +633,7 @@ class _PilotProgressFormatter:
         compact: list[str] = []
         for line in rules_logic(tuple(unique)):
             if line.startswith("comment("):
-                # One line per rung leaves no room for its comment; the plan text prints it.
+                # One line per rung leaves no room for its comment.  The plan text prints it.
                 continue
             if line.startswith("  ") and compact and compact[-1].startswith("with rung("):
                 compact[-1] = (

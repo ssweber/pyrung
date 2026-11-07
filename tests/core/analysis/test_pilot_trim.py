@@ -101,8 +101,15 @@ def test_logic_a_set_cannot_stand_in_for_stays(monkeypatch):
         "with rung(HoldState != 7):\n     out(HoldStableOff.Done)",
     ):
         assert logic in text
-    # The sensor's second rule rebuilds its one row: the text says which earlier step it replaces.
-    assert "comment(" not in text
+    # The sensor's rules each decide a bit, and one row drives the sensor from them.  The second
+    # install rebuilds them.  The text says which earlier step it replaces.
+    assert (
+        "   with rung(HoldStableOff.TT):\n"
+        "     out(__off2__HoldSensor)\n"
+        "   with rung(Or(And(__on1__HoldSensor, ~__off1__HoldSensor), __on2__HoldSensor), "
+        "~__off2__HoldSensor):\n"
+        "     out(HoldSensor)\n"
+    ) in text
     assert "This replaces the logic for HoldSensor from step 3." in text
     assert "Temporary logic in effect: steps 5, 7, and 9." in text
     replayed = plan.replay()

@@ -14,6 +14,8 @@ Coverage targets:
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
@@ -466,6 +468,38 @@ class TestPilotRungs:
         plc.step()
         plc.step()
         assert plc.state.tags[In.name] is effective.value
+
+    def test_progress_on_a_real_holding_nan_keeps_its_meaning(self):
+        """Progress that needs ``Level < 5`` False is in flight at NaN, though ``Level >= 5`` is False."""
+        from pyrung import Real
+
+        In = Bool("NanIn", external=True)
+        Scope = Bool("NanScope", external=True)
+        Go = Bool("NanGo", external=True)
+        Level = Real("NanLevel", external=True)
+        with Program() as prog:
+            with Rung(In, Scope, Go, Level > 0):
+                out(Bool("NanOut"))
+        plc = PLC(prog, dt=0.010)
+        in_flight = PilotRung(
+            In.name,
+            True,
+            ~Scope,
+            OperationReceipt(In, ConditionDemand(CompareLt(Level, 5), False)),
+        )
+        other = PilotRung(In.name, False, Go)
+        values = {Scope.name: True, Go.name: True, Level.name: math.nan}
+        snapshot = dict(plc.state.tags)
+        snapshot.update(values)
+
+        receipt = _pilot_rung_execution_receipt((in_flight, other), snapshot)
+
+        assert receipt.owner(In.name) is in_flight
+        _set_pilot_rungs(plc, (in_flight, other))
+        plc.patch(values)
+        plc.step()
+        plc.step()
+        assert plc.state.tags[In.name] is True
 
     def test_operation_progress_continues_after_its_start_guard_closes(self):
         In = Bool("ProgressLifetime_In", external=True)

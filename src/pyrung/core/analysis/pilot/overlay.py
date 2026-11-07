@@ -425,14 +425,11 @@ def _pilot_rung_execution_receipt(
 ) -> PilotOverlayExecution:
     """Classify every installed rule using the compiler's exact expansion.
 
-    All conditions read one snapshot: the state the holds start from.  That is
-    what :func:`guarded_copy_rung` means by every guard, and it lays its rung
-    out (one writer per destination, rules frozen onto bits where a guard would
-    otherwise read an earlier write) so that running it agrees.  The last
-    active expanded rule for each destination is the effective owner.  Earlier
-    active starts remain eligible, earlier active continuation branches remain
-    continuing, and an operation prevented from starting by a peer's progress
-    is shadowed.
+    All conditions read one snapshot, the state the holds start from.  Every guard of
+    :func:`guarded_copy_rung` means that state too, and the rung it builds agrees when it
+    runs.  The last active expanded rule for each destination is the effective owner.
+    Earlier active starts remain eligible, earlier active continuation branches remain
+    continuing, and an operation prevented from starting by a peer's progress is shadowed.
     """
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.condition import _as_condition
@@ -552,8 +549,8 @@ def pilot_logic_at(recording: PLC, scan: int) -> Any | None:
 def pilot_rules_rung(pilot_rungs: Iterable[PilotRung], tags: Mapping[str, Any]) -> Any | None:
     """*pilot_rungs* built into a rung on their own, as :func:`_set_pilot_rungs` builds them.
 
-    For logic that has not run: a proposal, or a step built by hand.  A tag missing from *tags*
-    stands in by its value's type, which is all the build reads from it.
+    This is for logic that has not run, such as a proposal or a step built by hand.  A tag
+    missing from *tags* stands in by its value's type, which is all the build reads from it.
     """
     from pyrung.core.synthesis import guarded_copy_rung
     from pyrung.core.tag import Bool, Char, Int, Real

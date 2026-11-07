@@ -2,8 +2,8 @@
 
 pyrung adds tags of its own to a running program:
 
-- ``__frz{n}__{dest}``: the freeze bit of a synthesis bracket
-  (``pyrung.core.synthesis``).
+- ``__on{n}__{dest}``, ``__off{n}__{dest}``, ``__set{n}__{dest}``: the bit
+  of one rule of a synthesis bracket (``pyrung.core.synthesis``).
 - ``__cpl_ond__``, ``__cpl_on__``, ``__cpl_off__``, ``__cpl_armed__``
   ``{feedback}``: the delay timers of a harness coupling
   (``pyrung.core.harness``).
@@ -22,17 +22,20 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import TypeVar
 
+from pyrung.core.synthesis import RULE_BIT_PREFIX
+
 _V = TypeVar("_V")
 
 _INTERNAL_TAG_PREFIX = re.compile(
-    r"__(?:frz\d+|cpl_(?:ond|armed|(?:on|off)(?:_T[smhd])?)"
-    r"|pls_(?:ond|offd|(?:on|off)(?:_T[smhd])?))__(?=.)",
+    rf"(?:{RULE_BIT_PREFIX}"
+    r"|__(?:cpl_(?:ond|armed|(?:on|off)(?:_T[smhd])?)"
+    r"|pls_(?:ond|offd|(?:on|off)(?:_T[smhd])?))__)(?=.)",
     re.DOTALL,
 )
 
 
 def is_internal_tag_name(name: str) -> bool:
-    """True for a tag pyrung adds itself (a bracket freeze bit, a harness timer)."""
+    """True for a tag pyrung adds itself (a bracket's rule bit, a harness timer)."""
     return _INTERNAL_TAG_PREFIX.match(name) is not None
 
 

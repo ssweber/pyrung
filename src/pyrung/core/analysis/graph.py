@@ -41,8 +41,11 @@ class PlanStep:
     rungs: tuple[Any, ...] = ()
     source: str = ""
     # The temporary logic this step put in (or took out), printed from the rung that ran, so the
-    # text cannot drift from it.  Empty for a step built by hand: its rules are built alone.
+    # text cannot drift from it.  A step built by hand leaves it empty, and the text builds its
+    # rules alone.
     logic: tuple[str, ...] = ()
+    # The logic that runs after a removal that leaves some of a tag's rules in.
+    kept_logic: tuple[str, ...] = ()
 
 
 def _format_value(value: Any) -> str:
@@ -155,24 +158,54 @@ def _format_rung_install(
     next_step: int | None = None,
 ) -> str:
     """Print the temporary logic a step put in, as it ran."""
-    line = f"{prefix} Install temporary logic{_source_suffix(step.source, next_step=next_step)}:"
-    detail = [f"   {logic}" for logic in step.logic or rules_logic(step.rungs)]
+    source = _source_suffix(step.source, next_step=next_step)
+    logic = step.logic or rules_logic(step.rungs)
+    if logic:
+        line = f"{prefix} Install temporary logic{source}:"
+    else:
+        # A non-Bool tag whose every condition is never true gets no row at all.
+        line = (
+            f"{prefix} Install temporary logic for {_step_tags(step)}{source}."
+            " None of its conditions can be true, so it writes nothing."
+        )
+    detail = [f"   {row}" for row in logic]
     for tag, earlier in (replaced or {}).items():
         detail.append(f"   This replaces the logic for {tag} from step {earlier}.")
     detail.extend(f"   {_format_plan_note(note)}" for note in step.notes)
     return "\n".join((line, *detail))
 
 
+def _step_tags(step: PlanStep) -> str:
+    return ", ".join(dict.fromkeys(rung.dest for rung in step.rungs))
+
+
 def _format_rung_revoke(
     prefix: str,
     step: PlanStep,
     installed_steps: tuple[int, ...],
+    *,
+    ran: tuple[Any, ...] = (),
+    kept: tuple[str, ...] = (),
 ) -> str:
-    """Print the temporary logic a step took out, as it ran until then."""
+    """Print the temporary logic a step took out, as it ran until then.
+
+    *ran* is every rule of the step's tags until then, for a step no recording printed.  With
+    *kept*, some of those rules stay in, and the text shows the logic before and after.
+    """
     origin = f" from {_format_step_refs(installed_steps)}" if installed_steps else ""
-    line = f"{prefix} Remove temporary logic{origin}:"
-    detail = [f"   {logic}" for logic in step.logic or rules_logic(step.rungs)]
-    return "\n".join((line, *detail))
+    logic = step.logic or rules_logic(ran or step.rungs)
+    if kept:
+        return "\n".join(
+            (
+                f"{prefix} Remove some of the temporary logic{origin}. Until now it ran as:",
+                *(f"   {row}" for row in logic),
+                "   From here on it runs as:",
+                *(f"   {row}" for row in kept),
+            )
+        )
+    if not logic:
+        return f"{prefix} Remove temporary logic for {_step_tags(step)}{origin}. It wrote nothing."
+    return "\n".join((f"{prefix} Remove temporary logic{origin}:", *(f"   {row}" for row in logic)))
 
 
 def _rung_coast_summary(rungs: tuple[Any, ...], *, same_holds: bool = False) -> list[str]:
@@ -290,6 +323,8 @@ def _format_plan_step(
     same_holds: bool = False,
     control_steps: tuple[int, ...] = (),
     replaced: dict[str, int] | None = None,
+    ran: tuple[Any, ...] = (),
+    kept: tuple[str, ...] = (),
 ) -> str:
     prefix = f"{idx}."
 
@@ -306,7 +341,7 @@ def _format_plan_step(
         return _with_notes(f"{prefix} Keep {tags}.")
 
     if step.kind == "revoke":
-        return _format_rung_revoke(prefix, step, control_steps)
+        return _format_rung_revoke(prefix, step, control_steps, ran=ran, kept=kept)
 
     if step.kind == "patch":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
@@ -580,16 +615,55 @@ class Plan:
                 lines.extend(("", step_line))
         if self.journal:
             lines.extend(("",) if leading else ("", "Steps:", ""))
+            from pyrung.core.analysis.pilot.world_key import _rung_identity
+
             previous_holds: tuple[Any, ...] | None = None
-            # The step that last printed each tag's row: the temporary logic has one row per
-            # tag, so a later step writing the same tag prints a row that replaces it.
+            # The step whose text last showed each tag's logic.  A later step that changes the
+            # tag's logic says which step's logic it replaces.
             installed_at: dict[str, int] = {}
-            for i, step in enumerate(self.journal, first_step):
+            # Each rule in so far, with the step that put it in.  A removal can take out some of
+            # a tag's rules and leave the rest.
+            rules_in: dict[tuple[Any, ...], tuple[Any, int]] = {}
+            for j, (i, step) in enumerate(enumerate(self.journal, first_step)):
                 dests = dict.fromkeys(rung.dest for rung in step.rungs)
                 earlier = {dest: installed_at[dest] for dest in dests if dest in installed_at}
+                control = tuple(sorted(set(earlier.values())))
+                ran: tuple[Any, ...] = ()
+                kept: tuple[str, ...] = ()
                 if step.kind == "force":
                     for dest in dests:
                         installed_at[dest] = i
+                    for rung in step.rungs:
+                        rules_in[_rung_identity(rung)] = (rung, i)
+                elif step.kind == "revoke":
+                    ran = tuple(rung for rung, _i in rules_in.values() if rung.dest in dests)
+                    gone = [_rung_identity(rung) for rung in step.rungs]
+                    # The steps that put in the rules this one takes out.
+                    put_in_by = {rules_in[key][1] for key in gone if key in rules_in}
+                    if put_in_by:
+                        control = tuple(sorted(put_in_by))
+                    for key in gone:
+                        rules_in.pop(key, None)
+                    left = tuple(rung for rung, _i in rules_in.values() if rung.dest in dests)
+                    # Logic put in on the same scan prints the tag's whole logic itself.
+                    rebuilt = any(
+                        later.kind == "force"
+                        and later.scan == step.scan
+                        and any(rung.dest in dests for rung in later.rungs)
+                        for later in self.journal[j + 1 :]
+                    )
+                    # The recording also knows rules put in before the plan's first step.
+                    kept_dests = {rung.dest for rung in left} or (
+                        set(dests) if step.kept_logic else set()
+                    )
+                    if kept_dests and not rebuilt:
+                        kept = step.kept_logic or rules_logic(left)
+                    for dest in dests:
+                        if dest in kept_dests:
+                            if not rebuilt:
+                                installed_at[dest] = i
+                        else:
+                            installed_at.pop(dest, None)
                 holds = step.rungs or tuple(step.steady_holds)
                 same_holds = step.kind == "coast" and bool(holds) and holds == previous_holds
                 lines.append(
@@ -598,13 +672,12 @@ class Plan:
                         step,
                         dt=dt,
                         same_holds=same_holds,
-                        control_steps=tuple(sorted(set(earlier.values()))),
+                        control_steps=control,
                         replaced=earlier,
+                        ran=ran,
+                        kept=kept,
                     )
                 )
-                if step.kind == "revoke":
-                    for dest in dests:
-                        installed_at.pop(dest, None)
                 if step.kind == "coast" and holds:
                     previous_holds = holds
                 if i != len(self.journal) + first_step - 1:

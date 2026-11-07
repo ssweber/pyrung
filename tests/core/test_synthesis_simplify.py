@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import itertools
+import math
 import random
 from typing import Any
 
-from pyrung import Bool, Int, rise
+from pyrung import Bool, Int, Real, rise
 from pyrung.core.condition import AllCondition, AnyCondition
 from pyrung.core.synthesis import _ALWAYS, _NEVER, _simplified
 
 A, B, C = Bool("A"), Bool("B"), Bool("C")
 N = Int("N")
+R = Real("R")
 
 
 class _Values:
@@ -58,16 +60,23 @@ def _leaf(rng: random.Random) -> Any:
             N >= 2,
             N > 0,
             N <= 0,
+            R < 2,
+            R >= 2,
+            R > 0,
+            R <= 0,
+            R == 1.0,
+            R != 1.0,
         ]
     )
 
 
 def test_a_simplified_condition_has_the_same_truth_table():
     rng = random.Random(20261107)
+    # A Real holding NaN fails every ordered compare, R < 2 and R >= 2 alike.
     states = [
-        {"A": a, "B": b, "C": c, "N": n}
-        for a, b, c, n in itertools.product(
-            (False, True), (False, True), (False, True), range(-1, 4)
+        {"A": a, "B": b, "C": c, "N": n, "R": r}
+        for a, b, c, n, r in itertools.product(
+            (False, True), (False, True), (False, True), range(-1, 4), (math.nan, -1.0, 1.0, 3.0)
         )
     ]
     shrunk = 0
@@ -95,3 +104,40 @@ def test_an_edge_contact_leaves_the_condition_as_it_is():
     condition = AllCondition(rise(A), AnyCondition(rise(A), B))
 
     assert _simplified(condition) is condition
+
+
+def test_an_ordered_compare_on_a_real_is_no_complement_of_its_opposite():
+    from pyrung.core.condition import CompareGe
+    from pyrung.core.synthesis import _condition_complement
+
+    either = AnyCondition(R < 5, R >= 5)
+    nan = {"A": False, "B": True, "C": False, "N": 0, "R": math.nan}
+
+    assert _simplified(either) is not _ALWAYS
+    assert _truth(_simplified(either), nan) is False
+    kept = AnyCondition(R < 5, AllCondition(R >= 5, B))
+    assert _truth(_simplified(kept), nan) is False
+    assert _condition_complement(R < 5) is None
+    assert _condition_complement(AllCondition(B, R >= 5)) is None
+    assert type(_condition_complement(N < 5)) is CompareGe
+
+
+def test_a_real_holding_nan_fails_both_rules_and_the_tag_follows_the_other():
+    from pyrung import PLC, Program, Rung, copy
+    from pyrung.core.analysis.pilot.overlay import _set_synth_holds
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    D = Bool("D")
+    with Program(strict=False) as prog:
+        with Rung(B, D, R > 100):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"R": math.nan, "B": True})
+    plc.step()
+    _set_synth_holds(
+        plc, [guarded_copy_rung([(D, True, B), (D, False, AnyCondition(R < 5, R >= 5))])]
+    )
+
+    plc.step()
+
+    assert plc.state.tags["D"] is True
