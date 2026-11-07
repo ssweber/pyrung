@@ -34,22 +34,22 @@ class JitStats:
     """What the jit did while this collector was on."""
 
     def __init__(self) -> None:
-        # Calls by kind: run_for()/run_until() and coast_until().
+        # Calls of run_for()/run_until() and coast_until(), by kind.
         self.calls: Counter[str] = Counter()
-        # Scans by where they ran: in the loop, as real compiled scans, interpreted, and
-        # the compiled scans that check a new trace.  The last are work, not committed scans.
+        # Scans by where they ran.  "self check" counts the compiled scans that check a new
+        # trace, which are work and not committed scans.
         self.scans: Counter[str] = Counter()
         # Each reason a run, an attempt or a trace stayed out of the loop.
         self.declines: Counter[str] = Counter()
-        # What ended each stretch: a guard's kernel source line, or a reason.
+        # What ended each stretch, as a guard's kernel source line or a reason.
         self.left_by: Counter[str] = Counter()
         # Guards that ended one path's loop in a coast, which then went on in another path.
         self.handed_over_by: Counter[str] = Counter()
-        # By the scans a stretch could have run: [stretches, scans run, scans it could have run].
+        # Stretches, scans run and scans they could have run, by bit length of the last.
         self.by_length: dict[int, list[int]] = {}
-        # Count and seconds of each costly step: compile, trace and loop writing.
+        # Count and seconds of each costly step, such as a compile or a trace.
         self.costs: dict[str, list[float]] = {}
-        # Other counts the loop keeps: traces built, misfires, self check mismatches.
+        # Other counts the loop keeps, such as traces built and misfires.
         self.events: Counter[str] = Counter()
 
     @property
@@ -107,7 +107,9 @@ class JitStats:
             lines.append(
                 "    (a stretch could have run on to the next guard that failed, or the run's end)"
             )
-            lines.append(f"    {'could run':>15} {'stretches':>10} {'scans run':>10} {'could have':>11}")
+            lines.append(
+                f"    {'could run':>15} {'stretches':>10} {'scans run':>10} {'could have':>11}"
+            )
             for bits in sorted(self.by_length):
                 count, used, could = self.by_length[bits]
                 low, high = 1 << (bits - 1), (1 << bits) - 1

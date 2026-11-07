@@ -74,6 +74,7 @@ import logging
 import math
 import operator
 import time
+import types
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -330,7 +331,7 @@ class KernelSource:
         }
 
     def snippet(self, guard: _Guard) -> str:
-        """Where *guard* came from, as the jit counters show it: function, line and text."""
+        """Where *guard* came from, as the jit counters show it, with function, line and text."""
         if guard.why:
             return guard.why
         key = (guard.line, guard.inner)
@@ -611,8 +612,8 @@ class _Op:
 class _Guard:
     leave_if: str
     uses: tuple[str, ...]
-    # Where it came from, for the jit counters: the kernel source line of the step function's
-    # statement and of the innermost statement (0 if none), or a reason a coast wrote it.
+    # Where the jit counters say it came from.  The lines are the kernel source lines of the
+    # step function's statement and of the innermost one, 0 if none.  A coast's guard has a why.
     line: int = 0
     inner: int = 0
     why: str = ""
@@ -1697,9 +1698,13 @@ _LEFT_ON_RAISE = -2
 _LEFT_ON_STOP = -3
 
 
+def _loop_globals(function: Callable[..., Any]) -> dict[str, Any]:
+    return cast("types.FunctionType", function).__globals__
+
+
 def start_counting_exit(function: Callable[..., Any]) -> None:
     """Clear what *function* says ended its last call.  The jit counters call this."""
-    function.__globals__["EXIT"][0] = _LEFT_AT_LIMIT
+    _loop_globals(function)["EXIT"][0] = _LEFT_AT_LIMIT
 
 
 def exit_of(function: Callable[..., Any], source: KernelSource) -> tuple[str, bool]:
@@ -1707,9 +1712,10 @@ def exit_of(function: Callable[..., Any], source: KernelSource) -> tuple[str, bo
 
     Ask only after :func:`start_counting_exit` and a call that ran fewer scans than its limit.
     """
-    left = function.__globals__["EXIT"][0]
+    names = _loop_globals(function)
+    left = names["EXIT"][0]
     if left >= 0:
-        return f"a guard at {source.snippet(function.__globals__['GUARDS'][left])}", True
+        return f"a guard at {source.snippet(names['GUARDS'][left])}", True
     if left == _LEFT_ON_RAISE:
         return "an operation raised", True
     if left == _LEFT_ON_STOP:
@@ -1889,7 +1895,9 @@ def _coast_guards(
         if free_to_move and type(after) is int and type(before) is int:
             delta = after - before
             guards.append(
-                _Guard(f"{new} - {old} != {delta!r}", uses, why=f"{name} moves by other than {delta}")
+                _Guard(
+                    f"{new} - {old} != {delta!r}", uses, why=f"{name} moves by other than {delta}"
+                )
             )
             if delta:
                 moved.append((name, delta))

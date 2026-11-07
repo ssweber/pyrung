@@ -46,12 +46,11 @@ an exact flip or a float ramp, and a ramp's values say ``Unknown``.
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
-
-import time
 
 from pyrung.core import compiled_run, jit_stats, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
@@ -821,7 +820,7 @@ def _try_stretch(
     previous: _Path | None = None
     burst = 0
     segments: list[_Segment] = []
-    # While the jit counters count: what ended the last firing, and whether a guard did.
+    # What ended the last firing and whether a guard did, while the jit counters count.
     left_by: tuple[str, bool] | None = None
 
     def fire(path: _Path) -> int:
@@ -1132,7 +1131,9 @@ def _coast_until(
             ):
                 wait = min(wait * 2, MAX_WAIT_AFTER_NONE)
                 if run is not None:
-                    jit_stats.add_decline("attempt: the stop predicate reads what a loop cannot watch")
+                    jit_stats.add_decline(
+                        "attempt: the stop predicate reads what a loop cannot watch"
+                    )
                 continue
             watched = monitored | {str(name) for name in traced}
         assert kernel is not None
