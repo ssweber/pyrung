@@ -149,6 +149,27 @@ def test_a_compare_that_may_read_nan_complements_to_its_opposite_or_a_nan_check(
     assert type(_condition_complement(N < M + 1)) is CompareGe
     assert type(_condition_complement(N < ints[M])) is CompareGe
     assert _condition_complement(CompareLt(R, math.nan)) is None
+    # Two big finite products can overflow to inf, and inf - inf is NaN.
+    overflow = N < M * 1e308 - M * 1e308
+    complement = _condition_complement(overflow)
+    assert type(complement) is AnyCondition
+    big = {"N": 5, "M": 10}
+    assert _truth(overflow, big) is False
+    assert _truth(complement, big) is True
+
+
+def test_a_nan_check_goes_beside_an_ordered_compare_on_the_same_tag():
+    from pyrung.core.condition import CompareEq
+    from pyrung.core.synthesis import _condition_complement
+
+    # The complement of the complement of R < 5 holds R == R, which R < 5 already implies.
+    twice = _simplified(_condition_complement(_condition_complement(R < 5)))
+    assert repr(twice) == "R < 5"
+    # With no ordered compare on R beside it, R == R is the only NaN check and stays.
+    assert "R == R" in repr(_simplified(AllCondition(B, CompareEq(R, R))))
+    for r in (math.nan, 1.0, 7.0):
+        values = {"A": False, "B": True, "C": False, "N": 0, "R": r}
+        assert _truth(twice, values) is (r < 5)
 
 
 def test_a_real_holding_nan_fails_both_rules_and_the_tag_follows_the_other():

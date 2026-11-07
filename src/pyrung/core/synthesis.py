@@ -23,7 +23,6 @@ program.
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -429,6 +428,7 @@ def _simplified(condition: Any) -> Any:
     - the rules of ``simplified.simplify``
     - inside an And, each part may assume the contacts beside it are closed
     - inside an Or, each part may assume the contacts beside it are open
+    - inside an And, ``X == X`` goes beside an ordered compare on ``X``, which is False at NaN
 
     These leave the condition as it was:
 
@@ -536,7 +536,51 @@ def _simplified(condition: Any) -> Any:
         if reduced == expr:
             break
         expr = reduced
-    return raise_back(expr)
+    return _without_spare_nan_checks(raise_back(expr))
+
+
+def _without_spare_nan_checks(condition: Any) -> Any:
+    """*condition* without an ``X == X`` that an ordered compare on ``X`` beside it implies.
+
+    ``X == X`` is False only at NaN, and so is ``X < 5``.  Each complement of a NaN check
+    leaves one behind.
+    """
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+    )
+    from pyrung.core.tag import Tag
+
+    kind = type(condition)
+    if kind not in (AllCondition, AnyCondition):
+        return condition
+    parts = [_without_spare_nan_checks(part) for part in condition.conditions]
+    if kind is AllCondition:
+        ordered: set[str] = set()
+        for part in parts:
+            if type(part) in (CompareLt, CompareLe, CompareGt, CompareGe):
+                ordered.add(part.tag.name)
+                if isinstance(part.value, Tag):
+                    ordered.add(part.value.name)
+        parts = [
+            part
+            for part in parts
+            if not (
+                type(part) is CompareEq
+                and isinstance(part.value, Tag)
+                and part.value.name == part.tag.name
+                and part.tag.name in ordered
+            )
+        ]
+    same = len(parts) == len(condition.conditions)
+    if same and all(new is old for new, old in zip(parts, condition.conditions, strict=True)):
+        return condition
+    return parts[0] if len(parts) == 1 else kind(*parts)
 
 
 def _flattened(condition: Any) -> Any:
@@ -559,7 +603,7 @@ def _may_be_nan(operand: Any) -> bool:
 
     - a ``Real`` tag or a NaN constant
     - an indirect ref, range or expression that reads a ``Real``
-    - an expression that holds an infinite constant, since ``inf - inf`` is NaN
+    - an expression that holds a float constant, since ``M * 1e308 - M * 1e308`` is NaN
     """
     from pyrung.core.expression import Expression
     from pyrung.core.memory_block import (
@@ -580,7 +624,7 @@ def _may_be_nan(operand: Any) -> bool:
         return operand.block.type == TagType.REAL
     if isinstance(operand, Expression):
         return any(
-            (isinstance(part, float) and not math.isfinite(part)) or _may_be_nan(part)
+            isinstance(part, float) or _may_be_nan(part)
             for key, part in vars(operand).items()
             if not key.startswith("_")
         )

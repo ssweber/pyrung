@@ -505,6 +505,7 @@ class TestPilotRungs:
         printed = bracket_lines(pilot_rules_rung((in_flight, other), {In.name: In}))
         assert printed
         assert not [line for line in printed if "DemandActive" in line]
+        assert "with rung(~NanScope, NanLevel < 5):" in printed
 
     def test_operation_progress_continues_after_its_start_guard_closes(self):
         In = Bool("ProgressLifetime_In", external=True)

@@ -232,70 +232,131 @@ def test_the_oscillator_runs_and_prints_as_one_row() -> None:
     assert lines == ("with rung(Sts >= 2, ~RS):", "  out(RS)")
 
 
-def _merged_and_bits_agree(rules: list[tuple[Any, Any, Any]], keep: bool, scans: int = 14) -> bool:
-    """Run *rules* merged and on bits side by side.  True when the merge left no bits."""
+Real1, Real2 = pyrung.Real("Real1"), pyrung.Real("Real2")
+Pick = Int("Pick")
+Other = Bool("Other")
+
+
+def _read_program() -> Program:
+    """A program that reads every tag the merge cases drive, and writes none of them."""
+    with Program(strict=False) as prog:
+        with Rung(A, B, W, Other, Speed == 9, Level == 9, Real1 > 1000, Real2 > 1000, Pick == 9):
+            copy(1, Int("Seen"))
+    return prog
+
+
+def _same(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    def equal(a: Any, b: Any) -> bool:
+        return a == b or (a != a and b != b)
+
+    return left.keys() == right.keys() and all(equal(left[k], right[k]) for k in left)
+
+
+def _merged_and_bits_agree(
+    rules: list[tuple[Any, Any, Any]],
+    keep: bool,
+    patches: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Run *rules* merged and on bits side by side.  True when the merge left no bits.
+
+    Each scan patches the next of *patches* first, or the program alone moves the tags.
+    """
     from pyrung.core.synthesis import _guarded_rows, _is_rule_bit
 
     merged = _guarded_rows(list(rules), keep=keep)
     bits = _guarded_rows(list(rules), keep=keep, merge=False)
     plcs = []
     for hold in (merged, bits):
-        plc = PLC(_program(), dt=0.01)
+        plc = PLC(_program() if patches is None else _read_program(), dt=0.01)
         _set_synth_holds(plc, [hold])
         plcs.append(plc)
-    for scan in range(scans):
+    for scan, patch in enumerate(patches or [{}] * 14):
         for plc in plcs:
+            plc.patch(patch)
             plc.step()
         merged_tags, bit_tags = (
             {name: value for name, value in plc.state.tags.items() if not _is_rule_bit(name)}
             for plc in plcs
         )
-        assert merged_tags == bit_tags, (scan, bracket_lines(merged))
+        assert _same(merged_tags, bit_tags), (scan, bracket_lines(merged), bracket_lines(bits))
     return not any("__" in line for line in bracket_lines(merged))
 
 
 def test_a_merged_row_runs_as_its_bits_did() -> None:
+    import math as pymath
     import random
 
-    from pyrung.core.condition import CompareGe, CompareLt
+    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt
 
     rng = random.Random(20261107)
+    numbers = [pymath.nan, -1.0, 0.0, 1.0, 2.0, 5.0, 7.5, pymath.inf]
 
-    def leaf(dest: Any) -> Any:
-        k = rng.randint(0, 5)
-        return rng.choice(
-            [Sts == k, Sts != k, CompareLt(Sts, k), CompareGe(Sts, k), dest == True, dest == False]  # noqa: E712
-            if dest.type.name == "BOOL"
-            else [Sts == k, Sts != k, CompareLt(Sts, k), CompareGe(Sts, k), dest == 3, dest != 7]
-        )
+    def leaf(dests: list[Any]) -> Any:
+        k = rng.choice([0, 1, 2, 5.0])
+        pool = [
+            CompareLt(Real1, k),
+            CompareGe(Real1, k),
+            CompareLe(Real1, Real2),
+            CompareGt(Real2, k),
+            Real1 == 1.0,
+            Real1 != 1.0,
+            Pick == rng.randint(0, 3),
+            CompareLt(Pick, rng.randint(0, 3)),
+            A,
+            ~A,
+            B,
+            ~B,
+        ]
+        for dest in dests:
+            pool += [dest == True, dest == False] if dest.type.name == "BOOL" else [dest == 3]  # noqa: E712
+        return rng.choice(pool)
+
+    def guard(dests: list[Any]) -> Any:
+        parts = [leaf(dests) for _part in range(rng.randint(1, 3))]
+        if len(parts) == 1:
+            return parts[0]
+        return pyrung.Or(*parts) if rng.random() < 0.15 else And(*parts)
 
     merged = 0
-    for _ in range(150):
-        keep = rng.random() < 0.5
-        dest = rng.choice([W, Speed])
+    for _trial in range(400):
+        keep = rng.random() < 0.4
+        # Two tags in either order, so a tag's row can come after the row of a tag it reads.
+        dests = rng.sample([W, Other, Speed, Level], rng.randint(1, 2))
         rules = []
-        for _rule in range(rng.randint(2, 3)):
-            guard = And(*(leaf(dest) for _part in range(rng.randint(1, 3))))
-            value = rng.random() < 0.5 if dest is W else rng.choice([3, 3, 7])
-            rules.append((dest, value, guard))
+        for _rule in range(rng.randint(2, 5)):
+            dest = rng.choice(dests)
+            value = rng.random() < 0.5 if dest.type.name == "BOOL" else rng.choice([3, 3, 7])
+            rules.append((dest, value, guard(dests if rng.random() < 0.4 else [dest])))
         if rng.random() < 0.3:
-            # A rule that reads another tag the rung writes keeps its bits.
-            rules.append((RS, True, Sts == 2))
-            rules.append((dest, rules[0][1], And(RS, Sts != 4)))
-        merged += _merged_and_bits_agree(rules, keep)
+            # Other's rows come first and W's rows read Other.  A merged W row would read
+            # the value this scan wrote, so W keeps its bits.
+            rules = [(Other, rng.random() < 0.5, guard([])) for _rule in range(rng.randint(1, 2))]
+            contact = Other if rng.random() < 0.5 else ~Other
+            rules += [(W, True, And(contact, leaf([]))), (W, False, guard([]))]
+        patches = [
+            {
+                "Real1": rng.choice(numbers),
+                "Real2": rng.choice(numbers),
+                "Pick": rng.randint(0, 3),
+                "A": rng.random() < 0.5,
+                "B": rng.random() < 0.5,
+            }
+            for _scan in range(12)
+        ]
+        merged += _merged_and_bits_agree(rules, keep, patches)
     # Both forms came up.
-    assert 0 < merged < 150
+    assert 0 < merged < 400
 
 
 def test_a_tag_whose_rule_reads_another_written_tag_keeps_its_bits() -> None:
+    # Other's row comes first, so a merged row for W would read Other after this scan wrote it.
     from pyrung.core.synthesis import _guarded_rows
 
-    rules = [(RS, True, Sts == 2), (W, True, Sts == 1), (W, False, And(RS, Sts == 1))]
-    lines = bracket_lines(_guarded_rows(rules, keep=False))
+    rules = [(Other, True, Pick == 2), (W, True, And(Other, Pick != 3)), (W, False, Pick == 1)]
+    patches = [{"Pick": pick} for pick in (0, 2, 2, 0, 2, 1, 2, 3, 2, 0)]
+    _merged_and_bits_agree(rules, keep=False, patches=patches)
 
-    assert "  out(__on1__W)" in lines
-    assert "  out(__off1__W)" in lines
-    _merged_and_bits_agree(rules, keep=False)
+    assert "  out(__on1__W)" in bracket_lines(_guarded_rows(rules, keep=False))
 
 
 def test_a_cycle_puts_the_second_rule_on_a_bit() -> None:
