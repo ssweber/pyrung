@@ -1044,7 +1044,7 @@ class _Tracer:
         iterable = self._eval(statement.iter, frame)
         if iterable.local is not None:
             raise Decline("moving iterable")
-        if not isinstance(iterable.concrete, (list, tuple, range)):
+        if not isinstance(iterable.concrete, _ITERABLE_TYPES):
             raise Decline("iteration over an unknown value")
         for item in iterable.concrete:
             self._store(statement.target, _wrapped(item), frame)
@@ -1264,7 +1264,7 @@ class _Tracer:
         if generator.ifs or generator.is_async:
             raise Decline("filtered comprehension")
         iterable = self._eval(generator.iter, frame)
-        if iterable.local is not None or not isinstance(iterable.concrete, (list, tuple, range)):
+        if iterable.local is not None or not isinstance(iterable.concrete, _ITERABLE_TYPES):
             raise Decline("comprehension over an unknown value")
         # A comprehension's target has a scope of its own: it must not outlive the
         # comprehension or disturb a local, or a global, of the same name.
@@ -1308,6 +1308,11 @@ class _Tracer:
             return self._enter(target, tuple(arguments))
         if name in ("range", "zip", "enumerate"):
             return self._iterator(name, arguments)
+        if name == "len" and len(arguments) == 1:
+            reference = arguments[0].concrete
+            if isinstance(reference, _Ref) and reference.kind == "block":
+                # A kernel's block keeps the size its spec gives it, as _cell_key assumes.
+                return _Value(len(self._kernel.blocks[reference.name]))
         pure = _PURE_BUILTINS.get(name)
         if pure is None:
             raise Decline(f"call {name}")
@@ -1346,7 +1351,7 @@ class _Tracer:
         if name == "range":
             return _Value(range(*[_plain(argument) for argument in arguments]))
         for argument in arguments:
-            if not isinstance(argument.concrete, (list, tuple, range)):
+            if not isinstance(argument.concrete, _ITERABLE_TYPES):
                 raise Decline(f"{name} over an unknown value")
         columns = [argument.concrete for argument in arguments]
         if name == "enumerate":
@@ -1487,6 +1492,11 @@ def _as_load(target: ast.expr) -> ast.expr:
     if isinstance(target, ast.Subscript):
         return ast.Subscript(target.value, target.slice, ast.Load())
     raise Decline(f"augmented assignment to {type(target).__name__}")
+
+
+# What the tracer iterates.  A constant one gives the same items on every scan, a str's
+# characters included, and an item of a list may still be moving.
+_ITERABLE_TYPES = (list, tuple, range, str)
 
 
 def _wrapped(item: Any) -> _Value:

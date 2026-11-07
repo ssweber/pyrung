@@ -22,20 +22,7 @@ PARTS_THAT_DECLINE = {
 MIN_LOOP_SHARE = 0.4
 
 #: Parts whose share of scans in the loop is lower, and why: a coverage gap, not a wrong answer.
-LOW_LOOP_SHARE = {
-    "follow_extra": (
-        0.10,
-        "adding td_write (a debounce and two flashers, 80% in the loop alone, 52% with "
-        "flasher_off) to txt_end's part took the share from 30% to 11%: with txt_end in the "
-        "program the loop declines 29 scans for 'iteration over an unknown value' and the "
-        "rest of the program's runs stay compiled, not in the loop; follow_flags (126 "
-        "rungs) and follow_values (140) had no room for td_write's 30 under the 150-rung "
-        "limit, and follow_timing is at 146.  Before that, adding txt_end (a Copy to text through a DS pointer, a read through a DD pointer "
-        "of 0) took the share from 58% to 30%: the loop declines 16 scans for 'iteration "
-        "over an unknown value' and 2 for 'call with keyword or starred arguments'; the "
-        "rungs are not isolated",
-    ),
-}
+LOW_LOOP_SHARE: dict[str, tuple[float, str]] = {}
 
 #: A case's scans are few: the loop's share of a part comes from the stretches around them.
 IDLE = 20
