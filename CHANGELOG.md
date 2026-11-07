@@ -128,6 +128,19 @@
   - a `flasher` tracks its phase itself rather than working it out from its `Acc` values. If the ladder writes the running phase's `Acc` past its preset, that phase ends on the next tick, and the other phase's `Acc` keeps its value
   - an on or off preset of 0 or less (including a register holding -5) keeps a `flasher` off with both `Acc` values at 0, and a `timed` coil gives no pulse
   - the rung's first scan counts toward the first phase, as with `on_delay`, so a `timed` pulse or a first `flasher` on phase of one scan or less no longer shows
+- Harness bool feedback runs as the CLICK coil it behaves like, so a feedback edge can come a scan or more earlier or later:
+  - `Physical(on_delay=, off_delay=)` runs as a `debounce` on its link
+  - a command dip shorter than `off_delay` keeps `Fb` on (it dropped `Fb`)
+  - after the command drops, `Fb` turns off one scan later than it did
+  - `Physical(flasher_on=, flasher_off=)` runs as a `flasher`
+  - its `Fb` goes high the scan after its enable turns on (it waited out the off time first)
+  - its first high phase is one scan short
+  - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
+  - both delays of one `Physical` count in the same unit, and so do `flasher_on` and `flasher_off`
+  - an `off_delay` over 32.767 s rounds `on_delay` up to whole seconds too
+  - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
+
+  Update tests that count scans to a feedback edge.
 - `system.sys.scan_clock_toggle` (SC3) is on when the scan counter (SD9) is even, starting on the first scan. It was a scan behind, off on the first scan. `rise()` of it now fires on scan 0 and `fall()` on scan 1.
 - `math()` cuts each whole-number constant in its formula to 16 bits, whatever the destination, as CLICK's Math does. So `math(DD1 / 65536, DD2)` divides by 0 (writing 0 with `fault.division_error`), and `math(2 * 40000, DD2)` writes -51072. Values read from tags aren't affected. Dividing by a constant that cuts to 0 is an error-level `MATH_DIV_ZERO` finding, and CLICK validation reports any constant past 16 bits as `CLK_MATH_WIDE_CONSTANT`. Copy the constant into a `DD` tag on a rung above and use the tag.
 - The verifier treats timers as black boxes. `always()`, `never()` and `reachable_states()` let an enabled on-delay, a disabled off-delay, a drum step or an Out coil's phase finish on any scan. So a `Proven` holds for any scan time and any preset. Every `Counterexample` is replayed on a `PLC` before it is reported, except one that only needs the clocks, the scan counter or the RTC to change, which carries a caveat instead. What changes:
@@ -159,9 +172,28 @@
 - A `copy()` that writes text across several elements (`to_text()`, a `Real` or a string literal into a TXT, `to_value`, `to_ascii`) fills what fits in its block, and drops the rest with no flag. Into a tag mapped with a TagMap or `Tag.map_to`, it keeps writing from the mapped address on. CLICK validation warns:
   - when the text always runs past the end of its bank (`CLK_TEXT_PAST_BANK`)
   - when the text runs past the end of a block mapped inside the bank, since a CLICK keeps writing past it (`CLK_TEXT_PAST_BLOCK`)
+- `Physical` takes one flat keyword per value, and each keyword is also its nickname-comment key:
+  - `Pulse`, `Ramp` and `Approach` are removed. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")` for a `Pulse`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` for a `Ramp` and `Physical(name, approach_to=180, approach_rate=0.3)` for an `Approach`.
+  - `Physical(profile=...)` raises `TypeError`. Give the keywords of one kind instead.
+  - `ramp_off` left out is 0, which holds the value when the enable drops
+  - a time given as a bare number raises. Write it with units, such as `"500ms"`
+  - an `approach_to` string that looks like a number raises. Pass the number
+  - keywords of two kinds in one `Physical` raise
+  - comments read `flasher_on=8ms, flasher_off=8ms`, `ramp_on=0.8, ramp_off=-0.05` and `approach_to=180, approach_rate=0.3`. A `profile=` comment raises
+  - the DAP `link` command takes the same keys. The `pyrungLink` request takes them in camelCase (`flasherOn`, `rampOn`, `approachTo`)
+  - `pyrungListLinks` rows carry `kind`, `keys` and a field per key in place of `profile`
+  - `TagMeta` has a field per key in place of `profile`. `parse_profile_spec()` and `profile_to_token()` are removed
+  - `harness status` shows each flasher, timed, toggle, ramp or approach link with its kind and keys (it showed `profile=`)
+
+  Run "Upgrade project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
 
 ### Features
 
+- Harness feedback has two new kinds, which run as the CLICK coils of the same names:
+  - `Physical(name, timed="200ms")` turns the feedback on for that time at each rise of its enable. With `maintained=True` it also stays on while the enable stays on
+  - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
+  - a comment writes them as `timed=200ms`, a bare `maintained` and a bare `toggle`
+  - `how()` plans through both
 - `pyrung check` advises against `==` and `!=` on a `Real` the ladder computes with `math()` (`CMP_EQ_ON_COMPUTED_REAL`). Rounding can step over the exact value, so compare with a range or a tolerance. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged.
 - CLICK validation refuses what CLICK's editor refuses, so ladder export stops where CLICK would. New refusals:
   - a `forloop()` count that isn't a constant or a `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`)
@@ -282,7 +314,7 @@
 ### Fixes
 
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
-  - a rung that needs both a harness `Pulse` feedback and that feedback's enable
+  - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
   - a target with a second route through a pointer or a for loop
   - a two-tag target where a one-shot overwrites one tag only once
   - a force or patch already on the PLC
@@ -320,7 +352,7 @@
   - after a STOP->RUN restart, from its own run, not the previous run's patches or cached states (a restart now starts a new recording)
   - with each tag at its default until a rung, patch or force first writes it
   - past a stop a rung caused, without restarting
-  - over a `Ramp` or `Approach` plant, without skipping scans
+  - over a harness ramp or approach feedback (`ramp_on` or `approach_to`), without skipping scans
 - `pyrung lock --check` on a program the verifier can't finish names the `Intractable` and exits 1, as `pyrung lock` does, instead of ending in a traceback.
 - Compiled runs and generated CircuitPython run a `run_function()` as stepping does:
   - a compiled run calls the function itself, not a copy of its source (a seek raised `NameError`, and a `global` store landed in the kernel's module)
@@ -368,7 +400,7 @@
 - A `copy()`, `blockcopy()` or `fill()` that clamps at an `Int` limit sets `out_of_range`. A `Real` into a `Dint` clamps with no flag.
 - A `copy()` of an integer or a `fill()` of a number into a `Char` no longer stops the scan in compiled runs or generated CircuitPython, and a `fill()` into a `Char` no longer stops it in `PLC`. `convert=to_binary` of Inf sets `out_of_range` and leaves the text unchanged (`PLC` raised `OverflowError`).
 - `Tag.map_to()` and `Block.slot(name=)` now raise `ValueError` when they would put a system point, such as `system.rtc.second`, in a block slot.
-- An `Approach` whose setpoint names a tag the program uses no longer makes `Harness.install()` raise `TypeError`. A setpoint tag that no rung uses and nothing has written gets a warning at install that it starts from 0.
+- An `approach_to` that names a tag the program uses no longer makes `Harness.install()` raise `TypeError`. A setpoint tag that no rung uses and nothing has written gets a warning at install that it starts from 0.
 - CLICK export writes what CLICK's editor writes, so an exported CSV matches a copy-back from CLICK v4 and imports back:
   - hex constants as `Ah` and `FFh`, in hex-mode Math, a copy or fill into DH/XD/YD, a compare against a DH/XD/YD tag, and a search over DH. They went out in decimal, which CLICK reads as hex, so `DH1 + 10` added 16 on the PLC
   - `Real` constants as `3.0E+38` and `1.0E-10`
@@ -438,7 +470,7 @@
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit (scans under 1 ms at `"Tms"`). Its accumulator stayed at 0 for good.
 - A `select()` with tag bounds (`DS.select(Start, End)`) sets `fault.address_error` and writes nothing, everywhere, when a bound is outside its block at either end. A `search()` over one now compiles (it generated an `IndentationError`).
 - A `select()` with tag bounds that spans a gap in a sparse block skips the gap everywhere, as a static `select()` does (compiled runs and generated CircuitPython set `fault.address_error`). So `always()` and `never()` no longer report `Proven` on what `PLC` didn't do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan, everywhere.
-- A harness `on_delay`, `off_delay` or `Pulse` dwell longer than 32.767 s now elapses. The feedback never flipped, because its millisecond timer stopped at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
+- A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses. The feedback never flipped, because its millisecond timer stopped at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`. They showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
 

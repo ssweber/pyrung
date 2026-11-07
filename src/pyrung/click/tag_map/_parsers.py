@@ -12,6 +12,7 @@ from pyclickplc.blocks import BlockRange as ClickBlockRange
 from pyclickplc.blocks import parse_block_tag
 
 from pyrung.core import Block, InputBlock, OutputBlock, TagType
+from pyrung.core.physical import PHYSICAL_KEYS, PhysicalKind, kind_of_keys
 from pyrung.core.tag import ChoiceMap
 
 from ._types import _BlockImportSpec
@@ -46,12 +47,6 @@ _EXPLICIT_BLOCK_START_RE = re.compile(
 _TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
 _CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
 _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
-# A ``profile=`` value is a structured spec token (``ramp:up=..|down=..``) whose
-# ``:`` and ``|`` are part of its grammar, so — unlike a scalar value — they are
-# allowed.  Only the comment-structure delimiters (``,`` token separator and the
-# ``[]`` group brackets) remain forbidden; the reader takes the token raw
-# (see ``_parse_tag_meta_group``) and hands it to ``parse_profile_spec``.
-_PROFILE_VALUE_RE = re.compile(r"^[^,\[\]]+$")
 # A ``link=`` value names the enable — a tag name or a Click address — with an
 # optional ``:trigger`` (a choices label or an integer): ``link=State:SORTING``.
 # ``~`` marks a bit enable that drives while OFF (``link=~Enable``); Click
@@ -75,13 +70,39 @@ class TagMeta:
     lock: bool = False
     link: str | None = None
     physical: str | None = None
+    # The response keys of ``pyrung.core.physical.PHYSICAL_KEYS``, as the comment writes them.
     on_delay: str | None = None
     off_delay: str | None = None
-    profile: str | None = None
+    flasher_on: str | None = None
+    flasher_off: str | None = None
+    timed: str | None = None
+    maintained: bool = False
+    toggle: bool = False
+    ramp_on: str | None = None
+    ramp_off: str | None = None
+    approach_to: str | None = None
+    approach_rate: str | None = None
     system: str | None = None
     min: int | float | None = None
     max: int | float | None = None
     uom: str | None = None
+
+    def physical_values(self) -> dict[str, str | bool]:
+        """The response keys this comment sets, in table order, with a flag as ``True``."""
+        values: dict[str, str | bool] = {}
+        for name in PHYSICAL_KEYS:
+            value = getattr(self, name)
+            if value is not None and value is not False:
+                values[name] = value
+        return values
+
+    @property
+    def physical_kind(self) -> PhysicalKind | None:
+        """The kind the response keys make, or ``None`` with none.
+
+        Raises ``ValueError`` for keys of two kinds or a kind missing a key it needs.
+        """
+        return kind_of_keys(self.physical_values())
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -459,34 +480,56 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
 
 
 _BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public", "lock"})
+_PHYSICAL_FLAG_TOKENS = frozenset(name for name, key in PHYSICAL_KEYS.items() if key.is_flag)
+_PHYSICAL_VALUE_TOKENS = frozenset(name for name, key in PHYSICAL_KEYS.items() if not key.is_flag)
 _VALUE_TOKENS = frozenset(
-    {"link", "physical", "on_delay", "off_delay", "profile", "system", "min", "max", "uom"}
+    {"link", "physical", "system", "min", "max", "uom", *_PHYSICAL_VALUE_TOKENS}
 )
-_STRING_VALUE_TOKENS = frozenset(
-    {"link", "physical", "on_delay", "off_delay", "profile", "system", "uom"}
-)
+#: Token starts only an older pyrung wrote. ``upgrade_comment`` rewrites them.
+_OLD_FORM_TOKENS = ("profile=",)
+
+
+def _old_form_error(token: str) -> ValueError:
+    return ValueError(
+        f"{token!r} is an old annotation form, and this pyrung no longer reads it. "
+        'Run "Upgrade project" in clicknick to rewrite it, '
+        "or pass the comment to pyrung.click.tag_map.upgrade_comment()."
+    )
+
+
+def _check_physical(values: dict[str, str | bool], system: str | None) -> None:
+    kind_of_keys(values)
+    if system is not None and not values:
+        raise ValueError("TagMeta system requires a physical response such as on_delay=.")
+
+
+def _is_tag_meta(tokens: list[str]) -> bool:
+    """True when a ``[...]`` group of *tokens* holds metadata, not the user's own text.
+
+    The first token that is not ``toggle`` or ``maintained`` decides. Those two words are
+    common in a note (``Selector switch [maintained]``), and a flag alone is never metadata.
+    """
+    first = next((token for token in tokens if token not in _PHYSICAL_FLAG_TOKENS), None)
+    if first is None:
+        return False
+    return (
+        first in _BOOL_FLAG_TOKENS
+        or first.startswith("choices=")
+        or any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
+        or first.startswith(_OLD_FORM_TOKENS)
+    )
 
 
 def _parse_tag_meta_group(content: str) -> TagMeta | None:
     tokens = [token.strip() for token in content.split(",") if token.strip()]
-    if not tokens:
-        return None
-
-    first = tokens[0]
-    if (
-        first not in _BOOL_FLAG_TOKENS
-        and not first.startswith("choices=")
-        and not any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
-    ):
+    if not _is_tag_meta(tokens):
         return None
 
     flags: dict[str, bool] = {}
     choices: ChoiceMap | None = None
     link: str | None = None
     physical: str | None = None
-    on_delay: str | None = None
-    off_delay: str | None = None
-    profile: str | None = None
+    response: dict[str, str | bool] = {}
     system: str | None = None
     min_val: int | float | None = None
     max_val: int | float | None = None
@@ -495,16 +538,15 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         if token in _BOOL_FLAG_TOKENS:
             flags[token] = True
             continue
+        if token in _PHYSICAL_FLAG_TOKENS:
+            response[token] = True
+            continue
+        if token.startswith(_OLD_FORM_TOKENS):
+            raise _old_form_error(token)
         if token.startswith("choices="):
             if choices is not None:
                 raise ValueError("TagMeta choices may only be specified once.")
             choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
-            continue
-        if token.startswith("profile="):
-            # A profile is a structured spec token (``ramp:up=..|down=..``) whose
-            # ``:`` / ``=`` / ``|`` fail the scalar-value grammar — take it raw and
-            # let ``parse_profile_spec`` decode it downstream.
-            profile = token.split("=", maxsplit=1)[1].strip()
             continue
         if token.startswith("link="):
             # ``Tag:trigger`` fails the scalar grammar on its ``:``; check it whole.
@@ -513,20 +555,22 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
                 raise ValueError(f"Invalid TagMeta link value {link!r}.")
             continue
         key, sep, value = token.partition("=")
+        key = key.strip()
+        if sep == "=" and key in _PHYSICAL_FLAG_TOKENS:
+            raise ValueError(f"TagMeta {key} is a bare flag. Write {key} without a value.")
+        if sep == "=" and key in _PHYSICAL_VALUE_TOKENS:
+            text = value.strip()
+            if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
+                raise ValueError(f"Invalid TagMeta {key} value {value!r}.")
+            PHYSICAL_KEYS[key].parse(text)
+            response[key] = text
+            continue
         if sep == "=" and key in _VALUE_TOKENS:
             parsed_value = _parse_tag_meta_scalar(value, field_name=key)
-            if key in _STRING_VALUE_TOKENS:
+            if key in ("physical", "system", "uom"):
                 parsed_text = str(parsed_value)
-                if key == "link":
-                    link = parsed_text
-                elif key == "physical":
+                if key == "physical":
                     physical = parsed_text
-                elif key == "on_delay":
-                    on_delay = parsed_text
-                elif key == "off_delay":
-                    off_delay = parsed_text
-                elif key == "profile":
-                    profile = parsed_text
                 elif key == "system":
                     system = parsed_text or None
                 else:
@@ -542,13 +586,6 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             continue
         raise ValueError(f"Unsupported TagMeta token {token!r}.")
 
-    has_timing = on_delay is not None or off_delay is not None
-    has_profile = profile is not None
-    if has_timing and has_profile:
-        raise ValueError("TagMeta physical metadata cannot combine timing with profile.")
-    if system is not None and not has_timing and not has_profile:
-        raise ValueError("TagMeta system requires on_delay/off_delay or profile.")
-
     return TagMeta(
         readonly=flags.get("readonly", False),
         choices=choices,
@@ -558,13 +595,11 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         lock=flags.get("lock", False),
         link=link,
         physical=physical,
-        on_delay=on_delay,
-        off_delay=off_delay,
-        profile=profile,
         system=system,
         min=min_val,
         max=max_val,
         uom=uom,
+        **response,  # ty: ignore[invalid-argument-type]
     )
 
 
@@ -581,9 +616,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
     lock = False
     link: str | None = None
     physical: str | None = None
-    on_delay: str | None = None
-    off_delay: str | None = None
-    profile: str | None = None
+    response: dict[str, str | bool] = {}
     system: str | None = None
     min_val: int | float | None = None
     max_val: int | float | None = None
@@ -605,12 +638,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
                 link = parsed.link
             if parsed.physical is not None:
                 physical = parsed.physical
-            if parsed.on_delay is not None:
-                on_delay = parsed.on_delay
-            if parsed.off_delay is not None:
-                off_delay = parsed.off_delay
-            if parsed.profile is not None:
-                profile = parsed.profile
+            response.update(parsed.physical_values())
             if parsed.system is not None:
                 system = parsed.system
             if parsed.min is not None:
@@ -627,12 +655,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
 
     remaining_parts.append(comment[cursor:])
     remaining_text = re.sub(r"[ \t]{2,}", " ", "".join(remaining_parts)).strip()
-    has_timing = on_delay is not None or off_delay is not None
-    has_profile = profile is not None
-    if has_timing and has_profile:
-        raise ValueError("TagMeta physical metadata cannot combine timing with profile.")
-    if system is not None and not has_timing and not has_profile:
-        raise ValueError("TagMeta system requires on_delay/off_delay or profile.")
+    _check_physical(response, system)
     if (
         not readonly
         and choices is None
@@ -642,9 +665,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         and not lock
         and link is None
         and physical is None
-        and on_delay is None
-        and off_delay is None
-        and profile is None
+        and not response
         and system is None
         and min_val is None
         and max_val is None
@@ -660,18 +681,19 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         lock=lock,
         link=link,
         physical=physical,
-        on_delay=on_delay,
-        off_delay=off_delay,
-        profile=profile,
         system=system,
         min=min_val,
         max=max_val,
         uom=uom,
+        **response,  # ty: ignore[invalid-argument-type]
     ), remaining_text
 
 
 def format_tag_meta(meta: TagMeta | None) -> str:
-    if meta is None or (
+    if meta is None:
+        return ""
+    response = meta.physical_values()
+    if (
         not meta.readonly
         and meta.choices is None
         and not meta.external
@@ -680,9 +702,7 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         and not meta.lock
         and meta.link is None
         and meta.physical is None
-        and meta.on_delay is None
-        and meta.off_delay is None
-        and meta.profile is None
+        and not response
         and meta.system is None
         and meta.min is None
         and meta.max is None
@@ -709,18 +729,17 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         if _CHOICE_VALUE_RE.fullmatch(meta.physical) is None:
             raise ValueError(f"Invalid TagMeta physical value {meta.physical!r}.")
         tokens.append(f"physical={meta.physical}")
-    if meta.on_delay is not None:
-        if _CHOICE_VALUE_RE.fullmatch(meta.on_delay) is None:
-            raise ValueError(f"Invalid TagMeta on_delay value {meta.on_delay!r}.")
-        tokens.append(f"on_delay={meta.on_delay}")
-    if meta.off_delay is not None:
-        if _CHOICE_VALUE_RE.fullmatch(meta.off_delay) is None:
-            raise ValueError(f"Invalid TagMeta off_delay value {meta.off_delay!r}.")
-        tokens.append(f"off_delay={meta.off_delay}")
-    if meta.profile is not None:
-        if _PROFILE_VALUE_RE.fullmatch(meta.profile) is None:
-            raise ValueError(f"Invalid TagMeta profile value {meta.profile!r}.")
-        tokens.append(f"profile={meta.profile}")
+    _check_physical(response, meta.system)
+    for name, value in response.items():
+        key = PHYSICAL_KEYS[name]
+        if key.is_flag:
+            tokens.append(name)
+            continue
+        text = str(value)
+        if _CHOICE_VALUE_RE.fullmatch(text) is None:
+            raise ValueError(f"Invalid TagMeta {name} value {text!r}.")
+        key.parse(text)
+        tokens.append(f"{name}={text}")
     if meta.system is not None:
         if _CHOICE_VALUE_RE.fullmatch(meta.system) is None:
             raise ValueError(f"Invalid TagMeta system value {meta.system!r}.")
@@ -746,6 +765,10 @@ def format_tag_meta(meta: TagMeta | None) -> str:
                     raise ValueError(f"Invalid TagMeta choice value {value!r}.")
                 pairs.append(f"{label}:{value_text}")
             tokens.append(f"choices={'|'.join(pairs)}")
+    flags = [name for name in response if PHYSICAL_KEYS[name].is_flag]
+    if flags and meta.link is None and meta.physical is None:
+        # A flag answers a linked command, and the reader takes a group of flags alone as text.
+        raise ValueError(f"TagMeta {flags[0]} needs link= or physical= beside it.")
     return f"[{', '.join(tokens)}]"
 
 

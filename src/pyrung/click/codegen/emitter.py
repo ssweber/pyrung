@@ -197,12 +197,7 @@ def _emit_physical_declarations(lines: list[str], collection: _OperandCollection
     """Emit hoisted Physical(...) declarations."""
     for decl in sorted(collection.physical_decls.values(), key=lambda item: item.var_name):
         args = [repr(decl.spec.name)]
-        if decl.spec.on_delay is not None:
-            args.append(f"on_delay={decl.spec.on_delay!r}")
-        if decl.spec.off_delay is not None:
-            args.append(f"off_delay={decl.spec.off_delay!r}")
-        if decl.spec.profile is not None:
-            args.append(f"profile={decl.spec.profile!r}")
+        args += [f"{key}={value!r}" for key, value in decl.spec.keywords]
         if decl.spec.system is not None:
             args.append(f"system={decl.spec.system!r}")
         lines.append(f"{decl.var_name} = Physical({', '.join(args)})")
@@ -287,14 +282,6 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     core_imports: list[str] = ["Program", "rung"]
     if collection.physical_decls:
         core_imports.append("Physical")
-        # A declarative analog profile emits ``profile=Ramp(...)`` / ``Approach(...)``,
-        # so the generated file must import the spec class it references.
-        profile_types = {
-            type(decl.spec.profile).__name__
-            for decl in collection.physical_decls.values()
-            if decl.spec.profile is not None
-        }
-        core_imports.extend(sorted(profile_types & {"Ramp", "Approach", "Pulse"}))
 
     # Block/TagType for reconstructed plain named blocks
     if collection.plain_blocks:

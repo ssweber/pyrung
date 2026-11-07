@@ -8,7 +8,7 @@ import pytest
 
 from pyrung.core import PLC, Bool, Coupling, Harness, Program, Real, Rung, out
 from pyrung.core.harness import link_problem
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 
 AUX = Physical("Aux", on_delay="20ms", off_delay="10ms")
 
@@ -97,7 +97,7 @@ def test_added_coupling_drives_a_new_feedback():
 def test_analog_override_ramps_a_real_feedback():
     plc = _plc()
     harness = _installed(plc)
-    heater = Coupling("Motor", "Temp", Physical("Temp", profile=Ramp(up=1000.0)))
+    heater = Coupling("Motor", "Temp", Physical("Temp", ramp_on=1000.0))
     harness.set_overrides({"Temp": heater})
     _run_motor(plc, 0.2)
     assert _value(plc, TempHigh) is True
@@ -206,7 +206,7 @@ class TestLinkProblem:
             link_problem(plc, Coupling("Motor", "Temp", Physical("Temp", on_delay="1s")))
         )
         assert "drive a number" in str(
-            link_problem(plc, Coupling("Motor", "Spare", Physical("Spare", profile=Ramp(up=1.0))))
+            link_problem(plc, Coupling("Motor", "Spare", Physical("Spare", ramp_on=1.0)))
         )
 
     def test_self_link(self):

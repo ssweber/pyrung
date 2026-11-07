@@ -6,14 +6,16 @@ the Harness.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import Bool, Int, Program, Real, Rung, copy
 from pyrung.core.analysis.pilot import pilot_how
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
 MOTOR_FB = Physical("MotorFb", on_delay="200ms", off_delay="100ms")
 VALVE_FB = Physical("ValveFb", on_delay="50ms", off_delay="50ms")
-SENSOR = Physical("TempSensor", profile=Ramp(up=1.0, down=-0.5))
+SENSOR = Physical("TempSensor", ramp_on=1.0, ramp_off=-0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -122,3 +124,33 @@ def test_profile_solves() -> None:
     plc = PLC(prog, dt=0.010)
     path = pilot_how(plc, Stage == 1, max_scans=3000)
     assert path.reachable
+
+
+# ---------------------------------------------------------------------------
+# Timed and toggle: a rise of the enable sets the feedback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "physical",
+    [
+        Physical("Horn", timed="200ms"),
+        Physical("Horn", timed="200ms", maintained=True),
+        Physical("Lamp", toggle=True),
+    ],
+    ids=["timed", "timed-maintained", "toggle"],
+)
+@pytest.mark.parametrize("released", [False, True], ids=["enable-on", "enable-off"])
+def test_timed_and_toggle_solve(physical: Physical, released: bool) -> None:
+    Enable = Bool("Enable", external=True)
+    Feedback = Bool("Feedback", physical=physical, link="Enable")
+    Stage = Int("Stage")
+    enable = ~Enable if released else Enable
+    with Program() as prog:
+        with Rung(enable, Feedback):
+            copy(1, Stage)
+    plc = PLC(prog, dt=0.010)
+    path = pilot_how(plc, Stage == 1, max_scans=3000)
+    assert path.reachable
+    # The plan comes from the feedback's profile, not from a last-resort guess.
+    assert "Nothing in the trace pointed to this" not in str(path)

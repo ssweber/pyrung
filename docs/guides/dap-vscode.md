@@ -118,7 +118,7 @@ data:
   clear_forces
   force <tag> <value>
   get <tag> [tag2 ...]
-  link <feedback> <[~]enable[:trigger]> on_delay=.. off_delay=.. | profile=..  (bench wiring)
+  link <feedback> <[~]enable[:trigger]> key=value ...   (bench wiring)
   links [bench on|off | enable <tag> | disable <tag>]
   monitor <tag>
   note <text>
@@ -294,7 +294,7 @@ spec test tests/test_specs.py  # generate pytest tests for accepted formulas
 If your program uses [Physical annotations](physical-harness.md) with `physical=` and `link=` declarations, the adapter installs the autoharness automatically at launch. A banner appears in the Debug Console:
 
 ```text
-Harness: 3 feedback loop(s) (2 bool, 1 analog); `harness status` for details
+Harness: 3 feedback loop(s) (2 delay, 1 ramp); `harness status` for details
 ```
 
 A force still wins over the harness. Force a feedback tag to hold it whatever the harness computes.
@@ -313,7 +313,7 @@ Bench links change the feedback wiring for this session without editing the prog
 
 ```text
 link X002 Y001 on_delay=2s off_delay=500ms     # Y001 drives X002 after 2 s, drops 500 ms after
-link DF5 Y003 profile=ramp:up=0.8|down=-0.05   # analog feedback
+link DF5 Y003 ramp_on=0.8 ramp_off=-0.05       # analog feedback
 link Sorted State:2 on_delay=1s                # value trigger
 unlink X002        # cut the program's link (X002 is a free input), or remove a bench link
 restore X002       # drop the bench change: back to what the program declares
@@ -442,17 +442,17 @@ Custom requests:
 | `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
 | `pyrungSetSpeed` | `{speed}` | `{speed}` |
 | `pyrungModbusInfo` | none | `{running, host, port, clients, error}` |
-| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, profile?, physical?, system?}` | `{text, command}` |
+| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, flasherOn?, flasherOff?, timed?, maintained?, toggle?, rampOn?, rampOff?, approachTo?, approachRate?, physical?, system?}` | `{text, command}` |
 | `pyrungUnlink` | `{feedback}` | `{text}` |
 | `pyrungRestoreLink` | `{feedback}` | `{text}` |
 | `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
-| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, onDelay, offDelay, profile, physical, system, source, active, pending, cut?, enabled?}]}` |
+| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
 
 `pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
 
-The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
+The link requests mirror the [bench link](#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` gives each value as the text a comment would hold (`"0.8"`, `"500ms"`), and `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
 
 Anyone can drive, and the last command wins. While Continue runs, a step or `run` from VS Code or `pyrung live` pauses Continue first and then executes.
 

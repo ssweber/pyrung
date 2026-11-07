@@ -31,7 +31,7 @@ from pyrung import (
 )
 from pyrung.core import SystemState, Timer, coast_run, compiled_run, read_trace, scan_trace
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Approach, Physical
+from pyrung.core.physical import Physical
 from pyrung.core.system_points import system
 from tests import fold_check
 from tests.fold_check import FoldMismatch
@@ -1685,7 +1685,9 @@ def test_a_fork_is_compared_under_a_force(installed) -> None:
 
 def test_a_fork_is_compared_under_a_plant(installed) -> None:
     fold_check.install()
-    temp = Real("Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Go")
+    temp = Real(
+        "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Go"
+    )
     with Program(strict=False) as program:
         with Rung():
             copy(temp, Real("Shown"))

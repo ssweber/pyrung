@@ -193,17 +193,267 @@ def test_a_reload_continues_a_running_off_delay(
     while runner.current_state.tags["Fb"] and scans < 400:
         runner.step()
         scans += 1
-    assert scans == 14 + extra_scans
+    # The debounce's off side compares a scan after the fall: 15 (14 under an off-delay timer).
+    assert scans == 15 + extra_scans
+
+
+def _coil_script(horn: str) -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "\n"
+        "motor = Bool('Motor')\n"
+        "spare = Bool('Spare')\n"
+        f"horn = {horn}\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(motor):\n"
+        "        out(Bool('Echo'))\n"
+        "    with Rung(spare, horn):\n"
+        "        out(Bool('Seen'))\n"
+        "\n"
+        "runner = PLC(prog, dt=0.01)\n"
+    )
+
+
+def _coil_run(
+    tmp_path: Path, script: str, link: str, before: int, *, reload: bool
+) -> list[tuple[Any, ...]]:
+    """Each scan's Spare, Horn and timer counts, after *before* scans with Motor on."""
+    tmp_path.mkdir()
+    adapter, out, _script_path = _setup(tmp_path, script)
+    if link:
+        resp, _ = _repl(adapter, out, link, seq=10)
+        assert resp["success"] is True
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, f"step {before}", seq=11)
+    if reload:
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+    seen = []
+    for _ in range(60):
+        adapter._runner.step()
+        tags = adapter._runner.current_state.tags
+        counts = sorted((k, v) for k, v in tags.items() if k.startswith(("__cpl_on", "__tmd_on")))
+        seen.append((tags["Spare"], tags["Horn"], counts))
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("horn", "link", "before", "first", "last"),
+    [
+        ("Bool('Horn')", "link Spare Motor toggle", 30, (True, False), (True, False)),
+        (
+            "Bool('Horn')",
+            "link Spare Motor timed=500ms maintained",
+            30,
+            (True, False),
+            (True, False),
+        ),
+        (
+            "Bool('Horn', physical=Physical('L', toggle=True), link='Motor')",
+            "",
+            30,
+            (False, True),
+            (False, True),
+        ),
+        (
+            "Bool('Horn', physical=Physical('H', timed='500ms'), link='Motor')",
+            "",
+            10,
+            (False, True),
+            (False, False),
+        ),
+        (
+            "Bool('Horn', physical=Physical('H', on_delay='500ms'), link='Motor')",
+            "",
+            10,
+            (False, False),
+            (False, True),
+        ),
+    ],
+    ids=["bench-toggle", "bench-timed-maintained", "toggle", "timed-running", "on-delay-running"],
+)
+def test_a_reload_leaves_a_plant_coil_as_it_was(
+    tmp_path: Path,
+    horn: str,
+    link: str,
+    before: int,
+    first: tuple[bool, bool],
+    last: tuple[bool, bool],
+):
+    """A reload with the enable on neither fires a toggle or timed coil nor cuts its count short."""
+    script = _coil_script(horn)
+    reloaded = _coil_run(tmp_path / "reloaded", script, link, before, reload=True)
+    assert reloaded == _coil_run(tmp_path / "stepped", script, link, before, reload=False)
+    assert reloaded[0][:2] == first
+    assert reloaded[-1][:2] == last
+
+
+def _horn_bits(adapter: DAPAdapter, fb: str, scans: int) -> str:
+    seen = ""
+    for _ in range(scans):
+        adapter._runner.step()
+        seen += "#" if adapter._runner.current_state.tags[fb] else "."
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("physical", "settled"),
+    [
+        ("toggle=True", "........"),
+        ("timed='50ms'", "........"),
+        ("timed='50ms', maintained=True", "########"),
+        ("on_delay='50ms'", "########"),
+    ],
+    ids=["toggle", "timed", "timed-maintained", "on-delay"],
+)
+def test_a_harness_install_after_remove_settles(tmp_path: Path, physical: str, settled: str):
+    """An enable turned on while the harness was off is held, not a rise."""
+    horn = f"Bool('Horn', physical=Physical('H', {physical}), link='Motor')"
+    adapter, out, _script_path = _setup(tmp_path, _coil_script(horn))
+    _repl(adapter, out, "step 5", seq=10)
+    resp, _ = _repl(adapter, out, "harness remove", seq=11)
+    assert resp["success"] is True
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, "step 100", seq=12)
+    resp, _ = _repl(adapter, out, "harness install", seq=13)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Horn", 8) == settled
+
+
+@pytest.mark.parametrize(
+    ("link", "settled"),
+    [("link Spare Motor toggle", "########"), ("link Spare Motor timed=500ms", "........")],
+    ids=["toggle", "timed"],
+)
+def test_a_harness_install_after_remove_settles_a_bench_link(
+    tmp_path: Path, link: str, settled: str
+):
+    """The bench links the install puts back settle too, so a held Motor fires none of them."""
+    adapter, out, _script_path = _setup(tmp_path, _coil_script("Bool('Horn')"))
+    resp, _ = _repl(adapter, out, link, seq=10)
+    assert resp["success"] is True
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, "step 80", seq=11)
+    _repl(adapter, out, "harness remove", seq=12)
+    _repl(adapter, out, "step 3", seq=13)
+    resp, _ = _repl(adapter, out, "harness install", seq=14)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Spare", 8) == settled
+
+
+@pytest.mark.parametrize("link", ["link Horn Motor toggle", "link Horn Motor timed=30ms"])
+@pytest.mark.parametrize("how", ["harness remove and install", "reload"])
+def test_a_bench_link_over_a_declared_coupling_settles_as_the_bench_link(
+    tmp_path: Path, link: str, how: str
+):
+    """The install settles the coil that runs, not the declared on-delay the link replaces.
+
+    Motor goes on, off and on, so the link leaves Horn off with Motor on.  Seeded for the
+    on-delay, Horn would turn on at install and stay on under the new coil.
+    """
+    horn = "Bool('Horn', physical=Physical('H', on_delay='20ms'), link='Motor')"
+    adapter, out, _script_path = _setup(tmp_path, _coil_script(horn))
+    resp, _ = _repl(adapter, out, link, seq=10)
+    assert resp["success"] is True
+    for seq, motor in enumerate((True, False, True), start=11):
+        adapter._runner.patch({"Motor": motor})
+        _repl(adapter, out, "step 5", seq=seq)
+    assert adapter._runner.current_state.tags["Horn"] is False
+    if how == "reload":
+        resp, _ = _repl(adapter, out, "reload", seq=20)
+    else:
+        _repl(adapter, out, "harness remove", seq=20)
+        resp, _ = _repl(adapter, out, "harness install", seq=21)
+    assert resp["success"] is True
+    assert adapter._runner.current_state.tags["Horn"] is False
+    assert _horn_bits(adapter, "Horn", 8) == "........"
+
+
+def _relink_script(enable: str) -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "\n"
+        "motor = Bool('Motor')\n"
+        "pump = Bool('Pump', default=True)\n"
+        f"fb = Bool('Fb', physical=Physical('X', toggle=True), link='{enable}')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(motor, pump):\n"
+        "        out(Bool('Echo'))\n"
+        "    with Rung(fb):\n"
+        "        out(Bool('Seen'))\n"
+        "\n"
+        "runner = PLC(prog, dt=0.01)\n"
+    )
+
+
+def test_a_reload_that_links_a_coil_to_another_enable_settles_it(tmp_path: Path):
+    """Fb's coil saw Motor off.  Pump is on, so carrying that memory on would flip Fb."""
+    adapter, out, script_path = _setup(tmp_path, _relink_script("Motor"))
+    _repl(adapter, out, "step 5", seq=10)
+    script_path.write_text(_relink_script("Pump"), encoding="utf-8")
+    resp, _ = _repl(adapter, out, "reload", seq=11)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Fb", 6) == "......"
+
+
+def _feedback_script(fb: str, physical: str) -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "\n"
+        "motor = Bool('Motor')\n"
+        f"fb = Bool('{fb}', physical=Physical('X', {physical}), link='Motor')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(motor):\n"
+        "        out(Bool('Echo'))\n"
+        "    with Rung(fb):\n"
+        "        out(Bool('Seen'))\n"
+        "\n"
+        "runner = PLC(prog, dt=0.01)\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("middle", "last", "settled"),
+    [
+        (("Fb2", "toggle=True"), ("Fb", "toggle=True"), "........"),
+        (("Fb", "toggle=True"), ("Fb", "timed='50ms'"), "........"),
+    ],
+    ids=["rename-and-back", "kind-change-and-back"],
+)
+def test_a_reload_back_to_a_coil_settles_it(
+    tmp_path: Path, middle: tuple[str, str], last: tuple[str, str], settled: str
+):
+    """A coil whose memory went stale on the way does not read it after a reload back.
+
+    The first program runs with Motor off, so its coil remembers its rung as off.
+    Motor turns on under the program between.  Read back, the stale memory would turn
+    that held Motor into a rise.
+    """
+    first = ("Fb", last[1])
+    adapter, out, script_path = _setup(tmp_path, _feedback_script(*first))
+    _repl(adapter, out, "step 3", seq=10)
+    script_path.write_text(_feedback_script(*middle), encoding="utf-8")
+    resp, _ = _repl(adapter, out, "reload", seq=11)
+    assert resp["success"] is True
+    assert "harness coil memory value(s) had no matching coupling" in resp["body"]["result"]
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, "step 3", seq=12)
+    script_path.write_text(_feedback_script(*last), encoding="utf-8")
+    resp, _ = _repl(adapter, out, "reload", seq=13)
+    assert resp["success"] is True
+    assert _horn_bits(adapter, "Fb", 8) == settled
 
 
 AMBIENT_SCRIPT = (
     "from pyrung.core import Bool, PLC, Physical, Program, Real, Rung, out\n"
-    "from pyrung.core.physical import Approach\n"
     "\n"
     "en = Bool('En')\n"
     "temp = Real(\n"
     "    'Temp',\n"
-    "    physical=Physical('T', profile=Approach(toward='Ambient', rate=0.3)),\n"
+    "    physical=Physical('T', approach_to='Ambient', approach_rate=0.3),\n"
     "    link='En',\n"
     ")\n"
     "\n"

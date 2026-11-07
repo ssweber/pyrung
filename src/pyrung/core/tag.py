@@ -203,10 +203,10 @@ class Tag:
             raise ValueError(f"Tag {self.name!r}: choices cannot be combined with min/max.")
         if self.readonly and self.physical is not None:
             raise ValueError(f"Tag {self.name!r}: readonly cannot be combined with physical.")
-        if self.physical is not None and self.physical.profile is not None and self.link is None:
+        if self.physical is not None and self.physical.kind != "delay" and self.link is None:
             raise ValueError(
-                f"Tag {self.name!r}: physical profile requires link "
-                "(profile defines response to a linked command)."
+                f"Tag {self.name!r}: physical {self.physical.kind} requires link "
+                "(it answers a linked command)."
             )
 
     def __hash__(self) -> int:

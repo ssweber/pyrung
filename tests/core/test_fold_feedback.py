@@ -1,6 +1,6 @@
 """Long runs over harness analog feedback, and over slots a run touches late.
 
-A ``Ramp`` or ``Approach`` plant moves its value every scan, so the loop must stop where a
+A ``ramp_on`` or ``approach_to`` plant moves its value every scan, so the loop must stop where a
 rung would read that value crossed, with the value where stepping leaves it.  A value
 nothing can see, or one that has settled, keeps the run in the loop.
 
@@ -32,6 +32,7 @@ from pyrung import (
     copy,
     count_down,
     count_up,
+    fall,
     forloop,
     latch,
     math,
@@ -45,7 +46,7 @@ from pyrung import (
 from pyrung.click import ClickBlocks
 from pyrung.core.coast_run import coast_until
 from pyrung.core.harness import Coupling, Harness
-from pyrung.core.physical import Approach, Physical, Pulse, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 from tests.core.scan_loop_counts import ScansOutsideLoop
 
@@ -57,9 +58,18 @@ T, Win = Timer.clone("T"), Timer.clone("Win")
 
 _FRESH = itertools.count()
 
-RAMP = Ramp(up=1.0, down=-0.5)
-ODD_RAMP = Ramp(up=0.37, down=-0.11)
-APPROACH = Approach(100.0, 0.3)
+
+def _ramp(on: float, off: float = 0.0) -> dict[str, Any]:
+    return {"ramp_on": on, "ramp_off": off}
+
+
+def _approach(to: float | str, rate: float) -> dict[str, Any]:
+    return {"approach_to": to, "approach_rate": rate}
+
+
+RAMP = _ramp(1.0, -0.5)
+ODD_RAMP = _ramp(0.37, -0.11)
+APPROACH = _approach(100.0, 0.3)
 PROFILES = [
     pytest.param(RAMP, 5.0, id="ramp"),
     pytest.param(ODD_RAMP, 2.0, id="odd-ramp"),
@@ -68,7 +78,7 @@ PROFILES = [
 
 
 def _temp(profile: Any) -> Real:
-    return Real("Temp", physical=Physical("TempSensor", profile=profile), link="Enable")
+    return Real("Temp", physical=Physical("TempSensor", **profile), link="Enable")
 
 
 def _plant(
@@ -231,7 +241,7 @@ class TestRunOverAnalogFeedback:
                 with Rung(temp >= 20.0):
                     latch(Hit)
 
-            return _plant(Approach("SetPt", 0.3), reader)
+            return _plant(_approach("SetPt", 0.3), reader)
 
         plc = make()
         plc.run_for(30.0)
@@ -271,7 +281,7 @@ class TestFeedbackStaysInTheLoop:
 
     def test_a_settled_approach_folds_under_a_copy_reader(self) -> None:
         def make() -> PLC:
-            return _plant(Approach(100.0, 5.0), self._copy_reader, far_s=800)
+            return _plant(_approach(100.0, 5.0), self._copy_reader, far_s=800)
 
         plc = make()
         plc.run_for(40.0)  # moving, and a rung reads every value: this stretch steps
@@ -289,7 +299,7 @@ class TestFeedbackStaysInTheLoop:
 
         A single scan's step is under half an ulp here, so Temp has stopped, and must stay.
         """
-        plc = _plant(Approach(100.0, 5.0), self._copy_reader, far_s=800)
+        plc = _plant(_approach(100.0, 5.0), self._copy_reader, far_s=800)
         ran = {}
         for _ in range(4_000):
             plc.step()
@@ -312,7 +322,7 @@ class TestFeedbackStaysInTheLoop:
             with Rung(Tog, ~Tog):
                 out(Enable)
 
-        plc = _plant(Ramp(up=1.0), self._copy_reader, enable=enable)
+        plc = _plant(_ramp(1.0), self._copy_reader, enable=enable)
         counter = _kernel_scans(plc)
         plc.run_for(30.0)
         assert counter["n"] < 50
@@ -340,7 +350,7 @@ class TestFeedbackStaysInTheLoop:
         _assert_exact(plc, make)
 
     def test_a_coast_runs_over_a_settled_plant(self) -> None:
-        make = lambda: _plant(Approach(0.0, 0.3), _latch_at(1e30), toggle=True)  # noqa: E731
+        make = lambda: _plant(_approach(0.0, 0.3), _latch_at(1e30), toggle=True)  # noqa: E731
         plc = make()
         _reached, stats = _coast(plc, _hit, budget=3_000, predicate_reads=frozenset({"Hit"}))
         assert stats["stretched_scans"] > 2_500
@@ -362,7 +372,7 @@ class TestFeedbackStaysInTheLoop:
             with Rung(Tog):
                 out(Enable)
 
-        ramp = Ramp(up=1.0, down=-1.0)
+        ramp = _ramp(1.0, -1.0)
         make = lambda: _plant(ramp, _latch_at(1e30), toggle=True, enable=enable)  # noqa: E731
         plc = make()
         _reached, stats = _coast(plc, _hit, budget=3_000, predicate_reads=frozenset({"Hit"}))
@@ -492,18 +502,16 @@ def _on_an_accumulator(
                 on_delay(T, 40, "s")
         plc = PLC(prog, dt=0.010)
         harness = Harness(plc)
-        harness.set_overrides(
-            {feedback: Coupling("Enable", feedback, Physical("S", profile=profile))}
-        )
+        harness.set_overrides({feedback: Coupling("Enable", feedback, Physical("S", **profile))})
         harness.install()
         return plc
 
     return make
 
 
-FAST_APPROACH = Approach(30000.0, 0.1)
-SHORT_APPROACH = Approach(5000.0, 0.2)
-STEEP_RAMP = Ramp(up=100.0)
+FAST_APPROACH = _approach(30000.0, 0.1)
+SHORT_APPROACH = _approach(5000.0, 0.2)
+STEEP_RAMP = _ramp(100.0)
 ACCUMULATOR_PLANTS = [
     pytest.param(_counter, "C_Acc", FAST_APPROACH, 20000, id="counter-approach"),
     pytest.param(_counter, "C_Acc", SHORT_APPROACH, 4000, id="counter-short-approach"),
@@ -568,7 +576,7 @@ class TestAPlantLinkedToAnAccumulator:
     @staticmethod
     def _make(link: str, source: Callable[[], Any], threshold: float) -> Callable[[], PLC]:
         def make() -> PLC:
-            temp = Real("Temp", physical=Physical("S", profile=Ramp(up=1.0, down=-0.5)), link=link)
+            temp = Real("Temp", physical=Physical("S", ramp_on=1.0, ramp_off=-0.5), link=link)
             with Program(strict=False) as prog:
                 with Rung(~Tog):
                     out(Tog)
@@ -669,7 +677,7 @@ def _banked(
     def make() -> PLC:
         bank = Block("Bk", TagType.REAL, 1, size)
         if named:
-            bank.slot(slot, physical=Physical("S", profile=profile), link="Enable")
+            bank.slot(slot, physical=Physical("S", **profile), link="Enable")
         pointer = Int("Idx", default=slot)
         with Program(strict=False) as prog:
             if toggle:
@@ -690,7 +698,7 @@ def _banked(
         plc = PLC(prog, dt=0.010)
         harness = Harness(plc)
         if not named:
-            physical = Physical("S", profile=profile)
+            physical = Physical("S", **profile)
             harness.set_overrides({f"Bk{slot}": Coupling("Enable", f"Bk{slot}", physical)})
         harness.install()
         return plc
@@ -836,12 +844,12 @@ class TestPlantReadThroughAPointer:
             blocks = ClickBlocks()
             if kind == "int":
                 bank = blocks.ds
-                ramp = Physical("S", profile=Ramp(up=130.0))
+                ramp = Physical("S", ramp_on=130.0)
                 temp: Any = Int("Mapped", physical=ramp, link="Enable")
                 threshold: float = 500
             else:
                 bank = blocks.df
-                temp = Real("Mapped", physical=Physical("S", profile=RAMP), link="Enable")
+                temp = Real("Mapped", physical=Physical("S", **RAMP), link="Enable")
                 threshold = 5.0
             temp.map_to(bank[2])
             pointer = Int("Idx", default=2)
@@ -897,13 +905,13 @@ class TestPointerReadsStayInTheLoop:
         self._folds(_banked(reader))
 
     def test_a_settled_plant(self) -> None:
-        self._folds(_banked(_compare_through, profile=Approach(0.0, 0.3)))
+        self._folds(_banked(_compare_through, profile=_approach(0.0, 0.3)))
 
     def test_a_plant_at_rest(self) -> None:
         self._folds(_banked(_compare_through, enable=False))
 
     def test_a_settled_plant_under_a_coast(self) -> None:
-        make = _banked(_compare_through, profile=Approach(0.0, 0.3), toggle=True)
+        make = _banked(_compare_through, profile=_approach(0.0, 0.3), toggle=True)
         plc = make()
         _reached, stats = _coast(plc, _hit, predicate_reads=frozenset({"Hit"}))
         assert stats["stretched_scans"] > 2_500
@@ -941,7 +949,7 @@ def _behind_a_pointer(
 
 def _copy_a_plant_through_a_pointer(slots: Any) -> None:
     bank = Block("Bk", TagType.REAL, 1, 8)
-    bank.slot(2, physical=Physical("S", profile=Ramp(up=1.0)), link="Enable")
+    bank.slot(2, physical=Physical("S", ramp_on=1.0), link="Enable")
     with Rung():
         copy(bank[Int("Idx", default=2)], slots[3])
     with Rung(bank[2] >= 1e30):
@@ -950,7 +958,7 @@ def _copy_a_plant_through_a_pointer(slots: Any) -> None:
 
 def _copy_a_plant_slot(slots: Any) -> None:
     bank = Block("Bk", TagType.REAL, 1, 8)
-    bank.slot(2, physical=Physical("S", profile=Ramp(up=1.0)), link="Enable")
+    bank.slot(2, physical=Physical("S", ramp_on=1.0), link="Enable")
     with Rung():
         copy(bank[2], slots[3])
     with Rung(bank[2] >= 1e30):
@@ -959,7 +967,7 @@ def _copy_a_plant_slot(slots: Any) -> None:
 
 def _copy_a_plant(slots: Any) -> None:
     with Rung():
-        copy(_temp(Ramp(up=1.0)), slots[3])
+        copy(_temp(_ramp(1.0)), slots[3])
 
 
 def _copy_an_accumulator(slots: Any) -> None:
@@ -1372,6 +1380,11 @@ class TestBoolFeedbackUnderACoast:
             latch(Hit)
 
     @staticmethod
+    def _first_fall(fb: Bool) -> None:
+        with Rung(fall(fb)):
+            latch(Hit)
+
+    @staticmethod
     def _third_rise(fb: Bool) -> None:
         count = Int("Cnt")
         with Rung(rise(fb)):
@@ -1379,9 +1392,11 @@ class TestBoolFeedbackUnderACoast:
         with Rung(count == 3):
             latch(Hit)
 
-    @pytest.mark.parametrize("reader", ["_contact", "_third_rise"])
+    # A plain contact sees the flasher on at its first scan, so it leaves nothing to wait
+    # for.  The first fall comes a whole on phase later.
+    @pytest.mark.parametrize("reader", ["_first_fall", "_third_rise"])
     def test_a_pulse_from_a_cold_start_lands_on_the_reader(self, reader: str) -> None:
-        physical = Physical("Sensor", profile=Pulse(on_dwell="2s", off_dwell="3s"))
+        physical = Physical("Sensor", flasher_on="2s", flasher_off="3s")
         make = lambda: self._bool_plant(physical, getattr(self, reader))  # noqa: E731
         expected = _first_hit(make)
         assert expected is not None
@@ -1412,7 +1427,7 @@ class TestApproachToAKnownTag:
             with Rung(SetPt > 1000.0, temp >= 0.0):
                 latch(Hit)
 
-        plc = _plant(Approach("SetPt", 0.3), reader)
+        plc = _plant(_approach("SetPt", 0.3), reader)
         plc.run_for(5.0)
         assert plc.state.tags["Temp"] > 0.0
 

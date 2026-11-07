@@ -90,14 +90,33 @@ def plant_timer(delay_ms: int) -> tuple[int, str, int]:
     )
 
 
-def plant_acc_name(stem: str, fb_name: str, delay_ms: int) -> str:
-    """The accumulator of a plant timer on *fb_name*, in the unit it counts *delay_ms* in.
+def coil_timer(on_ms: int, off_ms: int) -> tuple[int, int, str, int]:
+    """``(on preset, off preset, unit, ms per unit)`` for a plant coil's two timers.
+
+    A CLICK coil counts both its timers in one unit, so this takes the finest unit
+    both delays fit in (see :func:`plant_timer`), each rounded up to a whole one.
+    """
+    for unit, unit_ms in _TIMER_UNITS_MS:
+        on_preset, off_preset = -(-on_ms // unit_ms), -(-off_ms // unit_ms)
+        if max(on_preset, off_preset) <= TIMER_ACC_MAX:
+            return on_preset, off_preset, unit, unit_ms
+    raise ValueError(
+        f"a feedback delay of {max(on_ms, off_ms)} ms is longer than a timer can count (32767 days)"
+    )
+
+
+def plant_unit_ms(unit: str) -> int:
+    """Milliseconds in one count of a plant timer's *unit*."""
+    return dict(_TIMER_UNITS_MS)[unit]
+
+
+def plant_acc_name(stem: str, fb_name: str, unit: str) -> str:
+    """The accumulator of a plant timer on *fb_name* that counts in *unit*.
 
     A count means nothing without its unit, so a delay in another unit counts in another
     tag, and any state reads the same whichever coupling runs on it, a fork from before
     the link changed included.  Milliseconds have the plain name.
     """
-    _preset, unit, _unit_ms = plant_timer(delay_ms)
     return _acc_name_in(unit, stem, fb_name)
 
 
@@ -114,36 +133,39 @@ def bool_feedback_rungs(
     *,
     enable: Condition,
     fb_tag: Tag,
-    ton_done: Tag,
-    ton_acc: Tag,
-    tof_acc: Tag,
+    on_done: Tag,
+    on_acc: Tag,
+    off_done: Tag,
+    off_acc: Tag,
     on_delay_ms: int,
     off_delay_ms: int,
 ) -> list[Rung]:
-    """Lower a bool coupling to a real on-delay/off-delay timer pair (dwell).
+    """Lower a bool coupling to the CLICK debounce coil a delayed device behaves like::
 
-    Two plant rungs, exactly what a hand-written ladder would use::
+        Rung(enable): debounce(fb_tag, on=(on timer, on_delay), off=(off timer, off_delay))
 
-        Rung(enable):   on_delay(ton_done, ton_acc, on_delay_ms)
-        Rung(ton_done): off_delay(fb_tag,  tof_acc, off_delay_ms)
-
-    ``enable`` is sustained for ``on_delay`` before ``ton_done`` rises; feeding
-    ``ton_done`` through the off-delay keeps ``fb_tag`` asserted for
-    ``off_delay`` after the enable drops.  A glitch shorter than ``on_delay``
-    resets the accumulator, so feedback that was never sustained is never
-    fabricated — the dwell semantics, now native (no transport-delay heap).
-    Presets are in the unit :func:`plant_timer` picks, ms unless the delay is too
-    long for it, so a held enable crosses after ``ceil(delay_ms / dt_ms)`` scans.
+    ``fb_tag`` turns on once the enable has held for ``on_delay`` and off once it has
+    been off for ``off_delay``, so a dip shorter than ``off_delay`` keeps it on.  Like
+    CLICK's, the off side compares a scan after the fall, so ``fb_tag`` drops a scan
+    later than an off-delay timer of the same preset would.  ``on_done`` and
+    ``off_done`` only name the two timers.  Both presets count in the unit
+    :func:`coil_timer` picks.
     """
-    from pyrung.core.condition import BitCondition
-    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.instruction.out_variants import DebounceInstruction
 
-    on_preset, on_unit, _ = plant_timer(on_delay_ms)
-    off_preset, off_unit, _ = plant_timer(off_delay_ms)
-    ton = OnDelayInstruction(ton_done, ton_acc, on_preset, enable, unit=on_unit)
-    ton_power = BitCondition(ton_done)
-    tof = OffDelayInstruction(fb_tag, tof_acc, off_preset, ton_power, unit=off_unit)
-    return [_rung_holding(enable, ton), _rung_holding(ton_power, tof)]
+    on_preset, off_preset, unit, _ = coil_timer(on_delay_ms, off_delay_ms)
+    coil = DebounceInstruction(
+        fb_tag,
+        on_done=on_done,
+        on_acc=on_acc,
+        on_preset=on_preset,
+        off_done=off_done,
+        off_acc=off_acc,
+        off_preset=off_preset,
+        unit=unit,
+        enable_condition=enable,
+    )
+    return [_rung_holding(enable, coil)]
 
 
 def analog_feedback_rungs(
@@ -156,7 +178,7 @@ def analog_feedback_rungs(
     up: float,
     down: float,
 ) -> list[Rung]:
-    """Lower a linear analog coupling (a :class:`~pyrung.core.physical.Ramp`) to plant rungs.
+    """Lower a linear analog coupling (``ramp_on``/``ramp_off``) to plant rungs.
 
     Rates are per **second**, applied against ``dt_tag`` (``sys.dt``), so the ramp
     is stable across scan periods.  The rungs are exactly what a hand-written
@@ -194,7 +216,7 @@ def analog_approach_rung(
     rate: float,
     dt_tag: Tag,
 ) -> list[Rung]:
-    """Lower a first-order analog coupling (an :class:`~pyrung.core.physical.Approach`).
+    """Lower a first-order analog coupling (``approach_to``/``approach_rate``).
 
     One guarded ``calc`` plant rung — ``fb += rate*(toward - fb)*dt`` while
     energized, holding on enable fall::
@@ -215,7 +237,6 @@ def analog_approach_rung(
 def pulse_feedback_rungs(
     *,
     enable: Condition,
-    disable: Condition,
     fb_tag: Tag,
     on_done: Tag,
     on_acc: Tag,
@@ -224,48 +245,76 @@ def pulse_feedback_rungs(
     on_dwell_ms: int,
     off_dwell_ms: int,
 ) -> list[Rung]:
-    """Lower a bool pulse-train coupling (a :class:`~pyrung.core.physical.Pulse`).
+    """Lower a bool pulse-train coupling (``flasher_on``/``flasher_off``) to a flasher::
 
-    An astable oscillator in plant rungs — the classic ladder "flasher".  While
-    enabled, ``fb`` cycles high for ``on_dwell`` then low for ``off_dwell``; when
-    disabled it rests low::
+        Rung(enable): flasher(fb_tag, on=(on timer, on_dwell), off=(off timer, off_dwell))
 
-        Rung(enable & fb):             on_delay(on_done,  on_acc,  on_dwell)   # high dwell
-        Rung(enable & ~fb):            on_delay(off_done, off_acc, off_dwell)  # low dwell
-        Rung(enable & ~fb & off_done): latch(fb)   # low long enough → go high
-        Rung(enable & fb & on_done):   reset(fb)   # high long enough → go low
-        Rung(~enable):                 reset(fb)   # disabled → low
-
-    Each dwell timer is a real on-delay that auto-resets when its guard drops
-    (``fb`` flips), so the two ping-pong.  Each rung reads ``fb`` and the timers
-    as the rungs above it left them, so a half-cycle costs one scan of slop —
-    inconsequential for a pulse train.
-    Presets are in the unit :func:`plant_timer` picks, ms unless the dwell is too long
-    for it, so a dwell lasts ``ceil(dwell_ms/dt_ms)`` scans.
+    While enabled, ``fb_tag`` is on for ``on_dwell`` and off for ``off_dwell``, starting
+    with the on phase.  It is off while disabled.  As on a CLICK, the first on phase
+    counts the enable's first scan, so it is a scan short, and a dwell of 0 keeps
+    ``fb_tag`` off.  ``on_done`` and ``off_done`` only name the two timers.  Both
+    presets count in the unit :func:`coil_timer` picks.
     """
-    from pyrung.core.condition import AllCondition, BitCondition
-    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
-    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.instruction.out_variants import FlasherInstruction
 
-    fb_high = BitCondition(fb_tag)
-    fb_low = ~fb_tag
-    on_guard = AllCondition(enable, fb_high)
-    off_guard = AllCondition(enable, fb_low)
-    on_preset, on_unit, _ = plant_timer(on_dwell_ms)
-    off_preset, off_unit, _ = plant_timer(off_dwell_ms)
-    ton_high = OnDelayInstruction(on_done, on_acc, on_preset, on_guard, unit=on_unit)
-    ton_low = OnDelayInstruction(off_done, off_acc, off_preset, off_guard, unit=off_unit)
-    return [
-        _rung_holding(on_guard, ton_high),
-        _rung_holding(off_guard, ton_low),
-        _rung_holding(
-            AllCondition(enable, fb_low, BitCondition(off_done)), LatchInstruction(fb_tag)
-        ),
-        _rung_holding(
-            AllCondition(enable, fb_high, BitCondition(on_done)), ResetInstruction(fb_tag)
-        ),
-        _rung_holding(disable, ResetInstruction(fb_tag)),
-    ]
+    on_preset, off_preset, unit, _ = coil_timer(on_dwell_ms, off_dwell_ms)
+    coil = FlasherInstruction(
+        fb_tag,
+        on_done=on_done,
+        on_acc=on_acc,
+        on_preset=on_preset,
+        off_done=off_done,
+        off_acc=off_acc,
+        off_preset=off_preset,
+        unit=unit,
+        enable_condition=enable,
+    )
+    return [_rung_holding(enable, coil)]
+
+
+def timed_feedback_rungs(
+    *,
+    enable: Condition,
+    fb_tag: Tag,
+    timer_done: Tag,
+    timer_acc: Tag,
+    on_ms: int,
+    maintained: bool,
+) -> list[Rung]:
+    """Lower a ``timed`` coupling to a CLICK timed coil::
+
+        Rung(enable): timed(fb_tag, timer, on_ms, maintained=maintained)
+
+    Each rise of the enable turns ``fb_tag`` on for ``on_ms``.  Maintained, it then
+    follows the enable.  As on a CLICK, the rise's scan counts toward the time, so an
+    on time of a scan or less gives no pulse.  ``timer_done`` only names the timer.
+    The preset counts in the unit :func:`plant_timer` picks.
+    """
+    from pyrung.core.instruction.out_variants import TimedInstruction
+
+    preset, unit, _ = plant_timer(on_ms)
+    coil = TimedInstruction(
+        fb_tag,
+        timer_done=timer_done,
+        timer_acc=timer_acc,
+        on_preset=preset,
+        unit=unit,
+        maintained=maintained,
+        enable_condition=enable,
+    )
+    return [_rung_holding(enable, coil)]
+
+
+def toggle_feedback_rungs(*, enable: Condition, fb_tag: Tag) -> list[Rung]:
+    """Lower a ``toggle`` coupling to a CLICK toggle coil::
+
+        Rung(enable): toggle(fb_tag)
+
+    Each rise of the enable flips ``fb_tag``, which keeps its value in between.
+    """
+    from pyrung.core.instruction.out_variants import ToggleInstruction
+
+    return [_rung_holding(enable, ToggleInstruction(fb_tag, enable))]
 
 
 def copy_hold_rung(

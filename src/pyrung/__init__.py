@@ -8,7 +8,6 @@ Import user-facing DSL symbols from this module:
 from pyrung.core import (
     PLC,
     And,
-    Approach,
     Block,
     Bool,
     BoolBlock,
@@ -30,10 +29,8 @@ from pyrung.core import (
     OutputBlock,
     Physical,
     Program,
-    Pulse,
     PyrungNameError,
     PyrungNameWarning,
-    Ramp,
     RangeComparison,
     RangeSlotView,
     Real,
@@ -102,9 +99,6 @@ from pyrung.core import (
 __all__ = [
     "PLC",
     "Physical",
-    "Ramp",
-    "Approach",
-    "Pulse",
     "Coupling",
     "Harness",
     "system",

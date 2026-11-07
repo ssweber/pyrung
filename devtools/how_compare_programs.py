@@ -54,7 +54,6 @@ from pyrung import (  # noqa: E402
     Int,
     Or,
     Program,
-    Pulse,
     Rung,
     TagType,
     Timer,
@@ -75,6 +74,19 @@ from pyrung import (  # noqa: E402
 )
 from pyrung.core import Harness, Physical  # noqa: E402
 from pyrung.core.harness import Coupling  # noqa: E402
+
+
+def _flasher(name, on, off):
+    """A flasher Physical, in the old ``Pulse`` form on a base from before the flat keywords."""
+    try:
+        return Physical(name, flasher_on=on, flasher_off=off)
+    except TypeError:
+        import pyrung
+
+        pulse = vars(pyrung)["Pulse"]
+        old: dict[str, Any] = {"profile": pulse(on_dwell=on, off_dwell=off)}
+        return Physical(name, **old)
+
 
 FS = system.sys.first_scan
 FAULT = "fault.out_of_range"
@@ -229,6 +241,46 @@ _add(
 )
 _add("midcount", "mid/alarm settled 5s->10s", mid_alarm("5s", "10s", 40), fast=False)
 _add("midcount", "mid/alarm settled 60s->5s", mid_alarm("60s", "5s", 40), fast=False)
+
+
+def bench_dip(dip_scans, dt=0.1):
+    """A settled feedback under a bench link of on 1 s / off 500 ms, then a command dip.
+
+    A dip shorter than the off delay keeps the feedback on, so the alarm on its drop still
+    needs a real drop of the enable.
+    """
+
+    def build():
+        En = Bool("En")
+        Fb = Bool("Fb", physical=Physical("S", on_delay="200ms", off_delay="200ms"), link="En")
+        Armed, Alarm = Bool("Armed"), Bool("Alarm")
+        with Program(strict=False) as p:
+            with Rung(En):
+                out(Bool("Seen"))
+            with Rung(Fb):
+                latch(Armed)
+            with Rung(Armed, ~Fb):
+                latch(Alarm)
+        plc = PLC(p, dt=dt)
+        h = Harness(plc)
+        h.install()
+        plc.patch({"En": True})
+        plc.run(12)
+        bench = Physical("S", on_delay="1s", off_delay="500ms")
+        h.set_overrides({"Fb": Coupling("En", "Fb", bench, None)})
+        plc.run(3)
+        if dip_scans:
+            plc.patch({"En": False})
+            plc.run(dip_scans)
+            plc.patch({"En": True})
+            plc.run(3)
+        return dict(plc=plc, targets=(Alarm,), goal=_tag_goal(Alarm))
+
+    return build
+
+
+_add("midcount", "mid/bench dip 2 scans under 1s/500ms", bench_dip(2))
+_add("midcount", "mid/bench drop under 1s/500ms", bench_dip(0))
 
 
 # --------------------------------------------------------------------------- shared shapes
@@ -477,7 +529,7 @@ def _harness_delay(on, off=None):
 
 
 def _pulse(on_s, off_s):
-    physical = Physical("Sensor", profile=Pulse(on_dwell=f"{on_s}s", off_dwell=f"{off_s}s"))
+    physical = _flasher("Sensor", f"{on_s}s", f"{off_s}s")
     fb = Bool("Fb", physical=physical, link="Enable")
     enable, go, hit, t1 = (
         Bool("Enable"),
@@ -1281,7 +1333,7 @@ def _pulse_other_contact(*, held):
     enable = Bool("En", external=True)
     feedback = Bool(
         "Fb",
-        physical=Physical("Fb", profile=Pulse(on_dwell="500ms", off_dwell="500ms")),
+        physical=_flasher("Fb", "500ms", "500ms"),
         link="En",
     )
     hit = Bool("Hit")
