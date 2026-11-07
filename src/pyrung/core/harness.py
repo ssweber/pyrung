@@ -503,9 +503,9 @@ class Harness:
                 continue
             on_preset, off_preset, _unit, unit_ms = coil_timer(c.on_delay_ms, c.off_delay_ms)
             unit_ns = unit_ms * _NS_PER_MS
-            # The coil sees an enable change on the next scan.  Until then the count
-            # it will start from is 0: the debounce clears its on side at a rise, and
-            # its off side is 0 on every true scan.
+            # The coil sees an enable change on the next scan, and counts that side
+            # from 0.  The debounce clears its on side at a rise, and its off side is
+            # 0 on every true scan.
             seen = bool(state.memory.get(c.rung_memory_key, False)) != bool(
                 snap.get(c.fb_name, False)
             )
