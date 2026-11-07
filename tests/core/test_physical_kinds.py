@@ -130,9 +130,16 @@ class TestRoundTrip:
         meta, _rest = parse_tag_meta(f"[link=Run, {text}]")
         assert format_tag_meta(meta) == f"[link=Run, {text}]"
 
-    def test_the_writer_refuses_a_flag_alone(self):
-        with pytest.raises(ValueError, match="toggle needs link="):
-            format_tag_meta(TagMeta(toggle=True))
+    @pytest.mark.parametrize(
+        "meta",
+        [TagMeta(toggle=True), TagMeta(toggle=True, system="S"), TagMeta(toggle=True, lock=True)],
+    )
+    def test_the_writer_refuses_a_flag_without_link_or_physical(self, meta):
+        with pytest.raises(ValueError, match="toggle needs link= or physical="):
+            format_tag_meta(meta)
+
+    def test_the_writer_takes_a_flag_beside_physical(self):
+        assert format_tag_meta(TagMeta(physical="Sw", toggle=True)) == "[physical=Sw, toggle]"
 
     @pytest.mark.parametrize(("kind", "keywords", "text"), EVERY_KIND, ids=_ids())
     def test_keywords_rebuild_the_physical(self, kind, keywords, text):

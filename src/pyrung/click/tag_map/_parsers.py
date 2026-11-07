@@ -765,9 +765,10 @@ def format_tag_meta(meta: TagMeta | None) -> str:
                     raise ValueError(f"Invalid TagMeta choice value {value!r}.")
                 pairs.append(f"{label}:{value_text}")
             tokens.append(f"choices={'|'.join(pairs)}")
-    if not _is_tag_meta(tokens):
-        # The reader takes a group of flags alone as the user's own text.
-        raise ValueError(f"TagMeta {', '.join(tokens)} needs link= beside it.")
+    flags = [name for name in response if PHYSICAL_KEYS[name].is_flag]
+    if flags and meta.link is None and meta.physical is None:
+        # A flag answers a linked command, and the reader takes a group of flags alone as text.
+        raise ValueError(f"TagMeta {flags[0]} needs link= or physical= beside it.")
     return f"[{', '.join(tokens)}]"
 
 

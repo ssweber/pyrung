@@ -97,6 +97,14 @@ def test_the_upgraded_comment_gives_the_old_physical():
         ("[link=Run, profile=ramp:rise=1]", "profile=ramp:rise=1"),
         ("[link=Run, profile=ramp]", "profile=ramp"),
         ("[link=Run, profile=bogus:x=1]", "profile=bogus:x=1"),
+        # A renamed parameter given empty, which older pyrung refused.
+        ("[link=Heat, profile=ramp:up=1|down=]", "profile=ramp:up=1|down="),
+        # Values the new keys can't hold.
+        (
+            "[link=Pump, profile=approach:toward=X:1|rate=0.3]",
+            "profile=approach:toward=X:1|rate=0.3",
+        ),
+        ("[link=Heat, profile=ramp:up=fast]", "profile=ramp:up=fast"),
     ],
 )
 def test_an_old_form_no_migration_reads_is_listed_and_left_alone(comment, token):
@@ -129,6 +137,25 @@ def test_a_bad_comment_in_a_nickname_file_names_the_row(tmp_path):
     }
     pyclickplc.write_csv(path, records)
     with pytest.raises(ValueError, match=r"^OvenTemp at DF5: .*Upgrade project"):
+        TagMap.from_nickname_file(path)
+
+
+@pytest.mark.parametrize("comment", ["[toggle, system=S] Lamp", "[lock, toggle] Lamp"])
+def test_a_tag_the_comment_cannot_build_names_the_row(tmp_path, comment):
+    path = tmp_path / "flag.csv"
+    records = {
+        get_addr_key("C", 7): AddressRecord(
+            memory_type="C",
+            address=7,
+            nickname="Lamp",
+            comment=comment,
+            initial_value="",
+            retentive=False,
+            data_type=DataType.BIT,
+        )
+    }
+    pyclickplc.write_csv(path, records)
+    with pytest.raises(ValueError, match=r"^Lamp at C7: .*requires link"):
         TagMap.from_nickname_file(path)
 
 

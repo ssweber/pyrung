@@ -15,7 +15,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from ._parsers import _OLD_FORM_TOKENS, _TAG_META_GROUP_RE, _is_tag_meta
+from pyrung.core.physical import PHYSICAL_KEYS
+
+from ._parsers import _CHOICE_VALUE_RE, _OLD_FORM_TOKENS, _TAG_META_GROUP_RE, _is_tag_meta
 
 #: One token in a ``[...]`` group, with the spaces around it kept apart from its text.
 _TOKEN_RE = re.compile(r"(?:(?<=,)|^)(\s*)([^,]*?)(\s*)(?=,|$)")
@@ -36,12 +38,24 @@ def _params(text: str) -> dict[str, str] | None:
     return values
 
 
+def _fits(key: str, value: str) -> bool:
+    """True when the current comment grammar can hold *value* as *key*."""
+    if not value or _CHOICE_VALUE_RE.fullmatch(value) is None:
+        return False
+    try:
+        PHYSICAL_KEYS[key].parse(value)
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class CommentMigration:
     """One numbered rewrite of an old ``profile=<kind>:a=..|b=..`` token into new keys.
 
     It reads what older pyrung read. Spaces around the kind and the values are allowed, and
-    a parameter older pyrung ignored is dropped.
+    a parameter older pyrung ignored is dropped. A token it can't rewrite whole stays as
+    written, so ``old_form_tokens`` lists it for the user to fix.
     """
 
     number: int
@@ -64,7 +78,10 @@ class CommentMigration:
         values = _params(params)
         if values is None or not all(values.get(name) for name in self.required):
             return None
-        return ", ".join(f"{new}={values[old]}" for old, new in self.renames if values.get(old))
+        renamed = [(new, values[old]) for old, new in self.renames if old in values]
+        if not all(_fits(new, value) for new, value in renamed):
+            return None
+        return ", ".join(f"{new}={value}" for new, value in renamed)
 
     def apply(self, comment: str) -> str:
         """*comment* with this migration's old tokens rewritten, every other character kept."""
