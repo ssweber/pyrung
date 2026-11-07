@@ -2598,9 +2598,11 @@ def test_one_register_fill_exports_a_copy_of_the_same_value(build, token):
     assert _single_fill_tokens(build) == [token]
 
 
-def test_one_register_fill_into_text_from_a_number_register_passes_the_copy_checks():
-    # A Fill takes no number register into TXT, a Copy does.
-    assert _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5))) == ["copy(DS1,TXT5)"]
+def test_one_register_fill_into_text_from_a_number_register_is_still_refused():
+    # A Fill takes no number register into TXT, and a one-register Fill must pass
+    # the Fill table as well as the Copy one.
+    with pytest.raises(LadderExportError, match="Copy operation fill is incompatible"):
+        _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5)))
 
 
 def test_one_register_fill_keeps_the_checks_of_a_copy():
@@ -2612,10 +2614,12 @@ def test_one_register_fill_keeps_the_checks_of_a_copy():
 
 
 def test_one_register_fill_refuses_text_that_a_copy_would_convert():
+    # The bank check refuses these first, so allow it to reach the export's own refusal.
+    allow = ("CLK_COPY_BANK_INCOMPATIBLE",)
     with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
-        _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)))
+        _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)), allow=allow)
     with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
-        _single_fill_tokens(lambda: fill(txt[1], ds.select(5, 5)))
+        _single_fill_tokens(lambda: fill(txt[1], ds.select(5, 5)), allow=allow)
 
 
 def test_one_register_fill_refuses_several_characters():
