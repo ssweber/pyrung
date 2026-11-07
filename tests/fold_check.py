@@ -824,8 +824,9 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
     A stateful predicate (a call counter, a recorder, ``rise()``'s edge memory) must
     not be advanced by the twin's extra calls, and must meet the twin's scans from the
     state it had when the folded run began.  So it is copied before the folded run starts,
-    functions included, cell by cell.  The runner itself is shared, not copied.  An
-    uncopyable predicate is not asked.
+    cell by cell.  The runner itself is shared, not copied.  A class is not copied either, so
+    a function reached only through a class (a ``__call__`` or another method) still reads and
+    writes the real module-level names.  An uncopyable predicate is not asked.
     """
     try:
         return _PrivateCopy(plc).of(predicate)
@@ -836,10 +837,12 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
 class _PrivateCopy:
     """A deep copy that clones functions too, built on public protocols only.
 
-    ``copy.deepcopy()`` returns a function as it is, and Python 3.14 checks that before any hook
-    it offers.  So this copier walks the predicate itself.  Objects are rebuilt through
-    ``__deepcopy__`` or the pickle protocol (``copyreg.dispatch_table``, ``__reduce_ex__(4)``),
-    as ``deepcopy()`` rebuilds them.  A module is shared with the run, so it cannot be copied.
+    Python 3.14's ``copy.deepcopy()`` returns a function unchanged before it reads its dispatch
+    table, so no hook can make it clone one.  This copier walks the predicate itself instead.  It
+    rebuilds other objects through the pickle protocol (``copyreg.dispatch_table``,
+    ``__reduce_ex__(4)``), as ``deepcopy()`` does.  An object's own ``__deepcopy__`` is used only
+    where its copy keeps no function of the original and holds no copied runner.  A module is
+    shared with the run, so it cannot be copied.
     """
 
     _LEAVES = frozenset(
@@ -855,8 +858,6 @@ class _PrivateCopy:
             bytes,
             range,
             types.CodeType,
-            types.BuiltinFunctionType,
-            weakref.ref,
             property,
         }
     )
@@ -864,32 +865,43 @@ class _PrivateCopy:
     def __init__(self, plc: Any) -> None:
         self.plc_type = type(plc)
         self.shared = _shared_types()
-        self.memo: dict[int, Any] = {}
+        self.memo: dict[int, Any] = {id(plc): plc}
         # Each original stays alive until the copy is done, so no id in the memo is reused.
-        self.originals: list[Any] = []
+        self.originals: list[Any] = [plc]
+        # One private globals dict per module, so two functions of it still share their names.
+        self.module_globals: dict[int, dict[str, Any]] = {}
 
     def _remember(self, obj: Any, new: Any) -> Any:
         self.memo[id(obj)] = new
         self.originals.append(obj)
         return new
 
+    def _is_shared(self, obj: Any) -> bool:
+        return isinstance(obj, type) or type(obj) is self.plc_type or isinstance(obj, self.shared)
+
     def of(self, obj: Any) -> Any:
         if id(obj) in self.memo:
             return self.memo[id(obj)]
         cls = type(obj)
-        if (
-            cls in self._LEAVES
-            or isinstance(obj, type)
-            or cls is self.plc_type
-            or isinstance(obj, self.shared)
-        ):
+        if cls in self._LEAVES or self._is_shared(obj):
             return obj
         if isinstance(obj, types.ModuleType):
             raise TypeError(f"module {obj.__name__} is shared with the run")
+        if cls is weakref.ref:
+            referent = obj()
+            if referent is None or self._is_shared(referent):
+                return obj
+            raise TypeError("a live weak reference reaches an object the run shares")
         if cls is types.FunctionType:
             return self._function(obj)
         if cls is types.MethodType:
-            return self._remember(obj, types.MethodType(obj.__func__, self.of(obj.__self__)))
+            func = obj.__func__
+            if not _defined_on_its_class(obj):
+                func = self.of(func)
+            owner = self.of(obj.__self__)
+            if id(obj) in self.memo:  # a cycle through the method copied it already
+                return self.memo[id(obj)]
+            return self._remember(obj, types.MethodType(func, owner))
         if cls is list:
             new_list: list[Any] = self._remember(obj, [])
             new_list.extend(self.of(item) for item in obj)
@@ -907,8 +919,49 @@ class _PrivateCopy:
             return self._remember(obj, obj if same else tuple(items))
         copier = getattr(obj, "__deepcopy__", None)
         if copier is not None:
-            return self._remember(obj, copier(self.memo))
+            return self._remember(obj, self._own_deepcopy(obj, copier))
         return self._rebuilt(obj)
+
+    def _own_deepcopy(self, obj: Any, copier: Callable[[dict[int, Any]], Any]) -> Any:
+        """*obj*'s own ``__deepcopy__``, refused where its copy still runs the original's code.
+
+        That copy goes through ``copy.deepcopy()``, which neither clones a function nor knows
+        the runner.  So the shared objects go into the memo first, and a copy that keeps a
+        function of the original or holds a copied runner is refused.
+        """
+        stops = (self.plc_type, *self.shared)
+        before = list(_reachable(obj, None, stops))
+        for o in before:
+            if self._is_shared(o):
+                self.memo.setdefault(id(o), o)
+        new = copier(self.memo)
+        if new is obj and callable(obj):
+            raise TypeError(f"{type(obj).__name__}.__deepcopy__ returns the callable itself")
+        live = {i for o in before for i in self._code_ids(o)}
+        runners = {id(o) for o in before if type(o) is self.plc_type}
+        for o in _reachable(new, None, stops):
+            if live.intersection(self._code_ids(o)):
+                raise TypeError(
+                    f"{type(obj).__name__}.__deepcopy__ keeps a function of the original"
+                )
+            if type(o) is self.plc_type and id(o) not in runners:
+                raise TypeError(f"{type(obj).__name__}.__deepcopy__ copies the runner")
+        return new
+
+    @staticmethod
+    def _code_ids(obj: Any) -> list[int]:
+        """The ids by which *obj* runs code that can hold state (a function or a bound method)."""
+        if isinstance(obj, types.FunctionType):
+            return [id(obj)]
+        if isinstance(obj, types.MethodType):
+            if _defined_on_its_class(obj):
+                return [id(obj)]
+            return [id(obj), id(obj.__func__)]
+        if isinstance(obj, types.BuiltinFunctionType) and not isinstance(
+            obj.__self__, (types.NoneType, types.ModuleType)
+        ):
+            return [id(obj)]
+        return []
 
     def _function(self, fn: types.FunctionType) -> types.FunctionType:
         cells = None
@@ -922,12 +975,18 @@ class _PrivateCopy:
             code = todo.pop()
             names.update(code.co_names)
             todo.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
-        private: dict[str, Any] = {"__builtins__": fn.__globals__.get("__builtins__", {})}
-        private["__name__"] = fn.__globals__.get("__name__", "")
+        private = self.module_globals.get(id(fn.__globals__))
+        if private is None:
+            private = {
+                "__builtins__": fn.__globals__.get("__builtins__", {}),
+                "__name__": fn.__globals__.get("__name__", ""),
+            }
+            self.module_globals[id(fn.__globals__)] = private
+            self.originals.append(fn.__globals__)
         new = types.FunctionType(fn.__code__, private, fn.__name__, None, cells)
         self._remember(fn, new)
         for name in names:
-            if name in fn.__globals__:
+            if name in fn.__globals__ and name not in private:
                 private[name] = self.of(fn.__globals__[name])
         new.__kwdefaults__ = self.of(fn.__kwdefaults__)
         new.__defaults__ = self.of(fn.__defaults__)
@@ -945,12 +1004,12 @@ class _PrivateCopy:
             return obj
         parts: list[Any] = [*saved, None, None, None, None]
         rebuild, args, state, list_items, dict_items, state_setter = parts[:6]
-        if state_setter is not None:
-            raise TypeError(f"{type(obj).__name__} restores its state its own way")
         new = self._remember(obj, rebuild(*self.of(args)))
         if state is not None:
             state = self.of(state)
-            if hasattr(new, "__setstate__"):
+            if state_setter is not None:
+                state_setter(new, state)
+            elif hasattr(new, "__setstate__"):
                 new.__setstate__(state)
             else:
                 slots = None
@@ -965,6 +1024,19 @@ class _PrivateCopy:
         for key, value in dict_items or ():
             new[self.of(key)] = self.of(value)
         return new
+
+
+def _defined_on_its_class(method: types.MethodType) -> bool:
+    """The method's function is its class's own, which is shared since no class is copied."""
+    owner = method.__self__
+    func = method.__func__
+    for cls in (owner if isinstance(owner, type) else type(owner)).__mro__:
+        for attr in vars(cls).values():
+            if attr is func or (
+                isinstance(attr, (classmethod, staticmethod)) and attr.__func__ is func
+            ):
+                return True
+    return False
 
 
 def _reachable(root: Any, plc: Any, stop: tuple[type, ...] = ()) -> Iterator[Any]:
