@@ -208,11 +208,11 @@ The test never toggles the feedback by hand.
 
 ### How bool feedback works
 
-Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), scanned as a **plant** (the harness's model of the device) at the top of each scan (the input-read phase). The on-delay accumulates while the command is sustained. Once it crosses `on_delay`, `Fb` asserts. The off-delay then holds `Fb` for `off_delay` after the command drops. A command pulse shorter than `on_delay` never sustains the timer, so the pulse never fabricates feedback. This is **dwell**, not a transport delay. The on-delay is rounded up to scan ticks based on the PLC's `dt`.
+Each bool coupling runs as a CLICK `debounce` coil on its link, scanned as a **plant** (the harness's model of the device) at the top of each scan (the input-read phase). `Fb` turns on once the command has been on for `on_delay`. It turns off once the command has been off for `off_delay`. A command pulse shorter than `on_delay` never turns `Fb` on. A dip shorter than `off_delay` never turns `Fb` off. Both delays are rounded up to whole scans of the PLC's `dt`.
 
-Feedback is an **input**. The plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan. With `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model. A sensor can't respond to an output before it's written.)
+Feedback is an **input**. The plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan. With `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model. A sensor can't respond to an output before it's written.) A dropped command clears `Fb` one scan later than the same delay would set it, as `debounce` does on a CLICK.
 
-A delay longer than 32.767 s counts in whole seconds, rounded up. A delay longer than about 9 hours counts in whole minutes. The same goes for a `Pulse` dwell.
+A delay longer than 32.767 s counts in whole seconds, rounded up. A delay longer than about 9 hours counts in whole minutes. The same goes for a `Pulse` dwell. Both delays of one `Physical` count in the same unit, so `on_delay="100ms", off_delay="40s"` turns `Fb` on after 1 s.
 
 Multiple `Fb` fields linked to the same `En` are independent timers, each with its own `Physical` timing. A vacuum gripper's `Fb_Contact` (5ms) and `Fb_Vacuum` (80ms) assert at different scans from the same `En` edge.
 
@@ -239,7 +239,7 @@ from pyrung import Approach
 OVEN = Physical("Oven", profile=Approach(toward=180.0, rate=0.3))   # exponential to 180°C
 ```
 
-**`Pulse`** — a bool pulse train (an astable "flasher") for a discrete pulse sensor like a shaft encoder or flow-meter output. While `En` is active, `Fb` cycles high for `on_dwell` then low for `off_dwell`. It rests low when disabled:
+**`Pulse`** — a bool pulse train (an astable "flasher") for a discrete pulse sensor like a shaft encoder or flow-meter output. It runs as a CLICK `flasher` coil. While `En` is active, `Fb` cycles high for `on_dwell` then low for `off_dwell`. It rests low when disabled:
 
 ```python
 from pyrung import Pulse
@@ -253,6 +253,8 @@ class Conveyor:
 ```
 
 A counter instruction in the logic counts the rising edges. The harness produces the pulse train and the program counts it.
+
+`Fb` goes high the scan after `En` turns on, and that first high phase is one scan short. A dwell of 0 keeps `Fb` low.
 
 In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 

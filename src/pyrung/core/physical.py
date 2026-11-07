@@ -167,8 +167,7 @@ class Pulse:
     duration strings, e.g. ``"0.5s"``) as long as the linked enable is active,
     and rests low when disabled.  This is the declarative form of a discrete
     pulse sensor (a shaft encoder, a flow-meter pulse output) — lowered by
-    :func:`pyrung.core.synthesis.pulse_feedback_rungs` to a self-resetting
-    on-delay pair plus two toggle rungs (the classic ladder "flasher").
+    :func:`pyrung.core.synthesis.pulse_feedback_rungs` to a CLICK ``flasher`` coil.
 
     Round-trips through a Click comment as
     ``profile=pulse:on_dwell=<on_dwell>|off_dwell=<off_dwell>``.

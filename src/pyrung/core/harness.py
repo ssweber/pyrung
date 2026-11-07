@@ -491,9 +491,9 @@ class Harness:
     def pending_ms(self) -> dict[str, int]:
         """Simulated ms left before each mid-transition bool feedback flips.
 
-        Keyed by feedback name; a feedback that agrees with its enable is
-        absent. Rising, the on side is counting; falling, the off side is,
-        and the debounce drops the feedback a scan after its count is done.
+        Keyed by feedback name.  A feedback that agrees with its enable is absent.
+        On a rise the on side counts.  On a fall the off side counts, and the
+        debounce drops the feedback a scan after that count is done.
         """
         state = self._plc.current_state
         snap = state.tags
@@ -510,8 +510,10 @@ class Harness:
                 snap.get(c.fb_name, False)
             )
             if snap.get(c.fb_name, False):
-                preset, acc_name, scan_ns = off_preset, c.off_acc_name, round(
-                    self._plc._dt * 1_000 * _NS_PER_MS
+                preset, acc_name, scan_ns = (
+                    off_preset,
+                    c.off_acc_name,
+                    round(self._plc._dt * 1_000 * _NS_PER_MS),
                 )
             else:
                 preset, acc_name, scan_ns = on_preset, c.on_acc_name, 0
@@ -938,7 +940,7 @@ class Harness:
             self._plc._edit_tip_tags(seed)
 
     def _seed_bool_state(self) -> None:
-        """Put each debounce whose enable is already on where it would be had it settled long ago.
+        """Seed each debounce whose enable is already on as if it had settled long ago.
 
         The feedback is on, the on side has counted its preset, and the coil saw its
         rung true on the last scan.  Without this the first scans would show the device

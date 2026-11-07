@@ -96,8 +96,8 @@ class TestBoolFeedbackIsADebounce:
     def test_a_clean_command_turns_it_off_a_scan_after_its_off_delay(self) -> None:
         plc, btn = _pair(Physical("Dev", on_delay="30ms", off_delay="50ms"), debounce, 30, 50)
         fb, _coil = _drive(plc, btn, [True] * 10 + [False] * 10)
-        # The plant sees the fall on scan 11 and counts 50 ms on scans 11..15.
-        # It compares nothing on the scan of the fall, so Fb turns off on scan 17.
+        # The plant sees the fall on scan 12 and counts 50 ms on scans 12..16.
+        # Each scan compares the count from before its own tick, so Fb turns off on scan 17.
         assert _bits(fb) == "..." + "#" * 13 + "." * 4
 
     @pytest.mark.parametrize("dt", [0.010, 0.007])
@@ -161,7 +161,7 @@ def _profile_for(plc: PLC, fb: str, value: bool) -> Any:
 
 
 def _hold_until(plc: PLC, step: Any, fb: str, value: bool, budget: int = 200) -> int | None:
-    """Step under the plan's holds; the scans until ``fb`` has *value*, or ``None``."""
+    """Step under the plan's holds and count the scans until ``fb`` has *value* (``None`` if never)."""
     (demand,) = step.holds
     en = demand.condition.tag.name
     for scans in range(1, budget + 1):
@@ -173,7 +173,7 @@ def _hold_until(plc: PLC, step: Any, fb: str, value: bool, budget: int = 200) ->
 
 
 class TestPlansThroughTheCoils:
-    """how() reads each coupling's AdvanceProfile; stepping under its holds reaches the value."""
+    """how() reads each coupling's AdvanceProfile.  Stepping under its holds reaches the value."""
 
     @pytest.mark.parametrize("value", [True, False])
     def test_a_debounce_holds_its_enable_until_the_feedback_follows(self, value: bool) -> None:

@@ -231,6 +231,46 @@ _add("midcount", "mid/alarm settled 5s->10s", mid_alarm("5s", "10s", 40), fast=F
 _add("midcount", "mid/alarm settled 60s->5s", mid_alarm("60s", "5s", 40), fast=False)
 
 
+def bench_dip(dip_scans, dt=0.1):
+    """A settled feedback under a bench link of on 1 s / off 500 ms, then a command dip.
+
+    A dip shorter than the off delay keeps the feedback on, so the alarm on its drop still
+    needs a real drop of the enable.
+    """
+
+    def build():
+        En = Bool("En")
+        Fb = Bool("Fb", physical=Physical("S", on_delay="200ms", off_delay="200ms"), link="En")
+        Armed, Alarm = Bool("Armed"), Bool("Alarm")
+        with Program(strict=False) as p:
+            with Rung(En):
+                out(Bool("Seen"))
+            with Rung(Fb):
+                latch(Armed)
+            with Rung(Armed, ~Fb):
+                latch(Alarm)
+        plc = PLC(p, dt=dt)
+        h = Harness(plc)
+        h.install()
+        plc.patch({"En": True})
+        plc.run(12)
+        bench = Physical("S", on_delay="1s", off_delay="500ms")
+        h.set_overrides({"Fb": Coupling("En", "Fb", bench, None)})
+        plc.run(3)
+        if dip_scans:
+            plc.patch({"En": False})
+            plc.run(dip_scans)
+            plc.patch({"En": True})
+            plc.run(3)
+        return dict(plc=plc, targets=(Alarm,), goal=_tag_goal(Alarm))
+
+    return build
+
+
+_add("midcount", "mid/bench dip 2 scans under 1s/500ms", bench_dip(2))
+_add("midcount", "mid/bench drop under 1s/500ms", bench_dip(0))
+
+
 # --------------------------------------------------------------------------- shared shapes
 
 

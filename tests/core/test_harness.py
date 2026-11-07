@@ -138,7 +138,7 @@ class TestBoolAutoharness:
         assert _fb(plc, dev[1].En) is False
         assert _fb(plc, dev[1].Fb) is True
 
-        plc.step()  # plant sees En low; the off side counts 10 ms
+        plc.step()  # the plant sees En low and the off side counts 10 ms
         assert _fb(plc, dev[1].Fb) is True
 
         plc.step()  # the off side was done before this scan: Fb clears
@@ -1515,7 +1515,7 @@ class TestTriggerValueAutoharness:
         plc.step()  # off-edge commits; the plant still saw SORTING → Fb holds
         assert _fb(plc, dev[1].Fb) is True
 
-        plc.step()  # plant sees the leave; the off side counts 10 ms (1 dt)
+        plc.step()  # the plant sees the leave and the off side counts 10 ms (1 dt)
         assert _fb(plc, dev[1].Fb) is True
 
         plc.step()  # and clears Fb the scan after
