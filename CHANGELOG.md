@@ -160,15 +160,17 @@
   - when the text always runs past the end of its bank (`CLK_TEXT_PAST_BANK`)
   - when the text runs past the end of a block mapped inside the bank, since a CLICK keeps writing past it (`CLK_TEXT_PAST_BLOCK`)
 - `Physical` takes one flat keyword per value, and each keyword is also its nickname-comment key:
-  - `Pulse`, `Ramp`, `Approach` and `profile=` are removed, and importing them raises `ImportError`. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` or `Physical(name, approach_to=180, approach_rate=0.3)`
+  - `Pulse`, `Ramp` and `Approach` are removed, and importing one raises `ImportError`. `Physical(profile=...)` raises `TypeError`. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` or `Physical(name, approach_to=180, approach_rate=0.3)`
   - `ramp_off` left out is 0, which holds the value when the enable drops
   - a time given as a bare number raises. Write it with units, such as `"500ms"`
   - an `approach_to` string that looks like a number raises. Pass the number
   - keywords of two kinds in one `Physical` raise
-  - `timed=` (with optional `maintained=True`) and `toggle=True` are new kinds. The comment parser reads them. A `Harness` raises `NotImplementedError` for them for now
+  - `timed=` (with optional `maintained=True`) and `toggle=True` are new kinds. The comment parser reads them. `Harness.install()` raises `NotImplementedError` for them
   - comments read `flasher_on=8ms, flasher_off=8ms`, `ramp_on=0.8, ramp_off=-0.05` and `approach_to=180, approach_rate=0.3`. A `profile=` comment raises
   - the DAP `link` command takes the same keys. The `pyrungLink` request takes them in camelCase (`flasherOn`, `rampOn`, `approachTo`)
   - `pyrungListLinks` rows carry `kind`, `keys` and a field per key in place of `profile`
+  - `TagMeta` has a field per key in place of `profile`. `parse_profile_spec()` and `profile_to_token()` are removed
+  - `harness status` shows each flasher, ramp or approach link with its kind and keys (it showed `profile=`)
 
   Run "Upgrade project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
 
@@ -284,7 +286,7 @@
 ### Fixes
 
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
-  - a rung that needs both a harness `Pulse` feedback and that feedback's enable
+  - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
   - a target with a second route through a pointer or a for loop
   - a two-tag target where a one-shot overwrites one tag only once
   - a force or patch already on the PLC
@@ -322,7 +324,7 @@
   - after a STOP->RUN restart, from its own run, not the previous run's patches or cached states (a restart now starts a new recording)
   - with each tag at its default until a rung, patch or force first writes it
   - past a stop a rung caused, without restarting
-  - over a `Ramp` or `Approach` plant, without skipping scans
+  - over a harness ramp or approach feedback (`ramp_on` or `approach_to`), without skipping scans
 - `pyrung lock --check` on a program the verifier can't finish names the `Intractable` and exits 1, as `pyrung lock` does, instead of ending in a traceback.
 - Compiled runs and generated CircuitPython run a `run_function()` as stepping does:
   - a compiled run calls the function itself, not a copy of its source (a seek raised `NameError`, and a `global` store landed in the kernel's module)
@@ -370,7 +372,7 @@
 - A `copy()`, `blockcopy()` or `fill()` that clamps at an `Int` limit sets `out_of_range`. A `Real` into a `Dint` clamps with no flag.
 - A `copy()` of an integer or a `fill()` of a number into a `Char` no longer stops the scan in compiled runs or generated CircuitPython, and a `fill()` into a `Char` no longer stops it in `PLC`. `convert=to_binary` of Inf sets `out_of_range` and leaves the text unchanged (`PLC` raised `OverflowError`).
 - `Tag.map_to()` and `Block.slot(name=)` now raise `ValueError` when they would put a system point, such as `system.rtc.second`, in a block slot.
-- An `Approach` whose setpoint names a tag the program uses no longer makes `Harness.install()` raise `TypeError`. A setpoint tag that no rung uses and nothing has written gets a warning at install that it starts from 0.
+- An `approach_to` that names a tag the program uses no longer makes `Harness.install()` raise `TypeError`. A setpoint tag that no rung uses and nothing has written gets a warning at install that it starts from 0.
 - CLICK export writes what CLICK's editor writes, so an exported CSV matches a copy-back from CLICK v4 and imports back:
   - hex constants as `Ah` and `FFh`, in hex-mode Math, a copy or fill into DH/XD/YD, a compare against a DH/XD/YD tag, and a search over DH. They went out in decimal, which CLICK reads as hex, so `DH1 + 10` added 16 on the PLC
   - `Real` constants as `3.0E+38` and `1.0E-10`
@@ -440,7 +442,7 @@
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit (scans under 1 ms at `"Tms"`). Its accumulator stayed at 0 for good.
 - A `select()` with tag bounds (`DS.select(Start, End)`) sets `fault.address_error` and writes nothing, everywhere, when a bound is outside its block at either end. A `search()` over one now compiles (it generated an `IndentationError`).
 - A `select()` with tag bounds that spans a gap in a sparse block skips the gap everywhere, as a static `select()` does (compiled runs and generated CircuitPython set `fault.address_error`). So `always()` and `never()` no longer report `Proven` on what `PLC` didn't do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan, everywhere.
-- A harness `on_delay`, `off_delay` or `Pulse` dwell longer than 32.767 s now elapses. The feedback never flipped, because its millisecond timer stopped at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
+- A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses. The feedback never flipped, because its millisecond timer stopped at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`. They showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
 

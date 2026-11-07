@@ -114,6 +114,18 @@ def _tag_meta_has_physical_details(meta: TagMeta | None) -> bool:
     return meta is not None and bool(meta.physical_values())
 
 
+def _row_label(row: AddressRecord) -> str:
+    return f"{row.nickname or '(no nickname)'} at {format_address_display(row.memory_type, row.address)}"
+
+
+def _row_comment(row: AddressRecord) -> tuple[str, TagMeta | None, str | None]:
+    """Split *row*'s comment. A parse error names the row, so a project load says where."""
+    try:
+        return _extract_address_comment(row.comment)
+    except ValueError as exc:
+        raise ValueError(f"{_row_label(row)}: {exc}") from exc
+
+
 def _physical_from_meta_details(meta: TagMeta, *, name: str) -> Physical:
     return Physical.from_text(name, meta.physical_values(), system=meta.system)
 
@@ -198,12 +210,15 @@ def tag_map_from_nickname_file(
     physical_defs: dict[str, Physical] = {}
 
     for row in rows:
-        _, tag_meta, _ = _extract_address_comment(row.comment)
+        _, tag_meta, _ = _row_comment(row)
         if tag_meta is None or tag_meta.physical is None:
             continue
         if not _tag_meta_has_physical_details(tag_meta):
             continue
-        physical = _physical_from_meta_details(tag_meta, name=tag_meta.physical)
+        try:
+            physical = _physical_from_meta_details(tag_meta, name=tag_meta.physical)
+        except ValueError as exc:
+            raise ValueError(f"{_row_label(row)}: {exc}") from exc
         existing = physical_defs.get(tag_meta.physical)
         if existing is not None and existing != physical:
             display = format_address_display(row.memory_type, row.address)
@@ -322,7 +337,7 @@ def tag_map_from_nickname_file(
                     logical_block.slot(logical_addr, name=row.nickname)
 
             default = _parse_default(row.initial_value, logical_block.type)
-            comment, tag_meta, _ = _extract_address_comment(row.comment)
+            comment, tag_meta, _ = _row_comment(row)
             choices = tag_meta.choices if tag_meta is not None else None
             readonly = tag_meta.readonly if tag_meta is not None else False
             external = tag_meta.external if tag_meta is not None else False
@@ -659,7 +674,7 @@ def tag_map_from_nickname_file(
                         block.slot(instance, name=row.nickname)
 
                     default = _parse_default(row.initial_value, block.type)
-                    comment, tag_meta, _ = _extract_address_comment(row.comment)
+                    comment, tag_meta, _ = _row_comment(row)
                     choices = tag_meta.choices if tag_meta is not None else None
                     readonly = tag_meta.readonly if tag_meta is not None else False
                     external = tag_meta.external if tag_meta is not None else False
@@ -841,7 +856,7 @@ def tag_map_from_nickname_file(
 
         memory_type = row.memory_type
         logical_type = _tag_type_for_memory_type(memory_type)
-        comment, tag_meta, _ = _extract_address_comment(row.comment)
+        comment, tag_meta, _ = _row_comment(row)
         logical = Tag(
             name=row.nickname,
             type=logical_type,
@@ -1089,7 +1104,7 @@ def nickname_records(
                 data_type=BANKS[memory_type].data_type,
             )
             return
-        existing_comment, existing_meta, _ = _extract_address_comment(existing.comment)
+        existing_comment, existing_meta, _ = _row_comment(existing)
         records[addr_key] = replace(
             existing,
             comment=_compose_address_comment(existing_comment, block_tag, existing_meta),

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import pyclickplc
 import pytest
+from pyclickplc.addresses import AddressRecord, get_addr_key
+from pyclickplc.banks import DataType
 
+from pyrung.click import TagMap
 from pyrung.click.tag_map import (
     MIGRATIONS,
     comment_needs_upgrade,
+    old_form_tokens,
     parse_tag_meta,
     pending_migrations,
     upgrade_comment,
@@ -33,6 +38,13 @@ OLD_AND_NEW = [
     (
         "[profile=approach:toward=180|rate=0.3, link=Burner]",
         "[approach_to=180, approach_rate=0.3, link=Burner]",
+        3,
+    ),
+    # Older pyrung read these too: spaces around the kind and values, and extra parameters.
+    ("[link=Heat, profile= ramp :up = 1.0 ]", "[link=Heat, ramp_on=1.0 ]", 2),
+    (
+        "[link=Pump, profile=approach:toward=1|rate=0.3|gain=2]",
+        "[link=Pump, approach_to=1, approach_rate=0.3]",
         3,
     ),
 ]
@@ -79,19 +91,45 @@ def test_the_upgraded_comment_gives_the_old_physical():
 
 
 @pytest.mark.parametrize(
-    "comment",
+    ("comment", "token"),
     [
-        "[link=Run, profile=pulse:on_dwell=8ms]",  # off_dwell missing
-        "[link=Run, profile=ramp:rise=1]",  # unknown parameter
-        "[link=Run, profile=approach:toward=1|rate=0.3|gain=2]",
-        "[link=Run, profile=bogus:x=1]",
+        ("[link=Run, profile=pulse:on_dwell=8ms]", "profile=pulse:on_dwell=8ms"),
+        ("[link=Run, profile=ramp:rise=1]", "profile=ramp:rise=1"),
+        ("[link=Run, profile=ramp]", "profile=ramp"),
+        ("[link=Run, profile=bogus:x=1]", "profile=bogus:x=1"),
     ],
 )
-def test_an_old_form_no_migration_reads_is_left_alone(comment):
+def test_an_old_form_no_migration_reads_is_listed_and_left_alone(comment, token):
     assert upgrade_comment(comment) == comment
-    assert not comment_needs_upgrade(comment)
+    assert comment_needs_upgrade(comment)
+    assert pending_migrations(comment) == ()
+    assert old_form_tokens(upgrade_comment(comment)) == (token,)
     with pytest.raises(ValueError, match="Upgrade project"):
         parse_tag_meta(comment)
+
+
+def test_a_note_that_says_profile_is_not_an_old_form():
+    comment = "[note, profile=ramp:up=1] Zone 3"
+    assert not comment_needs_upgrade(comment)
+    assert parse_tag_meta(comment) == (None, comment)
+
+
+def test_a_bad_comment_in_a_nickname_file_names_the_row(tmp_path):
+    path = tmp_path / "old.csv"
+    records = {
+        get_addr_key("DF", 5): AddressRecord(
+            memory_type="DF",
+            address=5,
+            nickname="OvenTemp",
+            comment="[link=Heat, profile=ramp:up=0.8|down=-0.05] Oven",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.FLOAT,
+        )
+    }
+    pyclickplc.write_csv(path, records)
+    with pytest.raises(ValueError, match=r"^OvenTemp at DF5: .*Upgrade project"):
+        TagMap.from_nickname_file(path)
 
 
 def test_a_current_comment_needs_nothing():

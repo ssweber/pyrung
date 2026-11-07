@@ -16,10 +16,13 @@ parser, the comment writer and clicknick's annotation dialogs, so a key is descr
 
 from __future__ import annotations
 
+import dis
 import math
 import re
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import FrameType
 from typing import Any, Literal, overload
 
 _DURATION_TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*(ms|min|s|m|h|d)")
@@ -90,9 +93,12 @@ def parse_number_or_tag(text: str) -> float | str:
     if not stripped:
         raise ValueError("expected a number or a tag name, got nothing")
     try:
-        return parse_number(stripped)
+        value = float(stripped)
     except ValueError:
         return stripped
+    if not math.isfinite(value):
+        raise ValueError(f"expected a finite number, got {text!r}")
+    return value
 
 
 def format_number(value: float) -> str:
@@ -130,6 +136,12 @@ class PhysicalKey:
     def is_flag(self) -> bool:
         return self.value_type == "flag"
 
+    @property
+    def dap_field(self) -> str:
+        """The ``pyrungLink`` request field for this key: ``flasher_on`` -> ``flasherOn``."""
+        head, *rest = self.name.split("_")
+        return head + "".join(part.title() for part in rest)
+
     def parse(self, text: str) -> Any:
         """The Python value for comment text. Raises ``ValueError`` naming the key."""
         try:
@@ -160,7 +172,7 @@ class PhysicalKey:
                 parse_duration(value)
             except ValueError as exc:
                 raise ValueError(f"{where}: {exc}") from None
-            return value
+            return value.strip()
         if isinstance(value, str):
             if self.value_type == "number":
                 raise TypeError(f"{where} takes a number (got {value!r}).")
@@ -259,7 +271,7 @@ PHYSICAL_KINDS: tuple[PhysicalKind, ...] = (
                 "on_delay",
                 "delay",
                 "On delay",
-                "How long the command must hold before the feedback turns on. Left out, 0.",
+                "How long the command must hold before the feedback turns on. Leaving it out means 0.",
                 "500ms",
                 required=False,
             ),
@@ -267,7 +279,7 @@ PHYSICAL_KINDS: tuple[PhysicalKind, ...] = (
                 "off_delay",
                 "delay",
                 "Off delay",
-                "How long the feedback stays on after the command drops. Left out, 0.",
+                "How long the feedback stays on after the command drops. Leaving it out means 0.",
                 "200ms",
                 required=False,
             ),
@@ -369,7 +381,7 @@ PHYSICAL_KINDS: tuple[PhysicalKind, ...] = (
                 "approach",
                 "number_or_tag",
                 "Target",
-                "The value it moves toward while the command is on: a number or a tag name.",
+                "The number or tag name the value moves toward while the command is on.",
                 suggested="100",
             ),
             PhysicalKey(
@@ -377,7 +389,7 @@ PHYSICAL_KINDS: tuple[PhysicalKind, ...] = (
                 "approach",
                 "number",
                 "Rate",
-                "Share of the remaining gap closed per second. It holds while the command is off.",
+                "Share of the remaining gap closed per second. The value holds while the command is off.",
                 unit=_RATE_UNIT,
                 suggested="0.3",
             ),
@@ -443,12 +455,36 @@ REMOVED_NAMES: dict[str, str] = {
 }
 
 
-def removed_name_error(module: str, name: str) -> ImportError:
-    """The error for an old feedback class, naming the keywords that replace it."""
-    return ImportError(
-        f"{module}.{name} was removed. Give its values to Physical as keywords: "
-        f"{REMOVED_NAMES[name]}."
-    )
+class RemovedNameError(AttributeError):
+    """An old feedback class read as an attribute. ``hasattr()`` sees it as missing."""
+
+
+class RemovedNameImportError(ImportError):
+    """An old feedback class named in ``from ... import``."""
+
+
+_IMPORT_FROM = dis.opmap["IMPORT_FROM"]
+
+
+def _in_import_from(frame: FrameType | None) -> bool:
+    try:
+        return frame is not None and frame.f_code.co_code[frame.f_lasti] == _IMPORT_FROM
+    except (AttributeError, IndexError):
+        return False
+
+
+def removed_name_error(module: str, name: str) -> AttributeError | ImportError:
+    """The error a module ``__getattr__`` raises for an old feedback class.
+
+    It is an ``AttributeError`` so ``hasattr()`` and ``getattr(m, name, None)`` work. Python
+    turns an ``AttributeError`` inside ``from m import name`` into its own "cannot import
+    name" error, which drops this message, so that statement gets an ``ImportError``.
+    """
+    message = f"{module}.{name} was removed. Write {REMOVED_NAMES[name]} instead."
+    # Frame 0 is this function and frame 1 the module __getattr__ that called it.
+    if _in_import_from(sys._getframe(2)):
+        return RemovedNameImportError(message, name=name)
+    return RemovedNameError(message, name=name)
 
 
 def __getattr__(name: str) -> Any:

@@ -289,8 +289,8 @@ def _coupling_fields(coupling: Coupling) -> dict[str, Any]:
         "enable": coupling.en_name,
         "trigger": coupling.trigger_value,
         "kind": physical.kind,
-        **{_camel(key.name): False if key.is_flag else None for key in PHYSICAL_KEYS.values()},
-        **{_camel(key): text for key, text in physical.comment_text().items()},
+        **{key.dap_field: False if key.is_flag else None for key in PHYSICAL_KEYS.values()},
+        **{PHYSICAL_KEYS[key].dap_field: text for key, text in physical.comment_text().items()},
         "keys": " ".join(physical.tokens()),
         "physical": physical.name,
         "system": physical.system,
@@ -383,12 +383,6 @@ def format_links_locked(adapter: Any) -> str:
 # ---------------------------------------------------------------------------
 
 _LINK_USAGE = "link <feedback> <[~]enable[:trigger]> key=value ..."
-
-
-def _camel(key: str) -> str:
-    """The DAP field for a link key: ``flasher_on`` -> ``flasherOn``."""
-    head, *rest = key.split("_")
-    return head + "".join(part.title() for part in rest)
 
 
 def parse_link_keys(adapter: Any, tokens: list[str]) -> dict[str, str | bool]:

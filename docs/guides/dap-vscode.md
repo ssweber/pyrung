@@ -452,7 +452,7 @@ Custom requests:
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
 
-The link requests mirror the [bench link](#bench-links) console verbs. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
+The link requests mirror the [bench link](#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` gives each value as the text a comment would hold (`"0.8"`, `"500ms"`), and `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
 
 Anyone can drive, and the last command wins. While Continue runs, a step or `run` from VS Code or `pyrung live` pauses Continue first and then executes.
 

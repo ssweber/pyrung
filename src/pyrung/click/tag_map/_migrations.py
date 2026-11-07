@@ -13,71 +13,74 @@ A migration changes only the old token. The rest of the comment keeps its exact 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from ._parsers import _TAG_META_GROUP_RE, _starts_tag_meta
+from ._parsers import _OLD_FORM_TOKENS, _TAG_META_GROUP_RE, _is_tag_meta
+
+#: One token in a ``[...]`` group, with the spaces around it kept apart from its text.
+_TOKEN_RE = re.compile(r"(?:(?<=,)|^)(\s*)([^,]*?)(\s*)(?=,|$)")
+
+
+def _tokens(group: str) -> list[str]:
+    return [token.strip() for token in group.split(",") if token.strip()]
 
 
 def _params(text: str) -> dict[str, str] | None:
-    """``a=1|b=2`` as a dict, or ``None`` when a part has no ``=``."""
+    """``a=1|b=2`` as a dict, as older pyrung read it, or ``None`` when a part has no ``=``."""
     values: dict[str, str] = {}
     for pair in text.split("|"):
         key, sep, value = pair.partition("=")
-        if sep != "=" or not key.strip() or not value.strip():
+        if sep != "=":
             return None
         values[key.strip()] = value.strip()
     return values
 
 
-def _renamer(
-    renames: tuple[tuple[str, str], ...], required: tuple[str, ...]
-) -> Callable[[str], str | None]:
-    """Rewrite old ``a=1|b=2`` parameters as new ``x=1, y=2`` tokens, in *renames* order."""
-
-    def rewrite(text: str) -> str | None:
-        values = _params(text)
-        if values is None or set(values) - {old for old, _new in renames}:
-            return None
-        if any(name not in values for name in required):
-            return None
-        return ", ".join(f"{new}={values[old]}" for old, new in renames if old in values)
-
-    return rewrite
-
-
 @dataclass(frozen=True)
 class CommentMigration:
-    """One numbered rewrite of an old ``[...]`` token into the next form."""
+    """One numbered rewrite of an old ``profile=<kind>:a=..|b=..`` token into new keys.
+
+    It reads what older pyrung read. Spaces around the kind and the values are allowed, and
+    a parameter older pyrung ignored is dropped.
+    """
 
     number: int
     title: str
-    #: The old token's prefix, such as ``profile=pulse:``.
-    prefix: str
-    #: The old token's text after the prefix -> the new tokens, or ``None`` if it can't.
-    rewrite_value: Callable[[str], str | None]
+    #: The old ``profile=`` kind this migration rewrites, such as ``pulse``.
+    kind: str
+    #: Old parameter -> new key, in the order the new keys are written.
+    renames: tuple[tuple[str, str], ...]
+    #: Old parameters a token must have for older pyrung to have read it.
+    required: tuple[str, ...]
 
-    def _token_re(self) -> re.Pattern[str]:
-        return re.compile(r"(?:(?<=,)|^)(\s*)" + re.escape(self.prefix) + r"([^,]*?)(\s*)(?=,|$)")
-
-    def _rewrite_group(self, content: str) -> str:
-        tokens = [token.strip() for token in content.split(",") if token.strip()]
-        if not tokens or not _starts_tag_meta(tokens[0]):
-            return content
-
-        def replace(match: re.Match[str]) -> str:
-            new = self.rewrite_value(match.group(2).strip())
-            if new is None:
-                return match.group(0)
-            return f"{match.group(1)}{new}{match.group(3)}"
-
-        return self._token_re().sub(replace, content)
+    def rewrite_token(self, token: str) -> str | None:
+        """The new tokens for one old *token*, or ``None`` when this migration can't read it."""
+        head, _, value = token.partition("=")
+        if head != "profile":
+            return None
+        kind, sep, params = value.partition(":")
+        if sep != ":" or kind.strip() != self.kind:
+            return None
+        values = _params(params)
+        if values is None or not all(values.get(name) for name in self.required):
+            return None
+        return ", ".join(f"{new}={values[old]}" for old, new in self.renames if values.get(old))
 
     def apply(self, comment: str) -> str:
         """*comment* with this migration's old tokens rewritten, every other character kept."""
-        return _TAG_META_GROUP_RE.sub(
-            lambda m: f"[{self._rewrite_group(m.group()[1:-1])}]", comment
-        )
+
+        def group(match: re.Match[str]) -> str:
+            content = match.group()[1:-1]
+            if not _is_tag_meta(_tokens(content)):
+                return match.group()
+
+            def token(m: re.Match[str]) -> str:
+                new = self.rewrite_token(m.group(2))
+                return m.group(0) if new is None else f"{m.group(1)}{new}{m.group(3)}"
+
+            return f"[{_TOKEN_RE.sub(token, content)}]"
+
+        return _TAG_META_GROUP_RE.sub(group, comment)
 
     def applies(self, comment: str) -> bool:
         """True when this migration would change *comment*."""
@@ -89,24 +92,44 @@ MIGRATIONS: tuple[CommentMigration, ...] = (
     CommentMigration(
         1,
         "profile=pulse:on_dwell=..|off_dwell=.. -> flasher_on=.., flasher_off=..",
-        "profile=pulse:",
-        _renamer(
-            (("on_dwell", "flasher_on"), ("off_dwell", "flasher_off")), ("on_dwell", "off_dwell")
-        ),
+        "pulse",
+        (("on_dwell", "flasher_on"), ("off_dwell", "flasher_off")),
+        ("on_dwell", "off_dwell"),
     ),
     CommentMigration(
         2,
         "profile=ramp:up=..|down=.. -> ramp_on=.., ramp_off=..",
-        "profile=ramp:",
-        _renamer((("up", "ramp_on"), ("down", "ramp_off")), ("up",)),
+        "ramp",
+        (("up", "ramp_on"), ("down", "ramp_off")),
+        ("up",),
     ),
     CommentMigration(
         3,
         "profile=approach:toward=..|rate=.. -> approach_to=.., approach_rate=..",
-        "profile=approach:",
-        _renamer((("toward", "approach_to"), ("rate", "approach_rate")), ("toward", "rate")),
+        "approach",
+        (("toward", "approach_to"), ("rate", "approach_rate")),
+        ("toward", "rate"),
     ),
 )
+
+
+def old_form_tokens(comment: str) -> tuple[str, ...]:
+    """Every old token in *comment*'s metadata groups. The parser refuses each one.
+
+    ``old_form_tokens(upgrade_comment(c))`` lists the ones no migration can rewrite, so the
+    user can fix them by hand.
+    """
+    found: list[str] = []
+    for match in _TAG_META_GROUP_RE.finditer(comment):
+        tokens = _tokens(match.group()[1:-1])
+        if _is_tag_meta(tokens):
+            found += [token for token in tokens if token.startswith(_OLD_FORM_TOKENS)]
+    return tuple(found)
+
+
+def comment_needs_upgrade(comment: str) -> bool:
+    """True when *comment* holds an old token, whether or not a migration can rewrite it."""
+    return bool(old_form_tokens(comment))
 
 
 def pending_migrations(comment: str) -> tuple[CommentMigration, ...]:
@@ -120,11 +143,6 @@ def pending_migrations(comment: str) -> tuple[CommentMigration, ...]:
     return tuple(pending)
 
 
-def comment_needs_upgrade(comment: str) -> bool:
-    """True when some migration would rewrite *comment*."""
-    return bool(pending_migrations(comment))
-
-
 def upgrade_comment(comment: str) -> str:
     """*comment* with every migration run in order. A current comment comes back unchanged."""
     for migration in MIGRATIONS:
@@ -136,6 +154,7 @@ __all__ = [
     "MIGRATIONS",
     "CommentMigration",
     "comment_needs_upgrade",
+    "old_form_tokens",
     "pending_migrations",
     "upgrade_comment",
 ]

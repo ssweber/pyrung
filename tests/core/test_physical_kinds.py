@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.click.tag_map import parse_tag_meta
+from pyrung.click.tag_map import TagMeta, parse_tag_meta
 from pyrung.click.tag_map._parsers import format_tag_meta
 from pyrung.core import PLC, Bool, Harness, Program, Real, Rung, out
 from pyrung.core.physical import (
@@ -101,6 +101,12 @@ class TestKindsTable:
                 assert key.suggested is not None
                 key.parse(key.suggested)
 
+    def test_dap_fields_are_camel_case(self):
+        fields = {name: key.dap_field for name, key in PHYSICAL_KEYS.items()}
+        assert fields["flasher_on"] == "flasherOn"
+        assert fields["approach_rate"] == "approachRate"
+        assert fields["toggle"] == "toggle"
+
     def test_unknown_kind_name(self):
         with pytest.raises(ValueError, match="Unknown physical kind 'pulse'"):
             physical_kind("pulse")
@@ -121,8 +127,12 @@ class TestRoundTrip:
     def test_the_writer_writes_the_keys(self, kind, keywords, text):
         physical = Physical("Fb", **keywords)
         assert ", ".join(physical.tokens()) == text
-        meta, _rest = parse_tag_meta(f"[{text}]")
-        assert format_tag_meta(meta) == f"[{text}]"
+        meta, _rest = parse_tag_meta(f"[link=Run, {text}]")
+        assert format_tag_meta(meta) == f"[link=Run, {text}]"
+
+    def test_the_writer_refuses_a_flag_alone(self):
+        with pytest.raises(ValueError, match="toggle needs link="):
+            format_tag_meta(TagMeta(toggle=True))
 
     @pytest.mark.parametrize(("kind", "keywords", "text"), EVERY_KIND, ids=_ids())
     def test_keywords_rebuild_the_physical(self, kind, keywords, text):
@@ -135,6 +145,10 @@ class TestRoundTrip:
         assert physical.ramp_off == 0.0
         assert physical == Physical("T", ramp_on=1.0, ramp_off=0)
         assert physical.tokens() == ["ramp_on=1"]
+
+    def test_spaces_around_a_time_are_dropped(self):
+        assert Physical("M", on_delay=" 2s ") == Physical("M", on_delay="2s")
+        assert Physical("M", on_delay=" 2s ").tokens() == ["on_delay=2s"]
 
     def test_durations_keep_their_text(self):
         physical = Physical("M", on_delay="1s500ms")
@@ -190,18 +204,36 @@ class TestMisuse:
     @pytest.mark.parametrize(
         ("comment", "match"),
         [
-            ("[toggle=1]", "toggle is a bare flag"),
+            ("[link=Run, toggle=1]", "toggle is a bare flag"),
             ("[timed=1s, maintained=yes]", "maintained is a bare flag"),
             ("[on_delay=500]", "on_delay"),
             ("[ramp_on=fast]", "ramp_on: expected a number"),
             ("[ramp_on=1, on_delay=1s]", "two kinds"),
-            ("[maintained]", "needs timed"),
+            ("[link=Run, maintained]", "needs timed"),
+            ("[link=Run, approach_to=inf, approach_rate=1]", "finite number"),
         ],
     )
     def test_each_comment_misuse_raises_ascii(self, comment, match):
         with pytest.raises(ValueError, match=match) as caught:
             parse_tag_meta(comment)
         assert str(caught.value).isascii()
+
+    @pytest.mark.parametrize(
+        "comment",
+        [
+            "Selector switch [maintained]",
+            "Push on/off lamp [toggle]",
+            "[maintained, momentary]",
+            "[toggle=on] switch",
+        ],
+    )
+    def test_a_group_of_flags_alone_is_the_users_text(self, comment):
+        assert parse_tag_meta(comment) == (None, comment)
+
+    def test_a_flag_first_still_reads_as_metadata(self):
+        meta, rest = parse_tag_meta("[toggle, link=Run] Lamp")
+        assert meta is not None and meta.toggle and meta.link == "Run"
+        assert rest == "Lamp"
 
     def test_from_text_wants_a_flag_bare(self):
         with pytest.raises(ValueError, match="toggle is a bare flag"):

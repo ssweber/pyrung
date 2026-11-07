@@ -8,6 +8,7 @@ from ._migrations import (
     MIGRATIONS,
     CommentMigration,
     comment_needs_upgrade,
+    old_form_tokens,
     pending_migrations,
     upgrade_comment,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "MIGRATIONS",
     "CommentMigration",
     "comment_needs_upgrade",
+    "old_form_tokens",
     "pending_migrations",
     "upgrade_comment",
 ]

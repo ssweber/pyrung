@@ -503,25 +503,26 @@ def _check_physical(values: dict[str, str | bool], system: str | None) -> None:
         raise ValueError("TagMeta system requires a physical response such as on_delay=.")
 
 
-def _starts_tag_meta(first: str) -> bool:
-    """True when a ``[...]`` group whose first token is *first* holds metadata, not text."""
+def _is_tag_meta(tokens: list[str]) -> bool:
+    """True when a ``[...]`` group of *tokens* holds metadata, not the user's own text.
+
+    The first token that is not ``toggle`` or ``maintained`` decides. Those two words are
+    common in a note (``Selector switch [maintained]``), and a flag alone is never metadata.
+    """
+    first = next((token for token in tokens if token not in _PHYSICAL_FLAG_TOKENS), None)
+    if first is None:
+        return False
     return (
         first in _BOOL_FLAG_TOKENS
-        or first in _PHYSICAL_FLAG_TOKENS
         or first.startswith("choices=")
         or any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
-        # A flag given a value is metadata written wrong, so the parser can say so.
-        or any(first.startswith(f"{name}=") for name in _PHYSICAL_FLAG_TOKENS)
         or first.startswith(_OLD_FORM_TOKENS)
     )
 
 
 def _parse_tag_meta_group(content: str) -> TagMeta | None:
     tokens = [token.strip() for token in content.split(",") if token.strip()]
-    if not tokens:
-        return None
-
-    if not _starts_tag_meta(tokens[0]):
+    if not _is_tag_meta(tokens):
         return None
 
     flags: dict[str, bool] = {}
@@ -764,6 +765,9 @@ def format_tag_meta(meta: TagMeta | None) -> str:
                     raise ValueError(f"Invalid TagMeta choice value {value!r}.")
                 pairs.append(f"{label}:{value_text}")
             tokens.append(f"choices={'|'.join(pairs)}")
+    if not _is_tag_meta(tokens):
+        # The reader takes a group of flags alone as the user's own text.
+        raise ValueError(f"TagMeta {', '.join(tokens)} needs link= beside it.")
     return f"[{', '.join(tokens)}]"
 
 

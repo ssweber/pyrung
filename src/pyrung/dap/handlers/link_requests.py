@@ -81,7 +81,7 @@ def on_pyrung_link(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         )
     keys: dict[str, str | bool] = {}
     for key in PHYSICAL_KEYS.values():
-        field = links._camel(key.name)
+        field = key.dap_field
         value = getattr(parsed, field)
         if key.is_flag:
             if value is not None and not isinstance(value, bool):
