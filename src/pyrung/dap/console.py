@@ -632,6 +632,9 @@ class _PilotProgressFormatter:
         unique = list({_rung_identity(rung): rung for rung in rungs}.values())
         compact: list[str] = []
         for line in rules_logic(tuple(unique)):
+            if line.startswith("comment("):
+                # One line per rung leaves no room for its comment; the plan text prints it.
+                continue
             if line.startswith("  ") and compact and compact[-1].startswith("with rung("):
                 compact[-1] = (
                     f"{compact[-1]} {line.strip()}"

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from pyrung.core.validation.render import operand_name, render_condition
+from pyrung.core.validation.render import operand_name
 
 
 @dataclass(frozen=True)
@@ -129,15 +129,6 @@ def _format_plan_note(note: str) -> str:
     return note[:1].upper() + note[1:]
 
 
-def _rung_guard(rung: Any) -> str:
-    return render_condition(rung.guard)
-
-
-def _display_rung_key(rung: Any) -> tuple[str, str, str]:
-    """Identity of one piece of temporary logic as the plan names it."""
-    return (_rung_guard(rung), rung.dest, repr(rung.value))
-
-
 def rules_logic(rungs: tuple[Any, ...]) -> tuple[str, ...]:
     """*rungs* built into a rung on their own and printed, for logic no recording ran."""
     from pyrung.core.analysis.pilot.overlay import pilot_rules_rung
@@ -159,12 +150,15 @@ def _format_step_refs(steps: tuple[int, ...]) -> str:
 def _format_rung_install(
     prefix: str,
     step: PlanStep,
+    replaced: dict[str, int] | None = None,
     *,
     next_step: int | None = None,
 ) -> str:
     """Print the temporary logic a step put in, as it ran."""
     line = f"{prefix} Install temporary logic{_source_suffix(step.source, next_step=next_step)}:"
     detail = [f"   {logic}" for logic in step.logic or rules_logic(step.rungs)]
+    for tag, earlier in (replaced or {}).items():
+        detail.append(f"   This replaces the logic for {tag} from step {earlier}.")
     detail.extend(f"   {_format_plan_note(note)}" for note in step.notes)
     return "\n".join((line, *detail))
 
@@ -295,6 +289,7 @@ def _format_plan_step(
     dt: float | None = None,
     same_holds: bool = False,
     control_steps: tuple[int, ...] = (),
+    replaced: dict[str, int] | None = None,
 ) -> str:
     prefix = f"{idx}."
 
@@ -306,7 +301,7 @@ def _format_plan_step(
 
     if step.kind == "force":
         if step.rungs:
-            return _format_rung_install(prefix, step, next_step=idx + 1)
+            return _format_rung_install(prefix, step, replaced, next_step=idx + 1)
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
         return _with_notes(f"{prefix} Keep {tags}.")
 
@@ -586,34 +581,30 @@ class Plan:
         if self.journal:
             lines.extend(("",) if leading else ("", "Steps:", ""))
             previous_holds: tuple[Any, ...] | None = None
-            installed_at: dict[tuple[str, str, str], int] = {}
+            # The step that last printed each tag's row: the temporary logic has one row per
+            # tag, so a later step writing the same tag prints a row that replaces it.
+            installed_at: dict[str, int] = {}
             for i, step in enumerate(self.journal, first_step):
+                dests = dict.fromkeys(rung.dest for rung in step.rungs)
+                earlier = {dest: installed_at[dest] for dest in dests if dest in installed_at}
                 if step.kind == "force":
-                    for rung in step.rungs:
-                        installed_at.setdefault(_display_rung_key(rung), i)
+                    for dest in dests:
+                        installed_at[dest] = i
                 holds = step.rungs or tuple(step.steady_holds)
                 same_holds = step.kind == "coast" and bool(holds) and holds == previous_holds
-                control_steps = tuple(
-                    sorted(
-                        {
-                            installed_at[key]
-                            for rung in step.rungs
-                            if (key := _display_rung_key(rung)) in installed_at
-                        }
-                    )
-                )
                 lines.append(
                     _format_plan_step(
                         i,
                         step,
                         dt=dt,
                         same_holds=same_holds,
-                        control_steps=control_steps,
+                        control_steps=tuple(sorted(set(earlier.values()))),
+                        replaced=earlier,
                     )
                 )
                 if step.kind == "revoke":
-                    for rung in step.rungs:
-                        installed_at.pop(_display_rung_key(rung), None)
+                    for dest in dests:
+                        installed_at.pop(dest, None)
                 if step.kind == "coast" and holds:
                     previous_holds = holds
                 if i != len(self.journal) + first_step - 1:

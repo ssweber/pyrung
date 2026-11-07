@@ -23,7 +23,7 @@ program.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -319,6 +319,7 @@ def conditional_hold_rung(
 
 def guarded_copy_rung(
     rules: list[tuple[Tag, Any, Condition | Tag]],
+    notes: Sequence[str | None] | None = None,
 ) -> Rung:
     """Build one rung from ordered guarded writes: the last active write wins.
 
@@ -348,8 +349,11 @@ def guarded_copy_rung(
       complement with no contact form) is first solved onto an internal
       ``__frz{n}__{dest}`` bit at the top of the rung, and the writers read
       that bit instead: decide first, then act, as a ladder programmer would.
+
+    *notes*, one per rule (or None), say what each rule is for.  A row's comment holds the
+    notes of the rules it was built from, so the printed rung explains itself.
     """
-    return _guarded_rows(list(rules), keep=False)
+    return _guarded_rows(list(rules), keep=False, notes=notes)
 
 
 _ALWAYS: Any = object()
@@ -628,12 +632,24 @@ class _DestRules:
         return found
 
 
-def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
+def _guarded_rows(
+    rules: list[tuple[Tag, Any, Any]],
+    *,
+    keep: bool,
+    notes: Sequence[str | None] | None = None,
+) -> Rung:
     """Compile ordered ``(dest, value, guard)`` rules to one rung.
 
     ``keep`` leaves a destination with no active rule at its value; otherwise a
     Boolean destination returns to ``False``.  See :func:`guarded_copy_rung`.
     """
+
+    def noted(row: Rung, indices: Iterable[int]) -> Rung:
+        found = [notes[index] for index in indices] if notes is not None else []
+        text = " ".join(dict.fromkeys(note for note in found if note))
+        row.comment = text or None
+        return row
+
     from pyrung.core.condition import BitCondition, NormallyClosedCondition, _as_condition
     from pyrung.core.instruction.coils import OutInstruction, ResetInstruction
     from pyrung.core.tag import Bool, TagType
@@ -676,7 +692,9 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
         bit = frozen.get(id(guard))
         if bit is None:
             tag = Bool(f"{_FREEZE_PREFIX}{index}__{dest.name}", retentive=False)
-            frozen_rows.append(_rung_holding(guard, OutInstruction(tag)))
+            row = _rung_holding(guard, OutInstruction(tag))
+            row.comment = _FREEZE_COMMENT
+            frozen_rows.append(row)
             bit = frozen[id(guard)] = BitCondition(tag)
         return bit
 
@@ -706,11 +724,13 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
                 elif power is not _NEVER:
                     power = _condition_and(complement(index, dest, guard), power)
             power = _simplified(power)
+            indices = [index for index, _value, _guard in guards]
             if power is _NEVER:
-                writer_rows.append(_rung_holding(None, ResetInstruction(dest)))
+                row = _rung_holding(None, ResetInstruction(dest))
             else:
                 condition = None if power is _ALWAYS else power
-                writer_rows.append(_rung_holding(condition, OutInstruction(dest)))
+                row = _rung_holding(condition, OutInstruction(dest))
+            writer_rows.append(noted(row, indices))
         else:
             buckets: dict[Any, list[Any]] = {}
             if not keep and dest.type == TagType.BOOL:
@@ -723,11 +743,13 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
                         bucket[1] = _condition_or(guard, bucket[1])
                     elif bucket[1] is not _NEVER:
                         bucket[1] = _condition_and(complement(index, dest, guard), bucket[1])
-            for value, power in buckets.values():
+            for key, (value, power) in buckets.items():
                 power = _simplified(power)
                 if power is not _NEVER:
                     condition = None if power is _ALWAYS else power
-                    writer_rows.append(copy_hold_rung(value=value, dest=dest, guard=condition))
+                    row = copy_hold_rung(value=value, dest=dest, guard=condition)
+                    indices = [index for index, v, _guard in guards if _value_key(v) == key]
+                    writer_rows.append(noted(row, indices))
         written.add(name)
 
     outer = Rung()
@@ -764,8 +786,9 @@ def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str,
 
     Printing the rung that runs is what keeps the text honest: nothing re-reads the rules it
     was built from.  With *writes*, only the rows writing those tags are printed, and above them
-    the decide-first rows whose bits they read.  Rows that share a condition print under one
-    ``with rung(...)`` line.
+    the decide-first rows whose bits they read.  A row's comment prints above it, once for a run
+    of rows with the same comment.  Rows that share a condition print under one ``with rung(...)``
+    line unless a comment comes between them.
     """
     rows = list(rung._branches)
     if writes is not None:
@@ -784,11 +807,14 @@ def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str,
         ]
     lines: list[str] = []
     previous: str | None = None
+    said: str | None = None
     for row in rows:
         header, code = _render_row(row)
-        if (_row_writes(row) or "").startswith(_FREEZE_PREFIX):
-            lines.append(f'comment("{_FREEZE_COMMENT}")')
+        if row.comment and row.comment != said:
+            text = row.comment.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'comment("{text}")')
             previous = None
+        said = row.comment
         if header != previous:
             lines.append(header)
             previous = header

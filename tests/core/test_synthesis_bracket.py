@@ -309,3 +309,36 @@ def test_guarded_copy_refuses_a_value_that_is_not_a_constant() -> None:
         guarded_copy_rung([(sel, src, BitCondition(gate))])
     with pytest.raises(TypeError, match="is not a constant"):
         conditional_hold_rung(dest=sel, rules=[(3, gate), (src, None)])
+
+
+def test_each_printed_row_says_what_its_rules_are_for() -> None:
+    # The comment is set on the row the rules built, so the text cannot say one thing while
+    # the rung does another.  A row from rules with no note has nothing to add to its code.
+    from pyrung.core.condition import CompareEq, CompareNe
+    from pyrung.core.synthesis import bracket_lines, guarded_copy_rung
+
+    sel, a, b = Int("Sel"), Bool("A"), Bool("B")
+    rung = guarded_copy_rung(
+        [(sel, 3, CompareNe(sel, 3)), (sel, 0, CompareEq(sel, 3)), (a, True, BitCondition(b))],
+        ["Up to 3.", "Back to 0.", None],
+    )
+
+    decide = (
+        'comment("Decide first, so the rows below read the state from before this logic wrote.")'
+    )
+    assert bracket_lines(rung) == (
+        decide,
+        "with rung(Sel != 3):",
+        "  out(__frz0__Sel)",
+        "with rung(Sel == 3):",
+        "  out(__frz1__Sel)",
+        'comment("Up to 3.")',
+        "with rung(~__frz1__Sel, __frz0__Sel):",
+        "  copy(3, Sel)",
+        'comment("Back to 0.")',
+        "with rung(__frz1__Sel):",
+        "  copy(0, Sel)",
+        "with rung(B):",
+        "  out(A)",
+    )
+    assert bracket_lines(rung, ["A"]) == ("with rung(B):", "  out(A)")

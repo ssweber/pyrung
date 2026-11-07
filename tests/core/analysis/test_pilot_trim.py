@@ -101,6 +101,13 @@ def test_logic_a_set_cannot_stand_in_for_stays(monkeypatch):
         "with rung(HoldState != 7):\n     out(HoldStableOff.Done)",
     ):
         assert logic in text
+    # The sensor's second rule rebuilds its one row: the text says which earlier step it replaces.
+    assert (
+        'comment("On until HoldStableOn.Done, and held on while HoldStableOn.TT.'
+        ' Off until HoldStableOff.Done, and held off while HoldStableOff.TT.")'
+    ) in text
+    assert "This replaces the logic for HoldSensor from step 3." in text
+    assert "Temporary logic in effect: steps 5, 7, and 9." in text
     replayed = plan.replay()
     assert replayed.state.scan_id == plan.fork.state.scan_id
     assert replayed.state.tags["HoldState"] == 7

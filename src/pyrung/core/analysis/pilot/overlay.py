@@ -420,6 +420,47 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
     return tuple(rules)
 
 
+def _pilot_rule_note(rung: PilotRung, plc: Any) -> str | None:
+    """What an operation's rules are for, said once in the comment above their row.
+
+    The folded condition is exact but hard to read, and the operation is what makes a row's
+    conditions make sense.  A rule with no operation gets no note: its row says it all.
+    """
+    from pyrung.core.condition import _as_condition
+    from pyrung.core.synthesis import _condition_complement
+    from pyrung.core.validation.render import operand_name, render_condition
+
+    operation = rung.operation
+    if operation is None or operation.progress is None:
+        return None
+    progress = operation.progress
+    running = _as_condition(progress.condition)
+    if not progress.value:
+        running = _condition_complement(running)
+        if running is None:
+            return None
+    if rung.value is True or rung.value is False:
+        word = "on" if rung.value else "off"
+        start, held = word.capitalize(), f"held {word}"
+    else:
+        start, held = f"Set to {operand_name(rung.value)}", "held there"
+    try:
+        until = f" until {render_condition(_atom_condition(plc, operation.until))}"
+    except (KeyError, ValueError):
+        until = ""
+    return f"{start}{until}, and {held} while {render_condition(running)}."
+
+
+def _rule_notes(expanded: Iterable[_ExpandedPilotRule], plc: Any) -> list[str | None]:
+    notes: dict[int, str | None] = {}
+    result: list[str | None] = []
+    for rule in expanded:
+        if rule.rung_index not in notes:
+            notes[rule.rung_index] = _pilot_rule_note(rule.rung, plc)
+        result.append(notes[rule.rung_index])
+    return result
+
+
 def _pilot_rung_execution_receipt(
     pilot_rungs: Iterable[PilotRung], snapshot: Mapping[str, Any]
 ) -> PilotOverlayExecution:
@@ -521,7 +562,7 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
         if dest is None:
             raise KeyError(f"pilot rung destination {rule.rung.dest!r} is not a program tag")
         rules.append((dest, rule.rung.value, rule.guard))
-    holds = [guarded_copy_rung(rules)] if rules else []
+    holds = [guarded_copy_rung(rules, _rule_notes(expanded, plc))] if rules else []
     for rung in holds:
         # What the rung was built from, kept with it: an epoch keeps its holds, so a plan's
         # recording says which PILOT rungs ran on each of its scans.
@@ -555,11 +596,14 @@ def pilot_rules_rung(pilot_rungs: Iterable[PilotRung], tags: Mapping[str, Any]) 
     For logic that has not run: a proposal, or a step built by hand.  A tag missing from *tags*
     stands in by its value's type, which is all the build reads from it.
     """
+    from types import SimpleNamespace
+
     from pyrung.core.synthesis import guarded_copy_rung
     from pyrung.core.tag import Bool, Char, Int, Real
 
+    expanded = _expand_pilot_rules(pilot_rungs)
     rules: list[tuple[Any, Any, Any]] = []
-    for rule in _expand_pilot_rules(pilot_rungs):
+    for rule in expanded:
         dest = tags.get(rule.rung.dest)
         if dest is None:
             value = rule.rung.value
@@ -574,7 +618,9 @@ def pilot_rules_rung(pilot_rungs: Iterable[PilotRung], tags: Mapping[str, Any]) 
             )
             dest = kind(rule.rung.dest)
         rules.append((dest, rule.rung.value, rule.guard))
-    return guarded_copy_rung(rules) if rules else None
+    # The notes read tags by name, as from a runner; a missing one leaves its note shorter.
+    names = SimpleNamespace(_known_tags_by_name=tags, program=None)
+    return guarded_copy_rung(rules, _rule_notes(expanded, names)) if rules else None
 
 
 def _merged_pilot_rungs(
