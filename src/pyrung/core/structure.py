@@ -995,11 +995,10 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
 def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
     field_by_name = {spec.name: spec for spec in field_specs}
     for spec in field_specs:
-        has_profile = spec.physical is not None and spec.physical.profile is not None
-        if has_profile and spec.link is None:
+        if spec.physical is not None and spec.physical.kind != "delay" and spec.link is None:
             raise ValueError(
-                f"Field {spec.name!r}: physical profile requires link "
-                "(profile defines response to a linked command)."
+                f"Field {spec.name!r}: physical {spec.physical.kind} requires link "
+                "(it answers a linked command)."
             )
         if spec.link is None:
             continue
@@ -1047,15 +1046,10 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
                         ) from None
         if spec.type != TagType.BOOL:
             continue
-        physical = spec.physical
-        has_timing = physical is not None and (
-            physical.on_delay is not None or physical.off_delay is not None
-        )
-        has_prof = physical is not None and physical.profile is not None
-        if not has_timing and not has_prof:
+        if spec.physical is None:
             raise ValueError(
-                f"Field {spec.name!r} is a linked BOOL feedback and requires physical "
-                "timing via on_delay/off_delay or a profile."
+                f"Field {spec.name!r} is a linked BOOL feedback and requires a physical "
+                "response, such as on_delay/off_delay."
             )
 
 

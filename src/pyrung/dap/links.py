@@ -27,14 +27,14 @@ from pyrung.core.harness import (
     format_link_spec,
     link_problem,
 )
-from pyrung.core.physical import Physical, parse_profile_spec, profile_to_token
+from pyrung.core.physical import PHYSICAL_KEYS, Physical, parse_duration
 from pyrung.core.tag import TagType
 from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 from pyrung.dap.grammar import Slot
 
 #: Keys a link takes after its two tags, as in a Click nickname comment.
-LINK_KEYS = ("on_delay", "off_delay", "profile", "physical", "system")
+LINK_KEYS = (*PHYSICAL_KEYS, "physical", "system")
 
 
 @dataclass(frozen=True)
@@ -51,14 +51,15 @@ class BenchLink:
 
 
 def build_coupling_locked(
-    adapter: Any, feedback: str, enable: str, keys: Mapping[str, str]
+    adapter: Any, feedback: str, enable: str, keys: Mapping[str, str | bool]
 ) -> Coupling:
     """Resolve and validate one link: *enable* (``Tag``, ``Tag:trigger`` or ``~Tag``) drives
     *feedback*.
 
     Both tags may be tag names or Click addresses.  *keys* are ``LINK_KEYS``
-    values as written in a comment (``on_delay="2s"``).  The physical name
-    defaults to the feedback's own name.
+    values as written in a comment (``on_delay="2s"``), with a bare flag such as
+    ``toggle`` given as ``True``.  The physical name defaults to the feedback's
+    own name.
     """
     unknown = sorted(set(keys) - set(LINK_KEYS))
     if unknown:
@@ -73,13 +74,12 @@ def build_coupling_locked(
         raise adapter.DAPAdapterError(f"cannot link {fb_name}: {exc}") from exc
     en_name = adapter._resolve_target_locked(en_text)
     try:
-        profile = parse_profile_spec(keys["profile"]) if "profile" in keys else None
-        physical = Physical(
-            keys.get("physical") or fb_name,
-            on_delay=keys.get("on_delay"),
-            off_delay=keys.get("off_delay"),
-            profile=profile,
-            system=keys.get("system"),
+        name = keys.get("physical")
+        system = keys.get("system")
+        physical = Physical.from_text(
+            name if isinstance(name, str) and name else fb_name,
+            {key: value for key, value in keys.items() if key in PHYSICAL_KEYS},
+            system=system if isinstance(system, str) else None,
         )
         en_tag = runner._tag_known_or_reached(en_name)
         trigger = (
@@ -104,10 +104,19 @@ def same_wiring(a: Coupling, b: Coupling) -> bool:
         a.en_name == b.en_name
         and a.fb_name == b.fb_name
         and a.trigger_value == b.trigger_value
-        and (pa.on_delay_ms or 0) == (pb.on_delay_ms or 0)
-        and (pa.off_delay_ms or 0) == (pb.off_delay_ms or 0)
-        and pa.profile == pb.profile
+        and _response(pa) == _response(pb)
     )
+
+
+def _response(physical: Physical) -> tuple[Any, ...]:
+    """The kind and its values, a time in ms, so ``1s`` matches ``1000ms`` and a missing delay 0."""
+    values: list[Any] = [physical.kind]
+    for key in physical.kind_spec.keys:
+        value = getattr(physical, key.name)
+        if key.value_type == "duration":
+            value = parse_duration(value) if value is not None else 0
+        values.append(value)
+    return tuple(values)
 
 
 def _is_bit(adapter: Any, tag_name: str) -> bool:
@@ -125,13 +134,7 @@ def enable_text(adapter: Any, coupling: Coupling) -> str:
 def physical_tokens(coupling: Coupling) -> list[str]:
     """The ``LINK_KEYS`` tokens that describe *coupling*'s response."""
     physical = coupling.physical
-    tokens: list[str] = []
-    if physical.on_delay is not None:
-        tokens.append(f"on_delay={physical.on_delay}")
-    if physical.off_delay is not None:
-        tokens.append(f"off_delay={physical.off_delay}")
-    if physical.profile is not None:
-        tokens.append(f"profile={profile_to_token(physical.profile)}")
+    tokens = physical.tokens()
     if physical.name != coupling.fb_name:
         tokens.append(f"physical={physical.name}")
     if physical.system is not None:
@@ -178,7 +181,11 @@ def sync_harness_locked(adapter: Any) -> None:
         from pyrung.dap.harness_console import install_harness
 
         harness = install_harness(adapter)
-    if harness is not None:
+        harness.set_overrides(overrides)
+        # The program's own couplings settle as at any install.  A link the user adds
+        # with `link` takes effect as it is, so no bench link settles here.
+        harness._settle(skip=overrides)
+    elif harness is not None:
         harness.set_overrides(overrides)
     _changed(adapter)
 
@@ -285,9 +292,10 @@ def _coupling_fields(coupling: Coupling) -> dict[str, Any]:
         "feedback": coupling.fb_name,
         "enable": coupling.en_name,
         "trigger": coupling.trigger_value,
-        "onDelay": physical.on_delay,
-        "offDelay": physical.off_delay,
-        "profile": profile_to_token(physical.profile) if physical.profile is not None else None,
+        "kind": physical.kind,
+        **{key.dap_field: False if key.is_flag else None for key in PHYSICAL_KEYS.values()},
+        **{PHYSICAL_KEYS[key].dap_field: text for key, text in physical.comment_text().items()},
+        "keys": " ".join(physical.tokens()),
         "physical": physical.name,
         "system": physical.system,
     }
@@ -358,16 +366,7 @@ def format_links_locked(adapter: Any) -> str:
             enable = format_link_spec(
                 row["enable"], row["trigger"], bit=_is_bit(adapter, row["enable"])
             )
-            keys = " ".join(
-                f"{key}={row[field]}"
-                for key, field in (
-                    ("on_delay", "onDelay"),
-                    ("off_delay", "offDelay"),
-                    ("profile", "profile"),
-                )
-                if row[field] is not None
-            )
-            text = f"  {row['source']:<8} {enable} -> {fb}  {keys}"
+            text = f"  {row['source']:<8} {enable} -> {fb}  {row['keys']}"
         if row["source"] == "project" and not row["active"]:
             change = bench.get(fb)
             text += (
@@ -387,13 +386,17 @@ def format_links_locked(adapter: Any) -> str:
 # Console verbs
 # ---------------------------------------------------------------------------
 
-_LINK_USAGE = "link <feedback> <[~]enable[:trigger]> on_delay=.. off_delay=.. | profile=.."
+_LINK_USAGE = "link <feedback> <[~]enable[:trigger]> key=value ..."
 
 
-def parse_link_keys(adapter: Any, tokens: list[str]) -> dict[str, str]:
-    keys: dict[str, str] = {}
+def parse_link_keys(adapter: Any, tokens: list[str]) -> dict[str, str | bool]:
+    """Read ``key=value`` tokens, and a bare flag such as ``toggle`` as ``True``."""
+    keys: dict[str, str | bool] = {}
     for token in tokens:
         key, sep, value = token.partition("=")
+        if not sep and key in PHYSICAL_KEYS and PHYSICAL_KEYS[key].is_flag:
+            keys[key] = True
+            continue
         if sep != "=" or not key or not value:
             raise adapter.DAPAdapterError(f"expected key=value, got {token!r}")
         keys[key] = value
@@ -408,7 +411,7 @@ def parse_link_keys(adapter: Any, tokens: list[str]) -> dict[str, str]:
     slots=(
         Slot(kind="tag", label="feedback"),
         Slot(kind="tag", label="enable"),
-        Slot(kind="text", label="on_delay=.. off_delay=.. | profile=..", required=False),
+        Slot(kind="text", label="key=value ...", required=False),
     ),
 )
 def _cmd_link(adapter: Any, expression: str) -> ConsoleResult:

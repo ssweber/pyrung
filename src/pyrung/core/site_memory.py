@@ -22,7 +22,8 @@ uses the same names.
 
 Overlays get their own namespace, so their keys never collide with the user
 program's: plant rungs are ``plant:i{N}`` / ``plant:e{N}``, PILOT holds are
-``pilot:i{N}`` / ``pilot:e{N}``.  An instruction that was never bound has no
+``pilot:i{N}`` / ``pilot:e{N}``.  The harness keys each of its coils by the
+feedback it drives (``plant:fb.{name}``).  An instruction that was never bound has no
 key, and asking for one raises (there is no ``id()`` fallback).
 
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and
@@ -55,6 +56,9 @@ if TYPE_CHECKING:
 USER_NAMESPACE = ""
 PLANT_NAMESPACE = "plant"
 PILOT_NAMESPACE = "pilot"
+PLANT_FEEDBACK_SITE = f"{PLANT_NAMESPACE}:fb."
+"""Site key of a harness coil, before the name of the feedback it drives."""
+
 
 EDGE_MEMORY = "_edge"
 """Memory prefix of an edge contact's site: ``_edge:e{N}`` holds the bit as the
@@ -1183,7 +1187,14 @@ _OVERLAY_NAMESPACES = frozenset({PLANT_NAMESPACE, PILOT_NAMESPACE})
 
 
 def _is_overlay_memory(name: str) -> bool:
-    """Memory of a plant/PILOT overlay site (``_oneshot:pilot:i3``)."""
+    """Memory of a plant/PILOT overlay site (``_oneshot:pilot:i3``).
+
+    A harness coil's memory (``_toggle:plant:fb.Lamp``) is not.  Its key names the
+    feedback it drives, so the coil rebuilt for the new program finds it.  Dropped, a
+    toggle or timed coil whose enable is on would see a rise on the first scan.
+    """
+    if f":{PLANT_FEEDBACK_SITE}" in name:
+        return False
     parts = name.split(":")
     return len(parts) >= 3 and parts[-2] in _OVERLAY_NAMESPACES
 
@@ -1227,8 +1238,9 @@ def remap_site_memory_report(
     Memory of a site of *old* moves to the site of *new* that
     :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
     sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
-    for the new program.  Edge memory (``_edge:e{N}``) is site memory like any
-    other.  A site left unmatched still carries its input memory to an edited
+    for the new program.  A harness coil's memory (``plant:fb.{name}``) is kept.
+    Edge memory (``_edge:e{N}``) is site memory like any other.  A site left
+    unmatched still carries its input memory to an edited
     counterpart (:func:`_match_input_memory`), and a drum its latched preset
     unless the latched step's preset was edited.  Other memory (timer carries,
     system memory) is kept as is, except that a carry is cut to below one unit of

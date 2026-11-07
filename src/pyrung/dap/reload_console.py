@@ -18,7 +18,12 @@ from typing import Any
 from pyrsistent import pmap
 
 from pyrung.core import PLC
-from pyrung.core.site_memory import remap_site_memory_report, seed_new_edge_memory
+from pyrung.core.site_memory import (
+    PLANT_FEEDBACK_SITE,
+    instruction_memory,
+    remap_site_memory_report,
+    seed_new_edge_memory,
+)
 from pyrung.core.state import SystemState
 from pyrung.dap.console import ConsoleResult, register
 
@@ -189,10 +194,20 @@ def _reload_locked(
     adapter._miner_accepted.clear()
     adapter._miner_suppressed.clear()
 
+    # Each coil the old harness ran carries on from the memory the reload kept.  A coil
+    # new to the program, or one of a harness removed before the reload, settles.
+    old_harness = adapter._harness
+    carry = old_harness._coil_wiring() if old_harness is not None else frozenset()
     adapter._harness = None
     from pyrung.dap.harness_console import try_auto_install
 
-    banner = try_auto_install(adapter)
+    banner = try_auto_install(adapter, carry=carry)
+    stale = _drop_coil_memory_no_coupling_owns(reloaded)
+    if stale:
+        warnings.append(
+            f"  {len(stale)} harness coil memory value(s) had no matching coupling, "
+            "reset: " + ", ".join(stale)
+        )
 
     scan_id = reloaded.current_state.scan_id
     n_tags = len(reloaded._known_tags_by_name)
@@ -205,6 +220,31 @@ def _reload_locked(
 
     events: list[tuple[str, dict[str, Any] | None]] = [("stopped", adapter._stopped_body("entry"))]
     return "\n".join(parts), events
+
+
+def _drop_coil_memory_no_coupling_owns(runner: PLC) -> list[str]:
+    """Drop each harness coil memory that no coil of the new harness keeps.
+
+    A reload keeps a coil's memory for the coil of the same kind on the same
+    feedback.  Kept for a renamed feedback or another kind, the memory would wait in
+    the state.  A later reload back to it would then read a stale value and skip the
+    settle at install.
+    """
+    owned: set[str] = set()
+    synthesis = runner._synthesis
+    for rung in synthesis.plant if synthesis is not None else ():
+        for instr in rung._instructions:
+            key = instr._state_key
+            if key is not None and key.startswith(PLANT_FEEDBACK_SITE):
+                owned.update(f"{prefix}:{key}" for prefix, _default in instruction_memory(instr))
+    stale = sorted(
+        name
+        for name in runner.current_state.memory
+        if f":{PLANT_FEEDBACK_SITE}" in name and name not in owned
+    )
+    if stale:
+        runner._edit_tip_tags({}, drop_memory=stale)
+    return stale
 
 
 @register("reload", usage="reload", group="execution")

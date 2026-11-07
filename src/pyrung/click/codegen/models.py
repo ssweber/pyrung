@@ -97,9 +97,8 @@ class _PhysicalSpec:
     """A serializable Physical(...) declaration used by codegen."""
 
     name: str
-    on_delay: str | None = None
-    off_delay: str | None = None
-    profile: str | None = None
+    # ``Physical.keywords()`` as pairs, so the spec stays hashable.
+    keywords: tuple[tuple[str, object], ...] = ()
     system: str | None = None
 
 

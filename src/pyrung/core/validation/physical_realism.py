@@ -306,7 +306,7 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
         tag = tag_map[tag_name]
         if tag.link is None or tag.type == TagType.BOOL:
             continue
-        if tag.physical is not None and tag.physical.profile is not None:
+        if tag.physical is not None and tag.physical.kind != "delay":
             continue
         findings.append(
             PhysicalRealismFinding(
@@ -317,7 +317,7 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
                     severity="info",
                     frames=(Frame(location=tag.name),),
                     problem=f"{tag.name} has no physical model.",
-                    hint="add physical=Physical(..., profile=...)",
+                    hint="add physical=Physical(..., ramp_on=...) or Physical(..., approach_to=..., approach_rate=...)",
                 ),
                 severity="info",
             )

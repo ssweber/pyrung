@@ -2,8 +2,8 @@
 
 Increment 2 of the synthesis-is-rungs consolidation.  The PLC scans
 ``_synthesis.holds`` before user logic and ``_synthesis.plant`` after, in the
-same ctx/commit.  Here we hand-build a ``plant`` TON/TOF pair (the shape the
-harness factory will emit) and assert it reproduces the bool dwell — *without*
+same ctx/commit.  Here we hand-build a ``plant`` debounce coil (the shape the
+harness factory emits) and assert it reproduces the bool dwell — *without*
 the harness, proving the bracket itself carries the semantics.
 """
 
@@ -16,6 +16,7 @@ import pytest
 from pyrung import Bool, Int, Program, Rung, copy
 from pyrung.core.condition import AllCondition, BitCondition, NormallyClosedCondition
 from pyrung.core.runner import PLC
+from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
 from pyrung.core.synthesis import (
     Synthesis,
     bool_feedback_rungs,
@@ -40,12 +41,15 @@ def _plant_overlay(plc: PLC, *, on_ms: int, off_ms: int) -> Synthesis:
     rungs = bool_feedback_rungs(
         enable=BitCondition(En),
         fb_tag=Fb,
-        ton_done=Bool("__cpl_ond__Fb"),
-        ton_acc=Int("__cpl_on__Fb"),
-        tof_acc=Int("__cpl_off__Fb"),
+        on_done=Bool("__cpl_ond__Fb"),
+        on_acc=Int("__cpl_on__Fb"),
+        off_done=Bool("__cpl_offd__Fb"),
+        off_acc=Int("__cpl_off__Fb"),
         on_delay_ms=on_ms,
         off_delay_ms=off_ms,
     )
+    # The coil keeps its memory of the rung under its place in the plant.
+    bind_sites(rungs, namespace=PLANT_NAMESPACE)
     return Synthesis(plant=rungs)
 
 
@@ -64,8 +68,18 @@ def test_plant_ton_reproduces_dwell() -> None:
     # on_delay 200ms = 2 scans, off_delay 100ms = 1 scan; En held 4 then 3 off.
     # __plant__ is the pre-logic input-read: it reads the *previous* commit's En,
     # so the committed feedback lags the command by one scan (feedback is an
-    # input): rise at scan 3, three trues, fall at scan 6.
-    assert _run(plc, [True] * 4 + [False] * 3) == [False, False, True, True, True, False, False]
+    # input): rise at scan 3.  The debounce's off side compares a scan after the
+    # fall it sees at scan 6, so Fb falls at scan 7.
+    assert _run(plc, [True] * 4 + [False] * 3) == [False, False, True, True, True, True, False]
+
+
+def test_plant_rides_through_a_dip_shorter_than_the_off_delay() -> None:
+    plc = PLC(_prog(), dt=0.1)
+    plc._synthesis = _plant_overlay(plc, on_ms=300, off_ms=200)
+    # A one-scan dip in a held command: the off side never reaches 200 ms, and the
+    # rise after it does not clear Fb, so Fb stays on through it.
+    seq = [True] * 5 + [False] + [True] * 5
+    assert _run(plc, seq) == [False] * 3 + [True] * 8
 
 
 def test_plant_glitch_is_suppressed() -> None:
@@ -309,3 +323,47 @@ def test_guarded_copy_refuses_a_value_that_is_not_a_constant() -> None:
         guarded_copy_rung([(sel, src, BitCondition(gate))])
     with pytest.raises(TypeError, match="is not a constant"):
         conditional_hold_rung(dest=sel, rules=[(3, gate), (src, None)])
+
+
+def test_guarded_copy_refuses_a_tag_named_like_one_of_its_bits() -> None:
+    # The bracket would write its own bit over the user's tag of the same name.
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    d, gate = Bool("D"), Bool("Gate")
+    with pytest.raises(ValueError, match="'__on1__D', the same name as your tag"):
+        guarded_copy_rung([(d, True, gate), (d, False, BitCondition(Bool("__on1__D")))])
+    with pytest.raises(ValueError, match="'__set2__X', the same name as your tag"):
+        guarded_copy_rung([(Int("__set2__X"), 3, gate)])
+    # A name the bracket never gives a bit is the user's own.
+    guarded_copy_rung([(d, True, BitCondition(Bool("__on__D")))])
+
+
+def test_only_the_bit_rows_carry_a_comment() -> None:
+    # The comment is set on the rows the build adds, so the text says why they are there.
+    # A writer row's code says what it does on its own.  Each rule of Sel has its own bit.  Its
+    # copies run in rule order, so the last one on writes last.
+    from pyrung.core.condition import CompareEq, CompareNe
+    from pyrung.core.synthesis import bracket_lines, guarded_copy_rung
+
+    sel, a, b = Int("Sel"), Bool("A"), Bool("B")
+    rung = guarded_copy_rung(
+        [(sel, 3, CompareNe(sel, 3)), (sel, 0, CompareEq(sel, 3)), (a, True, BitCondition(b))]
+    )
+
+    decide = (
+        'comment("Decide first, so the rows below read the state from before this logic wrote.")'
+    )
+    assert bracket_lines(rung) == (
+        decide,
+        "with rung(Sel != 3):",
+        "  out(__set1__Sel)",
+        "with rung(Sel == 3):",
+        "  out(__set2__Sel)",
+        "with rung(__set1__Sel):",
+        "  copy(3, Sel)",
+        "with rung(__set2__Sel):",
+        "  copy(0, Sel)",
+        "with rung(B):",
+        "  out(A)",
+    )
+    assert bracket_lines(rung, ["A"]) == ("with rung(B):", "  out(A)")

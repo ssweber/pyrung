@@ -17,7 +17,7 @@ from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, on_delay,
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
-from pyrung.core.physical import Approach, Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 from tests.core.scan_loop_counts import ScansOutsideLoop
 
@@ -208,6 +208,7 @@ def test_the_install_gives_each_plant_tag_its_default() -> None:
     assert {name: value for name, value in plc.state.tags.items() if name.startswith("__cpl_")} == {
         "__cpl_ond__Fb": False,
         "__cpl_on__Fb": 0,
+        "__cpl_offd__Fb": False,
         "__cpl_off__Fb": 0,
     }
 
@@ -312,6 +313,9 @@ def test_an_uninstall_leaves_earlier_scans_as_they_ran() -> None:
     ran = _run_recording(plc, 20)
     assert any(name.startswith("_frac:") for name in plc.state.memory)
 
+    tip = plc.state.scan_id
+    coil_memory = {name for name in plc.state.memory if ":plant:fb." in name}
+    assert coil_memory
     harness.uninstall()
     ran.update(_run_recording(plc, 20))
     plc._recent_state_cache.clear()
@@ -319,7 +323,11 @@ def test_an_uninstall_leaves_earlier_scans_as_they_ran() -> None:
 
     for scan_id, state in ran.items():
         assert _exact(plc.history.at(scan_id).tags) == _exact(state.tags), scan_id
-        assert plc.history.at(scan_id).memory == state.memory, scan_id
+        memory = dict(state.memory)
+        if scan_id == tip:
+            # The uninstall clears the coils' memory at the tip, so a later install settles.
+            memory = {name: value for name, value in memory.items() if name not in coil_memory}
+        assert dict(plc.history.at(scan_id).memory) == memory, scan_id
 
 
 def test_a_coupling_change_on_a_checkpoint_edits_the_checkpoint() -> None:
@@ -368,7 +376,12 @@ def _stop_and_run(plc: PLC) -> None:
 
 
 _RESETS = [_reboot, _reboot_without_battery, _stop_and_run]
-_PLANT_AT_DEFAULTS = {"__cpl_ond__Fb": False, "__cpl_on__Fb": 0, "__cpl_off__Fb": 0}
+_PLANT_AT_DEFAULTS = {
+    "__cpl_ond__Fb": False,
+    "__cpl_on__Fb": 0,
+    "__cpl_offd__Fb": False,
+    "__cpl_off__Fb": 0,
+}
 
 
 def _mid_dwell(plc: PLC) -> PLC:
@@ -420,7 +433,7 @@ def test_a_kernel_holds_the_plant_tags_stepping_does_after_a_reset(
 
 
 def _late_ramp_recording() -> tuple[PLC, dict[int, Any]]:
-    Temp = Real("Temp", physical=Physical("Therm", profile=Ramp(up=1.0, down=-0.5)), link="Enable")
+    Temp = Real("Temp", physical=Physical("Therm", ramp_on=1.0, ramp_off=-0.5), link="Enable")
     Enable, Lamp, Hit = Bool("Enable"), Bool("Lamp"), Bool("Hit")
     with Program(strict=False) as prog:
         with Rung(Enable):
@@ -463,7 +476,7 @@ def test_a_replay_before_a_coupling_change_has_no_harness() -> None:
     enable, over, shown = Bool("Enable"), Bool("Over"), Real("Shown")
     timer = Timer.clone("Tm")
     temp = Real(
-        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+        "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Enable"
     )
     with Program(strict=False) as program:
         with Rung(enable):
@@ -504,7 +517,7 @@ def test_a_replay_before_a_coupling_change_has_no_harness() -> None:
 def test_a_replay_with_no_change_keeps_its_harness() -> None:
     enable = Bool("Enable")
     temp = Real(
-        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+        "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Enable"
     )
     with Program(strict=False) as program:
         with Rung():

@@ -3860,7 +3860,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=approach:toward=100|rate=0.3, min=0, max=100, uom=psi]",
+                    comment="[link=Enable, approach_to=100, approach_rate=0.3, min=0, max=100, uom=psi]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3880,8 +3880,7 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert (
-            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
-            in code
+            "Pressure_physical = Physical('Pressure', approach_to=100.0, approach_rate=0.3)" in code
         )
         assert (
             "df.slot(101, name='Pressure', physical=Pressure_physical,"
@@ -4074,7 +4073,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=approach:toward=100|rate=0.3]",
+                    comment="[link=Enable, approach_to=100, approach_rate=0.3]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -4094,9 +4093,8 @@ class TestStructuredCodegen:
         files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert "Physical" in files["src/plc/tags.py"]
-        assert "Approach" in files["src/plc/tags.py"]
         assert (
-            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
+            "Pressure_physical = Physical('Pressure', approach_to=100.0, approach_rate=0.3)"
             in files["src/plc/tags.py"]
         )
 

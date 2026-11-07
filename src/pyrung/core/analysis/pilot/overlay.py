@@ -362,6 +362,23 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
             active = [_DemandActive(demand) for demand in self.demands]
             return active[0] if len(active) == 1 else AnyCondition(*active)
 
+    from pyrung.core.synthesis import _condition_and, _condition_complement
+
+    def _demand_active(demand: Any) -> Any:
+        # The plain contact the demand stands for, so the printed rung reads as ladder.
+        condition = _as_condition(demand.condition)
+        if bool(demand.value):
+            return condition
+        flipped = _condition_complement(condition)
+        return _DemandActive(demand) if flipped is None else flipped
+
+    def _no_demand_active(demands: tuple[Any, ...]) -> Any:
+        parts = [_condition_complement(_demand_active(demand)) for demand in demands]
+        plain = [part for part in parts if part is not None]
+        if len(plain) != len(parts):
+            return _NoDemandActive(demands)
+        return plain[0] if len(plain) == 1 else AllCondition(*plain)
+
     materialized = list(pilot_rungs)
     progress_by_dest: dict[str, tuple[Any, ...]] = {}
     for rung in materialized:
@@ -379,7 +396,7 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
         progress = rung.operation.progress if rung.operation is not None else None
         peers = progress_by_dest.get(rung.dest, ())
         start_guard = (
-            AllCondition(rung_guard, _NoDemandActive(peers))
+            _condition_and(rung_guard, _no_demand_active(peers))
             if progress is not None and peers
             else rung_guard
         )
@@ -395,7 +412,7 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
                 _ExpandedPilotRule(
                     rung_index,
                     rung,
-                    _DemandActive(progress),
+                    _demand_active(progress),
                     True,
                 )
             )
@@ -408,14 +425,11 @@ def _pilot_rung_execution_receipt(
 ) -> PilotOverlayExecution:
     """Classify every installed rule using the compiler's exact expansion.
 
-    All conditions read one snapshot: the state the holds start from.  That is
-    what :func:`guarded_copy_rung` means by every guard, and it lays its rung
-    out (one writer per destination, rules frozen onto bits where a guard would
-    otherwise read an earlier write) so that running it agrees.  The last
-    active expanded rule for each destination is the effective owner.  Earlier
-    active starts remain eligible, earlier active continuation branches remain
-    continuing, and an operation prevented from starting by a peer's progress
-    is shadowed.
+    All conditions read one snapshot, the state the holds start from.  Every guard of
+    :func:`guarded_copy_rung` means that state too, and the rung it builds agrees when it
+    runs.  The last active expanded rule for each destination is the effective owner.
+    Earlier active starts remain eligible, earlier active continuation branches remain
+    continuing, and an operation prevented from starting by a peer's progress is shadowed.
     """
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.condition import _as_condition
@@ -510,6 +524,54 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
         # recording says which PILOT rungs ran on each of its scans.
         setattr(rung, PILOT_RUNGS_BUILT_FROM, materialized)
     _set_synth_holds(plc, holds)
+
+
+def _pilot_hold(synthesis: Any) -> Any | None:
+    for hold in () if synthesis is None else synthesis.holds:
+        if getattr(hold, PILOT_RUNGS_BUILT_FROM, None) is not None:
+            return hold
+    return None
+
+
+def pilot_logic_at(recording: PLC, scan: int) -> Any | None:
+    """The temporary logic as it was built and ran on the scan after *scan*, or None.
+
+    A plan prints this rung, not the rules it came from, so its text is the logic that ran.
+    The recording's own tip has run no scan under its logic yet, so its synthesis answers there.
+    """
+    for epoch, _first, _last in recording._causal_lineage.epochs_covering(scan + 1, scan + 1):
+        return _pilot_hold(epoch.synthesis)
+    if scan == recording.state.scan_id:
+        return _pilot_hold(recording._synthesis)
+    return None
+
+
+def pilot_rules_rung(pilot_rungs: Iterable[PilotRung], tags: Mapping[str, Any]) -> Any | None:
+    """*pilot_rungs* built into a rung on their own, as :func:`_set_pilot_rungs` builds them.
+
+    This is for logic that has not run, such as a proposal or a step built by hand.  A tag
+    missing from *tags* stands in by its value's type, which is all the build reads from it.
+    """
+    from pyrung.core.synthesis import guarded_copy_rung
+    from pyrung.core.tag import Bool, Char, Int, Real
+
+    rules: list[tuple[Any, Any, Any]] = []
+    for rule in _expand_pilot_rules(pilot_rungs):
+        dest = tags.get(rule.rung.dest)
+        if dest is None:
+            value = rule.rung.value
+            kind = (
+                Bool
+                if isinstance(value, bool)
+                else Real
+                if isinstance(value, float)
+                else Char
+                if isinstance(value, str)
+                else Int
+            )
+            dest = kind(rule.rung.dest)
+        rules.append((dest, rule.rung.value, rule.guard))
+    return guarded_copy_rung(rules) if rules else None
 
 
 def _merged_pilot_rungs(

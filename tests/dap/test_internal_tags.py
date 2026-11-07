@@ -11,8 +11,9 @@ from pyrung.dap.internal_tags import is_internal_tag_name, visible_tag_names, vi
 
 #: Every prefix pyrung generates (synthesis.py, harness.py).
 GENERATED = [
-    "__frz0__Light",
-    "__frz12__Light",
+    "__on1__Light",
+    "__off12__Light",
+    "__set1__Speed",
     "__cpl_ond__Fb",
     "__cpl_on__Fb",
     "__cpl_on_Ts__Fb",
@@ -25,6 +26,9 @@ GENERATED = [
     "__pls_on__Fb",
     "__pls_offd__Fb",
     "__pls_off__Fb",
+    "__tmd_ond__Fb",
+    "__tmd_on__Fb",
+    "__tmd_on_Ts__Fb",
 ]
 
 #: User tags that only look like them.
@@ -34,12 +38,15 @@ USER = [
     "__a__b",
     "__spare__1",
     "__init__",
-    "__frz__Light",
-    "__frzA__Light",
+    "__on__Light",
+    "__onA__Light",
+    "__set__Speed",
+    "__frz0__Light",
     "__cpl_x__Fb",
     "__pls_offx__Fb",
+    "__tmd_off__Fb",
     "__cpl_on__",
-    "x__frz0__Light",
+    "x__on1__Light",
 ]
 
 
@@ -54,7 +61,7 @@ def test_user_names_are_not_internal(name: str):
 
 
 def test_visible_helpers_keep_order_and_values():
-    names = ["B", "__frz0__B", "__init__", "__cpl_on__Fb", "A"]
+    names = ["B", "__on1__B", "__init__", "__cpl_on__Fb", "A"]
     assert visible_tag_names(names) == ["B", "__init__", "A"]
     assert visible_tags({name: index for index, name in enumerate(names)}) == {
         "B": 0,
@@ -63,10 +70,19 @@ def test_visible_helpers_keep_order_and_values():
     }
 
 
-def test_matches_what_a_harness_coupling_adds():
+@pytest.mark.parametrize(
+    "physical",
+    [
+        Physical("Switch", on_delay="200ms", off_delay="100ms"),
+        Physical("Horn", timed="200ms"),
+        Physical("Horn", timed="40s"),
+    ],
+    ids=["debounce", "timed", "timed-in-seconds"],
+)
+def test_matches_what_a_harness_coupling_adds(physical: Physical):
     # Ground the prefixes in the real generator, not just the list above.
     enable = Bool("Enable", external=True)
-    fb = Bool("Fb", physical=Physical("Switch", on_delay="200ms", off_delay="100ms"), link="Enable")
+    fb = Bool("Fb", physical=physical, link="Enable")
     stage = Int("Stage")
     with Program() as prog:
         with Rung(enable, fb):

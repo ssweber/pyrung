@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pyrung.core.physical import PHYSICAL_KEYS
 from pyrung.dap import links
 from pyrung.dap.capture import capture_hook
 
@@ -25,6 +26,15 @@ class _LinkRequestArgs:
     trigger: Any = None
     onDelay: Any = None
     offDelay: Any = None
+    flasherOn: Any = None
+    flasherOff: Any = None
+    timed: Any = None
+    maintained: Any = None
+    toggle: Any = None
+    rampOn: Any = None
+    rampOff: Any = None
+    approachTo: Any = None
+    approachRate: Any = None
     profile: Any = None
     physical: Any = None
     system: Any = None
@@ -64,15 +74,28 @@ def on_pyrung_link(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         if isinstance(trigger, bool) or not isinstance(trigger, (int, str)):
             raise adapter.DAPAdapterError("pyrungLink.trigger must be an integer or a string")
         enable = f"{enable}:{trigger}"
-    keys: dict[str, str] = {}
-    for key, value in (
-        ("on_delay", parsed.onDelay),
-        ("off_delay", parsed.offDelay),
-        ("profile", parsed.profile),
-        ("physical", parsed.physical),
-        ("system", parsed.system),
-    ):
-        text = _optional_text(adapter, value, f"pyrungLink.{key}")
+    if parsed.profile is not None:
+        raise adapter.DAPAdapterError(
+            "pyrungLink.profile was removed. Send the kind's own fields, such as "
+            "flasherOn and flasherOff."
+        )
+    keys: dict[str, str | bool] = {}
+    for key in PHYSICAL_KEYS.values():
+        field = key.dap_field
+        value = getattr(parsed, field)
+        if key.is_flag:
+            if value is not None and not isinstance(value, bool):
+                raise adapter.DAPAdapterError(f"pyrungLink.{field} must be a boolean")
+            if value:
+                keys[key.name] = True
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = str(value)
+        text = _optional_text(adapter, value, f"pyrungLink.{field}")
+        if text is not None:
+            keys[key.name] = text
+    for key in ("physical", "system"):
+        text = _optional_text(adapter, getattr(parsed, key), f"pyrungLink.{key}")
         if text is not None:
             keys[key] = text
 

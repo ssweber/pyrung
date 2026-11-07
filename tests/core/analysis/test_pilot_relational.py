@@ -13,10 +13,10 @@ from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.steerable import compute_steerable
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 
 # Harness-linked thermal ramp: Temp rises while its link (Enable) is held.
-_RAMP = Physical("RelThermal", profile=Ramp(up=1.0, down=-0.5))
+_RAMP = Physical("RelThermal", ramp_on=1.0, ramp_off=-0.5)
 
 
 def _known(logic: Program) -> dict:

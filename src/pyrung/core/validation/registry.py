@@ -84,7 +84,7 @@ _SPECS: tuple[RuleSpec, ...] = (
     RuleSpec(
         "PTR_UNGUARDED_ACCESS", "PTR", "advisory", "pointer", "Pointer Bounds Not Established"
     ),
-    RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
+    RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Analog Physical"),
     RuleSpec(
         "PHYS_ANTITOGGLE",
         "PHYS",

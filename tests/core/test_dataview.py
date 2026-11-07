@@ -15,7 +15,6 @@ from pyrung.core import (
     OutputBlock,
     Physical,
     Program,
-    Ramp,
     Real,
     Rung,
     TagType,
@@ -505,7 +504,7 @@ class TestDetails:
             max=150,
             uom="degC",
             external=True,
-            physical=Physical("TempFb", profile=Ramp(up=0.5, down=-0.1)),
+            physical=Physical("TempFb", ramp_on=0.5, ramp_off=-0.1),
             link="Enable",
         )
         enable = Bool("Enable")

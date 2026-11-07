@@ -8,22 +8,27 @@ across reloads. Console verbs: ``harness status``, ``harness install``,
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
-from pyrung.core.harness import Harness
+from pyrung.core.harness import CoilWiring, Harness
+from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 
 
 def install_harness(adapter: Any) -> Harness:
-    """Install a harness on the current runner, even one with no declared couplings."""
+    """Install a harness on the current runner, even one with no declared couplings.
+
+    Nothing is settled yet.  The caller settles once the bench links are in.
+    """
     harness = Harness(adapter._require_runner_locked())
-    harness.install()
+    harness._install(settle=False)
     harness.on_patches_applied = _make_patch_listener(adapter)
     adapter._harness = harness
     return harness
 
 
-def try_auto_install(adapter: Any) -> str | None:
+def try_auto_install(adapter: Any, carry: Collection[CoilWiring] = ()) -> str | None:
     """Install the harness for the program's couplings plus the bench links.
 
     Returns a banner string for the debug console, or ``None`` if there are
@@ -36,6 +41,8 @@ def try_auto_install(adapter: Any) -> str | None:
 
     harness = install_harness(adapter)
     notes = fit_to_harness_locked(adapter, harness)
+    # The one settle, over the couplings that run with the bench links in.
+    harness._settle(carry)
 
     summary = harness.coupling_summary()
     n_bool = len(summary["bool_couplings"])
@@ -46,11 +53,10 @@ def try_auto_install(adapter: Any) -> str | None:
         uninstall_harness(adapter)
         return "\n".join(notes) or None
 
-    parts = []
-    if n_bool:
-        parts.append(f"{n_bool} bool")
-    if n_profile:
-        parts.append(f"{n_profile} profile")
+    kinds: dict[str, int] = {"delay": n_bool} if n_bool else {}
+    for coupling in summary["profile_couplings"]:
+        kinds[coupling["kind"]] = kinds.get(coupling["kind"], 0) + 1
+    parts = [f"{count} {kind}" for kind, count in kinds.items()]
     banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
     if adapter._bench_links:
         banner += (
@@ -143,7 +149,7 @@ def _harness_status(adapter: Any) -> ConsoleResult:
     for ac in summary["profile_couplings"]:
         tv = ac.get("trigger_value")
         en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]
-        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}")
+        lines.append(f"  {ac['kind']}  {en_label} -> {ac['fb']}  ({ac['keys']})")
 
     pending = summary["pending_patches"]
     if pending:
@@ -157,6 +163,8 @@ def _harness_install(adapter: Any) -> ConsoleResult:
         return ConsoleResult("Harness already installed; use `harness remove` first")
 
     adapter._require_runner_locked()
+    # A scan paused mid-way began before the install and would commit over its seeding.
+    execution_flow.invalidate_mid_scan(adapter)
     banner = try_auto_install(adapter)
     if banner is None:
         return ConsoleResult("No Physical+link= couplings found; nothing to install")
@@ -166,5 +174,6 @@ def _harness_install(adapter: Any) -> ConsoleResult:
 def _harness_remove(adapter: Any) -> ConsoleResult:
     if adapter._harness is None:
         return ConsoleResult("Harness not installed")
+    execution_flow.invalidate_mid_scan(adapter)
     uninstall_harness(adapter)
     return ConsoleResult("Harness removed")

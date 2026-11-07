@@ -22,7 +22,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Pulse,
     Rung,
     TagType,
     Timer,
@@ -89,14 +88,14 @@ def _two_contacts(enable: Any, feedback: Any, hit: Any) -> None:
 
 
 def _pulse(dwell: str = "500ms") -> Physical:
-    return Physical("Fb", profile=Pulse(on_dwell=dwell, off_dwell=dwell))
+    return Physical("Fb", flasher_on=dwell, flasher_off=dwell)
 
 
 class TestLinkProofIsNotClaimedFalsely:
     def test_pulse_on_the_other_contact(self) -> None:
         """The link does not hold a pulse against its enable: it goes high while enabled."""
         program, hit = _linked(_pulse(), _two_contacts)
-        assert _step_to(_harnessed(program), hit, {"Enable": True}, 200) == 51
+        assert _step_to(_harnessed(program), hit, {"Enable": True}, 200) == 2
 
         plan = _harnessed(program).how(hit, **BOUND)
         assert plan.status is not PlanStatus.CANNOT_REACH, plan.reason

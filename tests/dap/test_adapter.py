@@ -3814,9 +3814,9 @@ def test_live_trace_body_includes_tag_hints(tmp_path: Path):
     assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
 
 
-#: Tags pyrung adds itself (a bracket's freeze bit, a harness coupling's timer)
+#: Tags pyrung adds itself (a bracket's rule bit, a harness coupling's timer)
 #: and user tags that only look like them.
-_INTERNAL_TAGS = ("__frz0__N", "__cpl_ond__Fb")
+_INTERNAL_TAGS = ("__on1__N", "__cpl_ond__Fb")
 _LOOKALIKE_TAGS = ("N", "__Mine", "__a__b", "__spare__1", "__init__")
 
 

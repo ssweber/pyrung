@@ -483,6 +483,13 @@ class TestRemap:
         assert remapped == {"_dt": 0.01}
         assert sorted(dropped) == ["_oneshot:pilot:i1", "_toggle:plant:i2"]
 
+    def test_a_harness_coils_memory_is_kept(self):
+        """The harness keys each coil by the feedback it drives, so its rebuilt coil reads it."""
+        old = _counter_program(insert_rung=False)
+        memory = {"_toggle:plant:fb.Lamp": True, "_debounce_rung:plant:fb.Valve": False}
+        remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(old))
+        assert (remapped, list(dropped)) == (memory, [])
+
     def test_edge_sites_match_after_a_line_shift(self):
         from pyrung.core.site_memory import _match_sites
 

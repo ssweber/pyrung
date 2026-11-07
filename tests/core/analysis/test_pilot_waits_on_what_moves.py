@@ -8,7 +8,7 @@ import pytest
 
 from pyrung import PLC, Bool, Program, Rung, Timer, latch, on_delay
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Physical, Pulse
+from pyrung.core.physical import Physical
 
 
 def _lands_on(plan: Any, goal: str) -> None:
@@ -66,7 +66,7 @@ def _pulse_program(*, on_ms: int = 500, off_ms: int = 500) -> tuple[Any, Any, An
     enable = Bool("En", external=True)
     feedback = Bool(
         "Fb",
-        physical=Physical("Fb", profile=Pulse(on_dwell=f"{on_ms}ms", off_dwell=f"{off_ms}ms")),
+        physical=Physical("Fb", flasher_on=f"{on_ms}ms", flasher_off=f"{off_ms}ms"),
         link="En",
     )
     hit = Bool("Hit")
@@ -77,7 +77,8 @@ def _pulse_program(*, on_ms: int = 500, off_ms: int = 500) -> tuple[Any, Any, An
 
 
 def test_a_pulse_feedback_is_waited_for_with_its_enable_on() -> None:
-    prog, _enable, hit = _pulse_program()
+    # A one-scan first on phase never shows, so the first edge is a full off dwell away.
+    prog, _enable, hit = _pulse_program(on_ms=10)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
     plc.patch({"En": True})

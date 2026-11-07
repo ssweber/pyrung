@@ -297,9 +297,7 @@ def _enrich_with_ownership(
             return None
         return _PhysicalSpec(
             name=name,
-            on_delay=getattr(physical, "on_delay", None),
-            off_delay=getattr(physical, "off_delay", None),
-            profile=getattr(physical, "profile", None),
+            keywords=tuple(physical.keywords().items()),
             system=getattr(physical, "system", None),
         )
 
