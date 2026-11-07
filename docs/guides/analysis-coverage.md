@@ -41,7 +41,7 @@ for finding in plc.query.wait_edges_without_escape():
 
 A step that only advances when something outside the program arrives is a *wait edge*. If nothing else can fire while the step waits, the machine sits there looking fine. This survey is static, so it needs no history. It reports the absence of an escape the program can fire unaided.
 
-The survey reads a tag that nothing in the program sets at its resting value. An escape doesn't count if:
+The survey assumes a tag that nothing in the program sets stays at its resting value. A guard on such a tag makes the advance a wait. An escape doesn't count if:
 
 - its guard needs such a tag to change, like a timeout enabled by a config register nobody set, or an abort waiting on a button
 - its step guard leaves out the waiting step

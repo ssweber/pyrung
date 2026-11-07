@@ -196,7 +196,7 @@ plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, t
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-Momentary commands are treated as actions, not just settled states. `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable is checked only on some scans, not on every one. Use a condition when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+Momentary commands are treated as actions, not just settled states. `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable is checked only on some scans. It is not checked on the repeated scans of a long wait. Use a condition when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
 
 Pass more than one condition, as a tuple or list, for a **union of exclusions**. Each is avoided independently.
 

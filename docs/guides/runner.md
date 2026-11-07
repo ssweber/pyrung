@@ -91,7 +91,7 @@ runner.run_until(Temp > 150.0)
 runner.run_until(Or(AlarmA, AlarmB, AlarmC))
 ```
 
-Stops at whichever comes first: the condition is true, a pause breakpoint fires, or `max_cycles` is reached.
+Stops when the condition is true, a pause breakpoint fires, or `max_cycles` is reached, whichever comes first.
 
 ### `run_until_fn(predicate)` — callable predicate
 
@@ -276,7 +276,7 @@ that would step more than 250,000 scans raises `UnrecordedScansError` and names
 the range. Scans a question has stepped keep their records, so ask first about a scan nearer the
 start of that range for `cause`, or nearer its end for `effect`, then ask again,
 from Python or the debugger. From Python, `cause()` also takes `since=`.
-`jit=False` records the run as it goes.
+Passing `jit=False` records a run as it goes.
 
 `previous_transition()` returns the latest matching recorded transition, or
 `None`.

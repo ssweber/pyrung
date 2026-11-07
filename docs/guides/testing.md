@@ -208,7 +208,7 @@ runner.run_until(Temp > 150.0)                    # Temperature exceeded
 runner.run_until(Or(AlarmA, AlarmB, AlarmC))  # Any alarm triggered
 ```
 
-`run_until` stops at whichever comes first: the condition is met, or `max_cycles` is reached.
+`run_until` stops when the condition is met or `max_cycles` is reached, whichever comes first.
 
 ## Forking: test alternate outcomes
 

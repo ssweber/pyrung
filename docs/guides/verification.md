@@ -148,7 +148,7 @@ System tags read as they do in a fixed-step run at the verifier's `dt`. That hol
 
 When the program writes `sys.cmd_mode_stop`, `sys.mode_run` becomes an input that can take any value instead. A stop written from outside the program, over Modbus or from an HMI, is not modeled.
 
-The clocks, `sys.scan_counter`, `sys.scan_clock_toggle` and the RTC fields depend on how long the PLC has run. `sys.battery_present` is set by the environment. The verifier explores all of these as inputs that can take any value on any scan, within the calendar range for the RTC fields. A `Proven` result holds for every timing. A `Counterexample` that drives one of them carries a caveat, since the PLC may never produce that sequence. A callable property can read the constants. Reading one of the other tags when no rung reads it returns `Intractable`, so write that property as a condition.
+The clocks, `sys.scan_counter`, `sys.scan_clock_toggle` and the RTC fields depend on how long the PLC has run. `sys.battery_present` is set by the environment. The verifier explores all of these as inputs that can take any value on any scan, within the calendar range for the RTC fields. A `Proven` result holds for every timing. A `Counterexample` that drives one of them carries a caveat, since the PLC may never produce that sequence. A callable property can read the constants. If it reads a clock, an RTC field, `sys.scan_counter`, `sys.scan_clock_toggle` or `sys.battery_present` that no rung reads, the result is `Intractable`. Write that property as a condition instead.
 
 ### Debugging with journals
 

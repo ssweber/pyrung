@@ -105,7 +105,7 @@ This DSL follows CLICK PLC instruction naming as closely as possible, departing 
 
 1. **Keep the CLICK name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
 2. **Use a domain synonym** when CLICK's name shadows a Python builtin. `set` becomes `latch`, which is well-understood PLC terminology. `math` keeps CLICK's name, although pyrung's `math` hides Python's `math` module in a file that imports it. Import Python's under another name (`import math as pymath`).
-3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit. The name says so.
+3. **Use clarified intent** when Python's execution model changes the semantics. `return` becomes `return_early`. In CLICK, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit. The name says so.
 
 | CLICK instruction | pyrung DSL | Reason |
 |-------------------|------------|--------|

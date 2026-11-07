@@ -11,7 +11,7 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-`copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. A `Copy` of a `Real` into a `Dint` clamps with no flag. `blockcopy()`, `fill()` and a `copy()` of Inf follow the same rule. This is different from `math()`, which wraps.
+`copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. A `Copy` of a `Real` into a `Dint` clamps with no flag. `blockcopy()`, `fill()` and a `copy()` of Inf into a `Dint` do the same. This is different from `math()`, which wraps.
 
 `Word` and bit destinations are different, and raise no flag. Into a `Word`, a constant or an `Int` keeps its low 16 bits (-1 is 65535). A `Dint` or `Real` above 65535 stores 65535. One below 0 keeps its low 16 bits, so -1 is 65535 and -32768 is 32768. Anything below -32768 also stores 32768. A `Word` into an `Int` keeps its bits (65535 is -1). A number into a `Bool` is on when it is nonzero and finite. CLICK's editor takes no constant into a bit, so the CLICK export refuses `copy(2, C[1])` and `fill(1, C.select(1, 4))`. Set bits with `out()`, `latch()` or `reset()`.
 
