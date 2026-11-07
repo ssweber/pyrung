@@ -526,9 +526,7 @@ class Harness:
                         yield profile
         for c in self._profile_couplings:
             profile = (
-                self._pulse_profile(c)
-                if c.physical.kind == "flasher"
-                else self._analog_profile(c)
+                self._pulse_profile(c) if c.physical.kind == "flasher" else self._analog_profile(c)
             )
             if profile is not None:
                 yield profile

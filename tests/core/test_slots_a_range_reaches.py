@@ -36,7 +36,7 @@ from pyrung.core import (
 )
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.tag import Tag
 from pyrung.dap.bounds_console import emit_bounds_violations
 from pyrung.dap.console import _resolve_tags
@@ -492,7 +492,7 @@ def test_the_bounds_console_labels_a_slot_a_range_reaches() -> None:
     assert "one" in emitted[0]
 
 
-RAMP = Physical("Slow", profile=Ramp(up=1.0))
+RAMP = Physical("Slow", ramp_on=1.0)
 
 
 def _ran_a_plant(bank: Block, dst: Block, rungs: Callable[[], None]) -> tuple[Harness, PLC]:

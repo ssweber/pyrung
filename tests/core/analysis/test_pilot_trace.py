@@ -69,7 +69,7 @@ from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.crossing import REVERSE_FALLTHROUGH, AffineCmp
 from pyrung.core.memory_block import Block
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.tag import TagType
 
 
@@ -805,7 +805,7 @@ def test_context_trace_uses_live_harness_to_surface_ramp_driver():
     enable = Bool("HarnessTrace_Enable", external=True)
     temp = Real(
         "HarnessTrace_Temp",
-        physical=Physical("HarnessTrace_Sensor", profile=Ramp(up=1.0, down=-0.5)),
+        physical=Physical("HarnessTrace_Sensor", ramp_on=1.0, ramp_off=-0.5),
         link=enable.name,
     )
     stage = Int("HarnessTrace_Stage")

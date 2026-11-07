@@ -54,7 +54,6 @@ from pyrung import (  # noqa: E402
     Int,
     Or,
     Program,
-    Pulse,
     Rung,
     TagType,
     Timer,
@@ -75,6 +74,18 @@ from pyrung import (  # noqa: E402
 )
 from pyrung.core import Harness, Physical  # noqa: E402
 from pyrung.core.harness import Coupling  # noqa: E402
+
+
+def _flasher(name, on, off):
+    """A flasher Physical, in the old ``Pulse`` form on a base from before the flat keywords."""
+    try:
+        return Physical(name, flasher_on=on, flasher_off=off)
+    except TypeError:
+        import pyrung
+
+        pulse = vars(pyrung)["Pulse"]
+        old: dict[str, Any] = {"profile": pulse(on_dwell=on, off_dwell=off)}
+        return Physical(name, **old)
 
 FS = system.sys.first_scan
 FAULT = "fault.out_of_range"
@@ -477,7 +488,7 @@ def _harness_delay(on, off=None):
 
 
 def _pulse(on_s, off_s):
-    physical = Physical("Sensor", profile=Pulse(on_dwell=f"{on_s}s", off_dwell=f"{off_s}s"))
+    physical = _flasher("Sensor", f"{on_s}s", f"{off_s}s")
     fb = Bool("Fb", physical=physical, link="Enable")
     enable, go, hit, t1 = (
         Bool("Enable"),
@@ -1281,7 +1292,7 @@ def _pulse_other_contact(*, held):
     enable = Bool("En", external=True)
     feedback = Bool(
         "Fb",
-        physical=Physical("Fb", profile=Pulse(on_dwell="500ms", off_dwell="500ms")),
+        physical=_flasher("Fb", "500ms", "500ms"),
         link="En",
     )
     hit = Bool("Hit")

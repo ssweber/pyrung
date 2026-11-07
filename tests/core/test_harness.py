@@ -24,7 +24,7 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.harness import _parse_link_spec, format_link_spec, link_problem
-from pyrung.core.physical import Approach, Physical, Pulse, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.synthesis import plant_acc_name, plant_timer
 
 # --- Fixtures: Physical declarations ---
@@ -32,9 +32,9 @@ from pyrung.core.synthesis import plant_acc_name, plant_timer
 LIMIT_SWITCH = Physical("LimitSwitch", on_delay="20ms", off_delay="10ms")
 SLOW_VALVE = Physical("SlowValve", on_delay="100ms", off_delay="200ms")
 FAST_SENSOR = Physical("FastSensor", on_delay="5ms", off_delay="5ms")
-TEMP_SENSOR = Physical("TempSensor", profile=Ramp(up=10.0, down=-5.0))
-BURNER = Physical("Burner", profile=Ramp(up=10.0, down=-2.0))
-ENCODER = Physical("Encoder", profile=Pulse(on_dwell="25ms", off_dwell="25ms"))
+TEMP_SENSOR = Physical("TempSensor", ramp_on=10.0, ramp_off=-5.0)
+BURNER = Physical("Burner", ramp_on=10.0, ramp_off=-2.0)
+ENCODER = Physical("Encoder", flasher_on="25ms", flasher_off="25ms")
 
 
 # --- Fixtures: UDTs ---
@@ -480,7 +480,7 @@ class TestDelaysPastTheMillisecondRange:
         assert _fb(plc, Fb) is False
 
     def test_a_long_pulse_flips_both_ways(self):
-        physical = Physical("Flow", profile=Pulse(on_dwell="60s", off_dwell="40s"))
+        physical = Physical("Flow", flasher_on="60s", flasher_off="40s")
         plc, Cmd, Fb = _long_delay_plc(physical, dt=0.25)
         plc.patch({Cmd: True})
         flips = []
@@ -553,7 +553,7 @@ class TestDelaysPastTheMillisecondRange:
         [
             (Physical("Slow", on_delay="60s"), 300),
             (Physical("Slow", on_delay="60s", off_delay="60s"), 300),
-            (Physical("Flow", profile=Pulse(on_dwell="60s", off_dwell="40s")), 700),
+            (Physical("Flow", flasher_on="60s", flasher_off="40s"), 700),
         ],
         ids=["on", "on-off", "pulse"],
     )
@@ -703,7 +703,7 @@ class TestALinkChangedAcrossUnits:
 
     def test_a_pulse_dwell_carries(self):
         En = Bool("En")
-        Fb = Bool("Fb", physical=Physical("F", profile=Pulse("5s", "5s")), link="En")
+        Fb = Bool("Fb", physical=Physical("F", flasher_on="5s", flasher_off="5s"), link="En")
         with Program(strict=False) as logic:
             with Rung(En):
                 out(Bool("Echo"))
@@ -716,7 +716,7 @@ class TestALinkChangedAcrossUnits:
         assert _fb(plc, Fb) is False
         count = plc.current_state.tags["__pls_off__Fb"]
         assert count > 0
-        self._relink(plc, profile=Pulse("60s", "60s"))
+        self._relink(plc, flasher_on="60s", flasher_off="60s")
         assert self._scans_to_flip(plc, Fb) == pytest.approx((60_000 - count) // 250, abs=2)
 
     def test_a_delay_staying_in_its_unit_writes_nothing(self):
@@ -1212,7 +1212,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
         Temp = Real(
             "Temp",
             default=20.0,
-            physical=Physical("T", profile=Approach(toward="Sps2", rate=0.3)),
+            physical=Physical("T", approach_to="Sps2", approach_rate=0.3),
             link="En",
         )
         CopySp = Real("CopySp")
@@ -1258,7 +1258,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
         Temp = Real(
             "Temp",
             default=20.0,
-            physical=Physical("T", profile=Approach(toward="Sp", rate=0.3)),
+            physical=Physical("T", approach_to="Sp", approach_rate=0.3),
             link="En",
         )
         Lamp = Bool("Lamp")
@@ -1340,7 +1340,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
         harness = Harness(plc)
         harness.install()
         coupling = Coupling(
-            "En", "Temp", Physical("T", profile=Approach(toward="Sp", rate=0.3)), None
+            "En", "Temp", Physical("T", approach_to="Sp", approach_rate=0.3), None
         )
         assert link_problem(plc, coupling) is None
         with pytest.warns(UserWarning, match="no rung names"):
@@ -1367,7 +1367,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
         logic, _En = self._approach_program()
         plc = PLC(logic, dt=0.01)
         coupling = Coupling(
-            "En", "Temp", Physical("T", profile=Approach(toward="Sps2", rate=0.3)), None
+            "En", "Temp", Physical("T", approach_to="Sps2", approach_rate=0.3), None
         )
         assert link_problem(plc, coupling) is None
 
@@ -1388,7 +1388,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
         plc.run(5)
         assert plc.current_state.tags["Seen"] == 20.0
         harness.set_overrides(
-            {"Temps4": Coupling("En", "Temps4", Physical("T", profile=Ramp(up=1.0)), None)}
+            {"Temps4": Coupling("En", "Temps4", Physical("T", ramp_on=1.0), None)}
         )
         assert plc.current_state.tags["Temps4"] == 20.0
         plc.run(5)

@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Real, Rung, copy
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
 # +1.0/s enabled, -0.5/s decaying → +0.1/scan, -0.05/scan at dt=0.1.
-PARITY_THERMAL = Ramp(up=1.0, down=-0.5)
+PARITY_THERMAL = Physical("T", ramp_on=1.0, ramp_off=-0.5)
 
 
 def _run(prog: Program, en_seq: list[bool], fb: str, dt: float = 0.1) -> list:
@@ -42,7 +42,7 @@ def _run(prog: Program, en_seq: list[bool], fb: str, dt: float = 0.1) -> list:
 
 def _analog_prog() -> Program:
     Enable = Bool("Enable", external=True)
-    Temp = Real("Temp", physical=Physical("T", profile=PARITY_THERMAL), link="Enable")
+    Temp = Real("Temp", physical=PARITY_THERMAL, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
         with Rung(Enable, Temp >= 5.0):

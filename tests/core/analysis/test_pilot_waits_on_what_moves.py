@@ -8,7 +8,7 @@ import pytest
 
 from pyrung import PLC, Bool, Program, Rung, Timer, latch, on_delay
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Physical, Pulse
+from pyrung.core.physical import Physical
 
 
 def _lands_on(plan: Any, goal: str) -> None:
@@ -66,7 +66,7 @@ def _pulse_program(*, on_ms: int = 500, off_ms: int = 500) -> tuple[Any, Any, An
     enable = Bool("En", external=True)
     feedback = Bool(
         "Fb",
-        physical=Physical("Fb", profile=Pulse(on_dwell=f"{on_ms}ms", off_dwell=f"{off_ms}ms")),
+        physical=Physical("Fb", flasher_on=f"{on_ms}ms", flasher_off=f"{off_ms}ms"),
         link="En",
     )
     hit = Bool("Hit")

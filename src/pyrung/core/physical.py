@@ -97,7 +97,7 @@ def parse_number_or_tag(text: str) -> float | str:
 
 def format_number(value: float) -> str:
     """Comment text for a number. A whole number drops its ``.0``, and others keep every digit."""
-    if value.is_integer() and abs(value) < 1e15:
+    if float(value).is_integer() and abs(value) < 1e15:
         return str(int(value))
     return repr(value)
 

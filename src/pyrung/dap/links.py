@@ -382,7 +382,7 @@ def format_links_locked(adapter: Any) -> str:
 # Console verbs
 # ---------------------------------------------------------------------------
 
-_LINK_USAGE = "link <feedback> <[~]enable[:trigger]> key=value ... (as in a comment)"
+_LINK_USAGE = "link <feedback> <[~]enable[:trigger]> key=value ..."
 
 
 def _camel(key: str) -> str:

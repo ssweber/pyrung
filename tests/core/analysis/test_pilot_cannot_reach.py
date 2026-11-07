@@ -22,7 +22,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Pulse,
     Rung,
     TagType,
     Timer,
@@ -89,7 +88,7 @@ def _two_contacts(enable: Any, feedback: Any, hit: Any) -> None:
 
 
 def _pulse(dwell: str = "500ms") -> Physical:
-    return Physical("Fb", profile=Pulse(on_dwell=dwell, off_dwell=dwell))
+    return Physical("Fb", flasher_on=dwell, flasher_off=dwell)
 
 
 class TestLinkProofIsNotClaimedFalsely:

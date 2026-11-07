@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Real, Rung, copy
 from pyrung.core.analysis.pilot import pilot_how
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
 MOTOR_FB = Physical("MotorFb", on_delay="200ms", off_delay="100ms")
 VALVE_FB = Physical("ValveFb", on_delay="50ms", off_delay="50ms")
-SENSOR = Physical("TempSensor", profile=Ramp(up=1.0, down=-0.5))
+SENSOR = Physical("TempSensor", ramp_on=1.0, ramp_off=-0.5)
 
 
 # ---------------------------------------------------------------------------

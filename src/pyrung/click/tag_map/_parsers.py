@@ -482,7 +482,9 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
 _BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public", "lock"})
 _PHYSICAL_FLAG_TOKENS = frozenset(name for name, key in PHYSICAL_KEYS.items() if key.is_flag)
 _PHYSICAL_VALUE_TOKENS = frozenset(name for name, key in PHYSICAL_KEYS.items() if not key.is_flag)
-_VALUE_TOKENS = frozenset({"link", "physical", "system", "min", "max", "uom", *_PHYSICAL_VALUE_TOKENS})
+_VALUE_TOKENS = frozenset(
+    {"link", "physical", "system", "min", "max", "uom", *_PHYSICAL_VALUE_TOKENS}
+)
 #: Token starts only an older pyrung wrote. ``upgrade_comment`` rewrites them.
 _OLD_FORM_TOKENS = ("profile=",)
 

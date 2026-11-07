@@ -198,12 +198,11 @@ def test_a_reload_continues_a_running_off_delay(
 
 AMBIENT_SCRIPT = (
     "from pyrung.core import Bool, PLC, Physical, Program, Real, Rung, out\n"
-    "from pyrung.core.physical import Approach\n"
     "\n"
     "en = Bool('En')\n"
     "temp = Real(\n"
     "    'Temp',\n"
-    "    physical=Physical('T', profile=Approach(toward='Ambient', rate=0.3)),\n"
+    "    physical=Physical('T', approach_to='Ambient', approach_rate=0.3),\n"
     "    link='En',\n"
     ")\n"
     "\n"

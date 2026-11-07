@@ -90,7 +90,9 @@ MIGRATIONS: tuple[CommentMigration, ...] = (
         1,
         "profile=pulse:on_dwell=..|off_dwell=.. -> flasher_on=.., flasher_off=..",
         "profile=pulse:",
-        _renamer((("on_dwell", "flasher_on"), ("off_dwell", "flasher_off")), ("on_dwell", "off_dwell")),
+        _renamer(
+            (("on_dwell", "flasher_on"), ("off_dwell", "flasher_off")), ("on_dwell", "off_dwell")
+        ),
     ),
     CommentMigration(
         2,

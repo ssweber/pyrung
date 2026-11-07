@@ -185,7 +185,7 @@ class TestConsole:
         adapter, out = _launch(tmp_path)
         response = _repl(adapter, out, "link Spare Motor physical=Spare")
         assert response["success"] is False
-        assert "neither timing nor profile" in response["message"]
+        assert "has no response" in response["message"]
 
     def test_link_rejects_unknown_keys(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)
@@ -275,9 +275,19 @@ class TestRequests:
             "feedback": "Spare",
             "enable": "Motor",
             "trigger": None,
+            "kind": "delay",
             "onDelay": "0ms",
             "offDelay": None,
-            "profile": None,
+            "flasherOn": None,
+            "flasherOff": None,
+            "timed": None,
+            "maintained": False,
+            "toggle": False,
+            "rampOn": None,
+            "rampOff": None,
+            "approachTo": None,
+            "approachRate": None,
+            "keys": "on_delay=0ms",
             "physical": "Spare",
             "system": None,
             "source": "bench",

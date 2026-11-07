@@ -210,7 +210,7 @@ A guard covers the access only if nothing writes `Ptr` between the guard's read 
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `PHYS_MISSING_PROFILE` | Info | A tag has a `Physical` relationship through `link`, but the linked tag has no physical profile. |
+| `PHYS_MISSING_PROFILE` | Info | A tag has a `Physical` relationship through `link`, but the linked analog tag has no `ramp_on` or `approach_to` response. |
 | `PHYS_ANTITOGGLE` | Warning | A feedback-linked command can pulse or change state faster than its declared feedback timing. |
 | `PHYS_LINK_UNKNOWN` | Warning | A tag's `link` names an enable the program never reads or writes, so the harness has nothing to drive its feedback from. |
 

@@ -118,7 +118,7 @@ data:
   clear_forces
   force <tag> <value>
   get <tag> [tag2 ...]
-  link <feedback> <[~]enable[:trigger]> on_delay=.. off_delay=.. | profile=..  (bench wiring)
+  link <feedback> <[~]enable[:trigger]> key=value ...   (bench wiring)
   links [bench on|off | enable <tag> | disable <tag>]
   monitor <tag>
   note <text>
@@ -313,7 +313,7 @@ Bench links change the feedback wiring for this session without editing the prog
 
 ```text
 link X002 Y001 on_delay=2s off_delay=500ms     # Y001 drives X002 after 2 s, drops 500 ms after
-link DF5 Y003 profile=ramp:up=0.8|down=-0.05   # analog feedback
+link DF5 Y003 ramp_on=0.8 ramp_off=-0.05       # analog feedback
 link Sorted State:2 on_delay=1s                # value trigger
 unlink X002        # cut the program's link (X002 is a free input), or remove a bench link
 restore X002       # drop the bench change: back to what the program declares
@@ -442,11 +442,11 @@ Custom requests:
 | `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
 | `pyrungSetSpeed` | `{speed}` | `{speed}` |
 | `pyrungModbusInfo` | none | `{running, host, port, clients, error}` |
-| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, profile?, physical?, system?}` | `{text, command}` |
+| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, flasherOn?, flasherOff?, timed?, maintained?, toggle?, rampOn?, rampOff?, approachTo?, approachRate?, physical?, system?}` | `{text, command}` |
 | `pyrungUnlink` | `{feedback}` | `{text}` |
 | `pyrungRestoreLink` | `{feedback}` | `{text}` |
 | `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
-| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, onDelay, offDelay, profile, physical, system, source, active, pending, cut?, enabled?}]}` |
+| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
 
 `pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
 

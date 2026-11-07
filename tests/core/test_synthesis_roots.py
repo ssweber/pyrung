@@ -17,7 +17,7 @@ from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, on_delay,
 from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
-from pyrung.core.physical import Approach, Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 from tests.core.scan_loop_counts import ScansOutsideLoop
 
@@ -420,7 +420,7 @@ def test_a_kernel_holds_the_plant_tags_stepping_does_after_a_reset(
 
 
 def _late_ramp_recording() -> tuple[PLC, dict[int, Any]]:
-    Temp = Real("Temp", physical=Physical("Therm", profile=Ramp(up=1.0, down=-0.5)), link="Enable")
+    Temp = Real("Temp", physical=Physical("Therm", ramp_on=1.0, ramp_off=-0.5), link="Enable")
     Enable, Lamp, Hit = Bool("Enable"), Bool("Lamp"), Bool("Hit")
     with Program(strict=False) as prog:
         with Rung(Enable):
@@ -463,7 +463,7 @@ def test_a_replay_before_a_coupling_change_has_no_harness() -> None:
     enable, over, shown = Bool("Enable"), Bool("Over"), Real("Shown")
     timer = Timer.clone("Tm")
     temp = Real(
-        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+        "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Enable"
     )
     with Program(strict=False) as program:
         with Rung(enable):
@@ -504,7 +504,7 @@ def test_a_replay_before_a_coupling_change_has_no_harness() -> None:
 def test_a_replay_with_no_change_keeps_its_harness() -> None:
     enable = Bool("Enable")
     temp = Real(
-        "Temp", physical=Physical("TempSensor", profile=Approach(100.0, 5.0)), link="Enable"
+        "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Enable"
     )
     with Program(strict=False) as program:
         with Rung():

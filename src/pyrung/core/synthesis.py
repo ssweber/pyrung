@@ -155,7 +155,7 @@ def analog_feedback_rungs(
     up: float,
     down: float,
 ) -> list[Rung]:
-    """Lower a linear analog coupling (a :class:`~pyrung.core.physical.Ramp`) to plant rungs.
+    """Lower a linear analog coupling (``ramp_on``/``ramp_off``) to plant rungs.
 
     Rates are per **second**, applied against ``dt_tag`` (``sys.dt``), so the ramp
     is stable across scan periods.  The rungs are exactly what a hand-written
@@ -193,7 +193,7 @@ def analog_approach_rung(
     rate: float,
     dt_tag: Tag,
 ) -> list[Rung]:
-    """Lower a first-order analog coupling (an :class:`~pyrung.core.physical.Approach`).
+    """Lower a first-order analog coupling (``approach_to``/``approach_rate``).
 
     One guarded ``calc`` plant rung — ``fb += rate*(toward - fb)*dt`` while
     energized, holding on enable fall::
