@@ -351,61 +351,13 @@ class Harness:
             # effect from the next scan (cut ones stop synthesizing).
             self._warn_of_unknown_setpoints()
             self._plc._note_plant_change()
-            synthesis = self._plc._synthesis
-            old_plant = [] if synthesis is None else list(synthesis.plant)
             self._refresh_synthesis()
-            self._carry_coil_memory(old_plant)
             self._seed_plant_defaults()
             self._carry_counts_to_current_units()
             for handle in self._monitors:
                 handle.remove()
             self._monitors.clear()
             self._install_monitors()
-
-    def _carry_coil_memory(self, old_plant: list[Any]) -> None:
-        """Give each plant coil the memory its feedback's coil had before the plant was rebuilt.
-
-        A coil keeps its memory under its place in the plant, and a link added or cut
-        moves the coils after it, so without this a coil would read another's.  A
-        debounce new to the plant takes its enable as it is now, so its first scan
-        sees no edge and its timers keep the time they have counted.  A new flasher
-        starts idle.
-        """
-        from pyrung.core.instruction.out_variants import DebounceInstruction, FlasherInstruction
-
-        def coils(plant: list[Any]) -> Iterator[tuple[Any, str, Any]]:
-            """Each coil, its memory key and the value an unwritten key reads as."""
-            for rung in plant:
-                for instr in rung._instructions:
-                    if isinstance(instr, DebounceInstruction):
-                        yield instr, instr.memory_key("_debounce_rung"), False
-                    elif isinstance(instr, FlasherInstruction):
-                        yield instr, instr.memory_key("_flash_phase"), 0
-
-        memory = self._plc._state.memory
-        tags = self._plc._state.tags
-        before = {
-            (type(coil), coil.target.name): memory.get(key, default)
-            for coil, key, default in coils(old_plant)
-        }
-        enables = {c.fb_name: c for c in self._bool_couplings}
-        edits: dict[str, Any] = {}
-        new_plant = [] if self._plc._synthesis is None else self._plc._synthesis.plant
-        for coil, key, default in coils(new_plant):
-            value = before.get((type(coil), coil.target.name))
-            if value is None:
-                c = enables.get(coil.target.name)
-                if isinstance(coil, DebounceInstruction) and c is not None:
-                    en_raw = tags.get(c.en_name, False)
-                    value = (
-                        en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
-                    )
-                else:
-                    value = default
-            if memory.get(key, default) != value:
-                edits[key] = value
-        if edits:
-            self._plc._edit_tip_tags({}, memory=edits)
 
     def _warn_of_unknown_setpoints(self) -> None:
         """Say so when an ``Approach`` will run toward a tag nothing has given a value.
@@ -503,7 +455,7 @@ class Harness:
                 continue
             on_preset, off_preset, _unit, unit_ms = coil_timer(c.on_delay_ms, c.off_delay_ms)
             unit_ns = unit_ms * _NS_PER_MS
-            # The coil sees an enable change on the next scan, and counts that side
+            # The coil sees an enable change on the next scan.  It counts that side
             # from 0.  The debounce clears its on side at a rise, and its off side is
             # 0 on every true scan.
             seen = bool(state.memory.get(c.rung_memory_key, False)) != bool(
@@ -621,7 +573,7 @@ class Harness:
 
         Its flasher coil is the plant's and the program has no writer for ``Fb``, so without
         this a trace reads the feedback as a dead end.  No scalar is exposed: the dwells are
-        the plant's business.  A dwell of 0 holds the flasher off, so then only off comes.
+        the plant's business.  A dwell of 0 keeps ``Fb`` off, so there is no plan to turn it on.
         """
         from pyrung.core.condition import BitCondition, CompareEq
         from pyrung.core.crossing import Eq
@@ -803,6 +755,7 @@ class Harness:
         installed on the same overlay.
         """
         from pyrung.core.condition import BitCondition, CompareEq, CompareNe
+        from pyrung.core.instruction.out_variants import DebounceInstruction, FlasherInstruction
         from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
         from pyrung.core.synthesis import (
             Synthesis,
@@ -908,6 +861,13 @@ class Harness:
             self._plc._synthesis = Synthesis()
         # Plant rungs keep their memory under their own ``plant:`` site keys.
         bind_sites(plant, namespace=PLANT_NAMESPACE)
+        # A coil's place in the plant moves when a link before it is added or cut,
+        # so its memory is keyed by its feedback.  Then a fork from before the
+        # change, or a reinstall, reads that feedback's own coil.
+        for rung in plant:
+            for instr in rung._instructions:
+                if isinstance(instr, (DebounceInstruction, FlasherInstruction)):
+                    instr._state_key = f"{PLANT_NAMESPACE}:fb.{instr.target.name}"
         for c, coil in coils:
             c.rung_memory_key = coil.memory_key("_debounce_rung")
         self._plc._synthesis.plant = plant

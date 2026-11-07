@@ -22,7 +22,8 @@ uses the same names.
 
 Overlays get their own namespace, so their keys never collide with the user
 program's: plant rungs are ``plant:i{N}`` / ``plant:e{N}``, PILOT holds are
-``pilot:i{N}`` / ``pilot:e{N}``.  An instruction that was never bound has no
+``pilot:i{N}`` / ``pilot:e{N}``.  The harness keys each of its coils by the
+feedback it drives (``plant:fb.{name}``).  An instruction that was never bound has no
 key, and asking for one raises (there is no ``id()`` fallback).
 
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and

@@ -250,36 +250,107 @@ class TestPendingMs:
         assert plc._harness.pending_ms()["Fb"] == self._flip_ms(plc, "Fb") == 50
 
 
-class TestALinkCutBeforeAnother:
-    """Each coil keeps its memory of its rung when a cut moves it in the plant."""
+def _two_links(en_a: bool, en_b: bool, scans: int) -> PLC:
+    """``FbA`` (on 100 ms, off 50 ms) and ``FbB`` (0 ms), with ``FbB``'s coil first in the plant."""
+    EnA, EnB = Bool("EnA"), Bool("EnB")
+    FbA = Bool("FbA", physical=Physical("A", on_delay="100ms", off_delay="50ms"), link="EnA")
+    FbB = Bool("FbB", physical=Physical("B", on_delay="0ms"), link="EnB")
+    with Program(strict=False) as logic:
+        with Rung(EnA, EnB):
+            out(Bool("Echo"))
+        with Rung(FbA, FbB):
+            out(Bool("Seen"))
+    plc = PLC(logic, dt=0.010)
+    Harness(plc).install()
+    plc.patch({EnA: en_a, EnB: en_b})
+    plc.run(scans)
+    return plc
 
-    def test_the_other_coil_keeps_counting(self) -> None:
-        def build() -> tuple[PLC, Bool]:
+
+def _coil_order(plc: PLC) -> list[str]:
+    assert plc._synthesis is not None
+    return [rung._instructions[0].target.name for rung in plc._synthesis.plant]
+
+
+def _scans_to(plc: PLC, tag: str, value: bool) -> int | None:
+    for scans in range(1, 50):
+        plc.step()
+        if plc.current_state.tags[tag] is value:
+            return scans
+    return None
+
+
+class TestALinkCutBeforeAnother:
+    """Each coil reads its own memory after a cut moves it up the plant."""
+
+    @pytest.mark.parametrize("en_b", [False, True])
+    def test_at_the_tip(self, en_b: bool) -> None:
+        plc = _two_links(True, en_b, 4)
+        assert _coil_order(plc) == ["FbB", "FbA"]
+        plc._harness.set_overrides({"FbB": None})
+        assert _coil_order(plc) == ["FbA"]
+        assert _scans_to(plc, "FbA", True) == _scans_to(_two_links(True, en_b, 4), "FbA", True) == 7
+
+    @pytest.mark.parametrize("en_b", [False, True])
+    def test_in_a_fork_from_before_the_cut(self, en_b: bool) -> None:
+        plc = _two_links(True, en_b, 4)
+        before = plc.current_state.scan_id - 1
+        plc._harness.set_overrides({"FbB": None})
+        never_cut = _two_links(True, en_b, 4).fork(scan_id=before)
+        assert _scans_to(plc.fork(scan_id=before), "FbA", True) == 8
+        assert _scans_to(never_cut, "FbA", True) == 8
+
+    def test_a_flasher_in_a_fork_from_before_the_cut(self) -> None:
+        def build() -> PLC:
             EnA, EnB = Bool("EnA"), Bool("EnB")
-            Bool("FbA", physical=Physical("A", on_delay="0ms"), link="EnA")
-            FbB = Bool("FbB", physical=Physical("B", on_delay="100ms"), link="EnB")
+            FbA = Bool("FbA", physical=Physical("A", profile=Pulse("30ms", "20ms")), link="EnA")
+            FbB = Bool("FbB", physical=Physical("B", profile=Pulse("30ms", "20ms")), link="EnB")
             with Program(strict=False) as logic:
                 with Rung(EnA, EnB):
                     out(Bool("Echo"))
-                with Rung(Bool("FbA"), FbB):
+                with Rung(FbA, FbB):
                     out(Bool("Seen"))
             plc = PLC(logic, dt=0.010)
             Harness(plc).install()
-            plc.patch({EnA: False, EnB: True})
+            plc.patch({EnA: True, EnB: False})
             plc.run(4)
-            return plc, FbB
+            return plc
 
-        plc, FbB = build()
-        cut, _FbB = build()
-        cut._harness.set_overrides({"FbA": None})
-        flips = []
-        for runner in (plc, cut):
-            for scans in range(1, 50):
-                runner.step()
-                if runner.current_state.tags[FbB.name]:
-                    flips.append(scans)
-                    break
-        assert flips == [7, 7]
+        def bits(plc: PLC) -> str:
+            seen = ""
+            for _ in range(12):
+                plc.step()
+                seen += "#" if plc.current_state.tags["FbA"] else "."
+            return seen
+
+        plc = build()
+        assert _coil_order(plc) == ["FbB", "FbA"]
+        before = plc.current_state.scan_id - 1
+        plc._harness.set_overrides({"FbB": None})
+        assert bits(plc.fork(scan_id=before)) == bits(build().fork(scan_id=before))
+
+    @pytest.mark.parametrize(("off_scans", "left"), [(2, 5), (6, 1)])
+    def test_after_an_uninstall_and_install(self, off_scans: int, left: int) -> None:
+        """``FbA``'s off side is counting, and ``FbB``'s coil last saw its rung true.
+
+        Had ``FbA``'s coil read ``FbB``'s memory, its next scan would be a fall,
+        and a fall scan never turns the coil off.
+        """
+
+        def build() -> PLC:
+            plc = _two_links(True, True, 15)
+            plc.patch({"EnA": False})
+            plc.run(off_scans)
+            return plc
+
+        plc = build()
+        harness = plc._harness
+        assert harness is not None
+        harness.uninstall()
+        harness.set_overrides({"FbB": None})
+        harness.install()
+        assert _coil_order(plc) == ["FbA"]
+        assert _scans_to(plc, "FbA", False) == _scans_to(build(), "FbA", False) == left
 
     def test_a_link_cut_and_linked_again_keeps_the_time_counted(self) -> None:
         plc, En, Fb = _linked(Physical("Dev", on_delay="100ms"))

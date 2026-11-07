@@ -217,7 +217,7 @@ def _contact(atoms: list[Any], tag: str, form: str) -> bool:
 
 
 def _plant_delays_ms(physical: Any) -> tuple[int, int]:
-    """How long the plant's debounce really takes each way: whole units of what both sides count."""
+    """How long the plant's debounce takes each way, rounded up to the one unit both sides count in."""
     on_preset, off_preset, _unit, unit_ms = coil_timer(
         physical.on_delay_ms or 0, physical.off_delay_ms or 0
     )

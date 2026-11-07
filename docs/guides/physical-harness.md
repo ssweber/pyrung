@@ -254,7 +254,7 @@ class Conveyor:
 
 A counter instruction in the logic counts the rising edges. The harness produces the pulse train and the program counts it.
 
-`Fb` goes high the scan after `En` turns on, and that first high phase is one scan short. A dwell of 0 keeps `Fb` low.
+`Fb` goes high the scan after `En` turns on. That first high phase is one scan short. A dwell of 0 keeps `Fb` low.
 
 In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
