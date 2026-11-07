@@ -1,12 +1,12 @@
 """Characterization / parity oracle for harness coupling executors.
 
 Pins the per-scan feedback the harness synthesizes, so the consolidation onto
-synthesis bracket rungs (analog -> a ``plant`` profile rung; bool -> real
-TON/TOF *dwell* plant rungs) is held to account: an intended diff is a visible,
+synthesis bracket rungs (analog -> a ``plant`` profile rung; bool -> a debounce
+coil) is held to account: an intended diff is a visible,
 reviewed change; an accidental one fails here.
 
 Bool couplings are **dwell** — feedback responds to a *sustained* command, never
-a glitch.  The bool feedback is real on/off-delay timers in the runner's
+a glitch.  The bool feedback is a debounce coil in the runner's
 ``plant`` pass, scanned *pre*-logic (the input-read phase): it reads the
 *previous* commit's settled command and lays the feedback down as this scan's
 input image, so the program reads it the same scan, and a command that settles
@@ -86,13 +86,15 @@ def test_bool_sustained_rise_and_fall_parity() -> None:
     # The ``plant`` pass reads the *previous* commit's En (the input-read phase),
     # so the *committed* feedback lags the command by one scan — same dwell
     # duration and glitch suppression, phase shifted right (feedback is an input).
+    # The debounce's off side compares a scan after the fall, so Fb holds a scan
+    # longer than its off_delay.
     assert _run(_bool_prog(), [True] * 4 + [False] * 3, "Fb") == [
         False,
         False,
         True,
         True,
         True,
-        False,
+        True,
         False,
     ]
 
@@ -101,8 +103,11 @@ def test_bool_on_delay_zero_is_next_scan() -> None:
     # on_delay == 0 -> the pre-logic plant reads the *previous* commit's command,
     # so Fb commits the scan *after* the command is active — feedback as fast as
     # the next scan (the scan boundary is the plant latency).
-    assert _run(_bool_prog(on_delay="0ms", off_delay="0ms"), [True] * 3 + [False] * 2, "Fb") == [
+    # An off_delay of 0 still holds Fb a scan after the plant sees the fall, as a
+    # CLICK debounce of 0 does (conformance ``deb_zero/off_side_lag``).
+    assert _run(_bool_prog(on_delay="0ms", off_delay="0ms"), [True] * 3 + [False] * 3, "Fb") == [
         False,
+        True,
         True,
         True,
         True,

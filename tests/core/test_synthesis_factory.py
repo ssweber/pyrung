@@ -12,69 +12,72 @@ from pyrung.core.condition import BitCondition, CompareEq
 from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
 from pyrung.core.instruction.control import FunctionCallInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+from pyrung.core.instruction.out_variants import DebounceInstruction, FlasherInstruction
 from pyrung.core.synthesis import (
     Synthesis,
     bool_feedback_rungs,
     copy_hold_rung,
     function_rung,
+    pulse_feedback_rungs,
 )
 
 
-def test_bool_feedback_rungs_are_a_ton_tof_pair() -> None:
+def _timers(stem: str) -> dict[str, Bool | Int]:
+    return {
+        "on_done": Bool(f"__{stem}_ond__Fb"),
+        "on_acc": Int(f"__{stem}_on__Fb"),
+        "off_done": Bool(f"__{stem}_offd__Fb"),
+        "off_acc": Int(f"__{stem}_off__Fb"),
+    }
+
+
+def test_bool_feedback_rungs_are_one_debounce_coil() -> None:
     En = Bool("Enable")
     Fb = Bool("Fb")
-    ton_done = Bool("__cpl_ond__Fb")
-    ton_acc = Int("__cpl_on__Fb")
-    tof_acc = Int("__cpl_off__Fb")
+    timers = _timers("cpl")
 
     rungs = bool_feedback_rungs(
-        enable=BitCondition(En),
-        fb_tag=Fb,
-        ton_done=ton_done,
-        ton_acc=ton_acc,
-        tof_acc=tof_acc,
-        on_delay_ms=200,
-        off_delay_ms=100,
+        enable=BitCondition(En), fb_tag=Fb, **timers, on_delay_ms=200, off_delay_ms=100
     )
 
-    assert len(rungs) == 2
-    ton_rung, tof_rung = rungs
-
-    # Rung 1: gated by the enable, runs the on-delay onto ton_done/ton_acc.
-    (ton,) = ton_rung._instructions
-    assert isinstance(ton, OnDelayInstruction)
-    assert ton.done_bit is ton_done
-    assert ton.accumulator is ton_acc
-    assert ton.preset == 200
-    assert ton_rung._conditions  # gated by `enable`, not unconditional
-
-    # Rung 2: gated by ton_done, off-delay writes the feedback tag itself.
-    (tof,) = tof_rung._instructions
-    assert isinstance(tof, OffDelayInstruction)
-    assert tof.done_bit is Fb
-    assert tof.accumulator is tof_acc
-    assert tof.preset == 100
-    # The off-delay's power comes from the on-delay's done bit.
-    (power,) = tof_rung._conditions
+    (rung,) = rungs
+    (coil,) = rung._instructions
+    assert isinstance(coil, DebounceInstruction)
+    assert coil.target is Fb
+    assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
+    assert (coil.on_preset, coil.off_preset, coil.unit.name) == (200, 100, "Tms")
+    (power,) = rung._conditions
     assert isinstance(power, BitCondition)
-    assert power._resolved_tag is ton_done
+    assert power._resolved_tag is En
+    assert coil.enable_condition is power
 
 
 def test_bool_feedback_rungs_accept_a_trigger_compare() -> None:
     Mode = Int("Mode")
     Fb = Bool("Fb")
     rungs = bool_feedback_rungs(
-        enable=CompareEq(Mode, 2),
-        fb_tag=Fb,
-        ton_done=Bool("d"),
-        ton_acc=Int("a"),
-        tof_acc=Int("b"),
-        on_delay_ms=0,
-        off_delay_ms=0,
+        enable=CompareEq(Mode, 2), fb_tag=Fb, **_timers("cpl"), on_delay_ms=0, off_delay_ms=0
     )
     (cond,) = rungs[0]._conditions
     assert isinstance(cond, CompareEq)
+
+
+def test_pulse_feedback_rungs_are_one_flasher_coil() -> None:
+    En = Bool("Enable")
+    Fb = Bool("Fb")
+    timers = _timers("pls")
+
+    rungs = pulse_feedback_rungs(
+        enable=BitCondition(En), fb_tag=Fb, **timers, on_dwell_ms=8, off_dwell_ms=40_000
+    )
+
+    (rung,) = rungs
+    (coil,) = rung._instructions
+    assert isinstance(coil, FlasherInstruction)
+    assert coil.target is Fb
+    assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
+    # One unit for both sides, as on a CLICK: 8 ms rounds up to a second.
+    assert (coil.on_preset, coil.off_preset, coil.unit.name) == (1, 40, "Ts")
 
 
 def test_copy_hold_rung_steady_vs_guarded() -> None:
@@ -134,13 +137,11 @@ def test_synthesis_container() -> None:
         bool_feedback_rungs(
             enable=BitCondition(Bool("En")),
             fb_tag=Fb,
-            ton_done=Bool("d"),
-            ton_acc=Int("a"),
-            tof_acc=Int("b"),
+            **_timers("cpl"),
             on_delay_ms=0,
             off_delay_ms=0,
         )
     )
     syn.holds.append(copy_hold_rung(value=True, dest=Bool("Cmd")))
     assert not syn.is_empty()
-    assert len(list(syn.all_rungs())) == 3  # 1 hold + 2 plant
+    assert len(list(syn.all_rungs())) == 2  # 1 hold + 1 plant

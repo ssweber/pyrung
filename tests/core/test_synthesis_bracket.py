@@ -2,8 +2,8 @@
 
 Increment 2 of the synthesis-is-rungs consolidation.  The PLC scans
 ``_synthesis.holds`` before user logic and ``_synthesis.plant`` after, in the
-same ctx/commit.  Here we hand-build a ``plant`` TON/TOF pair (the shape the
-harness factory will emit) and assert it reproduces the bool dwell — *without*
+same ctx/commit.  Here we hand-build a ``plant`` debounce coil (the shape the
+harness factory emits) and assert it reproduces the bool dwell — *without*
 the harness, proving the bracket itself carries the semantics.
 """
 
@@ -16,6 +16,7 @@ import pytest
 from pyrung import Bool, Int, Program, Rung, copy
 from pyrung.core.condition import AllCondition, BitCondition, NormallyClosedCondition
 from pyrung.core.runner import PLC
+from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
 from pyrung.core.synthesis import (
     Synthesis,
     bool_feedback_rungs,
@@ -40,12 +41,15 @@ def _plant_overlay(plc: PLC, *, on_ms: int, off_ms: int) -> Synthesis:
     rungs = bool_feedback_rungs(
         enable=BitCondition(En),
         fb_tag=Fb,
-        ton_done=Bool("__cpl_ond__Fb"),
-        ton_acc=Int("__cpl_on__Fb"),
-        tof_acc=Int("__cpl_off__Fb"),
+        on_done=Bool("__cpl_ond__Fb"),
+        on_acc=Int("__cpl_on__Fb"),
+        off_done=Bool("__cpl_offd__Fb"),
+        off_acc=Int("__cpl_off__Fb"),
         on_delay_ms=on_ms,
         off_delay_ms=off_ms,
     )
+    # The coil keeps its memory of the rung under its place in the plant.
+    bind_sites(rungs, namespace=PLANT_NAMESPACE)
     return Synthesis(plant=rungs)
 
 
@@ -64,8 +68,18 @@ def test_plant_ton_reproduces_dwell() -> None:
     # on_delay 200ms = 2 scans, off_delay 100ms = 1 scan; En held 4 then 3 off.
     # __plant__ is the pre-logic input-read: it reads the *previous* commit's En,
     # so the committed feedback lags the command by one scan (feedback is an
-    # input): rise at scan 3, three trues, fall at scan 6.
-    assert _run(plc, [True] * 4 + [False] * 3) == [False, False, True, True, True, False, False]
+    # input): rise at scan 3.  The debounce's off side compares a scan after the
+    # fall it sees at scan 6, so Fb falls at scan 7.
+    assert _run(plc, [True] * 4 + [False] * 3) == [False, False, True, True, True, True, False]
+
+
+def test_plant_rides_through_a_dip_shorter_than_the_off_delay() -> None:
+    plc = PLC(_prog(), dt=0.1)
+    plc._synthesis = _plant_overlay(plc, on_ms=300, off_ms=200)
+    # A one-scan dip in a held command: the off side never reaches 200 ms, and the
+    # rise after it does not clear Fb, so Fb stays on through it.
+    seq = [True] * 5 + [False] + [True] * 5
+    assert _run(plc, seq) == [False] * 3 + [True] * 8
 
 
 def test_plant_glitch_is_suppressed() -> None:

@@ -938,13 +938,14 @@ class Harness:
             self._plc._edit_tip_tags(seed)
 
     def _seed_bool_state(self) -> None:
-        """Turn on each bool feedback whose enable is already on, as if it settled long ago.
+        """Put each debounce whose enable is already on where it would be had it settled long ago.
 
-        A debounce coil never turns its target off while its rung is true, so the
-        feedback alone is enough.  Without it the first scans would show the device
+        The feedback is on, the on side has counted its preset, and the coil saw its
+        rung true on the last scan.  Without this the first scans would show the device
         off while it is commanded on.
         """
         seed: dict[str, Any] = {}
+        memory: dict[str, Any] = {}
         snap = self._plc.current_state.tags
         for c in self._bool_couplings:
             if not c.on_acc_name:
@@ -952,9 +953,11 @@ class Harness:
             en_raw = snap.get(c.en_name, False)
             en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
             if en_on:
+                seed[c.on_acc_name] = coil_timer(c.on_delay_ms, c.off_delay_ms)[0]
                 seed[c.fb_name] = True
+                memory[c.rung_memory_key] = True
         if seed:
-            self._plc._edit_tip_tags(seed)
+            self._plc._edit_tip_tags(seed, memory=memory)
 
     def _install_monitors(self) -> None:
         # Analog couplings are declarative specs lowered to plant rungs (their

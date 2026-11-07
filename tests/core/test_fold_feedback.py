@@ -32,6 +32,7 @@ from pyrung import (
     copy,
     count_down,
     count_up,
+    fall,
     forloop,
     latch,
     math,
@@ -1372,6 +1373,11 @@ class TestBoolFeedbackUnderACoast:
             latch(Hit)
 
     @staticmethod
+    def _first_fall(fb: Bool) -> None:
+        with Rung(fall(fb)):
+            latch(Hit)
+
+    @staticmethod
     def _third_rise(fb: Bool) -> None:
         count = Int("Cnt")
         with Rung(rise(fb)):
@@ -1379,7 +1385,9 @@ class TestBoolFeedbackUnderACoast:
         with Rung(count == 3):
             latch(Hit)
 
-    @pytest.mark.parametrize("reader", ["_contact", "_third_rise"])
+    # A flasher turns its target on the first scan it is enabled, so a plain contact
+    # needs no stretch.  Its first fall comes after the on phase.
+    @pytest.mark.parametrize("reader", ["_first_fall", "_third_rise"])
     def test_a_pulse_from_a_cold_start_lands_on_the_reader(self, reader: str) -> None:
         physical = Physical("Sensor", profile=Pulse(on_dwell="2s", off_dwell="3s"))
         make = lambda: self._bool_plant(physical, getattr(self, reader))  # noqa: E731
