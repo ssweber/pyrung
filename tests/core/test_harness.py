@@ -383,8 +383,8 @@ class TestAnalogRampSpec:
             assert result == pytest.approx(5.0, rel=0.25), f"dt={dt_val} gave {result}"
 
 
-class TestPulseSpec:
-    """A declarative ``Pulse`` lowers to an astable plant flasher (bool pulse train)."""
+class TestFlasherSpec:
+    """A flasher feedback lowers to a plant flasher."""
 
     def test_pulse_toggles_feedback_while_enabled(self):
         plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.005)

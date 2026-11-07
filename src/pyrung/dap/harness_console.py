@@ -46,11 +46,10 @@ def try_auto_install(adapter: Any) -> str | None:
         uninstall_harness(adapter)
         return "\n".join(notes) or None
 
-    parts = []
-    if n_bool:
-        parts.append(f"{n_bool} bool")
-    if n_profile:
-        parts.append(f"{n_profile} flasher/ramp/approach")
+    kinds: dict[str, int] = {"delay": n_bool} if n_bool else {}
+    for coupling in summary["profile_couplings"]:
+        kinds[coupling["kind"]] = kinds.get(coupling["kind"], 0) + 1
+    parts = [f"{count} {kind}" for kind, count in kinds.items()]
     banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
     if adapter._bench_links:
         banner += (

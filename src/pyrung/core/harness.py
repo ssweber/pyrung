@@ -343,7 +343,8 @@ class Harness:
         follows after its on-delay, as freshly wired hardware would.  A coupling
         replaced, or cut and linked again, keeps the time its timers have counted,
         whatever unit the new delays count in.  If its enable turned on while it was
-        cut, it counts its on-delay from 0.
+        cut, it counts its on-delay from 0.  A timed or toggle coupling new to its
+        feedback takes an enable already on as a rise, so it fires on the next scan.
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
@@ -621,7 +622,7 @@ class Harness:
         return AdvanceProfile(channels=(fb_tag,), plan=plan)
 
     def _edge_profile(self, c: _ProfileCoupling) -> Any | None:
-        """How a timed or toggle feedback gets each value: its enable rises.
+        """A timed or toggle feedback changes when its enable rises.
 
         The coil's own profile always asks for a pulse, so a rung that needs the
         enable on beside the feedback found no plan in it.  Here an enable that is off
@@ -825,6 +826,7 @@ class Harness:
         """
         from pyrung.core.condition import BitCondition, CompareEq, CompareNe
         from pyrung.core.site_memory import (
+            PLANT_FEEDBACK_SITE,
             PLANT_NAMESPACE,
             _first_tag_name,
             bind_sites,
@@ -965,7 +967,7 @@ class Harness:
         for rung in plant:
             for instr in rung._instructions:
                 if instruction_memory(instr):
-                    instr._state_key = f"{PLANT_NAMESPACE}:fb.{_first_tag_name(instr)}"
+                    instr._state_key = f"{PLANT_FEEDBACK_SITE}{_first_tag_name(instr)}"
         for c, coil in coils:
             c.rung_memory_key = coil.memory_key("_debounce_rung")
         for pc, coil, prefix in rung_coils:
@@ -1007,22 +1009,28 @@ class Harness:
         keeps its feedback.  Each coil saw its rung true on the last scan, so the
         first scan is no rise.  Without this the first scans would show the device off
         while it is commanded on, or a timed or toggle coil would fire at install.
+
+        A coil whose memory is already in the state ran before, as on a reload or a
+        reinstall.  It carries on from that memory, so a running pulse or delay runs out.
         """
         seed: dict[str, Any] = {}
         memory: dict[str, Any] = {}
-        snap = self._plc.current_state.tags
+        state = self._plc.current_state
+        snap = state.tags
 
-        def enabled(c: _BoolCoupling | _ProfileCoupling) -> bool:
+        def settles(c: _BoolCoupling | _ProfileCoupling) -> bool:
+            if c.rung_memory_key in state.memory:
+                return False
             en_raw = snap.get(c.en_name, False)
             return en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
 
         for c in self._bool_couplings:
-            if c.on_acc_name and enabled(c):
+            if c.on_acc_name and settles(c):
                 seed[c.on_acc_name] = coil_timer(c.on_delay_ms, c.off_delay_ms)[0]
                 seed[c.fb_name] = True
                 memory[c.rung_memory_key] = True
         for pc in self._profile_couplings:
-            if not pc.rung_memory_key or not enabled(pc):
+            if not pc.rung_memory_key or not settles(pc):
                 continue
             memory[pc.rung_memory_key] = True
             if pc.physical.kind == "timed":

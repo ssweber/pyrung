@@ -294,7 +294,7 @@ spec test tests/test_specs.py  # generate pytest tests for accepted formulas
 If your program uses [Physical annotations](physical-harness.md) with `physical=` and `link=` declarations, the adapter installs the autoharness automatically at launch. A banner appears in the Debug Console:
 
 ```text
-Harness: 3 feedback loop(s) (2 bool, 1 analog); `harness status` for details
+Harness: 3 feedback loop(s) (2 delay, 1 ramp); `harness status` for details
 ```
 
 A force still wins over the harness. Force a feedback tag to hold it whatever the harness computes.

@@ -197,6 +197,98 @@ def test_a_reload_continues_a_running_off_delay(
     assert scans == 15 + extra_scans
 
 
+def _coil_script(horn: str) -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "\n"
+        "motor = Bool('Motor')\n"
+        "spare = Bool('Spare')\n"
+        f"horn = {horn}\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(motor):\n"
+        "        out(Bool('Echo'))\n"
+        "    with Rung(spare, horn):\n"
+        "        out(Bool('Seen'))\n"
+        "\n"
+        "runner = PLC(prog, dt=0.01)\n"
+    )
+
+
+def _coil_run(
+    tmp_path: Path, script: str, link: str, before: int, *, reload: bool
+) -> list[tuple[Any, ...]]:
+    """Each scan's Spare, Horn and timer counts, after *before* scans with Motor on."""
+    tmp_path.mkdir()
+    adapter, out, _script_path = _setup(tmp_path, script)
+    if link:
+        resp, _ = _repl(adapter, out, link, seq=10)
+        assert resp["success"] is True
+    adapter._runner.patch({"Motor": True})
+    _repl(adapter, out, f"step {before}", seq=11)
+    if reload:
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+    seen = []
+    for _ in range(60):
+        adapter._runner.step()
+        tags = adapter._runner.current_state.tags
+        counts = sorted((k, v) for k, v in tags.items() if k.startswith(("__cpl_on", "__tmd_on")))
+        seen.append((tags["Spare"], tags["Horn"], counts))
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("horn", "link", "before", "first", "last"),
+    [
+        ("Bool('Horn')", "link Spare Motor toggle", 30, (True, False), (True, False)),
+        (
+            "Bool('Horn')",
+            "link Spare Motor timed=500ms maintained",
+            30,
+            (True, False),
+            (True, False),
+        ),
+        (
+            "Bool('Horn', physical=Physical('L', toggle=True), link='Motor')",
+            "",
+            30,
+            (False, True),
+            (False, True),
+        ),
+        (
+            "Bool('Horn', physical=Physical('H', timed='500ms'), link='Motor')",
+            "",
+            10,
+            (False, True),
+            (False, False),
+        ),
+        (
+            "Bool('Horn', physical=Physical('H', on_delay='500ms'), link='Motor')",
+            "",
+            10,
+            (False, False),
+            (False, True),
+        ),
+    ],
+    ids=["bench-toggle", "bench-timed-maintained", "toggle", "timed-running", "on-delay-running"],
+)
+def test_a_reload_leaves_a_plant_coil_as_it_was(
+    tmp_path: Path,
+    horn: str,
+    link: str,
+    before: int,
+    first: tuple[bool, bool],
+    last: tuple[bool, bool],
+):
+    """A reload with the enable on neither fires a toggle or timed coil nor cuts its count short."""
+    script = _coil_script(horn)
+    reloaded = _coil_run(tmp_path / "reloaded", script, link, before, reload=True)
+    assert reloaded == _coil_run(tmp_path / "stepped", script, link, before, reload=False)
+    assert reloaded[0][:2] == first
+    assert reloaded[-1][:2] == last
+
+
 AMBIENT_SCRIPT = (
     "from pyrung.core import Bool, PLC, Physical, Program, Real, Rung, out\n"
     "\n"
