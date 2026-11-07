@@ -673,8 +673,8 @@ def _short_of(scans: int):
     """_run_compiled that stops *scans* early and says it is done."""
     real = compiled_run._run_compiled
 
-    def run(plc, kernel, budget, predicate):
-        real(plc, kernel, budget - scans, predicate)
+    def run(plc, kernel, budget, predicate, *rest):
+        real(plc, kernel, budget - scans, predicate, *rest)
         return 0
 
     return run
@@ -864,8 +864,8 @@ def test_a_raised_run_landing_on_the_wrong_state_is_caught(installed, monkeypatc
 def test_a_raise_stepping_does_not_make_is_caught(installed, monkeypatch) -> None:
     real = compiled_run._run_compiled
 
-    def spurious(plc, kernel, budget, predicate):
-        real(plc, kernel, budget // 2, predicate)
+    def spurious(plc, kernel, budget, predicate, *rest):
+        real(plc, kernel, budget // 2, predicate, *rest)
         raise RuntimeError("spurious kernel raise")
 
     monkeypatch.setattr(compiled_run, "_run_compiled", spurious)
@@ -895,8 +895,8 @@ def test_a_spurious_raise_too_long_to_compare_is_caught(installed, monkeypatch) 
     _no_twin_can_follow(monkeypatch)
     real = compiled_run._run_compiled
 
-    def spurious(plc, kernel, budget, predicate):
-        real(plc, kernel, budget // 2, predicate)
+    def spurious(plc, kernel, budget, predicate, *rest):
+        real(plc, kernel, budget // 2, predicate, *rest)
         raise RuntimeError("spurious kernel raise")
 
     monkeypatch.setattr(compiled_run, "_run_compiled", spurious)
