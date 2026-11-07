@@ -25,6 +25,7 @@ tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
 conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
 conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
 hypothesis = { cmd = ["make", "test-hypothesis"], timeout = 300 }
+docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plus the reference manifest; a new public export must be listed
 
 [presets]
 # prove and pilot are subsets of test and fold, so only fast names them.
