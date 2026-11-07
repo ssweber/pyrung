@@ -164,9 +164,10 @@ def _format_rung_install(
         line = f"{prefix} Install temporary logic{source}:"
     else:
         # A non-Bool tag whose every condition is never true gets no row at all.
+        whose = "their" if len(dict.fromkeys(rung.dest for rung in step.rungs)) > 1 else "its"
         line = (
             f"{prefix} Install temporary logic for {_step_tags(step)}{source}."
-            " None of its conditions can be true, so it writes nothing."
+            f" None of {whose} conditions can be true, so it writes nothing."
         )
     detail = [f"   {row}" for row in logic]
     for tag, earlier in (replaced or {}).items():
@@ -652,9 +653,10 @@ class Plan:
                         and any(rung.dest in dests for rung in later.rungs)
                         for later in self.journal[j + 1 :]
                     )
-                    # The recording also knows rules put in before the plan's first step.
+                    # The recording also knows rules put in before the plan's first step.  On a
+                    # rebuilt scan its rows after the removal are the new logic's, not kept ones.
                     kept_dests = {rung.dest for rung in left} or (
-                        set(dests) if step.kept_logic else set()
+                        set(dests) if step.kept_logic and not rebuilt else set()
                     )
                     if kept_dests and not rebuilt:
                         kept = step.kept_logic or rules_logic(left)

@@ -326,6 +326,35 @@ class TestPlanDisplay:
         assert "3. Install temporary logic:\n   with rung():\n     reset(Go)" in text
         assert "Temporary logic in effect: step 3." in text
 
+    def test_a_removal_and_new_logic_on_one_scan_read_the_same_from_a_recording(self):
+        # The recording fills in the rows that ran, so the removal's rows after it are the new
+        # logic's.  They are not logic the removal kept.
+        State = Int("State")
+        old = PilotRung("Go", True, State == 6)
+        replacement = PilotRung("Go", False, State == 6)
+        was = ("with rung(State == 6):", "  out(Go)")
+        now = ("with rung():", "  reset(Go)")
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(old,), logic=was),
+                PlanStep("revoke", 2, 0, (), "", rungs=(old,), logic=was, kept_logic=now),
+                PlanStep("force", 2, 0, (), "", rungs=(replacement,), logic=now),
+                PlanStep("coast", 3, 5, (), "", rungs=(replacement,)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "2. Remove temporary logic from step 1:" in text
+        assert "Remove some of the temporary logic" not in text
+        assert "3. Install temporary logic:\n   with rung():\n     reset(Go)" in text
+        assert "This replaces the logic for Go from step 1" not in text
+        assert "Temporary logic in effect: step 3." in text
+
     def test_a_removal_that_leaves_some_of_a_tags_rules_in_shows_its_logic_before_and_after(self):
         State = Int("State")
         on = PilotRung("Go", True, State == 6)
@@ -408,6 +437,20 @@ class TestPlanDisplay:
             " None of its conditions can be true, so it writes nothing."
         ) in text
         assert "2. Remove temporary logic for Speed from step 1. It wrote nothing." in text
+
+        both = PilotRung("Rate", 4, And(State == 6, State != 6))
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(PlanStep("force", 1, 0, (), "", rungs=(never, both)),),
+        )
+
+        assert (
+            "1. Install temporary logic for Speed, Rate."
+            " None of their conditions can be true, so it writes nothing."
+        ) in str(plan)
 
     def test_wait_lists_the_manual_accumulator_edit_for_a_jump_ahead(self):
         plan = Plan(

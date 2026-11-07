@@ -117,9 +117,38 @@ def test_an_ordered_compare_on_a_real_is_no_complement_of_its_opposite():
     assert _truth(_simplified(either), nan) is False
     kept = AnyCondition(R < 5, AllCondition(R >= 5, B))
     assert _truth(_simplified(kept), nan) is False
-    assert _condition_complement(R < 5) is None
-    assert _condition_complement(AllCondition(B, R >= 5)) is None
     assert type(_condition_complement(N < 5)) is CompareGe
+
+
+def test_a_compare_that_may_read_nan_complements_to_its_opposite_or_a_nan_check():
+    from pyrung import Block, Char, TagType
+    from pyrung.core.condition import CompareGe, CompareLt
+    from pyrung.core.synthesis import _condition_complement
+
+    S, M, Text = Real("S"), Int("M"), Char("Text")
+    reals = Block("DF", TagType.REAL, 1, 3)
+    ints = Block("DS", TagType.INT, 1, 3)
+    conditions = [
+        R < 5,
+        R >= 5.0,
+        N < S,
+        R <= S,
+        N > M * S,
+        N < reals[M],
+        AllCondition(B, R >= 5),
+        AnyCondition(A, R > S),
+    ]
+    numbers = [math.nan, -1.0, 5.0, 7.5]
+    for condition in conditions:
+        complement = _condition_complement(condition)
+        assert complement is not None, condition
+        for r, s, at in itertools.product(numbers, numbers, numbers):
+            values = {"A": False, "B": True, "N": 5, "M": 1, "R": r, "S": s, "DF1": at}
+            assert _truth(complement, values) is not _truth(condition, values), (condition, values)
+    assert type(_condition_complement(CompareLt(Text, "b"))) is CompareGe
+    assert type(_condition_complement(N < M + 1)) is CompareGe
+    assert type(_condition_complement(N < ints[M])) is CompareGe
+    assert _condition_complement(CompareLt(R, math.nan)) is None
 
 
 def test_a_real_holding_nan_fails_both_rules_and_the_tag_follows_the_other():

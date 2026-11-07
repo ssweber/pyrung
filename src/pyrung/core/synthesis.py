@@ -23,6 +23,7 @@ program.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -546,24 +547,50 @@ def _flattened(condition: Any) -> Any:
     return kind(*parts)
 
 
+def _may_be_nan(operand: Any) -> bool:
+    """True when *operand* can read as NaN, so a compare on it has no plain opposite.
+
+    These can read as NaN:
+
+    - a ``Real`` tag or a NaN constant
+    - an indirect ref, range or expression that reads a ``Real``
+    - an expression that holds an infinite constant, since ``inf - inf`` is NaN
+    """
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import (
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
+    from pyrung.core.tag import ImmediateRef, Tag, TagType
+
+    if isinstance(operand, ImmediateRef):
+        return _may_be_nan(operand.value)
+    if isinstance(operand, Tag):
+        return operand.type == TagType.REAL
+    if isinstance(operand, float):
+        return operand != operand
+    if isinstance(operand, (IndirectRef, IndirectExprRef, BlockRange, IndirectBlockRange)):
+        return operand.block.type == TagType.REAL
+    if isinstance(operand, Expression):
+        return any(
+            (isinstance(part, float) and not math.isfinite(part)) or _may_be_nan(part)
+            for key, part in vars(operand).items()
+            if not key.startswith("_")
+        )
+    if isinstance(operand, (list, tuple)):
+        return any(_may_be_nan(part) for part in operand)
+    return False
+
+
 def _nan_free(compare: Any) -> bool:
     """True when neither side of *compare* can be NaN.
 
     ``R < 5`` and ``R >= 5`` are both False when ``R`` holds NaN, so one is the other's
-    complement only when no side is a ``Real``.
+    complement only when no side can be NaN.
     """
-    from pyrung.core.tag import ImmediateRef, Tag, TagType
-
-    def plain(operand: Any) -> bool:
-        if isinstance(operand, ImmediateRef):
-            operand = operand.value
-        if isinstance(operand, Tag):
-            return operand.type != TagType.REAL
-        if isinstance(operand, float):
-            return operand == operand
-        return isinstance(operand, int)
-
-    return plain(compare.tag) and plain(compare.value)
+    return not (_may_be_nan(compare.tag) or _may_be_nan(compare.value))
 
 
 def _condition_complement(condition: Any) -> Any | None:
@@ -571,10 +598,12 @@ def _condition_complement(condition: Any) -> Any | None:
 
     Compares, contacts and INT truthiness have a complement contact.  ``And`` and
     ``Or`` complement by De Morgan, and a condition may supply ``_complement()``.
-    These have none, so the caller puts the rule on a bit instead:
+    ``R < 5`` and ``R >= 5`` are both False when ``R`` holds NaN, so the complement of
+    ``R < 5`` is ``Or(R >= 5, R != R)``.  The conditions below have no complement, so the
+    caller puts the rule on a bit instead:
 
     - an edge contact, which keeps memory of its own
-    - an ordered compare that reads a ``Real``, which may hold NaN
+    - an ordered compare against a NaN constant
     - anything else opaque
     """
     from pyrung.core.condition import (
@@ -590,7 +619,7 @@ def _condition_complement(condition: Any) -> Any | None:
         IntTruthyCondition,
         NormallyClosedCondition,
     )
-    from pyrung.core.tag import TagType
+    from pyrung.core.tag import Tag, TagType
 
     if condition is _ALWAYS:
         return _NEVER
@@ -606,9 +635,19 @@ def _condition_complement(condition: Any) -> Any | None:
     }
     kind = type(condition)
     if kind in complements:
-        if kind not in (CompareEq, CompareNe) and not _nan_free(condition):
+        flipped = complements[kind](condition.tag, condition.value)
+        if kind in (CompareEq, CompareNe) or _nan_free(condition):
+            return flipped
+        value = condition.value
+        if isinstance(value, float) and value != value:
             return None
-        return complements[kind](condition.tag, condition.value)
+        # ``X != X`` is True exactly when X holds NaN.
+        nan_reads = [CompareNe(condition.tag, condition.tag)] if _may_be_nan(condition.tag) else []
+        if isinstance(value, Tag) and _may_be_nan(value):
+            nan_reads.append(CompareNe(value, value))
+        elif _may_be_nan(value):
+            nan_reads.append(value != value)
+        return AnyCondition(flipped, *nan_reads)
     if kind is BitCondition:
         return NormallyClosedCondition(condition.tag)
     if kind is NormallyClosedCondition:
@@ -715,8 +754,8 @@ def _guarded_rows(
         for name in sorted({dest.name, *_static_reads(guard)}):
             if _is_rule_bit(name):
                 raise ValueError(
-                    f"synthesis bracket rule {index} for {dest.name}: tag {name!r} is named "
-                    "like a bit the bracket adds. Rename it."
+                    f"how() names a bit of its temporary logic {name!r}, the same name as "
+                    "your tag. Rename the tag."
                 )
         group = groups.setdefault(dest.name, _DestRules(dest, []))
         group.rules.append((value, guard))

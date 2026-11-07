@@ -316,9 +316,9 @@ def test_guarded_copy_refuses_a_tag_named_like_one_of_its_bits() -> None:
     from pyrung.core.synthesis import guarded_copy_rung
 
     d, gate = Bool("D"), Bool("Gate")
-    with pytest.raises(ValueError, match="'__on1__D' is named like a bit"):
+    with pytest.raises(ValueError, match="'__on1__D', the same name as your tag"):
         guarded_copy_rung([(d, True, gate), (d, False, BitCondition(Bool("__on1__D")))])
-    with pytest.raises(ValueError, match="'__set2__X' is named like a bit"):
+    with pytest.raises(ValueError, match="'__set2__X', the same name as your tag"):
         guarded_copy_rung([(Int("__set2__X"), 3, gate)])
     # A name the bracket never gives a bit is the user's own.
     guarded_copy_rung([(d, True, BitCondition(Bool("__on__D")))])

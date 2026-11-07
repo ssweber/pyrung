@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _set_pilot_rungs,
     _until_unresolved_condition,
     fork_with_pilot_rungs,
+    pilot_rules_rung,
     project_pilot_overlay,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
@@ -71,6 +72,7 @@ from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.physical import Physical
 from pyrung.core.program.context._state import _current_rung
 from pyrung.core.runner import PLC
+from pyrung.core.synthesis import bracket_lines
 
 
 def _timer_program():
@@ -500,6 +502,9 @@ class TestPilotRungs:
         plc.step()
         plc.step()
         assert plc.state.tags[In.name] is True
+        printed = bracket_lines(pilot_rules_rung((in_flight, other), {In.name: In}))
+        assert printed
+        assert not [line for line in printed if "DemandActive" in line]
 
     def test_operation_progress_continues_after_its_start_guard_closes(self):
         In = Bool("ProgressLifetime_In", external=True)

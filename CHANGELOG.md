@@ -269,10 +269,11 @@
   - logic that holds an input False is tried as a Set first, so a command the plan lets go of stays let go of
   - the plan's text and `plan.replay()` describe the same run
 - A `how()` plan prints its temporary logic as the rows that ran, in pyrung source:
-  - a tag the logic sets under one condition gets one row, an `out()` for a Bool (it printed a `latch()` or `reset()` per rule). A condition that reads a tag written above it goes on a bit instead
+  - a tag the logic sets under one condition gets one row, an `out()` for a Bool (it printed a `latch()` or `reset()` per rule)
+  - a condition that reads a tag the logic writes earlier goes on a bit instead
   - a tag the logic sets under two or more conditions gets one bit per condition, such as `__on1__HoldSensor`, `__off1__HoldSensor` or `__set1__Speed`, and the bit rows run first
   - a non-Bool tag gets one `copy()` per bit, in order
-  - the bits stay in the recording's tags after the logic is removed. The debugger doesn't list them
+  - the bits stay in `plan.fork`'s tags after the logic is removed. The debugger doesn't list them
   - conditions leave out terms that can't change them
   - a step that rebuilds a tag's logic says which step it replaces
 
