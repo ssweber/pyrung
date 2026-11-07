@@ -58,6 +58,9 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.raw",
     "pyrung.click.validate_click_program",
     "pyrung.click.ValidationMode",
+    "pyrung.click.CLICK_STEP_LIMIT",
+    "pyrung.click.StepEstimate",
+    "pyrung.click.estimate_steps",
 )
 
 
@@ -126,6 +129,8 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.branch",
             "pyrung.comment",
             "pyrung.forloop",
+            "pyrung.break_loop",
+            "pyrung.continue_loop",
             "pyrung.subroutine",
         ),
     ),
