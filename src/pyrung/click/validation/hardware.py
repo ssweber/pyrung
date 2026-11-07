@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyclickplc.banks import BANKS
 
-from pyrung.click.capabilities import CONVERTER_COMPATIBILITY
+from pyrung.click.capabilities import CONVERTER_COMPATIBILITY, single_register_fill_dest
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.conversions import (
@@ -342,6 +342,9 @@ def _evaluate_copy_compatibility(
         return findings
 
     operation, source_field, dest_field = mapping
+    if operation == "fill" and single_register_fill_dest(instruction.dest) is not None:
+        # CLICK has no Fill of one register, so the export is a Copy.
+        operation = "single"
     source_location = _instruction_location(base_location, f"instruction.{source_field}")
     dest_location = _instruction_location(base_location, f"instruction.{dest_field}")
 

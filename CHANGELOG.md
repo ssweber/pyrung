@@ -375,6 +375,7 @@
 - In compiled runs and generated CircuitPython, a box placed directly in a `forloop()` body (not in a body rung) reads its pins (`.reset()`, `.jump()` and so on) before it writes, as `PLC` does. A drum's jump pin no longer reads the step the drum has just corrected.
 - A drum reads its jump step when the scan reaches it, before it moves, everywhere. If the drum itself writes the step tag, the jump goes to the value the tag held when the scan reached the drum (it took the value the drum had just written).
 - Ladder export no longer puts a vertical token (`T`, `|`, `T:`) in column A, the left power rail, which CLICK refuses ("Vertical-down tokens are not allowed in Column A").
+- CLICK ladder export writes a `fill()` of one register as a Copy, because CLICK's Fill needs at least two registers. A text or REAL value that a Copy would convert, and a text of several characters, are refused. Write `copy()` for those.
 - Analysis now sees inside `forloop()` bodies:
   - a `return_early()` in a loop makes the subroutine's later rungs conditional on it, for `cause()`, `how()` and the verifier
   - the stuck-bit and conflicting-output validators, and the call conditions `simplified()` shows, see calls in a body. A body rung's contacts count as part of the call's condition where no iteration can change them

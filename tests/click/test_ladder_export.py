@@ -2547,3 +2547,117 @@ class TestIndexedMarkers:
         assert sub_markers[0] == "R1"  # restarts at 1
         assert sub_markers[1] == "R2"
         assert sub_markers[2] == "R3"  # return()
+
+
+# --- A fill() of one register exports as a Copy ---------------------------------------
+#
+# CLICK's Fill dialog needs a range of at least two registers (checked on the editor,
+# 2026-11-07), so a one-register Fill is pasted as the Single Copy of the same value.
+
+
+def _single_fill_tokens(body, *, allow: tuple[str, ...] = ()) -> list[str]:
+    with Program(strict=False) as logic:
+        with Rung(x[1]):
+            body()
+    bundle = pyrung_to_ladder(logic, TagMap(), allow=allow)
+    return [row[-1] for row in bundle.main_rows[1:] if row[-1] not in ("", "end()")]
+
+
+def test_one_register_fill_exports_the_full_row_of_a_single_copy():
+    with Program(strict=False) as logic:
+        with Rung(x[1]):
+            fill(7, ds.select(5, 5), oneshot=True)
+    rows = pyrung_to_ladder(logic, TagMap()).main_rows
+    expected = _literal_csv_rows(
+        "R,X001," + ",".join(["-"] * 30) + ',"copy(7,DS5,oneshot=1)"\n'
+        "R," + ",".join(["-"] * 31) + ",end()"
+    )
+    assert normalize_csv(rows) == expected
+
+
+def test_two_register_fill_is_still_a_fill():
+    assert _single_fill_tokens(lambda: fill(7, ds.select(5, 6), oneshot=True)) == [
+        "fill(7,DS5..DS6,oneshot=1)"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("build", "token"),
+    [
+        (lambda: fill(7, ds.select(5, 5)), "copy(7,DS5)"),
+        (lambda: fill(ds[1], ds.select(5, 5)), "copy(DS1,DS5)"),
+        (lambda: fill(2.5, df.select(3, 3)), "copy(2.5,DF3)"),
+        (lambda: fill(10, dh.select(7, 7)), "copy(Ah,DH7)"),
+        (lambda: fill("A", txt.select(5, 5)), 'copy("A",TXT5)'),
+        (lambda: fill("", txt.select(5, 5)), "copy($00,TXT5)"),
+        (lambda: fill("\x00", txt.select(5, 5)), "copy($00,TXT5)"),
+        (lambda: fill(txt[1], txt.select(5, 5)), "copy(TXT1,TXT5)"),
+    ],
+)
+def test_one_register_fill_exports_a_copy_of_the_same_value(build, token):
+    assert _single_fill_tokens(build) == [token]
+
+
+def test_one_register_fill_into_text_from_a_number_register_passes_the_copy_checks():
+    # A Fill takes no number register into TXT, a Copy does.
+    assert _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5))) == ["copy(DS1,TXT5)"]
+
+
+def test_one_register_fill_keeps_the_checks_of_a_copy():
+    with pytest.raises(LadderExportError, match="CLK_COPY_CONSTANT_INTO_BIT") as exc_info:
+        _single_fill_tokens(lambda: fill(1, c.select(1, 1)))
+    assert "copy(1, ...) into C" in str(exc_info.value)
+    with pytest.raises(LadderExportError, match="CLK_EXPR_ONLY_IN_MATH"):
+        _single_fill_tokens(lambda: fill(ds[1] + 1, ds.select(5, 5)))
+
+
+def test_one_register_fill_refuses_text_that_a_copy_would_convert():
+    with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
+        _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)))
+    with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
+        _single_fill_tokens(lambda: fill(txt[1], ds.select(5, 5)))
+
+
+def test_one_register_fill_refuses_several_characters():
+    with pytest.raises(LadderExportError, match="several characters"):
+        _single_fill_tokens(lambda: fill("AB", txt.select(5, 5)))
+
+
+def test_pointer_range_fill_is_still_refused():
+    # Its length is unknown at export, so it is never turned into a Copy.
+    ptr = Int("Ptr")
+    with pytest.raises(LadderExportError, match="CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"):
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                fill(1, ds.select(ptr, ptr))
+        pyrung_to_ladder(logic, TagMap({ptr: ds[1]}, include_system=False))
+
+
+@pytest.mark.parametrize("value", [7, 40000, -40000])
+def test_one_register_fill_and_its_copy_store_alike(value):
+    from pyrung import PLC
+
+    def run(build):
+        with Program(strict=False) as logic:
+            with Rung():
+                build()
+        runner = PLC(logic)
+        runner.step()
+        return runner.current_state.tags
+
+    filled = run(lambda: fill(value, ds.select(5, 5)))
+    copied = run(lambda: copy(value, ds[5]))
+    assert filled["DS5"] == copied["DS5"]
+    assert filled.get("SC43") == copied.get("SC43")
+
+
+def test_one_register_fill_costs_what_the_copy_costs():
+    from pyrung.click.ladder.steps import estimate_steps
+
+    def total(build):
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                build()
+        return estimate_steps(pyrung_to_ladder(logic, TagMap())).total
+
+    assert total(lambda: fill(7, ds.select(5, 5))) == total(lambda: copy(7, ds[5]))
