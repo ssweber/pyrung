@@ -249,7 +249,7 @@ class Harness:
     def _install(self) -> None:
         """Install without settling, so a feedback stays as the state has it.
 
-        Its timers keep counting from there. A caller that puts overrides in afterwards
+        The feedback's timers keep counting from there. A caller that puts overrides in afterwards
         settles once they are in, with :meth:`_settle`.
         """
         if self._installed:
