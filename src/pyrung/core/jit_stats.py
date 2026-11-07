@@ -37,7 +37,8 @@ class JitStats:
         # Calls of run_for()/run_until() and coast_until(), by kind.
         self.calls: Counter[str] = Counter()
         # Scans by where they ran.  "self check" counts the compiled scans that check a new
-        # trace, which are work and not committed scans.
+        # trace, which are work and not committed scans.  "undone" counts the scans a compiled
+        # run took back when a scan raised or left its bounds.
         self.scans: Counter[str] = Counter()
         # Each reason a run, an attempt or a trace stayed out of the loop.
         self.declines: Counter[str] = Counter()
@@ -45,7 +46,8 @@ class JitStats:
         self.left_by: Counter[str] = Counter()
         # Guards that ended one path's loop in a coast, which then went on in another path.
         self.handed_over_by: Counter[str] = Counter()
-        # Stretches, scans run and scans they could have run, by bit length of the last.
+        # Keyed by the bit length of the scans a stretch could have run: [stretches, scans run,
+        # scans they could have run].
         self.by_length: dict[int, list[int]] = {}
         # Count and seconds of each costly step, such as a compile or a trace.
         self.costs: dict[str, list[float]] = {}
@@ -97,6 +99,7 @@ class JitStats:
             f"  scans: {total}, {self.scans['loop']} in the loop ({_share(self.scans['loop'], total)}), "
             f"{self.scans['compiled']} compiled, {self.scans['interpreted']} interpreted, "
             f"{self.scans['self check']} more to check new traces"
+            + (f", {self.scans['undone']} undone and run again" if self.scans["undone"] else "")
         )
         lines.append(
             f"  stretches: {self.stretches}, which ran {self.stretched_scans} scans of the "
@@ -117,7 +120,8 @@ class JitStats:
                 lines.append(f"    {span:>15} {count:>10} {used:>10} {could:>11}")
         lines += _counted("  stretches ended by:", self.left_by)
         lines += _counted(
-            "  guards that sent a coast from one path to another:", self.handed_over_by
+            "  guards that ended one loop path while the run went on in another:",
+            self.handed_over_by,
         )
         lines += _counted("  declines:", self.declines)
         if self.costs:
@@ -180,12 +184,17 @@ def add_cost(name: str, seconds: float) -> None:
 
 
 class Run:
-    """One call's stretches.  Each waits for the run's next failed guard or its end, which
-    says how long it could have run."""
+    """One call's stretches.
+
+    A stretch could have run on to the call's next failed guard or to the call's end.  Each
+    stretch waits for one of them.  The collectors get the stretches when the call ends, so a
+    scan the call takes back is not counted.
+    """
 
     def __init__(self, kind: str) -> None:
         self.loop_scans = 0
-        self._waiting: list[tuple[int, int]] = []  # (first scan, scans run)
+        # [first scan, scans run, what ended it, the scan it could have run to or None]
+        self._stretches: list[list[Any]] = []
         for stats in ACTIVE:
             stats.calls[kind] += 1
 
@@ -193,22 +202,40 @@ class Run:
         """A stretch ran *used* scans from scan *first*.  *guard_failed* says the next scan
         took another path, so no stretch before it could have run past it."""
         self.loop_scans += used
-        add_scans("loop", used)
-        for stats in ACTIVE:
-            stats.left_by[left_by] += 1
-        self._waiting.append((first, used))
+        self._stretches.append([first, used, left_by, None])
         if guard_failed:
             self._settle(first + used)
 
+    def undo(self, last: int) -> None:
+        """The call took back every scan after scan *last*, to run them again interpreted."""
+        kept = []
+        for stretch in self._stretches:
+            first, used = stretch[0], stretch[1]
+            cut = min(used, first + used - 1 - last)
+            if cut <= 0:
+                kept.append(stretch)
+                continue
+            self.loop_scans -= cut
+            if cut < used:
+                stretch[1:] = [used - cut, "a scan the run took back", last + 1]
+                kept.append(stretch)
+        self._stretches = kept
+
     def end(self, next_scan: int) -> None:
-        """The run ended before scan *next_scan*."""
+        """The call ended before scan *next_scan*."""
         self._settle(next_scan)
+        if self.loop_scans:
+            add_scans("loop", self.loop_scans)
+        for first, used, left_by, until in self._stretches:
+            for stats in ACTIVE:
+                stats.left_by[left_by] += 1
+                stats._stretch(used, max(until - first, used))
+        self._stretches.clear()
 
     def _settle(self, until: int) -> None:
-        for first, used in self._waiting:
-            for stats in ACTIVE:
-                stats._stretch(used, max(until - first, used))
-        self._waiting.clear()
+        for stretch in self._stretches:
+            if stretch[3] is None:
+                stretch[3] = until
 
 
 def _dump(stats: JitStats, target: str) -> None:

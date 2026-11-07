@@ -7,23 +7,26 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, copy, on_delay
+from pyrung import PLC, Bool, Int, Program, Rung, Timer, copy, math, on_delay
 from pyrung.core import compiled_run, jit_stats, scan_trace
 from pyrung.core.coast_run import coast_until
 
 T = Timer.clone("JsT")
 Go = Bool("JsGo")
 N = Int("JsN")
+FOLD_CHECK = getattr(compiled_run, "_fold_check_installed", False)
 # Under --fold-check each run's twin compiles a kernel of its own.
-COMPILES = 2 if getattr(compiled_run, "_fold_check_installed", False) else 1
+COMPILES = 2 if FOLD_CHECK else 1
 
 
 @pytest.fixture(autouse=True)
 def production(monkeypatch: pytest.MonkeyPatch) -> None:
-    """As a user runs: an interpreted prefix, then the loop with no firing limit."""
+    """As a user runs, with an interpreted prefix and then the loop with no firing limit."""
     monkeypatch.setattr(compiled_run, "INTERPRETED_PREFIX", 1000)
     monkeypatch.setattr(scan_trace, "MIN_RUN_SCANS", 1000)
     monkeypatch.setattr(scan_trace, "BURST_SIZES", None)
+    # A collector PYRUNG_JIT_STATS started would count these runs too.
+    monkeypatch.setattr(jit_stats, "ACTIVE", [])
 
 
 def _timer(preset_ms: int) -> PLC:
@@ -87,6 +90,28 @@ def test_a_guard_that_fails_ends_its_stretch_and_is_named() -> None:
     assert guard in stats.report()
 
 
+def test_scans_a_run_takes_back_count_where_they_run_again() -> None:
+    Lim = Int("JsLim", min=0, max=50)
+    with Program(strict=False) as program:
+        with Rung(Go):
+            on_delay(T, 15_000, "ms")
+        with Rung(T.Done):
+            math(Lim + 1, Lim)
+    plc = PLC(program, dt=0.01)
+    plc.patch({Go.name: True})
+    plc.step()
+    with jit_stats.collect() as stats, pytest.warns(UserWarning, match="JsLim"):
+        plc.run_for(30)  # 3000 scans
+    assert sum(stats.scans[where] for where in ("loop", "compiled", "interpreted")) == 3000
+    if FOLD_CHECK:
+        return  # fold-check's observer settles each firing, so nothing is taken back
+    # A real scan takes Lim past 50 at scan 1551, and the run takes back the scans since
+    # its checkpoint at scan 1400.  They run again interpreted.
+    assert stats.scans == {"interpreted": 2601, "compiled": 1, "loop": 398, "undone": 149}
+    assert (stats.stretches, stats.stretched_scans) == (1, 398)
+    assert stats.left_by == {"a scan the run took back": 1}
+
+
 def test_a_short_run_says_why_it_stayed_interpreted() -> None:
     plc = _timer(3000)
     with jit_stats.collect() as stats:
@@ -138,6 +163,19 @@ def test_a_stretch_could_have_run_to_the_next_failed_guard() -> None:
     # 15 to the guard at scan 25, 5 for the stretch the guard ended, 10 to the run's end.
     assert stats.could_have_run == 15 + 5 + 10
     assert stats.by_length == {4: [2, 8, 25], 3: [1, 5, 5]}
+
+
+def test_a_stretch_taken_back_counts_only_what_stays() -> None:
+    with jit_stats.collect() as stats:
+        run = jit_stats.Run("test")
+        run.stretch(10, 5, "a guard", guard_failed=True)
+        run.stretch(16, 5, "a guard", guard_failed=True)
+        run.stretch(22, 5, "its scan limit", guard_failed=False)
+        run.undo(17)  # scans from 18 on run again, interpreted
+        run.end(40)
+    assert stats.scans == {"loop": 7}
+    assert stats.left_by == {"a guard": 1, "a scan the run took back": 1}
+    assert stats.by_length == {3: [1, 5, 5], 2: [1, 2, 2]}
 
 
 def test_the_report_is_ascii_and_holds_every_section() -> None:

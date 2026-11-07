@@ -228,6 +228,8 @@ def _run_compiled(
     settled = start  # the last state known exact, and where a failed run resumes
     used = 0
     undone = False
+    # Loop scans and real scans past *settled*, which an undone run takes back.
+    unsettled = [0, 0]
     loop = ScanLoop(replay, kernel, budget, predicate, plc._constrained_tags)
     loop.jit = run
     plc._epoch_caches.on_tip_advanced()
@@ -237,9 +239,11 @@ def _run_compiled(
         ran = loop.advance(min(budget - used, to_checkpoint))
         if ran:
             used += ran
+            unsettled[0] += ran
             checkpoint = replay._kernel.scan_id % interval == 0
             if checkpoint or LOOP_OBSERVERS:
                 settled = replay._materialize_replay_state()
+                unsettled = [0, 0]
                 if checkpoint:
                     _install(plc, replay, settled)
                 for observer in LOOP_OBSERVERS:
@@ -257,12 +261,14 @@ def _run_compiled(
             break
         loop.real_scan_ran()
         used += 1
+        unsettled[1] += 1
         scan_id = replay._kernel.scan_id
         checkpoint = scan_id % interval == 0
         if predicate is None and not checkpoint:
             continue
         state = replay._materialize_replay_state()
         settled = state
+        unsettled = [0, 0]
         if checkpoint:
             _install(plc, replay, state)
         if predicate is not None and predicate(state):
@@ -271,6 +277,13 @@ def _run_compiled(
     loop.finish()
     if undone:
         used = settled.scan_id - start.scan_id
+        if run is not None:
+            # These scans run again interpreted, and count there.
+            run.undo(settled.scan_id)
+            if unsettled[1]:
+                jit_stats.add_scans("compiled", -unsettled[1])
+            if any(unsettled):
+                jit_stats.add_scans("undone", sum(unsettled))
     elif settled.scan_id != replay._kernel.scan_id:
         settled = replay._materialize_replay_state()
     if settled.scan_id != plc._state.scan_id:

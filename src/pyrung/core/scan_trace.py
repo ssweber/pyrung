@@ -331,7 +331,7 @@ class KernelSource:
         }
 
     def snippet(self, guard: _Guard) -> str:
-        """Where *guard* came from, as the jit counters show it, with function, line and text."""
+        """The function, line number and source text of the statement that made *guard*."""
         if guard.why:
             return guard.why
         key = (guard.line, guard.inner)
@@ -787,10 +787,14 @@ class _Tracer:
         if len(arguments) != len(function.params):
             raise Decline(f"call of {function.node.name} with other arguments")
         frame = _Frame(function, dict(zip(function.params, arguments, strict=True)))
+        # A guard after the call names the caller's statement, not the helper's last one.
+        inner = self._inner
         try:
             self._block(function.node.body, frame)
         except _Returned as returned:
             return returned.value
+        finally:
+            self._inner = inner
         return _Value(None)
 
     def _block(self, statements: list[ast.stmt], frame: _Frame) -> None:
@@ -1495,8 +1499,8 @@ def _as_load(target: ast.expr) -> ast.expr:
     raise Decline(f"augmented assignment to {type(target).__name__}")
 
 
-# What the tracer iterates.  A constant one gives the same items on every scan, a str's
-# characters included, and an item of a list may still be moving.
+# What the tracer iterates.  A constant one gives the same items on every scan, and a constant
+# str the same characters.  An item of a list may still be moving.
 _ITERABLE_TYPES = (list, tuple, range, str)
 
 
@@ -1972,7 +1976,8 @@ class ScanLoop:
     jit: jit_stats.Run | None = None
     # What the jit counters call this loop's real scans.
     _real_scans_are = "compiled"
-    # The stretch the last firing left open, as [first scan, scans run], while counting.
+    # While the counters count, this holds the stretch the last firing left open, as
+    # [first scan, scans run].
     _open: list[int] | None = None
 
     def __init__(
@@ -2175,7 +2180,8 @@ class ScanLoop:
         if stretch is not None and stretch[0] + stretch[1] == first:
             stretch[1] += used
         else:
-            self._close_open("its scan limit, and no loop took the next scan")
+            # The scan after the open stretch ran outside the loop, a real change.
+            self._close_open("its scan limit, and no loop took the next scan", guard_failed=True)
             stretch = self._open = [first, used]
         if used < limit:
             self._open = None
@@ -2183,11 +2189,11 @@ class ScanLoop:
             assert self.jit is not None
             self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=failed)
 
-    def _close_open(self, left_by: str) -> None:
+    def _close_open(self, left_by: str, *, guard_failed: bool = False) -> None:
         stretch = self._open
         if stretch is not None and self.jit is not None:
             self._open = None
-            self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=False)
+            self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=guard_failed)
 
     def _after_firing(self, used: int, limit: int) -> None:
         if used >= min(limit, UNPRODUCTIVE_BELOW):

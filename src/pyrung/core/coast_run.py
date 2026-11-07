@@ -207,7 +207,7 @@ def memo_of(plc: PLC) -> CoastMemo:
 def _kernel_for(plc: PLC, memo: CoastMemo, *, may_compile: bool = True) -> CompiledKernel | None:
     """The kernel of this runner's program and overlay.  A fork need not compile it again.
 
-    With *may_compile* false, a kernel compiled before or None.
+    With *may_compile* false, it returns only a kernel compiled before, or None.
     """
     cached = plc._compiled_replay_kernel
     if cached is False:
@@ -963,14 +963,17 @@ def _try_stretch(
         _record_segments(plc, segments, paths)
         _land(plc, replay)
     if run is not None:
+        # A scan the loop cannot run is a real change, so no stretch could run past it.
+        blocked_here = False
         if total >= limit:
             ended = "the run's end"
         elif asked_to_stop:
             ended = "the stop predicate asked"
         else:
             ended = f"a scan the loop cannot run ({blocked})"
+            blocked_here = True
         if total:
-            run.stretch(start.scan_id + 1, total, ended, guard_failed=False)
+            run.stretch(start.scan_id + 1, total, ended, guard_failed=blocked_here)
         else:
             jit_stats.add_decline(f"attempt: {ended}")
     return total, None
