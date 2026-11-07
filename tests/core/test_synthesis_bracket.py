@@ -311,16 +311,15 @@ def test_guarded_copy_refuses_a_value_that_is_not_a_constant() -> None:
         conditional_hold_rung(dest=sel, rules=[(3, gate), (src, None)])
 
 
-def test_each_printed_row_says_what_its_rules_are_for() -> None:
-    # The comment is set on the row the rules built, so the text cannot say one thing while
-    # the rung does another.  A row from rules with no note has nothing to add to its code.
+def test_only_the_decide_first_rows_carry_a_comment() -> None:
+    # The comment is set on the rows the build adds, so the text says why they are there.
+    # A writer row's code says what it does on its own.
     from pyrung.core.condition import CompareEq, CompareNe
     from pyrung.core.synthesis import bracket_lines, guarded_copy_rung
 
     sel, a, b = Int("Sel"), Bool("A"), Bool("B")
     rung = guarded_copy_rung(
-        [(sel, 3, CompareNe(sel, 3)), (sel, 0, CompareEq(sel, 3)), (a, True, BitCondition(b))],
-        ["Up to 3.", "Back to 0.", None],
+        [(sel, 3, CompareNe(sel, 3)), (sel, 0, CompareEq(sel, 3)), (a, True, BitCondition(b))]
     )
 
     decide = (
@@ -332,10 +331,8 @@ def test_each_printed_row_says_what_its_rules_are_for() -> None:
         "  out(__frz0__Sel)",
         "with rung(Sel == 3):",
         "  out(__frz1__Sel)",
-        'comment("Up to 3.")',
         "with rung(~__frz1__Sel, __frz0__Sel):",
         "  copy(3, Sel)",
-        'comment("Back to 0.")',
         "with rung(__frz1__Sel):",
         "  copy(0, Sel)",
         "with rung(B):",
