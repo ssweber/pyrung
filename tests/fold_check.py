@@ -55,9 +55,12 @@ prints every mismatch of the session with its test and the differing fields.
 
 from __future__ import annotations
 
+import copyreg
 import os
 import threading
+import types
 import warnings
+import weakref
 from collections import Counter
 from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
@@ -820,23 +823,98 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
 
     A stateful predicate (a call counter, a recorder, ``rise()``'s edge memory) must
     not be advanced by the twin's extra calls, and must meet the twin's scans from the
-    state it had when the folded run began.  So it is deep-copied before the folded
-    run starts (functions included, cell by cell); the runner itself is shared, not
-    copied.  An uncopyable predicate is not asked.
+    state it had when the folded run began.  So it is copied before the folded run starts,
+    functions included, cell by cell.  The runner itself is shared, not copied.  An
+    uncopyable predicate is not asked.
     """
-    import copy
-    import types
+    try:
+        return _PrivateCopy(plc).of(predicate)
+    except Exception:
+        return None
 
-    memo: dict[int, Any] = {}
-    shared_types = _shared_types()
 
-    def clone_function(fn: types.FunctionType, memo: dict[int, Any]) -> Any:
-        if id(fn) in memo:
-            return memo[id(fn)]
+class _PrivateCopy:
+    """A deep copy that clones functions too, built on public protocols only.
+
+    ``copy.deepcopy()`` returns a function as it is, and Python 3.14 checks that before any hook
+    it offers.  So this copier walks the predicate itself.  Objects are rebuilt through
+    ``__deepcopy__`` or the pickle protocol (``copyreg.dispatch_table``, ``__reduce_ex__(4)``),
+    as ``deepcopy()`` rebuilds them.  A module is shared with the run, so it cannot be copied.
+    """
+
+    _LEAVES = frozenset(
+        {
+            types.NoneType,
+            types.EllipsisType,
+            types.NotImplementedType,
+            int,
+            float,
+            bool,
+            complex,
+            str,
+            bytes,
+            range,
+            types.CodeType,
+            types.BuiltinFunctionType,
+            weakref.ref,
+            property,
+        }
+    )
+
+    def __init__(self, plc: Any) -> None:
+        self.plc_type = type(plc)
+        self.shared = _shared_types()
+        self.memo: dict[int, Any] = {}
+        # Each original stays alive until the copy is done, so no id in the memo is reused.
+        self.originals: list[Any] = []
+
+    def _remember(self, obj: Any, new: Any) -> Any:
+        self.memo[id(obj)] = new
+        self.originals.append(obj)
+        return new
+
+    def of(self, obj: Any) -> Any:
+        if id(obj) in self.memo:
+            return self.memo[id(obj)]
+        cls = type(obj)
+        if (
+            cls in self._LEAVES
+            or isinstance(obj, type)
+            or cls is self.plc_type
+            or isinstance(obj, self.shared)
+        ):
+            return obj
+        if isinstance(obj, types.ModuleType):
+            raise TypeError(f"module {obj.__name__} is shared with the run")
+        if cls is types.FunctionType:
+            return self._function(obj)
+        if cls is types.MethodType:
+            return self._remember(obj, types.MethodType(obj.__func__, self.of(obj.__self__)))
+        if cls is list:
+            new_list: list[Any] = self._remember(obj, [])
+            new_list.extend(self.of(item) for item in obj)
+            return new_list
+        if cls is dict:
+            new_dict: dict[Any, Any] = self._remember(obj, {})
+            for key, value in obj.items():
+                new_dict[self.of(key)] = self.of(value)
+            return new_dict
+        if cls is tuple:
+            items = [self.of(item) for item in obj]
+            if id(obj) in self.memo:  # a cycle through the tuple copied it already
+                return self.memo[id(obj)]
+            same = all(a is b for a, b in zip(items, obj, strict=True))
+            return self._remember(obj, obj if same else tuple(items))
+        copier = getattr(obj, "__deepcopy__", None)
+        if copier is not None:
+            return self._remember(obj, copier(self.memo))
+        return self._rebuilt(obj)
+
+    def _function(self, fn: types.FunctionType) -> types.FunctionType:
         cells = None
         if fn.__closure__ is not None:
             cells = tuple(types.CellType() for _ in fn.__closure__)
-        # Module-level names the function reads are state too: it gets a private
+        # Module-level names the function reads are state too.  So the copy gets a private
         # globals dict holding copies of just those names.
         names: set[str] = set()
         todo = [fn.__code__]
@@ -846,42 +924,47 @@ def _isolated(predicate: Callable[[Any], bool], plc: Any) -> Callable[[Any], boo
             todo.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
         private: dict[str, Any] = {"__builtins__": fn.__globals__.get("__builtins__", {})}
         private["__name__"] = fn.__globals__.get("__name__", "")
-        new = types.FunctionType(fn.__code__, private, fn.__name__, fn.__defaults__, cells)
-        memo[id(fn)] = new
+        new = types.FunctionType(fn.__code__, private, fn.__name__, None, cells)
+        self._remember(fn, new)
         for name in names:
             if name in fn.__globals__:
-                private[name] = copy.deepcopy(fn.__globals__[name], memo)
-        new.__kwdefaults__ = copy.deepcopy(fn.__kwdefaults__, memo)
-        new.__defaults__ = copy.deepcopy(fn.__defaults__, memo)
-        new.__dict__.update(copy.deepcopy(fn.__dict__, memo))
-        if cells is not None and fn.__closure__ is not None:
-            for old, cell in zip(fn.__closure__, cells, strict=True):
-                try:
-                    contents = old.cell_contents
-                except ValueError:
-                    continue
-                cell.cell_contents = copy.deepcopy(contents, memo)
+                private[name] = self.of(fn.__globals__[name])
+        new.__kwdefaults__ = self.of(fn.__kwdefaults__)
+        new.__defaults__ = self.of(fn.__defaults__)
+        new.__dict__.update(self.of(fn.__dict__))
+        for old, cell in zip(fn.__closure__ or (), cells or (), strict=True):
+            if _filled(old):
+                cell.cell_contents = self.of(old.cell_contents)
         return new
 
-    for obj in _reachable(predicate, plc, shared_types):
-        if isinstance(obj, shared_types):
-            memo[id(obj)] = obj
-    shared = (type(plc),)
-    table = copy._deepcopy_dispatch  # type: ignore[attr-defined]
-    saved = {t: table.get(t) for t in (types.FunctionType, *shared)}
-    table[types.FunctionType] = clone_function
-    for t in shared:
-        table[t] = lambda x, memo: x
-    try:
-        return copy.deepcopy(predicate, memo)
-    except Exception:
-        return None
-    finally:
-        for t, old in saved.items():
-            if old is None:
-                table.pop(t, None)
+    def _rebuilt(self, obj: Any) -> Any:
+        """*obj* rebuilt from what pickling it would save, each part copied."""
+        reductor = copyreg.dispatch_table.get(type(obj))
+        saved: Any = reductor(obj) if reductor is not None else obj.__reduce_ex__(4)
+        if isinstance(saved, str):  # saved by its name, as a class is
+            return obj
+        parts: list[Any] = [*saved, None, None, None, None]
+        rebuild, args, state, list_items, dict_items, state_setter = parts[:6]
+        if state_setter is not None:
+            raise TypeError(f"{type(obj).__name__} restores its state its own way")
+        new = self._remember(obj, rebuild(*self.of(args)))
+        if state is not None:
+            state = self.of(state)
+            if hasattr(new, "__setstate__"):
+                new.__setstate__(state)
             else:
-                table[t] = old
+                slots = None
+                if isinstance(state, tuple) and len(state) == 2:
+                    state, slots = state
+                if state:
+                    new.__dict__.update(state)
+                for key, value in (slots or {}).items():
+                    setattr(new, key, value)
+        for item in list_items or ():
+            new.append(self.of(item))
+        for key, value in dict_items or ():
+            new[self.of(key)] = self.of(value)
+        return new
 
 
 def _reachable(root: Any, plc: Any, stop: tuple[type, ...] = ()) -> Iterator[Any]:

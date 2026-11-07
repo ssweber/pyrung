@@ -379,6 +379,19 @@ def test_a_counting_predicate_is_judged_from_its_own_copy() -> None:
     assert k == [0]
 
 
+def test_a_function_held_in_an_object_is_copied_too() -> None:
+    plc = _plc()
+    k = [0]
+
+    def count(_s) -> bool:
+        k[0] += 1
+        return k[0] >= 5
+
+    holder = SimpleNamespace(steps=[count])
+    fold_check._checked("run_until", plc, _stepper(plc, 5), lambda s: holder.steps[0](s))
+    assert k == [0]
+
+
 # --- A mismatch nobody declared fails, whoever catches it --------------------------------
 
 
