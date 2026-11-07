@@ -96,10 +96,9 @@ def test_logic_a_set_cannot_stand_in_for_stays(monkeypatch):
     # can't.  A timer's Done bit is no input to Set, and the drive patched it where its logic
     # went in: without the logic, the text would leave out a patch the replay makes.
     for logic in (
-        "latch(HoldSensor)",
-        "reset(HoldSensor)",
-        "latch(HoldStableOn_Done)",
-        "latch(HoldStableOff_Done)",
+        "out(HoldSensor)",
+        "with rung(HoldState != 7):\n     out(HoldStableOn.Done)",
+        "with rung(HoldState != 7):\n     out(HoldStableOff.Done)",
     ):
         assert logic in text
     replayed = plan.replay()

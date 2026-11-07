@@ -40,6 +40,7 @@ from pyrung.core.analysis.pilot.budget import (
 )
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTrigger
 from pyrung.core.analysis.pilot.overlay import PILOT_RUNGS_BUILT_FROM, fork_with_pilot_rungs
+from pyrung.core.analysis.pilot.recording import with_logic
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.coast_run import memo_of
 
@@ -389,6 +390,6 @@ def trim_holds(
     return replace(
         plan,
         fork=fork,
-        journal=_journal(plan.journal, change),
+        journal=tuple(with_logic(fork, step) for step in _journal(plan.journal, change)),
         hold_log=_hold_log(plan.hold_log, change),
     )

@@ -23,7 +23,7 @@ program.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -365,7 +365,8 @@ def _condition_or(term: Any, rest: Any) -> Any:
         return rest
     if rest is _NEVER:
         return term
-    return AnyCondition(term, rest)
+    # One flat Or, not an Or inside an Or: the same logic, and it prints as one contact list.
+    return AnyCondition(*_flat(AnyCondition, term), *_flat(AnyCondition, rest))
 
 
 def _condition_and(term: Any, rest: Any) -> Any:
@@ -377,7 +378,149 @@ def _condition_and(term: Any, rest: Any) -> Any:
         return rest
     if rest is _ALWAYS:
         return term
-    return AllCondition(term, rest)
+    return AllCondition(*_flat(AllCondition, term), *_flat(AllCondition, rest))
+
+
+def _flat(kind: type, condition: Any) -> tuple[Any, ...]:
+    return tuple(condition.conditions) if type(condition) is kind else (condition,)
+
+
+class _NotExact(Exception):
+    """A contact the simplifier can't treat as a plain value: the condition is left as it is."""
+
+
+_EXACT_FLIPS = {
+    "xic": "xio",
+    "xio": "xic",
+    "eq": "ne",
+    "ne": "eq",
+    "lt": "ge",
+    "ge": "lt",
+    "le": "gt",
+    "gt": "le",
+}
+
+
+def _simplified(condition: Any) -> Any:
+    """*condition* without terms that cannot change it, or *condition* as it was.
+
+    Combining rules leaves terms a ladder programmer would cut: a contact already required
+    beside an Or that contains it, a branch needing a contact the rest of the rung has open.
+    Only exact rules are used (``simplified.simplify``, and inside an And each part may assume
+    the contacts beside it hold, inside an Or that they don't), so the rung does the same.  A
+    condition holding an edge contact (it keeps memory of its own), an immediate contact, an
+    indirect or computed compare, or anything opaque is left alone.
+    """
+    from pyrung.core.analysis.simplified import (
+        And,
+        Atom,
+        Const,
+        Or,
+        _condition_to_expr,
+        _expr_key,
+        simplify,
+    )
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+    )
+    from pyrung.core.tag import ImmediateRef, Tag, TagType
+
+    if condition is _ALWAYS or condition is _NEVER:
+        return condition
+    plain = (BitCondition, NormallyClosedCondition, IntTruthyCondition)
+    compares = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
+    originals: dict[tuple[Any, ...], Any] = {}
+
+    def lower(part: Any) -> Any:
+        kind = type(part)
+        if kind in (AllCondition, AnyCondition):
+            terms = tuple(lower(child) for child in part.conditions)
+            return And(terms) if kind is AllCondition else Or(terms)
+        if kind not in plain + compares or isinstance(part.tag, ImmediateRef):
+            raise _NotExact
+        if (
+            kind in (CompareEq, CompareNe)
+            and part.tag.type == TagType.BOOL
+            and isinstance(part.value, bool)
+        ):
+            # A Bool compared to a constant is a contact, and prints as one: one key for both.
+            closed = part.value is (kind is CompareEq)
+            part = BitCondition(part.tag) if closed else NormallyClosedCondition(part.tag)
+            kind = type(part)
+        if kind in compares and not isinstance(part.value, (Tag, bool, int, float, str)):
+            raise _NotExact
+        atom = _condition_to_expr(part)
+        originals.setdefault(_expr_key(atom), part)
+        return atom
+
+    def flip(atom: Any) -> tuple[Any, ...] | None:
+        form = _EXACT_FLIPS.get(atom.form)
+        if form is None:
+            return None
+        return _expr_key(Atom(atom.tag, form, atom.operand, operand_is_tag=atom.operand_is_tag))
+
+    def resolve(expr: Any, known: dict[tuple[Any, ...], bool]) -> Any:
+        if isinstance(expr, Atom):
+            key = _expr_key(expr)
+            if key in known:
+                return Const(known[key])
+            flipped = flip(expr)
+            if flipped is not None and flipped in known:
+                return Const(not known[flipped])
+            return expr
+        if isinstance(expr, (And, Or)):
+            holds = isinstance(expr, And)
+            terms = []
+            for index, term in enumerate(expr.terms):
+                beside = dict(known)
+                for other_index, other in enumerate(expr.terms):
+                    if other_index != index and isinstance(other, Atom):
+                        beside[_expr_key(other)] = holds
+                terms.append(resolve(term, beside))
+            return And(tuple(terms)) if holds else Or(tuple(terms))
+        return expr
+
+    def raise_back(expr: Any) -> Any:
+        if isinstance(expr, Const):
+            return _ALWAYS if expr.value else _NEVER
+        if isinstance(expr, Atom):
+            return originals[_expr_key(expr)]
+        parts = [raise_back(term) for term in expr.terms]
+        return AllCondition(*parts) if isinstance(expr, And) else AnyCondition(*parts)
+
+    try:
+        expr = simplify(lower(condition))
+    except _NotExact:
+        return condition
+    for _ in range(20):
+        reduced = simplify(resolve(expr, {}))
+        if reduced == expr:
+            break
+        expr = reduced
+    return raise_back(expr)
+
+
+def _flattened(condition: Any) -> Any:
+    """*condition* with no And directly inside an And, nor Or inside an Or: the same logic."""
+    from pyrung.core.condition import AllCondition, AnyCondition
+
+    kind = type(condition)
+    if kind not in (AllCondition, AnyCondition):
+        return condition
+    parts: list[Any] = []
+    for part in condition.conditions:
+        parts.extend(_flat(kind, _flattened(part)))
+    return kind(*parts)
 
 
 def _condition_complement(condition: Any) -> Any | None:
@@ -505,7 +648,9 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
                 "be read after earlier writes of the bracket"
             )
         group = groups.setdefault(dest.name, _DestRules(dest, []))
-        group.rules.append((index, value, _ALWAYS if guard is None else _as_condition(guard)))
+        group.rules.append(
+            (index, value, _ALWAYS if guard is None else _flattened(_as_condition(guard)))
+        )
     reads = {name: group.reads() for name, group in groups.items()}
 
     # A destination goes above every destination its guards read.  A cycle is
@@ -531,7 +676,7 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
     def freeze(index: int, dest: Tag, guard: Any) -> Any:
         bit = frozen.get(id(guard))
         if bit is None:
-            tag = Bool(f"__frz{index}__{dest.name}", retentive=False)
+            tag = Bool(f"{_FREEZE_PREFIX}{index}__{dest.name}", retentive=False)
             frozen_rows.append(_rung_holding(guard, OutInstruction(tag)))
             bit = frozen[id(guard)] = BitCondition(tag)
         return bit
@@ -561,6 +706,7 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
                     power = _condition_or(guard, power)
                 elif power is not _NEVER:
                     power = _condition_and(complement(index, dest, guard), power)
+            power = _simplified(power)
             if power is _NEVER:
                 writer_rows.append(_rung_holding(None, ResetInstruction(dest)))
             else:
@@ -579,6 +725,7 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
                     elif bucket[1] is not _NEVER:
                         bucket[1] = _condition_and(complement(index, dest, guard), bucket[1])
             for value, power in buckets.values():
+                power = _simplified(power)
                 if power is not _NEVER:
                     condition = None if power is _ALWAYS else power
                     writer_rows.append(copy_hold_rung(value=value, dest=dest, guard=condition))
@@ -588,6 +735,70 @@ def _guarded_rows(rules: list[tuple[Tag, Any, Any]], *, keep: bool) -> Rung:
     for row in (*frozen_rows, *writer_rows):
         outer.add_branch(row)
     return outer
+
+
+def _row_target(instruction: Any) -> Any:
+    target = getattr(instruction, "target", None)
+    return getattr(instruction, "dest", None) if target is None else target
+
+
+def _row_writes(row: Rung) -> str | None:
+    if not row._instructions:
+        return None
+    return getattr(_row_target(row._instructions[0]), "name", None)
+
+
+def _render_row(row: Rung) -> tuple[str, str]:
+    from pyrung.core.condition import AllCondition
+    from pyrung.core.validation.render import operand_name, render_instruction, with_rung_line
+
+    conditions = list(row._conditions)
+    if len(conditions) == 1 and isinstance(conditions[0], AllCondition):
+        conditions = list(conditions[0].conditions)
+    instruction = row._instructions[0]
+    code, _caret = render_instruction(instruction, operand_name(_row_target(instruction)))
+    return with_rung_line(conditions), code
+
+
+def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str, ...]:
+    """The rows of a rung built here, as pyrung source, read off the rung itself.
+
+    Printing the rung that runs is what keeps the text honest: nothing re-reads the rules it
+    was built from.  With *writes*, only the rows writing those tags are printed, and above them
+    the decide-first rows whose bits they read.  Rows that share a condition print under one
+    ``with rung(...)`` line.
+    """
+    rows = list(rung._branches)
+    if writes is not None:
+        wanted = set(writes)
+        kept = [row for row in rows if _row_writes(row) in wanted]
+        reads: set[str] = set()
+        for row in kept:
+            for condition in row._conditions:
+                reads |= _static_reads(condition)
+        kept_ids = {id(row) for row in kept}
+        rows = [
+            row
+            for row in rows
+            if id(row) in kept_ids
+            or ((_row_writes(row) or "").startswith(_FREEZE_PREFIX) and _row_writes(row) in reads)
+        ]
+    lines: list[str] = []
+    previous: str | None = None
+    for row in rows:
+        header, code = _render_row(row)
+        if (_row_writes(row) or "").startswith(_FREEZE_PREFIX):
+            lines.append(f'comment("{_FREEZE_COMMENT}")')
+            previous = None
+        if header != previous:
+            lines.append(header)
+            previous = header
+        lines.append(f"  {code}")
+    return tuple(lines)
+
+
+_FREEZE_PREFIX = "__frz"
+_FREEZE_COMMENT = "Decide first, so the rows below read the state from before this logic wrote."
 
 
 def function_rung(

@@ -8,6 +8,7 @@ do not choose an action, apply knowledge, or mutate the drive world.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
@@ -24,7 +25,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
-from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
+from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt, pilot_logic_at
 from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
@@ -412,7 +413,22 @@ def _build_plan_journal(
             )
 
     entries.sort(key=lambda e: (e[0], e[1]))
-    return tuple(step for _, _, step in entries)
+    return tuple(with_logic(fork, step) for _, _, step in entries)
+
+
+def with_logic(fork: Any, step: PlanStep) -> PlanStep:
+    """*step* with the temporary logic it put in or took out, printed from the rung that ran.
+
+    An install prints the logic from its own scan on, a removal the logic it ended.  Only the
+    rows writing the step's inputs print, with any decide-first rows they read.
+    """
+    from pyrung.core.synthesis import bracket_lines
+
+    if fork is None or step.kind not in ("force", "revoke") or not step.rungs:
+        return step
+    ran = pilot_logic_at(fork, step.scan - 1 if step.kind == "revoke" else step.scan)
+    logic = () if ran is None else bracket_lines(ran, {rung.dest for rung in step.rungs})
+    return replace(step, logic=logic)
 
 
 def _iteration_payload(

@@ -147,7 +147,7 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "with rung(Sts_StateCurrent != 6):" in text
-        assert "latch(DoorClosed)" in text
+        assert "out(DoorClosed)" in text
         assert "(found during investigation)" in text
         assert "force DoorClosed" not in text
 
@@ -225,10 +225,9 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        assert "with rung(And(Sts_StateCurrent == 6, ~RotateSensor)):" in text
-        assert "latch(RotateSensor)" in text
-        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor)):" in text
-        assert "reset(RotateSensor)" in text
+        # The False rule adds nothing to an out(): the input is off whenever the True rule isn't.
+        assert "with rung(Sts_StateCurrent == 6, ~RotateSensor):\n     out(RotateSensor)" in text
+        assert "reset(RotateSensor)" not in text
         assert "Temporary logic in effect: step 1." in text
         assert "holds: RotateSensor" not in text
 
@@ -267,8 +266,7 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        assert "with rung(And(~WatchdogDone, ~RotateSensor)):" in text
-        assert "latch(RotateSensor)" in text
+        assert "with rung(~WatchdogDone, ~RotateSensor):\n     out(RotateSensor)" in text
         assert "Temporary logic in effect: step 1." in text
         assert "Keep: RotateSensor=True" not in text
         assert "Oscillate: RotateSensor" not in text
@@ -315,9 +313,9 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "2. Remove temporary logic from step 1:" in text
-        assert "with rung(State == 6):\n     latch(Go)" in text
-        assert "3. Install temporary logic" in text
-        assert "with rung(State == 6):\n     reset(Go)" in text
+        assert "with rung(State == 6):\n     out(Go)" in text
+        # A lone False rule holds Go off for as long as it is in: its condition never mattered.
+        assert "3. Install temporary logic:\n   with rung():\n     reset(Go)" in text
         assert "Temporary logic in effect: step 3." in text
 
     def test_wait_lists_the_manual_accumulator_edit_for_a_jump_ahead(self):

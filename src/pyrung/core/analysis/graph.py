@@ -40,6 +40,9 @@ class PlanStep:
     # summary; the renderer prefers this lossless representation.
     rungs: tuple[Any, ...] = ()
     source: str = ""
+    # The temporary logic this step put in (or took out), printed from the rung that ran, so the
+    # text cannot drift from it.  Empty for a step built by hand: its rules are built alone.
+    logic: tuple[str, ...] = ()
 
 
 def _format_value(value: Any) -> str:
@@ -130,18 +133,18 @@ def _rung_guard(rung: Any) -> str:
     return render_condition(rung.guard)
 
 
-def _format_synthesis_instruction(rung: Any) -> str:
-    """Render the instruction shape used by the synthesis rung factory."""
-    if rung.value is True:
-        return f"latch({rung.dest})"
-    if rung.value is False:
-        return f"reset({rung.dest})"
-    return f"copy({operand_name(rung.value)}, {rung.dest})"
+def _display_rung_key(rung: Any) -> tuple[str, str, str]:
+    """Identity of one piece of temporary logic as the plan names it."""
+    return (_rung_guard(rung), rung.dest, repr(rung.value))
 
 
-def _display_rung_key(rung: Any) -> tuple[str, str]:
-    """Identity of one installed rung as presented in the plan."""
-    return (_rung_guard(rung), _format_synthesis_instruction(rung))
+def rules_logic(rungs: tuple[Any, ...]) -> tuple[str, ...]:
+    """*rungs* built into a rung on their own and printed, for logic no recording ran."""
+    from pyrung.core.analysis.pilot.overlay import pilot_rules_rung
+    from pyrung.core.synthesis import bracket_lines
+
+    built = pilot_rules_rung(rungs, {})
+    return () if built is None else bracket_lines(built)
 
 
 def _format_step_refs(steps: tuple[int, ...]) -> str:
@@ -155,42 +158,27 @@ def _format_step_refs(steps: tuple[int, ...]) -> str:
 
 def _format_rung_install(
     prefix: str,
-    rungs: tuple[Any, ...],
-    source: str,
-    notes: tuple[str, ...],
+    step: PlanStep,
     *,
     next_step: int | None = None,
 ) -> str:
-    """Render the actual guarded rungs installed by PILOT."""
-    by_guard: dict[str, list[Any]] = {}
-    for rung in rungs:
-        by_guard.setdefault(_rung_guard(rung), []).append(rung)
-
-    line = f"{prefix} Install temporary logic{_source_suffix(source, next_step=next_step)}:"
-    detail: list[str] = []
-    for guard, guarded_rungs in by_guard.items():
-        detail.append(f"   with rung({guard}):")
-        detail.extend(f"     {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
-    detail.extend(f"   {_format_plan_note(note)}" for note in notes)
-    return line + "\n" + "\n".join(detail)
+    """Print the temporary logic a step put in, as it ran."""
+    line = f"{prefix} Install temporary logic{_source_suffix(step.source, next_step=next_step)}:"
+    detail = [f"   {logic}" for logic in step.logic or rules_logic(step.rungs)]
+    detail.extend(f"   {_format_plan_note(note)}" for note in step.notes)
+    return "\n".join((line, *detail))
 
 
 def _format_rung_revoke(
     prefix: str,
-    rungs: tuple[Any, ...],
+    step: PlanStep,
     installed_steps: tuple[int, ...],
 ) -> str:
-    """Render the actual removal of previously installed temporary logic."""
+    """Print the temporary logic a step took out, as it ran until then."""
     origin = f" from {_format_step_refs(installed_steps)}" if installed_steps else ""
     line = f"{prefix} Remove temporary logic{origin}:"
-    by_guard: dict[str, list[Any]] = {}
-    for rung in rungs:
-        by_guard.setdefault(_rung_guard(rung), []).append(rung)
-    detail: list[str] = []
-    for guard, guarded_rungs in by_guard.items():
-        detail.append(f"   with rung({guard}):")
-        detail.extend(f"     {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
-    return line + "\n" + "\n".join(detail)
+    detail = [f"   {logic}" for logic in step.logic or rules_logic(step.rungs)]
+    return "\n".join((line, *detail))
 
 
 def _rung_coast_summary(rungs: tuple[Any, ...], *, same_holds: bool = False) -> list[str]:
@@ -318,18 +306,12 @@ def _format_plan_step(
 
     if step.kind == "force":
         if step.rungs:
-            return _format_rung_install(
-                prefix,
-                step.rungs,
-                step.source,
-                step.notes,
-                next_step=idx + 1,
-            )
+            return _format_rung_install(prefix, step, next_step=idx + 1)
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
         return _with_notes(f"{prefix} Keep {tags}.")
 
     if step.kind == "revoke":
-        return _format_rung_revoke(prefix, step.rungs, control_steps)
+        return _format_rung_revoke(prefix, step, control_steps)
 
     if step.kind == "patch":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
@@ -604,7 +586,7 @@ class Plan:
         if self.journal:
             lines.extend(("",) if leading else ("", "Steps:", ""))
             previous_holds: tuple[Any, ...] | None = None
-            installed_at: dict[tuple[str, str], int] = {}
+            installed_at: dict[tuple[str, str, str], int] = {}
             for i, step in enumerate(self.journal, first_step):
                 if step.kind == "force":
                     for rung in step.rungs:
