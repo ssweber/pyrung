@@ -7,7 +7,7 @@ pyrung Click validation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pyclickplc.banks import BANKS
 
@@ -238,6 +238,21 @@ COMPARE_CONSTANT_COMPATIBILITY: dict[str, frozenset[CompareConstantKind]] = {
 HEX_CONSTANT_BANKS: frozenset[str] = frozenset(
     bank for bank, kinds in COMPARE_CONSTANT_COMPATIBILITY.items() if kinds == {"hex"}
 )
+
+
+def single_register_fill_dest(dest: Any) -> Any | None:
+    """The one tag a ``fill()`` destination covers, or ``None``.
+
+    CLICK's Fill dialog needs at least two registers, so a Fill of one register
+    exports as a Copy.  Only a range known when the program is written counts. A
+    pointer range can be one register long at run time, and it stays a Fill.
+    """
+    from pyrung.core.memory_block import BlockRange
+
+    if not isinstance(dest, BlockRange):
+        return None
+    tags = dest.tags()
+    return tags[0] if len(tags) == 1 else None
 
 
 class ClickHardwareProfile:

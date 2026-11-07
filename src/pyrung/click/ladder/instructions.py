@@ -5,10 +5,13 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
+from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
+from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
+from pyrung.core.tag import TagType
 
 from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
@@ -221,6 +224,39 @@ class _InstructionMixin:
             **kwargs,
         )
 
+    def _single_register_fill_token(
+        self, instruction: Any, tag: Any, *, path: str, oneshot_kw: dict[str, str]
+    ) -> str:
+        """A Fill of one register as the Copy CLICK takes in its place.
+
+        The Copy must store what the Fill stores.  A text value of several characters
+        would fill several TXT, and a Copy across text converts, so both are refused.
+        """
+        value = instruction.value
+        if isinstance(value, str) and len(value) > 1 and tag.type == TagType.CHAR:
+            self._raise_issue(
+                path=f"{path}.value",
+                message=(
+                    f"fill({value!r}, ...) writes one register, which CLICK takes as a Copy. "
+                    "A Copy of several characters fills several TXT. "
+                    "Fill one character, or use copy() into the TXT you mean."
+                ),
+                source=instruction,
+            )
+        if _plain_text_converter(value, tag) is not None:
+            self._raise_issue(
+                path=f"{path}.value",
+                message=(
+                    "fill() of one register exports as a Copy, and a Copy between text and "
+                    "a number converts. Write copy() with convert= to say which conversion."
+                ),
+                source=instruction,
+            )
+        dest = self._render_operand(tag, path=f"{path}.dest", source=instruction)
+        with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+            source = self._render_operand(value, path=f"{path}.value", source=instruction)
+        return self._fn("copy", source, dest, **oneshot_kw)
+
     def _instruction_token(self, instruction: Any, *, path: str) -> str:
         # Dispatch by runtime type name to avoid importing all instruction classes.
         instruction_type = type(instruction).__name__
@@ -298,6 +334,11 @@ class _InstructionMixin:
                 **oneshot_kw,
             )
         if instruction_type == "FillInstruction":
+            single = single_register_fill_dest(instruction.dest)
+            if single is not None:
+                return self._single_register_fill_token(
+                    instruction, single, path=path, oneshot_kw=oneshot_kw
+                )
             dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
             with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
                 fill_value = self._render_operand(

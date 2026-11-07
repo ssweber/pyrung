@@ -1,7 +1,7 @@
 """S6 store probes: the ``store_probe`` group (subroutine ``Conf_StoreProbe``).
 
 The last group of part ``math`` (``suite.PARTS``): the editor may refuse a RAND bound form at paste.  What a RAND, a Math of NaN, a
-Copy of an infinity or a Fill stores and which fault flag follows, for the
+Copy of an infinity stores and which fault flag follows, for the
 stores the ``bob/stores`` arc chose without a reading.  Each case probes as the
 ``faults`` group does (an op once, on the first scan from 3 on which the flag
 it reads is off just before it, a flag after an op read by running it again;
@@ -53,7 +53,7 @@ are what a CLICK read on 2026-11-05.
   plain Copy of the TXT into an Int reads the digit, 6 (Result2; the number
   would read 66, rounded 67, and a refused or failed copy leaves ``Z``, 90).
   The text is ten characters ("66.6999969" on a CLICK, a float32; pyrung's is
-  "66.7000000"), so it starts at TXT851.  A Fill of 40000 into Ints clamps to
+  "66.7000000"), so it starts at TXT851.  A Copy of 40000 into an Int clamps to
   32767 (Result3) and raises SC43 (bit 2 of Result4); the Real copy raises
   none (bit 1).
 
@@ -328,11 +328,11 @@ def prove_real_into_text_and_fill(slot):
         copy("Z", txt[851])
         copy(real, txt[851])
 
-    def clamping_fill():
-        fill(40000, ds.select(4499, 4499))
+    def clamping_copy():
+        copy(40000, ds[4499])
 
     probe(slot, real_to_text, SC43, slot.Result4, 1)
-    probe(slot, clamping_fill, SC43, slot.Result4, 2)
+    probe(slot, clamping_copy, SC43, slot.Result4, 2)
     with Rung(*_end(slot)):
         copy(txt[851], slot.Result1, convert=to_ascii)
         copy(txt[851], slot.Result2)
@@ -417,15 +417,15 @@ group = Group(
         ),
         case(
             "A finite Real copied into a TXT writes its digits: 66.7 reads text code 54, '6' "
-            "(Result1), and 6 as a plain Copy into an Int (Result2); a Fill of 40000 into "
-            "Ints clamps to 32767 (Result3) and raises SC43, the Real copy none (Result4 = 2)",
+            "(Result1), and 6 as a plain Copy into an Int (Result2); a Copy of 40000 into "
+            "an Int clamps to 32767 (Result3) and raises SC43, the Real copy none (Result4 = 2)",
             ladder=prove_real_into_text_and_fill,
             init=_init(
                 6, dfs=[(429, 429)], dhs=[(414, 415)], txts=[(851, 865)], dss=[(4499, 4499)]
             ),
             expect={"Result1": 54, "Result2": 6, "Result3": 32767, "Result4": 2},
             scans=SCANS,
-            probe="finite Real copied into a TXT; Fill that clamps",
+            probe="finite Real copied into a TXT; Copy that clamps",
         ),
     ],
 )

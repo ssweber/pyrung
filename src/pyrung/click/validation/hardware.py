@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyclickplc.banks import BANKS
 
-from pyrung.click.capabilities import CONVERTER_COMPATIBILITY
+from pyrung.click.capabilities import CONVERTER_COMPATIBILITY, single_register_fill_dest
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.conversions import (
@@ -342,6 +342,12 @@ def _evaluate_copy_compatibility(
         return findings
 
     operation, source_field, dest_field = mapping
+    # CLICK has no Fill of one register, so the export is a Copy. It must pass
+    # the Fill table too, so nothing a Fill refused becomes accepted.
+    operations = (operation,)
+    if operation == "fill" and single_register_fill_dest(instruction.dest) is not None:
+        operations = ("fill", "single")
+        operation = "single"
     source_location = _instruction_location(base_location, f"instruction.{source_field}")
     dest_location = _instruction_location(base_location, f"instruction.{dest_field}")
 
@@ -369,14 +375,22 @@ def _evaluate_copy_compatibility(
 
     for source_memory_type in source_memory_types:
         for dest_memory_type in dest_memory_types:
-            if not profile.copy_compatible(operation, source_memory_type, dest_memory_type):
+            refused = next(
+                (
+                    op
+                    for op in operations
+                    if not profile.copy_compatible(op, source_memory_type, dest_memory_type)
+                ),
+                None,
+            )
+            if refused is not None:
                 location_text = _format_location(dest_location)
                 findings.append(
                     ClickFinding(
                         code=CLK_COPY_BANK_INCOMPATIBLE,
                         severity=_route_severity(CLK_COPY_BANK_INCOMPATIBLE, mode),
                         message=(
-                            f"Copy operation {operation} is incompatible for "
+                            f"Copy operation {refused} is incompatible for "
                             f"{source_memory_type} -> {dest_memory_type} "
                             f"at {location_text}."
                         ),
