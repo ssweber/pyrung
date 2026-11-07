@@ -132,9 +132,12 @@
   - `Physical(on_delay=, off_delay=)` runs as a `debounce` on its link
   - a command dip shorter than `off_delay` keeps `Fb` on (it dropped `Fb`)
   - after the command drops, `Fb` turns off one scan later than it did
-  - a `Pulse` runs as a `flasher`. `Fb` goes high the scan after its enable turns on (it waited out `off_dwell` first). That first high phase is one scan short
+  - a `Pulse` runs as a `flasher`
+  - a `Pulse` feedback goes high the scan after its enable turns on (it waited out `off_dwell` first)
+  - the first high phase of a `Pulse` is one scan short
   - a `Pulse` dwell of 0 keeps `Fb` low
-  - both delays of one `Physical` count in the same unit, and so do both dwells of a `Pulse`. An `off_delay` over 32.767 s rounds `on_delay` up to whole seconds too
+  - both delays of one `Physical` count in the same unit, and so do both dwells of a `Pulse`
+  - an `off_delay` over 32.767 s rounds `on_delay` up to whole seconds too
   - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
 
   Update tests that count scans to a feedback edge.

@@ -339,7 +339,8 @@ class Harness:
         feedback no timer has counted for starts cold: under a held enable the feedback
         follows after its on-delay, as freshly wired hardware would.  A coupling
         replaced, or cut and linked again, keeps the time its timers have counted,
-        whatever unit the new delays count in.
+        whatever unit the new delays count in.  If its enable turned on while it was
+        cut, it counts its on-delay from 0.
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
@@ -755,8 +756,12 @@ class Harness:
         installed on the same overlay.
         """
         from pyrung.core.condition import BitCondition, CompareEq, CompareNe
-        from pyrung.core.instruction.out_variants import DebounceInstruction, FlasherInstruction
-        from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
+        from pyrung.core.site_memory import (
+            PLANT_NAMESPACE,
+            _first_tag_name,
+            bind_sites,
+            instruction_memory,
+        )
         from pyrung.core.synthesis import (
             Synthesis,
             analog_approach_rung,
@@ -861,13 +866,13 @@ class Harness:
             self._plc._synthesis = Synthesis()
         # Plant rungs keep their memory under their own ``plant:`` site keys.
         bind_sites(plant, namespace=PLANT_NAMESPACE)
-        # A coil's place in the plant moves when a link before it is added or cut,
-        # so its memory is keyed by its feedback.  Then a fork from before the
-        # change, or a reinstall, reads that feedback's own coil.
+        # An instruction's place in the plant moves when a link before it is added
+        # or cut, so each one that keeps memory is keyed by the tag it drives.  Then
+        # a fork from before the change, or a reinstall, reads its own memory.
         for rung in plant:
             for instr in rung._instructions:
-                if isinstance(instr, (DebounceInstruction, FlasherInstruction)):
-                    instr._state_key = f"{PLANT_NAMESPACE}:fb.{instr.target.name}"
+                if instruction_memory(instr):
+                    instr._state_key = f"{PLANT_NAMESPACE}:fb.{_first_tag_name(instr)}"
         for c, coil in coils:
             c.rung_memory_key = coil.memory_key("_debounce_rung")
         self._plc._synthesis.plant = plant

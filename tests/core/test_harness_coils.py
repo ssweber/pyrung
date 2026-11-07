@@ -19,6 +19,8 @@ from pyrung import (
     Physical,
     Program,
     Pulse,
+    Ramp,
+    Real,
     Rung,
     Timer,
     debounce,
@@ -27,6 +29,7 @@ from pyrung import (
 )
 from pyrung.core.crossing import Eq
 from pyrung.core.harness import Coupling
+from pyrung.core.site_memory import _first_tag_name, instruction_memory
 
 
 def _pair(
@@ -364,6 +367,30 @@ class TestALinkCutBeforeAnother:
             plc.step()
             scans += 1
         assert scans == 6
+
+
+def test_every_plant_instruction_with_memory_is_keyed_by_the_tag_it_drives() -> None:
+    """A position key would move when a link before it is cut (see above)."""
+    En = Bool("En")
+    FbD = Bool("FbD", physical=Physical("D", on_delay="30ms", off_delay="20ms"), link="En")
+    FbP = Bool("FbP", physical=Physical("P", profile=Pulse("30ms", "20ms")), link="En")
+    FbR = Real("FbR", physical=Physical("R", profile=Ramp(up=1.0, down=-1.0)), link="En")
+    with Program(strict=False) as logic:
+        with Rung(En):
+            out(Bool("Echo"))
+        with Rung(FbD, FbP, FbR > 5.0):
+            out(Bool("Seen"))
+    plc = PLC(logic, dt=0.010)
+    Harness(plc).install()
+    assert plc._synthesis is not None
+    keyed = {
+        instr.state_key: _first_tag_name(instr)
+        for rung in plc._synthesis.plant
+        for instr in rung._instructions
+        if instruction_memory(instr)
+    }
+    assert {"FbD", "FbP"} <= set(keyed.values())
+    assert all(key == f"plant:fb.{tag}" for key, tag in keyed.items())
 
 
 class TestEveryEngineAgrees:
