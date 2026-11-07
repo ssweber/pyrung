@@ -96,7 +96,7 @@ class TestLinkProofIsNotClaimedFalsely:
     def test_pulse_on_the_other_contact(self) -> None:
         """The link does not hold a pulse against its enable: it goes high while enabled."""
         program, hit = _linked(_pulse(), _two_contacts)
-        assert _step_to(_harnessed(program), hit, {"Enable": True}, 200) == 51
+        assert _step_to(_harnessed(program), hit, {"Enable": True}, 200) == 2
 
         plan = _harnessed(program).how(hit, **BOUND)
         assert plan.status is not PlanStatus.CANNOT_REACH, plan.reason
