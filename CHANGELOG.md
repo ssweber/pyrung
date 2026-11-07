@@ -179,17 +179,21 @@
   - a time given as a bare number raises. Write it with units, such as `"500ms"`
   - an `approach_to` string that looks like a number raises. Pass the number
   - keywords of two kinds in one `Physical` raise
-  - `timed=` (with optional `maintained=True`) and `toggle=True` are new kinds. The comment parser reads them. `Harness.install()` raises `NotImplementedError` for them
   - comments read `flasher_on=8ms, flasher_off=8ms`, `ramp_on=0.8, ramp_off=-0.05` and `approach_to=180, approach_rate=0.3`. A `profile=` comment raises
   - the DAP `link` command takes the same keys. The `pyrungLink` request takes them in camelCase (`flasherOn`, `rampOn`, `approachTo`)
   - `pyrungListLinks` rows carry `kind`, `keys` and a field per key in place of `profile`
   - `TagMeta` has a field per key in place of `profile`. `parse_profile_spec()` and `profile_to_token()` are removed
-  - `harness status` shows each flasher, ramp or approach link with its kind and keys (it showed `profile=`)
+  - `harness status` shows each flasher, timed, toggle, ramp or approach link with its kind and keys (it showed `profile=`)
 
   Run "Upgrade project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
 
 ### Features
 
+- Harness feedback has two new kinds, which run as the CLICK coils of the same names:
+  - `Physical(name, timed="200ms")` turns the feedback on for that time at each rise of its enable. With `maintained=True` it also stays on while the enable stays on
+  - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
+  - a comment writes them as `timed=200ms`, a bare `maintained` and a bare `toggle`
+  - `how()` plans through both
 - `pyrung check` advises against `==` and `!=` on a `Real` the ladder computes with `math()` (`CMP_EQ_ON_COMPUTED_REAL`). Rounding can step over the exact value, so compare with a range or a tolerance. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged.
 - CLICK validation refuses what CLICK's editor refuses, so ladder export stops where CLICK would. New refusals:
   - a `forloop()` count that isn't a constant or a `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`)

@@ -3,7 +3,8 @@
 Each feedback runs as the one CLICK coil the device behaves like, in a plant rung
 scanned before the program.  A bool feedback with ``on_delay``/``off_delay`` is a
 ``debounce`` coil under its enable, and one with ``flasher_on``/``flasher_off`` is a
-``flasher`` coil.  The ramp and approach kinds are ``math`` rows.
+``flasher`` coil.  A ``timed`` or ``toggle`` feedback is the coil of that name.  The
+ramp and approach kinds are ``math`` rows.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pyrung.core.synthesis import (
     coil_timer,
     plant_acc_name,
     plant_acc_registers,
+    plant_timer,
     plant_unit_ms,
 )
 from pyrung.core.tag import TagType
@@ -60,12 +62,18 @@ class _BoolCoupling:
 
 @dataclass
 class _ProfileCoupling:
-    """A flasher, ramp or approach feedback, lowered to plant rungs from its ``physical``."""
+    """A flasher, timed, toggle, ramp or approach feedback, lowered to plant rungs.
+
+    A timed or toggle coil keeps its memory of the rung under ``rung_memory_key``,
+    and a timed coil counts in ``acc_name``.  Seeding a settled plant reads both.
+    """
 
     en_name: str
     fb_name: str
     physical: Physical
     trigger_value: int | str | None = None
+    rung_memory_key: str = ""
+    acc_name: str = ""
 
 
 #: Raw trigger for ``~Name``: drive while the bit enable is OFF (normally closed).
@@ -144,13 +152,11 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
         return f"{coupling.fb_name} cannot drive itself"
     if fb_tag.readonly:
         return f"{coupling.fb_name} is readonly"
-    if coupling.physical.kind in _NOT_YET_RUN:
-        return _not_yet_text(coupling.physical)
     if coupling.physical.feedback_type == "bool":
         if fb_tag.type != TagType.BOOL:
             return (
                 f"{coupling.fb_name} is {fb_tag.type.value}; "
-                "on_delay/off_delay and flasher drive a bool feedback"
+                "on_delay/off_delay, flasher, timed and toggle drive a bool feedback"
             )
     elif fb_tag.type in (TagType.BOOL, TagType.CHAR):
         return f"{coupling.fb_name} is {fb_tag.type.value}; ramp and approach drive a number"
@@ -161,13 +167,6 @@ def link_problem(plc: PLC, coupling: Coupling) -> str | None:
 
 
 _NS_PER_MS = 1_000_000
-
-#: Kinds ``Physical`` and the comment parser take whose plant rungs come in a later step.
-_NOT_YET_RUN = frozenset({"timed", "toggle"})
-
-
-def _not_yet_text(physical: Physical) -> str:
-    return f"{physical.kind} feedback ({physical.name}) does not run in the harness yet"
 
 
 def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
@@ -197,8 +196,9 @@ class Harness:
     Walks all known tags to find link= couplings and lowers each to plant rungs
     scanned pre-logic (the input-read phase): an ``on_delay``/``off_delay``
     ``Physical`` becomes a ``debounce`` coil, a ``flasher_on``/``flasher_off`` one a
-    ``flasher`` coil, and ``ramp_on``/``approach_to`` ``math`` rows on an analog
-    register.  No Python tick, no monitors.
+    ``flasher`` coil, a ``timed`` or ``toggle`` one the coil of that name, and
+    ``ramp_on``/``approach_to`` ``math`` rows on an analog register.  No Python tick,
+    no monitors.
 
     The couplings found in the program are the *declared* ones.  Overrides
     (:meth:`set_overrides`) replace or cut a declared coupling, or add one,
@@ -393,6 +393,8 @@ class Harness:
                 unit = coil_timer(c.physical.flasher_on_ms or 0, c.physical.flasher_off_ms or 0)[2]
                 yield "__pls_on", c.fb_name, unit
                 yield "__pls_off", c.fb_name, unit
+            elif c.physical.kind == "timed":
+                yield "__tmd_on", c.fb_name, plant_timer(c.physical.timed_ms or 0)[1]
 
     def _carry_counts_to_current_units(self) -> None:
         """Move a count sitting in another unit's register to the one its timer uses now.
@@ -519,19 +521,28 @@ class Harness:
         enable at the value wanted.  The coil is not in the user's
         :class:`Program`, so a walk of the program alone cannot find it.  A
         flasher coil has no profile and an analog coupling has no instruction to
-        give one, so their profiles are built here.
+        give one, so their profiles are built here.  So are those of a timed or
+        toggle coil (see :meth:`_edge_profile`).
         """
+        from pyrung.core.instruction.out_variants import TimedInstruction, ToggleInstruction
+
         synthesis = self._plc._synthesis
         if synthesis is not None:
             for rung in synthesis.plant:
                 for instruction in rung._instructions:
+                    if isinstance(instruction, (TimedInstruction, ToggleInstruction)):
+                        continue
                     profile = instruction.advance_profile()
                     if profile is not None:
                         yield profile
         for c in self._profile_couplings:
-            profile = (
-                self._pulse_profile(c) if c.physical.kind == "flasher" else self._analog_profile(c)
-            )
+            kind = c.physical.kind
+            if kind in ("timed", "toggle"):
+                profile = self._edge_profile(c)
+            elif kind == "flasher":
+                profile = self._pulse_profile(c)
+            else:
+                profile = self._analog_profile(c)
             if profile is not None:
                 yield profile
 
@@ -605,6 +616,61 @@ class Harness:
                 return None
             if dark and bool(next(iter(constraint.values))):
                 return None
+            return AdvanceStep(until=constraint, holds=(demand,), progress=demand)
+
+        return AdvanceProfile(channels=(fb_tag,), plan=plan)
+
+    def _edge_profile(self, c: _ProfileCoupling) -> Any | None:
+        """How a timed or toggle feedback gets each value: its enable rises.
+
+        The coil's own profile always asks for a pulse, so a rung that needs the
+        enable on beside the feedback found no plan in it.  Here an enable that is off
+        is held on, which gives the rise, as a flasher's enable is held.  An enable
+        that is on is pulsed, which takes a fall first.  A timed pulse ends by itself,
+        and a maintained one once the enable is held off.  An on time of a scan or
+        less gives no pulse, so there is no plan to turn it on.
+        """
+        from pyrung.core.condition import BitCondition, CompareEq
+        from pyrung.core.crossing import Eq
+        from pyrung.core.instruction.advance import (
+            AdvanceProfile,
+            AdvanceStep,
+            ConditionDemand,
+            constraint_holds,
+        )
+
+        fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
+        en_tag = self._plc._known_tags_by_name.get(c.en_name)
+        if fb_tag is None or en_tag is None:
+            return None
+        trigger = c.trigger_value
+        rung = CompareEq(en_tag, trigger) if trigger is not None else BitCondition(en_tag)
+        physical = c.physical
+        timed = physical.kind == "timed"
+        maintained = bool(physical.maintained)
+        if timed:
+            preset, _unit, unit_ms = plant_timer(physical.timed_ms or 0)
+            dark = preset * unit_ms <= self._plc._dt * 1000
+        else:
+            dark = False
+
+        def plan(constraint: Any, snapshot: Any) -> AdvanceStep | None:
+            if not isinstance(constraint, Eq) or len(constraint.values) != 1:
+                return None
+            desired = next(iter(constraint.values))
+            if not isinstance(desired, bool) or constraint_holds(constraint, snapshot) is True:
+                return None
+            if timed and not desired:
+                if maintained:
+                    return AdvanceStep(until=constraint, holds=(ConditionDemand(rung, False),))
+                return AdvanceStep(until=constraint)
+            if dark:
+                return None
+            en_raw = snapshot.get(c.en_name)
+            en_on = en_raw == trigger if trigger is not None else bool(en_raw)
+            if en_on:
+                return AdvanceStep(until=constraint, pulse=ConditionDemand(rung))
+            demand = ConditionDemand(rung)
             return AdvanceStep(until=constraint, holds=(demand,), progress=demand)
 
         return AdvanceProfile(channels=(fb_tag,), plan=plan)
@@ -727,8 +793,6 @@ class Harness:
     ) -> None:
         # Route by the kind, not the Fb type. A flasher, ramp or approach takes the
         # profile path. An on/off delay is a bool dwell coupling.
-        if physical.kind in _NOT_YET_RUN:
-            raise NotImplementedError(_not_yet_text(physical))
         if physical.kind != "delay":
             self._profile_couplings.append(
                 _ProfileCoupling(en_name, fb_name, physical, trigger_value=trigger_value)
@@ -772,12 +836,15 @@ class Harness:
             analog_feedback_rungs,
             bool_feedback_rungs,
             pulse_feedback_rungs,
+            timed_feedback_rungs,
+            toggle_feedback_rungs,
         )
         from pyrung.core.system_points import system
         from pyrung.core.tag import Bool, Int, Real
 
         plant: list[Any] = []
         coils: list[tuple[_BoolCoupling, Any]] = []
+        rung_coils: list[tuple[_ProfileCoupling, Any, str]] = []
         for c in self._bool_couplings:
             en_tag = self._plc._known_tags_by_name.get(c.en_name)
             if en_tag is None:
@@ -815,7 +882,7 @@ class Harness:
                 continue
             fb_tag = self._tag_rungs_know(c.fb_name)
             if fb_tag is None:
-                fb_tag = Bool(c.fb_name) if spec.kind == "flasher" else Real(c.fb_name)
+                fb_tag = Bool(c.fb_name) if spec.feedback_type == "bool" else Real(c.fb_name)
             if c.trigger_value is not None:
                 enable = CompareEq(en_tag, c.trigger_value)
                 disable = CompareNe(en_tag, c.trigger_value)
@@ -835,6 +902,26 @@ class Harness:
                         down=spec.ramp_off or 0.0,
                     )
                 )
+            elif spec.kind == "timed":
+                timer_acc = Int(
+                    plant_acc_name("__tmd_on", c.fb_name, plant_timer(spec.timed_ms or 0)[1]),
+                    retentive=False,
+                )
+                c.acc_name = timer_acc.name
+                rungs = timed_feedback_rungs(
+                    enable=enable,
+                    fb_tag=fb_tag,
+                    timer_done=Bool(f"__tmd_ond__{c.fb_name}", retentive=False),
+                    timer_acc=timer_acc,
+                    on_ms=spec.timed_ms or 0,
+                    maintained=bool(spec.maintained),
+                )
+                rung_coils.append((c, rungs[0]._instructions[0], "_timed_rung"))
+                plant.extend(rungs)
+            elif spec.kind == "toggle":
+                rungs = toggle_feedback_rungs(enable=enable, fb_tag=fb_tag)
+                rung_coils.append((c, rungs[0]._instructions[0], "_toggle"))
+                plant.extend(rungs)
             elif spec.kind == "approach":  # first-order lag toward a constant/setpoint tag
                 toward = spec.approach_to
                 toward_operand: Any = toward
@@ -881,6 +968,8 @@ class Harness:
                     instr._state_key = f"{PLANT_NAMESPACE}:fb.{_first_tag_name(instr)}"
         for c, coil in coils:
             c.rung_memory_key = coil.memory_key("_debounce_rung")
+        for pc, coil, prefix in rung_coils:
+            pc.rung_memory_key = coil.memory_key(prefix)
         self._plc._synthesis.plant = plant
         # The overlay changed, so caches that snapshot it are stale: the soft-exec
         # replay kernel + its bracketed compilation unit, rebuilt lazily on next use.
@@ -911,25 +1000,36 @@ class Harness:
             self._plc._edit_tip_tags(seed)
 
     def _seed_bool_state(self) -> None:
-        """Seed each debounce whose enable is already on as if it had settled long ago.
+        """Seed each bool coil whose enable is already on as if it had settled long ago.
 
-        The feedback is on, the on side has counted its preset, and the coil saw its
-        rung true on the last scan.  Without this the first scans would show the device
-        off while it is commanded on.
+        A debounce's feedback is on and its on side has counted its preset.  A timed
+        coil's on time is over, so its feedback is on only when maintained.  A toggle
+        keeps its feedback.  Each coil saw its rung true on the last scan, so the
+        first scan is no rise.  Without this the first scans would show the device off
+        while it is commanded on, or a timed or toggle coil would fire at install.
         """
         seed: dict[str, Any] = {}
         memory: dict[str, Any] = {}
         snap = self._plc.current_state.tags
-        for c in self._bool_couplings:
-            if not c.on_acc_name:
-                continue
+
+        def enabled(c: _BoolCoupling | _ProfileCoupling) -> bool:
             en_raw = snap.get(c.en_name, False)
-            en_on = en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
-            if en_on:
+            return en_raw == c.trigger_value if c.trigger_value is not None else bool(en_raw)
+
+        for c in self._bool_couplings:
+            if c.on_acc_name and enabled(c):
                 seed[c.on_acc_name] = coil_timer(c.on_delay_ms, c.off_delay_ms)[0]
                 seed[c.fb_name] = True
                 memory[c.rung_memory_key] = True
-        if seed:
+        for pc in self._profile_couplings:
+            if not pc.rung_memory_key or not enabled(pc):
+                continue
+            memory[pc.rung_memory_key] = True
+            if pc.physical.kind == "timed":
+                seed[pc.acc_name] = plant_timer(pc.physical.timed_ms or 0)[0]
+                memory[f"_frac:{pc.acc_name}"] = 0
+                seed[pc.fb_name] = bool(pc.physical.maintained)
+        if seed or memory:
             self._plc._edit_tip_tags(seed, memory=memory)
 
     def _install_monitors(self) -> None:

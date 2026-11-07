@@ -1,8 +1,9 @@
 """The harness runs each bool feedback as the CLICK coil the device behaves like.
 
-``Physical(on_delay=, off_delay=)`` runs as ``debounce`` under its enable, and one with
-``flasher_on=, flasher_off=`` as ``flasher``.  Each test here holds the harness's feedback to that literal coil in a
-program, scan by scan, or to what stepping does.
+``Physical(on_delay=, off_delay=)`` runs as ``debounce`` under its enable,
+``Physical(flasher_on=, flasher_off=)`` as ``flasher``, and ``timed`` and ``toggle`` as the
+coils of those names.  Each test here holds the harness's feedback to that literal coil in
+a program, scan by scan, or to what stepping does.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from pyrung import (
     debounce,
     flasher,
     out,
+    timed,
+    toggle,
 )
 from pyrung.core.crossing import Eq
 from pyrung.core.harness import Coupling
@@ -33,19 +36,26 @@ from pyrung.core.site_memory import _first_tag_name, instruction_memory
 def _pair(
     physical: Physical, coil: Any, on_ms: int, off_ms: int, dt: float = 0.010
 ) -> tuple[PLC, Bool]:
-    """A harness feedback ``Fb`` and the literal coil ``Coil``, both driven by ``Cmd``.
+    """A harness feedback ``Fb`` and the literal two-timer coil ``Coil``."""
+    on_timer, off_timer = Timer.clone("CoilOn"), Timer.clone("CoilOff")
+    return _pair_with(
+        physical, lambda target: coil(target, on=(on_timer, on_ms), off=(off_timer, off_ms)), dt
+    )
 
-    The coil's rung comes first, so it reads ``Cmd`` as the last scan left it, as the
-    plant does.
+
+def _pair_with(physical: Physical, write: Any, dt: float = 0.010) -> tuple[PLC, Bool]:
+    """A harness feedback ``Fb`` and the literal coil ``Coil`` that *write* puts in a rung.
+
+    Both are driven by ``Cmd``.  The coil's rung comes first, so it reads ``Cmd`` as the
+    last scan left it, as the plant does.
     """
     Btn = Bool("Btn", external=True)
     Cmd = Bool("Cmd")
     Fb = Bool("Fb", physical=physical, link="Cmd")
     Coil = Bool("Coil")
-    on_timer, off_timer = Timer.clone("CoilOn"), Timer.clone("CoilOff")
     with Program(strict=False) as logic:
         with Rung(Cmd):
-            coil(Coil, on=(on_timer, on_ms), off=(off_timer, off_ms))
+            write(Coil)
         with Rung(Btn):
             out(Cmd)
         with Rung(Fb):
@@ -136,8 +146,53 @@ class TestFlasherFeedbackIsAFlasher:
             assert _bits(fb) == _bits(coil)
 
 
-def _linked(physical: Physical) -> tuple[PLC, Bool, Bool]:
-    En = Bool("En")
+def _timed_coil(on_ms: int, maintained: bool) -> Any:
+    timer = Timer.clone("CoilT")
+    return lambda target: timed(target, timer, on_ms, maintained=maintained)
+
+
+class TestTimedFeedbackIsATimedCoil:
+    def test_each_command_gives_one_pulse(self) -> None:
+        plc, btn = _pair_with(Physical("Horn", timed="50ms"), _timed_coil(50, False))
+        fb, _coil = _drive(plc, btn, [True] * 8 + [False] * 3 + [True] * 8)
+        # The rise's scan counts toward the 50 ms, so Fb shows for 4 scans, not 5.
+        assert _bits(fb) == ".####......." + "####..."
+
+    def test_maintained_it_follows_the_command_after_the_pulse(self) -> None:
+        physical = Physical("Horn", timed="50ms", maintained=True)
+        plc, btn = _pair_with(physical, _timed_coil(50, True))
+        fb, _coil = _drive(plc, btn, [True] * 2 + [False] * 8 + [True] * 8 + [False] * 3)
+        assert _bits(fb) == ".####....." + ".########" + ".."
+
+    @pytest.mark.parametrize("dt", [0.010, 0.007])
+    @pytest.mark.parametrize("maintained", [False, True])
+    @pytest.mark.parametrize("on_ms", [0, 10, 30, 75])
+    def test_it_matches_a_timed_coil_scan_by_scan(self, on_ms, maintained, dt) -> None:
+        rng = random.Random(on_ms * 10 + maintained)
+        physical = Physical("Horn", timed=f"{on_ms}ms", maintained=maintained)
+        for _ in range(5):
+            plc, btn = _pair_with(physical, _timed_coil(on_ms, maintained), dt)
+            fb, coil = _drive(plc, btn, _random_pattern(rng, 150))
+            assert _bits(fb) == _bits(coil)
+
+
+class TestToggleFeedbackIsAToggleCoil:
+    def test_each_command_flips_it(self) -> None:
+        plc, btn = _pair_with(Physical("Lamp", toggle=True), toggle)
+        fb, _coil = _drive(plc, btn, [True] * 3 + [False] * 2 + [True] * 3 + [False] * 2)
+        assert _bits(fb) == ".#####...."
+
+    @pytest.mark.parametrize("dt", [0.010, 0.007])
+    def test_it_matches_a_toggle_coil_scan_by_scan(self, dt) -> None:
+        rng = random.Random(7)
+        for _ in range(5):
+            plc, btn = _pair_with(Physical("Lamp", toggle=True), toggle, dt)
+            fb, coil = _drive(plc, btn, _random_pattern(rng, 150))
+            assert _bits(fb) == _bits(coil)
+
+
+def _linked(physical: Physical, *, enabled: bool = False) -> tuple[PLC, Bool, Bool]:
+    En = Bool("En", default=enabled)
     Fb = Bool("Fb", physical=physical, link="En")
     with Program(strict=False) as logic:
         with Rung(En):
@@ -206,6 +261,108 @@ class TestPlansThroughTheCoils:
         assert _profile_for(plc, "Fb", True) == []
         (step,) = _profile_for(plc, "Fb", False)
         assert _hold_until(plc, step, "Fb", True, budget=50) is None
+
+
+def _pulse_until(plc: PLC, step: Any, fb: str, value: bool, budget: int = 50) -> int | None:
+    """Give the plan's pulse a rise, then step under its holds until ``fb`` has *value*."""
+    demand = step.pulse
+    en = demand.condition.tag.name
+    if plc.current_state.tags[en] is demand.value:
+        plc.patch({en: not demand.value})
+        plc.step()
+    plc.patch({en: demand.value})
+    for scans in range(1, budget + 1):
+        plc.step()
+        if plc.current_state.tags[fb] is value:
+            return scans
+    return None
+
+
+class TestPlansThroughTimedAndToggle:
+    """A timed or toggle feedback comes on a rise of its enable.  Stepping the plan reaches it.
+
+    An enable that is off is held on.  One that is on is pulsed, which takes a fall first.
+    """
+
+    @pytest.mark.parametrize(
+        "physical",
+        [Physical("Horn", timed="50ms"), Physical("Lamp", toggle=True)],
+        ids=["timed", "toggle"],
+    )
+    def test_an_enable_that_is_off_is_held_on(self, physical: Physical) -> None:
+        plc, _En, _Fb = _linked(physical)
+        (step,) = _profile_for(plc, "Fb", True)
+        assert step.pulse is None
+        assert [(d.condition.tag.name, d.value) for d in step.holds] == [("En", True)]
+        assert _hold_until(plc, step, "Fb", True) == 2
+
+    @pytest.mark.parametrize(
+        "physical",
+        [Physical("Horn", timed="50ms"), Physical("Lamp", toggle=True)],
+        ids=["timed", "toggle"],
+    )
+    def test_an_enable_that_is_on_is_pulsed(self, physical: Physical) -> None:
+        plc, _En, _Fb = _linked(physical, enabled=True)
+        (step,) = _profile_for(plc, "Fb", True)
+        assert (step.pulse.condition.tag.name, step.pulse.value, step.holds) == ("En", True, ())
+        assert _pulse_until(plc, step, "Fb", True) == 2
+
+    def test_a_toggle_that_is_on_is_pulsed_off(self) -> None:
+        plc, En, _Fb = _linked(Physical("Lamp", toggle=True))
+        plc.patch({En: True})
+        plc.run(3)
+        assert plc.current_state.tags["Fb"] is True
+        (step,) = _profile_for(plc, "Fb", False)
+        assert (step.pulse.condition.tag.name, step.pulse.value) == ("En", True)
+        assert _pulse_until(plc, step, "Fb", False) == 2
+
+    def test_a_timed_pulse_ends_by_itself(self) -> None:
+        plc, En, _Fb = _linked(Physical("Horn", timed="50ms"))
+        plc.patch({En: True})
+        plc.run(2)
+        (step,) = _profile_for(plc, "Fb", False)
+        assert (step.pulse, step.holds) == (None, ())
+        scans = 0
+        while plc.current_state.tags["Fb"]:
+            plc.step()
+            scans += 1
+        assert scans == 4
+
+    def test_a_maintained_timed_feedback_holds_its_enable_off(self) -> None:
+        plc, En, _Fb = _linked(Physical("Horn", timed="50ms", maintained=True))
+        plc.patch({En: True})
+        plc.run(10)
+        (step,) = _profile_for(plc, "Fb", False)
+        assert [(d.condition.tag.name, d.value) for d in step.holds] == [("En", False)]
+        assert _hold_until(plc, step, "Fb", False) == 2
+
+    @pytest.mark.parametrize("on_time", ["0ms", "10ms"])
+    def test_an_on_time_of_a_scan_or_less_offers_no_way_on(self, on_time: str) -> None:
+        plc, _En, _Fb = _linked(Physical("Horn", timed=on_time))
+        assert _profile_for(plc, "Fb", True) == []
+        plc.patch({"En": True})
+        assert not any(_scan(plc, 10))
+
+
+class TestInstallWithTheEnableOn:
+    """A coil whose enable is already on has long since seen its rise, so it does not fire."""
+
+    @pytest.mark.parametrize(("maintained", "fb"), [(False, "......"), (True, "######")])
+    def test_timed(self, maintained: bool, fb: str) -> None:
+        plc, _En, _Fb = _linked(Physical("Horn", timed="50ms", maintained=maintained), enabled=True)
+        assert _bits(_scan(plc, 6)) == fb
+
+    def test_toggle(self) -> None:
+        plc, _En, _Fb = _linked(Physical("Lamp", toggle=True), enabled=True)
+        assert _bits(_scan(plc, 6)) == "......"
+
+
+def _scan(plc: PLC, scans: int) -> list[bool]:
+    seen = []
+    for _ in range(scans):
+        plc.step()
+        seen.append(plc.current_state.tags["Fb"])
+    return seen
 
 
 class TestPendingMs:
@@ -377,10 +534,12 @@ def test_every_plant_instruction_with_memory_is_keyed_by_the_tag_it_drives() -> 
     FbD = Bool("FbD", physical=Physical("D", on_delay="30ms", off_delay="20ms"), link="En")
     FbP = Bool("FbP", physical=Physical("P", flasher_on="30ms", flasher_off="20ms"), link="En")
     FbR = Real("FbR", physical=Physical("R", ramp_on=1.0, ramp_off=-1.0), link="En")
+    FbT = Bool("FbT", physical=Physical("T", timed="30ms"), link="En")
+    FbG = Bool("FbG", physical=Physical("G", toggle=True), link="En")
     with Program(strict=False) as logic:
         with Rung(En):
             out(Bool("Echo"))
-        with Rung(FbD, FbP, FbR > 5.0):
+        with Rung(FbD, FbP, FbR > 5.0, FbT, FbG):
             out(Bool("Seen"))
     plc = PLC(logic, dt=0.010)
     Harness(plc).install()
@@ -391,7 +550,7 @@ def test_every_plant_instruction_with_memory_is_keyed_by_the_tag_it_drives() -> 
         for instr in rung._instructions
         if instruction_memory(instr)
     }
-    assert {"FbD", "FbP"} <= set(keyed.values())
+    assert {"FbD", "FbP", "FbT", "FbG"} <= set(keyed.values())
     assert all(key == f"plant:fb.{tag}" for key, tag in keyed.items())
 
 
@@ -404,8 +563,11 @@ class TestEveryEngineAgrees:
             Physical("Dev", on_delay="30ms", off_delay="50ms"),
             Physical("Dev", on_delay="0ms", off_delay="0ms"),
             Physical("Enc", flasher_on="30ms", flasher_off="20ms"),
+            Physical("Horn", timed="30ms"),
+            Physical("Horn", timed="30ms", maintained=True),
+            Physical("Lamp", toggle=True),
         ],
-        ids=["debounce", "debounce-0", "flasher"],
+        ids=["debounce", "debounce-0", "flasher", "timed", "timed-maintained", "toggle"],
     )
     def test_replays_match_the_live_run(self, physical: Physical) -> None:
         En = Bool("En", external=True)
@@ -428,9 +590,19 @@ class TestEveryEngineAgrees:
             assert plc._replay_to_compiled(scan, kernel).current_state.tags == live[scan - 1]
             assert plc._replay_to_interpreted(scan).current_state.tags == live[scan - 1]
 
-    def test_a_run_equals_stepping(self) -> None:
+    @pytest.mark.parametrize(
+        "physical",
+        [
+            Physical("Dev", on_delay="30ms", off_delay="50ms"),
+            Physical("Horn", timed="30ms"),
+            Physical("Horn", timed="30ms", maintained=True),
+            Physical("Lamp", toggle=True),
+        ],
+        ids=["debounce", "timed", "timed-maintained", "toggle"],
+    )
+    def test_a_run_equals_stepping(self, physical: Physical) -> None:
         def build() -> PLC:
-            plc, _En, _Fb = _linked(Physical("Dev", on_delay="30ms", off_delay="50ms"))
+            plc, _En, _Fb = _linked(physical)
             return plc
 
         stepped, ran = build(), build()

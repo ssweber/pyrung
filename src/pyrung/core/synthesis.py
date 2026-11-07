@@ -271,6 +271,51 @@ def pulse_feedback_rungs(
     return [_rung_holding(enable, coil)]
 
 
+def timed_feedback_rungs(
+    *,
+    enable: Condition,
+    fb_tag: Tag,
+    timer_done: Tag,
+    timer_acc: Tag,
+    on_ms: int,
+    maintained: bool,
+) -> list[Rung]:
+    """Lower a ``timed`` coupling to a CLICK timed coil::
+
+        Rung(enable): timed(fb_tag, timer, on_ms, maintained=maintained)
+
+    Each rise of the enable turns ``fb_tag`` on for ``on_ms``.  Maintained, it then
+    follows the enable.  As on a CLICK, the rise's scan counts toward the time, so an
+    on time of a scan or less gives no pulse.  ``timer_done`` only names the timer.
+    The preset counts in the unit :func:`plant_timer` picks.
+    """
+    from pyrung.core.instruction.out_variants import TimedInstruction
+
+    preset, unit, _ = plant_timer(on_ms)
+    coil = TimedInstruction(
+        fb_tag,
+        timer_done=timer_done,
+        timer_acc=timer_acc,
+        on_preset=preset,
+        unit=unit,
+        maintained=maintained,
+        enable_condition=enable,
+    )
+    return [_rung_holding(enable, coil)]
+
+
+def toggle_feedback_rungs(*, enable: Condition, fb_tag: Tag) -> list[Rung]:
+    """Lower a ``toggle`` coupling to a CLICK toggle coil::
+
+        Rung(enable): toggle(fb_tag)
+
+    Each rise of the enable flips ``fb_tag``, which keeps its value in between.
+    """
+    from pyrung.core.instruction.out_variants import ToggleInstruction
+
+    return [_rung_holding(enable, ToggleInstruction(fb_tag, enable))]
+
+
 def copy_hold_rung(
     *,
     value: Any,

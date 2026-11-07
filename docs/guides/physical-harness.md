@@ -42,7 +42,7 @@ PRESSURE     = Physical("Pressure",     approach_to=100.0, approach_rate=0.3)
 ENCODER      = Physical("Encoder",      flasher_on="8ms", flasher_off="8ms")
 ```
 
-A `Physical` takes the keywords of one kind. `on_delay`/`off_delay` suit simple delayed transitions (contactors, limit switches). `flasher_on`/`flasher_off` make a Bool pulse train. `ramp_on`/`ramp_off` and `approach_to`/`approach_rate` drive analog registers. Times are strings with units, such as `"2s"` or `"1s500ms"`. A bare number raises. Rates are numbers per second. The same keywords go in a CLICK nickname comment: `[link=Heat, ramp_on=0.5, ramp_off=-0.05]`.
+A `Physical` takes the keywords of one kind. `on_delay`/`off_delay` suit simple delayed transitions (contactors, limit switches). `flasher_on`/`flasher_off` make a Bool pulse train. `timed` turns a Bool on for a while at each command, and `toggle` flips it. `ramp_on`/`ramp_off` and `approach_to`/`approach_rate` drive analog registers. Times are strings with units, such as `"2s"` or `"1s500ms"`. A bare number raises. Rates are numbers per second. The same keywords go in a CLICK nickname comment: `[link=Heat, ramp_on=0.5, ramp_off=-0.05]`.
 
 ## Linking feedback to commands
 
@@ -248,12 +248,26 @@ A counter instruction in the logic counts the rising edges. The harness produces
 
 In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional `~` or trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, `[on_delay=300ms, link=~Vent_Sol]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address. An address without a nickname keeps its address name (`Y005`).
 
+### Timed and toggle feedback
+
+```python
+HORN  = Physical("Horn",  timed="500ms")                   # one blip per command
+LAMP  = Physical("Lamp",  timed="2s", maintained=True)     # at least 2 s, then follows En
+RELAY = Physical("Relay", toggle=True)                     # push on, push off
+```
+
+Both answer a rise of `En`. `timed` runs as a CLICK `timed` coil. `Fb` turns on for the time given, even if `En` drops sooner. A second rise during that time does not restart it. With `maintained=True`, `Fb` also stays on while `En` stays on. `toggle` runs as a CLICK `toggle` coil, and each rise of `En` flips `Fb`.
+
+The rise's scan counts toward the time, as on a CLICK, so a `timed` of one scan or less never turns `Fb` on. A harness installed while `En` is already on doesn't count that as a rise.
+
+In a comment, `maintained` and `toggle` are bare words, as in `[link=Bell, timed=500ms, maintained]` and `[link=Btn, toggle]`.
+
 ## Validation
 
 pyrung validates UDT and named-array field annotations at construction time:
 
 - **Bool Fb field + `link=` but no physical** — rejected. A linked bool feedback field must declare a `physical=Physical(...)`, such as `Physical(..., on_delay=..., off_delay=...)`.
-- **A flasher, ramp or approach without `link=`** — rejected on tags and fields. It defines a response to a linked command. Without a link there's nothing to respond to.
+- **A flasher, timed, toggle, ramp or approach without `link=`** — rejected on tags and fields. It defines a response to a linked command. Without a link there's nothing to respond to.
 - **Trigger value on Bool enable** — rejected. `link="En:1"` where `En` is a Bool field is invalid. Use `link="En"` to drive while it is on, or `link="~En"` while it is off.
 - **`~` on a non-Bool enable** — rejected. `link="~Mode"` where `Mode` is an Int raises `ValueError`. Write `link="Mode:0"`.
 - **Unknown choices label** — `link="State:MISSING"` raises `ValueError` when `MISSING` is not in the enable field's choices map.

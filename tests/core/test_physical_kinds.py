@@ -247,9 +247,9 @@ class TestMisuse:
             Physical.from_text("Fb", {"toggle": "1"})
 
 
-class TestNotYetInTheHarness:
+class TestEveryKindRunsInTheHarness:
     @pytest.mark.parametrize("keywords", [{"timed": "200ms"}, {"toggle": True}])
-    def test_timed_and_toggle_say_not_yet(self, keywords):
+    def test_timed_and_toggle_install(self, keywords):
         fb = Bool("Fb", physical=Physical("Fb", **keywords), link="Cmd")
         with Program(strict=False) as prog:
             with Rung(Bool("Cmd")):
@@ -257,8 +257,8 @@ class TestNotYetInTheHarness:
             with Rung(fb):
                 out(Bool("Seen"))
         plc = PLC(prog, dt=0.010)
-        with pytest.raises(NotImplementedError, match="does not run in the harness yet"):
-            Harness(plc).install()
+        Harness(plc).install()
+        assert plc._synthesis is not None and len(plc._synthesis.plant) == 1
 
     def test_a_ramp_still_runs(self):
         temp = Real("Temp", physical=Physical("Temp", ramp_on=10.0), link="Heat")

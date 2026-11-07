@@ -9,6 +9,8 @@ pyrung adds tags of its own to a running program:
   and a ramp's arm bit (``pyrung.core.harness``).
 - ``__pls_ond__``, ``__pls_on__``, ``__pls_offd__``, ``__pls_off__``
   ``{feedback}``: the flasher timers of a harness pulse (``pyrung.core.harness``).
+- ``__tmd_ond__``, ``__tmd_on__`` ``{feedback}``: the timer of a harness timed coil
+  (``pyrung.core.harness``).
 - ``on`` and ``off`` above with a unit (``__cpl_on_Ts__{feedback}``): the same
   timer, for a delay too long to count in milliseconds.
 
@@ -26,7 +28,8 @@ _V = TypeVar("_V")
 
 _INTERNAL_TAG_PREFIX = re.compile(
     r"__(?:frz\d+|cpl_(?:ond|offd|armed|(?:on|off)(?:_T[smhd])?)"
-    r"|pls_(?:ond|offd|(?:on|off)(?:_T[smhd])?))__(?=.)",
+    r"|pls_(?:ond|offd|(?:on|off)(?:_T[smhd])?)"
+    r"|tmd_(?:ond|on(?:_T[smhd])?))__(?=.)",
     re.DOTALL,
 )
 

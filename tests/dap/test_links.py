@@ -200,9 +200,15 @@ class TestConsole:
 
     def test_link_reads_a_bare_flag(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)
-        response = _repl(adapter, out, "link Spare Motor toggle")
-        assert response["success"] is False
-        assert "toggle feedback (Spare) does not run in the harness yet" in response["message"]
+        _say(adapter, out, "link Spare Motor toggle")
+        assert "Motor -> Spare  toggle" in _say(adapter, out, "links")
+        seen = []
+        for cmd in ("true", "false", "true"):
+            _say(adapter, out, f"patch Cmd {cmd}")
+            _say(adapter, out, "run 30ms")
+            seen.append(_tag(adapter, "Spare"))
+        # Each press of Cmd flips Spare.
+        assert seen == [True, True, False]
         response = _repl(adapter, out, "link Spare Motor toggle=1")
         assert response["success"] is False
         assert "toggle is a bare flag" in response["message"]
@@ -390,8 +396,7 @@ class TestRequests:
                 adapter, out, "pyrungLink", {"feedback": "Spare", "enable": "Motor", "toggle": True}
             )
         )
-        assert response["success"] is False
-        assert "does not run in the harness yet" in response["message"]
+        assert response["success"] is True
 
     def test_set_links_changes_nothing_when_an_entry_is_unknown(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)

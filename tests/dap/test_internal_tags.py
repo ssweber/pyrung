@@ -25,6 +25,9 @@ GENERATED = [
     "__pls_on__Fb",
     "__pls_offd__Fb",
     "__pls_off__Fb",
+    "__tmd_ond__Fb",
+    "__tmd_on__Fb",
+    "__tmd_on_Ts__Fb",
 ]
 
 #: User tags that only look like them.
@@ -38,6 +41,7 @@ USER = [
     "__frzA__Light",
     "__cpl_x__Fb",
     "__pls_offx__Fb",
+    "__tmd_off__Fb",
     "__cpl_on__",
     "x__frz0__Light",
 ]
@@ -63,10 +67,19 @@ def test_visible_helpers_keep_order_and_values():
     }
 
 
-def test_matches_what_a_harness_coupling_adds():
+@pytest.mark.parametrize(
+    "physical",
+    [
+        Physical("Switch", on_delay="200ms", off_delay="100ms"),
+        Physical("Horn", timed="200ms"),
+        Physical("Horn", timed="40s"),
+    ],
+    ids=["debounce", "timed", "timed-in-seconds"],
+)
+def test_matches_what_a_harness_coupling_adds(physical: Physical):
     # Ground the prefixes in the real generator, not just the list above.
     enable = Bool("Enable", external=True)
-    fb = Bool("Fb", physical=Physical("Switch", on_delay="200ms", off_delay="100ms"), link="Enable")
+    fb = Bool("Fb", physical=physical, link="Enable")
     stage = Int("Stage")
     with Program() as prog:
         with Rung(enable, fb):
