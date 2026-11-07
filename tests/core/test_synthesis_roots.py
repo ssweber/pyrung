@@ -313,6 +313,9 @@ def test_an_uninstall_leaves_earlier_scans_as_they_ran() -> None:
     ran = _run_recording(plc, 20)
     assert any(name.startswith("_frac:") for name in plc.state.memory)
 
+    tip = plc.state.scan_id
+    coil_memory = {name for name in plc.state.memory if ":plant:fb." in name}
+    assert coil_memory
     harness.uninstall()
     ran.update(_run_recording(plc, 20))
     plc._recent_state_cache.clear()
@@ -320,7 +323,11 @@ def test_an_uninstall_leaves_earlier_scans_as_they_ran() -> None:
 
     for scan_id, state in ran.items():
         assert _exact(plc.history.at(scan_id).tags) == _exact(state.tags), scan_id
-        assert plc.history.at(scan_id).memory == state.memory, scan_id
+        memory = dict(state.memory)
+        if scan_id == tip:
+            # The uninstall clears the coils' memory at the tip, so a later install settles.
+            memory = {name: value for name, value in memory.items() if name not in coil_memory}
+        assert dict(plc.history.at(scan_id).memory) == memory, scan_id
 
 
 def test_a_coupling_change_on_a_checkpoint_edits_the_checkpoint() -> None:
