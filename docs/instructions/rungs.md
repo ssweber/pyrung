@@ -37,7 +37,7 @@ with rung(Running):
     out(RunLamp)
 ```
 
-A rung is commonly referred to as evaluated left to right, top to bottom; actually it's a little more nuanced than that. Each instruction solves only the path from the rail to it, and instructions run in the order written, not "all rung, then all branch." A rung's own contacts are read once and hold for everything below:
+Each instruction evaluates only the path from the rail to itself. Instructions run in the order written, so rung and branch instructions interleave (not "all rung, then all branch"). A rung's own contacts are read once and hold for everything below:
 
 ```python
 with rung(A):
@@ -54,9 +54,9 @@ with rung(A):
         out(Y)  # On this scan: the branch reads B after the latch
 ```
 
-Each rung starts fresh: the next rung sees the state as the previous rung's instructions left it.
+Each rung starts fresh. The next rung sees the state as the previous rung's instructions left it.
 
-A box with pins (a counter's `.reset()` or `.down()`, a shift register's `.clock()`, a drum's events) reads its enable and every pin together, before it writes anything. It ends its rung: no other output or branch shares the rung with it, so what follows it goes in a `.continued()` rung or a rung of its own.
+A box with pins reads its enable and every pin together, before it writes anything. Examples are a counter's `.reset()` or `.down()`, a shift register's `.clock()` and a drum's events. A box with pins ends its rung. No other output or branch shares the rung with it, so what follows it goes in a `.continued()` rung or a rung of its own.
 
 ### Nested branches
 
@@ -75,7 +75,7 @@ For hand-written logic, flat branches are clearer.
 
 ## Continued rungs
 
-`rung.continued()` draws a rung as a further wire of the rung above it: in CLICK, one visual rung with several independent wires to the right power rail. It does not change what the rung does: a continued rung is solved like a rung of its own, and its contacts read the state the instructions above it left.
+`rung.continued()` draws a rung as a further wire of the rung above it. In CLICK, that is one visual rung with several independent wires to the right power rail. It does not change what the rung does. A continued rung is evaluated like a rung of its own, and its contacts read the state the instructions above it left.
 
 ```python
 with rung(A):

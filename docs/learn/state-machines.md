@@ -74,16 +74,16 @@ with Program() as logic:
 
 Each state has a small group of rungs: one to run its timer or check its condition, one to handle the transition. Clean, readable, testable.
 
-The state values are **tag-constants** — `Int` tags initialized once and never written. Your Python instinct says `Enum`; the ladder answer is "constants are tags." They live in the PLC's tag table, visible to anyone who opens the project — better documentation than a Python comment because they travel with the project file.
+The state values are **tag-constants**, which are `Int` tags initialized once and never written. Your Python instinct says `Enum`. The ladder answer is "constants are tags." They live in the PLC's tag table, visible to anyone who opens the project. That's better documentation than a Python comment, because they travel with the project file.
 
-Once you've seen `@named_array` in [Lesson 9](structured-tags.md), you can package these as a read-only structure — one declaration, a dropdown in the debugger. Same idea, less repetition.
+Once you've seen `@named_array` in [Lesson 9](structured-tags.md), you can package these as a read-only structure, with one declaration and a dropdown in the debugger. Same idea, less repetition.
 
 A few things to notice in the code:
 
 - **`rise(EntrySensor)`** — remember [Lesson 4](assignment.md)? Without it, the IDLE→DETECTING transition fires every scan the sensor sees a box, not just the first.
-- **`State == DETECTING` repeats across three rungs.** In Python you'd write one `if` and nest. In ladder, each rung stands alone — independently editable, grep-able, and deletable. The maintenance tech at 3am searching for `DETECTING` finds every rung that participates.
-- **We never reset `DetTimer`.** Once `State` leaves DETECTING, the `on_delay` rung goes false and the TON auto-resets — `DetTimer.Done` clears on its own. That's the [TON behavior from Lesson 5](timers.md).
-- **`IsLarge` crosses states.** It's latched in DETECTING and reset in RESETTING. [Lesson 8](branches.md) reads it in the diverter output rung. Latches outlive rungs — they're how a state machine carries data between states without globals or context objects.
+- **`State == DETECTING` repeats across three rungs.** In Python you'd write one `if` and nest. In ladder, each rung stands alone. Each one is independently editable, grep-able, and deletable. The maintenance tech at 3am searching for `DETECTING` finds every rung that participates.
+- **We never reset `DetTimer`.** Once `State` leaves DETECTING, the `on_delay` rung goes false and the TON auto-resets, so `DetTimer.Done` clears on its own. That's the [TON behavior from Lesson 5](timers.md).
+- **`IsLarge` crosses states.** It's latched in DETECTING and reset in RESETTING. [Lesson 8](branches.md) reads it in the diverter output rung. Latches outlive rungs. They're how a state machine carries data between states without globals or context objects.
 
 ## Try it
 
@@ -110,7 +110,7 @@ with PLC(logic, dt=0.010) as plc:
     assert IsLarge.value is False       # Cleaned up in RESETTING
 ```
 
-RESETTING is a **pass-through state** — it transitions to IDLE in the same scan. That's fine; its job is to clean up (`reset(IsLarge)`, `copy(IDLE, State)`), and cleanup doesn't need to wait. If you want to observe it, use `runner.monitor(State, callback)` — it fires on every committed change, including mid-cycle transitions.
+RESETTING is a **pass-through state** that transitions to IDLE in the same scan. That's fine. Its job is to clean up (`reset(IsLarge)`, `copy(IDLE, State)`), and cleanup doesn't need to wait. If you want to observe it, use `runner.monitor(State, callback)`. The monitor fires on every committed change, including mid-cycle transitions.
 
 ## Exercise
 
@@ -124,4 +124,4 @@ The sorting sequence works in one mode. But a real conveyor has auto mode (runs 
 
 !!! info "Also known as..."
 
-    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML** — it defines ~17 states that any operator recognizes.
+    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML**. It defines ~17 states that any operator recognizes.

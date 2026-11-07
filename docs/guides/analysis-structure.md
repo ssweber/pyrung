@@ -6,7 +6,7 @@ See also: [Diagnosis](analysis-diagnosis.md) (snapshot-based debugging), [Cause 
 
 ## DataView: what does my program touch?
 
-`plc.dataview` returns a chainable query over the program's static dependency graph. No scans needed — it reads the program structure directly.
+`plc.dataview` returns a chainable query over the program's static dependency graph. No scans are needed. It reads the program structure directly.
 
 ```python
 from pyrung import Bool, PLC, Program, rung, And, latch, reset, out
@@ -51,7 +51,7 @@ dv.contains("cmd")      # finds CommandRun, Cmd_Reset, etc.
 dv.contains("motor")    # finds MotorOut, ConveyorMotor, etc.
 ```
 
-It splits on camelCase and underscores, then expands both sides into consonant abbreviations — `"cmd"` finds `CommandRun`, and `"command"` finds `Cmd_Reset`.
+It splits on camelCase and underscores, then expands both sides into consonant abbreviations. For example, `"cmd"` finds `CommandRun`, and `"command"` finds `Cmd_Reset`.
 
 ### Dependency slicing
 
@@ -180,7 +180,7 @@ and they do not add contacts or otherwise change execution.
 
 ### Branch topology is preserved
 
-Sibling branches that both drive a tag (an `out()`, then a `latch()` below it) produce `And(parent, Or(local₁, local₂))`, not the flat DNF form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution — shared preconditions appear once, with the distinguishing triggers nested inside.
+Sibling branches that both drive a tag (an `out()`, then a `latch()` below it) produce `And(parent, Or(local₁, local₂))`, not the flattened form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution. Shared preconditions appear once, with the distinguishing triggers nested inside.
 
 ### Cycles (seal-in)
 

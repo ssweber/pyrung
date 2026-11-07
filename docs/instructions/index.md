@@ -8,7 +8,7 @@ with rung(Start, ~Fault):
     on_delay(RunDelay, preset=500)
 ```
 
-Read it like a ladder diagram: conditions go on `rung(...)`, instructions go in the body. Use the pages below by instruction family.
+Read it like a ladder diagram. Conditions go on `rung(...)`. Instructions go in the body. Use the pages below by instruction family.
 
 ## Start here
 

@@ -32,12 +32,9 @@ step.triggers               # [Transition(StartBtn, 0→1)]
 step.enablers               # [EnablingCondition(Fault, value=False, held_since=None)]
 ```
 
-**Trigger** means the contact transitioned and flipped the rung. **Enabler** means it was already in the right state — necessary, but not what changed. The engine figures out which is which automatically.
+**Trigger** means the contact transitioned and flipped the rung. **Enabler** means it was already in the right state. It is necessary, but it is not what changed. The engine figures out which is which automatically.
 
-!!! note "How attribution works"
-    The engine converts each rung's condition into a series-parallel (SP) tree, then applies a four-rule post-order walk to identify which contacts mattered for the evaluation. Intersecting "mattered" with the transition log produces the trigger/enabler split.
-
-Recorded steps use `fidelity="full"`. Historical states outside the recent-state cache are reconstructed from retained history, so `history_budget` affects analysis cost rather than the answer. When an interpreted replay journal is available, the chain also preserves exact same-scan occurrence ordering: multiple writes to one tag and parent/subroutine interleaving are attributed to the dynamic writer that produced the committed value.
+Recorded steps use `fidelity="full"`. Historical states outside the recent-state cache are reconstructed from retained history, so `history_budget` affects analysis cost rather than the answer. When an interpreted replay journal is available, the chain also preserves exact same-scan occurrence ordering. When several writes hit one tag in a scan, or a parent and a subroutine interleave, the chain names the writer that actually produced the committed value.
 
 ## Recorded effect — what did this cause?
 
@@ -45,10 +42,10 @@ Recorded steps use `fidelity="full"`. Historical states outside the recent-state
 chain = plc.effect(StartBtn, scan=1)
 ```
 
-Walks forward from `StartBtn`'s transition at scan 1. Exact replay journals follow the reads and writes in literal execution order. When that journal is unavailable, the engine checks whether the transition mattered to each downstream rung — if the rung would have evaluated the same way without it, the transition is filtered out. Only load-bearing causes propagate forward.
+`effect()` walks forward from `StartBtn`'s transition at scan 1. Exact replay journals follow the reads and writes in literal execution order. When that journal is unavailable, the engine checks whether the transition mattered to each downstream rung. If the rung would have evaluated the same way without it, the transition is filtered out. Only load-bearing causes propagate forward.
 
 !!! note "Counterfactual evaluation"
-    The forward walk uses counterfactual SP evaluation: flip the cause leaf in the rung's SP tree, re-evaluate, and compare to the original result. If the outcome doesn't change, the cause was incidental, not a trigger.
+    The forward walk uses counterfactual SP evaluation. It flips the cause leaf in the rung's SP tree, re-evaluates, and compares to the original result. If the outcome doesn't change, the cause was incidental, not a trigger.
 
 ## Projected cause — what *would* cause this?
 
@@ -77,7 +74,7 @@ chain.blockers # [BlockingCondition(rung=1, blocked_contact=StopBtn,
                #   reason=BlockerReason.NO_OBSERVED_TRANSITION)]
 ```
 
-The blockers explain exactly which inputs the test suite has never demonstrated — either a coverage gap (write the test) or a deliberate omission (operator-only input, not testable from software).
+The blockers explain exactly which inputs the test suite has never demonstrated. Each is either a coverage gap (write the test) or a deliberate omission (operator-only input, not testable from software).
 
 ## Projected effect — what *would* happen if...?
 
@@ -123,7 +120,7 @@ assert not plc.cause("Motor_Running",
 assert plc.recovers("Alarm_Ack", assume={"Alarm_Ack": False})
 ```
 
-`assume=` on a `readonly` tag raises `ValueError` — the tag is declared constant, so pinning it to a different value contradicts the declaration. `external` and `final` tags are fine to assume.
+`assume=` on a `readonly` tag raises `ValueError`. The tag is declared constant, so pinning it to a different value contradicts the declaration. `external` and `final` tags are fine to assume.
 
 `assume=` requires projected mode. Using it without `to=` on `cause()` or without `from_=` on `effect()` raises `ValueError`.
 

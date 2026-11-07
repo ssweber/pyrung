@@ -25,7 +25,7 @@ Tags are typed and sized. You can't put a float in a Bool or store a negative nu
     Tag names in this guide use `TitleCase` (e.g. `ConveyorRunning`), not Python's `snake_case`. Two reasons:
 
     1. **It matches PLC convention** — what you'll see in every vendor's projects.
-    2. **Characters are a budget.** Most PLCs cap tag names at 16–40 characters. `EStopPressed` fits everywhere; `e_stop_pressed` might not.
+    2. **Characters are a budget.** Most PLCs cap tag names at 16–40 characters. `EStopPressed` fits everywhere. `e_stop_pressed` might not.
 
     On flat-namespace PLCs like CLICK, underscores group related tags into a pseudo-namespace (`Bin1_Count`, `Bin1_Full`) that becomes a real UDT member (`Bin1.Count`) on platforms with structures. More on that in [Structured Tags and Blocks](structured-tags.md).
 
@@ -53,13 +53,13 @@ PLC tags use PascalCase by convention, matching ladder logic naming.
 
 ## Retentive vs non-retentive
 
-When a PLC goes through a STOP→RUN cycle (like a reboot), **retentive** tags keep their values and **non-retentive** tags reset to defaults. There's no Python analog — every Python variable is "retentive" until the process exits.
+When a PLC goes through a STOP→RUN cycle (like a reboot), **retentive** tags keep their values and **non-retentive** tags reset to defaults. There's no Python analog. Every Python variable is "retentive" until the process exits.
 
-Bool tags are non-retentive by default: your outputs start in a known safe state. Int, Real, and others are retentive: your production counter doesn't reset to zero every time someone power-cycles the machine. This matters because a control engineer's first question about any tag is "what happens on power-up?"
+Bool tags are non-retentive by default, so your outputs start in a known safe state. Int, Real, and others are retentive, so your production counter doesn't reset to zero every time someone power-cycles the machine. This matters because a control engineer's first question about any tag is "what happens on power-up?"
 
 ## Setting values from outside the program
 
-The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI. In pyrung, that's `with PLC(logic) as plc:` — inside it, you read and write tag values and call `plc.step()` or `plc.run()` to execute scans.
+The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI. In pyrung, that's `with PLC(logic) as plc:`. Inside it, you read and write tag values and call `plc.step()` or `plc.run()` to execute scans.
 
 ```python
 from pyrung import Bool, Int, Program, rung, PLC, out
@@ -83,11 +83,11 @@ with PLC(logic) as plc:
     assert OverSpeed.value is True     # Program reacts on the next scan
 ```
 
-`ConveyorSpeed.value = 600` happens outside the program, before the scan. The program sees the new value when it runs and reacts accordingly. This is the same relationship an operator has with a real PLC: they set inputs and parameters, the logic does the rest.
+`ConveyorSpeed.value = 600` happens outside the program, before the scan. The program sees the new value when it runs and reacts accordingly. An operator has the same relationship with a real PLC. They set inputs and parameters, and the logic does the rest.
 
 ## Exercise
 
-Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energizes a `HeavyBox` alarm when weight exceeds the limit. Test with values below and above the threshold. Then test the boundary: what happens when `BoxWeight` exactly equals `WeightLimit`? Does your rung use `>` or `>=`? Make sure it does what you intend -- in a real plant, that boundary is the difference between a nuisance alarm and a missed overweight.
+Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energizes a `HeavyBox` alarm when weight exceeds the limit. Test with values below and above the threshold. Then test the boundary: what happens when `BoxWeight` exactly equals `WeightLimit`? Does your rung use `>` or `>=`? Make sure it does what you intend. In a real plant, that boundary is the difference between a nuisance alarm and a missed overweight.
 
 ---
 
@@ -95,4 +95,4 @@ The motor turns on and off with the button, but in a real factory you press Star
 
 !!! info "Also known as..."
 
-    `Bool` tags are called control relays, `C` bits, or `X`/`Y` for I/O. `Int` is a 16-bit signed type almost everywhere. `Real` is a 32-bit float. "Retentive" is universal — it's a tag's ability to survive a power cycle or STOP→RUN transition.
+    `Bool` tags are called control relays, `C` bits, or `X`/`Y` for I/O. `Int` is a 16-bit signed type almost everywhere. `Real` is a 32-bit float. "Retentive" is universal. It's a tag's ability to survive a power cycle or STOP→RUN transition.

@@ -491,8 +491,8 @@ def test_the_refusal_says_what_works_from_the_console(
     monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 800)
 
     assert ADVICE in compiled.console("cause Lamp@3005")
-    # Earlier scans first, as it says.  What each one steps stays read.  Steps of 700, as
-    # lockstep's run keeps no recorded prefix for the walk to start from.
+    # Earlier scans first, as it says.  The scans each question steps keep their records.
+    # Steps of 700, as lockstep's run keeps no recorded prefix for the walk to start from.
     for scan in (700, 1400, 2100, 2800):
         compiled.console(f"cause Lamp@{scan}")
     assert compiled.console("cause Lamp@3005") == stepped.console("cause Lamp@3005")

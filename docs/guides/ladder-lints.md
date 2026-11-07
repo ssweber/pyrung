@@ -69,11 +69,11 @@ The report is truthy when it contains any finding. Use `assert not report` when 
 
 ### Diagnostic frames
 
-`str(finding)` is the complete terminal diagnostic shown above. For integrations, `finding.display` exposes the structured `.problem`, `.frames`, and `.hint`; `finding.message` contains the frame-and-hint body without the code and severity header. Consumers do not need to parse terminal text.
+`str(finding)` is the complete terminal diagnostic shown above. For integrations, `finding.display` exposes the structured `.problem`, `.frames`, and `.hint`. `finding.message` contains the frame-and-hint body without the code and severity header. Consumers do not need to parse terminal text.
 
 ## Selecting rules
 
-The core rules run when `select` is omitted. `select` replaces that set, `extend_select` adds to it, and `ignore` excludes rules. Selectors accept complete codes, prefixes, or `ALL`:
+The core rules run when `select` is omitted. `select` replaces that set. `extend_select` adds to it. `ignore` excludes rules. Selectors accept complete codes, prefixes, or `ALL`:
 
 ```python
 logic.check(select={"RUNG"})
@@ -112,7 +112,7 @@ ignore = ["CMP_STATIC_ON_LEFT", "CMP_REPEATED_STATE_VALUE"]
 
 Omit `select` to retain core defaults, or use `select = ["ALL"]` to enable everything. Prefixes also select matching checks added in later versions.
 
-`pyrung check` reads the nearest ancestor `pyproject.toml` containing this section, starting from the current directory. `--config path/to/pyproject.toml` chooses a file explicitly. Command-line `--select` and `--ignore` replace their project values; `--extend-select` adds to the project extensions.
+`pyrung check` starts in the current directory and reads the nearest ancestor `pyproject.toml` that contains this section. `--config path/to/pyproject.toml` chooses a file explicitly. Command-line `--select` and `--ignore` replace their project values. `--extend-select` adds to the project's `extend-select` list.
 
 The Python API never reads a working-directory configuration implicitly. Integrations can share the same policy through `pyrung.core.validation.CheckConfig`, `load_check_config`, and `save_check_config`.
 
@@ -272,4 +272,4 @@ logic.validate("click", tag_map=mapping, mode="strict")
 logic.validate("circuitpy", hw=hw, mode="strict")
 ```
 
-`logic.validate()` without a dialect remains a compatibility alias for `logic.check()`. The dialect forms check whether a program can run on that target; they do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.
+`logic.validate()` without a dialect remains a compatibility alias for `logic.check()`. The dialect forms check whether a program can run on that target. They do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.

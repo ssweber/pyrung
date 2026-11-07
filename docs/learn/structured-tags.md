@@ -17,9 +17,9 @@ Python has dataclasses for structured records and lists for arrays. Ladder logic
 
 ## UDTs
 
-Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSensor`, `BinBAcc`. That's fine for two bins, but it doesn't scale -- and it doesn't match how real plants are organized. Identical equipment should use identical structures.
+Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSensor`, `BinBAcc`. That's fine for two bins, but it doesn't scale, and it doesn't match how real plants are organized. Identical equipment should use identical structures.
 
-pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On CLICK that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
+pyrung builds a flat tag name from the structure. `Bin[1].Sensor` is how Python reaches the tag, and the tag's real name is `Bin1_Sensor`. On CLICK that name is a flat nickname. On Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
 from pyrung import udt, Bool, Counter, Program, rung, PLC, out, rise, count_up
@@ -47,11 +47,11 @@ with Program() as logic:
         out(Bin[2].Full)
 ```
 
-`@udt(count=2)` creates two instances, accessed by index. `Bin[1].Sensor` and `Bin[2].Sensor` are distinct tags, but they share the same structure. Counters are separate — `Counter` is a built-in UDT, so you don't embed its fields in yours. This maps directly to how real plants are organized: identical equipment, replicated logic, consistent naming.
+`@udt(count=2)` creates two instances, accessed by index. `Bin[1].Sensor` and `Bin[2].Sensor` are distinct tags, but they share the same structure. Counters are separate. `Counter` is a built-in UDT, so you don't embed its fields in yours. This maps directly to how real plants are organized: identical equipment, replicated logic, consistent naming.
 
-Yes, the `Bin[1]` and `Bin[2]` rungs look nearly identical. Your Python instinct says "loop." Resist it. Each rung is independently editable, grep-able, and visible in the ladder editor. When Bin 2 needs a different preset or an extra condition, you edit one rung — you don't fight a loop. Duplication in ladder logic is a feature, not a smell.
+Yes, the `Bin[1]` and `Bin[2]` rungs look nearly identical. Your Python instinct says "loop." Resist it. Each rung is independently editable, grep-able, and visible in the ladder editor. When Bin 2 needs a different preset or an extra condition, you edit one rung and don't fight a loop. Duplication in ladder logic is a feature, not a smell.
 
-That said, Python `for` loops work fine at build time — `for i in (1, 2): with rung(rise(Bin[i].Sensor)): ...` emits two distinct rungs into the program. pyrung doesn't forbid it; it's just normal Python running during program construction. But explicit rungs are usually more readable, especially once the bins diverge.
+That said, Python `for` loops work fine at build time. For example, `for i in (1, 2): with rung(rise(Bin[i].Sensor)): ...` emits two distinct rungs into the program. pyrung doesn't forbid it. It's just normal Python running during program construction. But explicit rungs are usually more readable, especially once the bins diverge.
 
 A singleton UDT (`count` omitted or `count=1`) generates compact names with no instance number: `Motor_Running`, `Motor_Speed`. With `count > 1` you get numbered names: `Pump1_Running`, `Pump2_Running`. If your naming convention wants `Motor1_Running` even for a singleton (so future expansion doesn't rename everything), pass `always_number=True`.
 
@@ -66,13 +66,13 @@ A singleton UDT (`count` omitted or `count=1`) generates compact names with no i
 
 !!! warning "PLC arrays start at 1"
 
-    `Bin[1]`, not `Bin[0]`. Every PLC vendor in the world is 1-indexed and pyrung honors that because the tag table you generate has to match the PLC's. Your Python instinct will betray you here exactly once. If you specifically need 0-based addressing (matching a 0-based hardware range or porting code), Blocks accept a 0-based start — but the default is 1.
+    `Bin[1]`, not `Bin[0]`. Every PLC vendor in the world is 1-indexed and pyrung honors that because the tag table you generate has to match the PLC's. Your Python instinct will betray you here exactly once. If you specifically need 0-based addressing (matching a 0-based hardware range or porting code), Blocks accept a 0-based start, but the default is 1.
 
 When all fields share the same type (like a group of Int fields for one sensor), pyrung also offers `named_array`, which maps to contiguous memory and supports bulk operations. See the [Tag Structures guide](../guides/tag-structures.md) for details.
 
 ## Read-only structures
 
-The state constants from [Lesson 7](state-machines.md) — four `Int` tags, initialized once, never written — are really a read-only named array:
+The state constants from [Lesson 7](state-machines.md), four `Int` tags initialized once and never written, are really a read-only named array:
 
 ```python
 @named_array(Int, stride=4, readonly=True)
@@ -85,9 +85,9 @@ class SortState:
 State = Int(choices=SortState)
 ```
 
-`SortState.IDLE` is a tag — use it anywhere: `State == SortState.IDLE`, `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field; constants show a read-only badge (**RO**) in the debugger and are locked from editing by default.
+`SortState.IDLE` is a tag, and you can use it anywhere, such as `State == SortState.IDLE` or `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field. Constants show a read-only badge (**RO**) in the debugger and are locked from editing by default.
 
-`choices=SortState` tells the Data View to show a labeled dropdown instead of a raw number — `SORTING (2)` instead of `2`. Selecting a choice writes the value immediately.
+`choices=SortState` tells the Data View to show a labeled dropdown instead of a raw number (`SORTING (2)` instead of `2`). Selecting a choice writes the value immediately.
 
 Tags can also be marked `public=True` to indicate they're part of the operator-facing API. The Data View shows a **P** badge next to public tags and provides a filter checkbox to hide everything else. See [Tag Structures — Tag flags](../guides/tag-structures.md#tag-flags) for all available flags.
 
@@ -111,9 +111,9 @@ with Program() as logic:
         copy(BoxSize, SortLog[1])                                # Insert at front
 ```
 
-`SortLog.select(1, 4)` gives you SortLog1 through SortLog4 as a range, and `blockcopy` moves the whole thing in one instruction. The oldest value in SortLog5 falls off the end. This is a **shift register** — the canonical FIFO pattern in ladder logic, with dedicated instructions on every platform (`BSL`/`BSR` on Rockwell, `SHIFT` on CLICK and Do-More). pyrung uses `blockcopy` over `select` for the same effect: no loops, no index arithmetic.
+`SortLog.select(1, 4)` gives you SortLog1 through SortLog4 as a range, and `blockcopy` moves the whole thing in one instruction. The oldest value in SortLog5 falls off the end. This is a **shift register**, the canonical FIFO pattern in ladder logic, with dedicated instructions on every platform (`BSL`/`BSR` on Rockwell, `SHIFT` on CLICK and Do-More). pyrung uses `blockcopy` over `select` for the same effect, with no loops and no index arithmetic.
 
-Why `.select(1, 4)` instead of `[1:4]`? Python's `list[1:4]` is `[1, 2, 3]` — exclusive end. PLC ranges like `DS1..DS4` are inclusive on both ends — `[1, 2, 3, 4]`. Reusing slice syntax would silently do the wrong thing exactly half the time. `.select(start, end)` is visibly different because the semantics are different. Both bounds are inclusive, every time.
+Why `.select(1, 4)` instead of `[1:4]`? Python's `list[1:4]` is `[1, 2, 3]`, with an exclusive end. PLC ranges like `DS1..DS4` are inclusive on both ends, giving `[1, 2, 3, 4]`. Reusing slice syntax would silently do the wrong thing exactly half the time. `.select(start, end)` is visibly different because the semantics are different. Both bounds are inclusive, every time.
 
 ## Try it
 
@@ -159,8 +159,8 @@ Add a singleton `Conveyor` UDT with fields for `Running` (Bool), `Speed` (Int), 
 
 ---
 
-The logic is complete. Now prove it works -- write a test suite that covers the normal cycle, the fault path, the mode switch, and the edge cases.
+The logic is complete. Now prove it works. Write a test suite that covers the normal cycle, the fault path, the mode switch, and the edge cases.
 
 !!! info "Also known as..."
 
-    Structured tags are UDTs or `STRUCT`s. Flat-namespace PLCs fake it with underscore prefixes — exactly what pyrung generates as the flat identity. Block-copy, shift-register, and fill all have dedicated instructions on every platform.
+    Structured tags are UDTs or `STRUCT`s. Flat-namespace PLCs fake it with underscore prefixes, which is exactly how pyrung names the flat tags it generates. Block-copy, shift-register, and fill all have dedicated instructions on every platform.

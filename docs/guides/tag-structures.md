@@ -4,7 +4,7 @@ Advanced patterns for UDTs, named arrays, and block configuration. For basic tag
 
 ## UDT naming
 
-A singleton UDT (`count=1`) generates compact tag names — no instance number:
+A singleton UDT (`count=1`) generates compact tag names with no instance number:
 
 ```python
 @udt()
@@ -64,7 +64,7 @@ class Config:
 
 ### Per-instance sequences with auto()
 
-`auto()` generates a different default for each instance — useful for IDs and addresses:
+`auto()` generates a different default for each instance. This is useful for IDs and addresses:
 
 ```python
 @udt(count=3)
@@ -101,7 +101,7 @@ Sensor[3].Setpoint  # third sensor's setpoint
 
 ### Selecting whole instances
 
-You can select one or more complete instances as a contiguous `BlockRange`. This works with both dense and sparse layouts — stride is known, so instance boundaries are always well-defined:
+You can select one or more complete instances as a contiguous `BlockRange`. This works with both dense and sparse layouts. The stride is known, so instance boundaries are always well-defined:
 
 ```python
 @named_array(Int, count=3)
@@ -134,11 +134,11 @@ class DataPack:
     Value = 0
 ```
 
-Instance 1 occupies slots 1–4, instance 2 occupies slots 5–8. Only slots 1–2 and 5–6 hold named fields; slots 3–4 and 7–8 are gaps. This matters when mapping to hardware with fixed slot widths.
+Instance 1 occupies slots 1–4 and instance 2 occupies slots 5–8. Only slots 1–2 and 5–6 hold named fields. Slots 3–4 and 7–8 are gaps. This matters when mapping to hardware with fixed slot widths.
 
 ## Cloning
 
-`.clone()` creates an independent copy of a structure with a new name. Same field layout, fresh tags:
+`.clone()` creates an independent copy of a structure with a new name. The clone has the same field layout and fresh tags:
 
 ```python
 @udt(count=2)
@@ -171,7 +171,7 @@ BinACounter = Counter.clone("BinACounter", public=True)
 
 Available flags: `readonly`, `external`, `final`, `public`, `lock`. See [Tag flags](#tag-flags) for details.
 
-Use case: define a template structure once, clone it for each subsystem.
+Use it to define a template structure once and clone it for each subsystem.
 
 ## Mapping to hardware
 
@@ -198,11 +198,11 @@ This maps:
 
 The target range must have exactly `count * stride` addresses. Each instance claims `stride` consecutive slots, with fields filling from the front and gaps (if any) at the end.
 
-For UDTs, use `TagMap` to map individual field blocks — see the [CLICK Dialect](../dialects/click.md) guide.
+For UDTs, use `TagMap` to map individual field blocks. See the [CLICK Dialect](../dialects/click.md) guide.
 
 ## Block configuration
 
-Blocks support per-slot overrides for name, retentive policy, default value, and comment. All configuration must happen **before** you index the slot (before tag materialization). The unified `slot()` method handles inspection, configuration, and reset.
+Blocks support per-slot overrides for name, retentive policy, default value, and comment. All configuration must happen **before** you index the slot (before the tag is created). The unified `slot()` method handles inspection, configuration, and reset.
 
 ### Configuring slots
 
@@ -246,7 +246,7 @@ Per-slot overrides from `slot()` take precedence over `default_factory`.
 
 ### Inspecting slots
 
-`slot()` without configuration kwargs returns a live `SlotView` — no tag materialization:
+`slot()` without configuration kwargs returns a live `SlotView` and does not create the tag:
 
 ```python
 sv = ds.slot(10)
@@ -288,7 +288,7 @@ metadata supplies a matching choice label.
 
 ## Tag flags
 
-Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by [ladder lints](ladder-lints.md); two metadata flags control presentation and verification.
+Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by [ladder lints](ladder-lints.md). Two metadata flags control presentation and verification.
 
 ### Semantic flags
 
@@ -304,7 +304,7 @@ FilteredVal   = Int(final=True)      # exactly one writer
 
 **`final`** — exactly one instruction in the ladder may write this tag. The `TAG_FINAL_MULTIPLE_WRITERS` validator flags any tag with more than one write site, regardless of mutual exclusivity.
 
-Mutual exclusivity: `readonly` + `final` and `readonly` + `external` raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
+`readonly` + `final` and `readonly` + `external` are mutually exclusive and raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
 
 ### Metadata flags
 
@@ -314,11 +314,11 @@ State   = Int(choices=SortState, public=True)
 MotorOut = Bool(lock=True)           # tracked in lock file
 ```
 
-**`public`** — part of the intended API surface. Setpoints, mode commands, alarms, key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. No validator consequence.
+**`public`** — part of the intended API surface. Examples are setpoints, mode commands, alarms and key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. It has no validator consequence.
 
-The absence of `public` means plumbing — not hidden, not forbidden, just not the featured interface. Same convention as Python's `foo` vs `_foo`.
+The absence of `public` means plumbing. A plumbing tag is not hidden and not forbidden, just not the featured interface. This is the same convention as Python's `foo` vs `_foo`.
 
-**`lock`** — included in the default `pyrung lock` projection. Tags with `lock=True` define the behavioral contract tracked by the lock file. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Programs using CLICK `TagMap` get this automatically: output-mapped tags are stamped `lock=True` at construction.
+**`lock`** — included in the default `pyrung lock` projection. Tags with `lock=True` define the behavioral contract tracked by the lock file. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity. It can combine freely with any other flag. Programs using CLICK `TagMap` get this automatically. Output-mapped tags are stamped `lock=True` at construction.
 
 ### Flags on structures
 

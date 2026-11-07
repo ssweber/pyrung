@@ -60,7 +60,7 @@ with rung():
 
 The count can be a positive literal or a tag, read once when the loop starts.
 As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
-iterations (a scan of a second or more on a CLICK), and a `Dint` count whole
+iterations (a scan of a second or more on a CLICK). A `Dint` count is read whole
 and signed, so 65536 runs 65536 and -1 runs none. A count of 0 runs none.
 The verifier (`always()`, `never()`, `pyrung lock`) answers `Intractable` when
 a loop can run more than 1,000,000 iterations in a scan, or when its count
@@ -86,13 +86,13 @@ with rung():
         copy(Src[loop.idx + 1], Dst[loop.idx + 1])
 ```
 
-End and return instructions aren't needed — Python indentation handles scope.
+End and return instructions aren't needed. Python indentation handles scope.
 
 ### Body rungs
 
 The loop body is a run of rungs between For and Next. A bare instruction is a
 body rung with no contacts. A body rung with contacts is a `with rung(...)`
-inside the loop; its contacts are evaluated on every iteration, against the
+inside the loop. Its contacts are evaluated on every iteration, against the
 values the earlier body rungs just wrote:
 
 ```python
@@ -106,10 +106,10 @@ with rung(Enable):
 ```
 
 `continue_loop()` skips the rest of the current iteration. `break_loop()` leaves
-the innermost loop; the scan carries on after its Next. Both need a body rung
+the innermost loop. The scan carries on after its Next. Both need a body rung
 with at least one contact, as in CLICK. When the loop's own rung is false, the
-body does not run at all, as on CLICK: its `out()` coils keep their values, its
-timers and counters neither time, count nor reset, and its one-shots do not
+body does not run at all, as on CLICK. Its `out()` coils keep their values. Its
+timers and counters neither time, count nor reset. Its one-shots do not
 re-arm (only the For's own `oneshot=True` does). To turn a body coil off when
 the loop stops, `reset()` it from a rung of its own.
 

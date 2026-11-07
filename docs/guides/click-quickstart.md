@@ -4,7 +4,7 @@ Write a motor start/stop circuit, test it, map it to CLICK hardware addresses, e
 
 ## The program
 
-A sealed motor circuit: press Start to latch the motor on, press Stop to reset it off. A speed input copies through only while the motor runs.
+This is a sealed motor circuit. Start latches the motor on. Stop resets it off. A speed input copies through only while the motor runs.
 
 ```python
 from pyrung import Bool, Real, PLC, Program, rung, copy, latch, reset, rise
@@ -30,7 +30,7 @@ with Program() as logic:
         copy(Speed, DisplaySpeed)
 ```
 
-`rise()` triggers on the rising edge — one scan pulse when the button transitions from off to on. Without it, holding Start would re-latch every scan (harmless here, but wrong for counting or toggling).
+`rise()` triggers on the rising edge. It gives a one-scan pulse when the button goes from off to on. Without it, holding Start would re-latch every scan (harmless here, but wrong for counting or toggling).
 
 ## Test it
 
@@ -116,6 +116,6 @@ Either way, ClickNick walks you through pasting each rung and subroutine into CL
 ## Next steps
 
 - [CLICK PLC Dialect](../dialects/click.md) — pre-built blocks, TagMap details, validation findings, nickname CSV I/O
-- [CLICK Python Codegen](../dialects/click-codegen.md) — round-trip: import CLICK ladder CSV back into pyrung
+- [CLICK Python Codegen](../dialects/click-codegen.md) — imports CLICK ladder CSV back into pyrung
 - [Testing Guide](testing.md) — forces, time travel, forking, pytest patterns
 - [ClickNick](https://github.com/ssweber/clicknick) — the companion tool for CLICK clipboard I/O and nickname management

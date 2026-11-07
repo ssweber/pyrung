@@ -4,7 +4,7 @@
 
 You know Python. You've never touched a PLC. This guide teaches you ladder logic, the dominant programming language of industrial automation, using tools you already have: Python, VS Code, and pytest. No hardware required.
 
-pyrung won't let you cheat — if you try to write a `for` loop where a scan cycle belongs, it'll tell you. That's the point. You're learning a different way of thinking about programs, and the guardrails are there to keep you honest.
+pyrung won't let you cheat. If you try to write a `for` loop where a scan cycle belongs, it'll tell you. That's the point. You're learning a different way of thinking about programs, and the guardrails are there to keep you honest.
 
 ---
 
@@ -14,7 +14,7 @@ Every lesson adds a feature to the same project: a **conveyor sorting station**.
 
 Each lesson follows the same arc: start with the Python you'd instinctively reach for, see why it doesn't work for a machine that controls physical things, then learn the ladder logic way. Every lesson ends with an exercise you can run and test.
 
-**Prerequisites:** Python 3.11+, basic pytest knowledge, a text editor. Code samples use PLC-style `TitleCase` for tag names -- more on that in [Lesson 2](tags.md).
+**Prerequisites:** Python 3.11+, basic pytest knowledge, a text editor. Code samples use PLC-style `TitleCase` for tag names (more on that in [Lesson 2](tags.md)).
 
 ```bash
 pip install pyrung

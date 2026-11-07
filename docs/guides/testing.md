@@ -39,7 +39,7 @@ def test_stop_resets_motor():
         assert Motor.value is False
 ```
 
-Tags are defined at module level (just like PLC addresses), and each test gets a fresh PLC. Inside the `with PLC(...) as plc:` block, `.value` reads and writes go through the runner's current state. Set a value, step, assert — that's the pattern.
+Tags are defined at module level (just like PLC addresses), and each test gets a fresh PLC. Inside the `with PLC(...) as plc:` block, `.value` reads and writes go through the runner's current state. The pattern is to set a value, step, and assert.
 
 ## Testing timers
 
@@ -69,11 +69,11 @@ def test_timer_fires_at_preset():
         assert MyTimer.Done.value is True
 ```
 
-A 100 ms preset with 1 ms scans takes exactly 100 steps. No timing jitter, no flaky tests.
+A 100 ms preset with 1 ms scans takes exactly 100 steps. There is no timing jitter and no flaky test.
 
 ## Testing time-of-day logic
 
-Logic that depends on the real-time clock (shift changes, scheduled events, lighting) can be tested with `set_rtc`. With a fixed `dt`, the RTC advances with simulation time — no wall-clock dependency:
+Logic that depends on the real-time clock (shift changes, scheduled events, lighting) can be tested with `set_rtc`. With a fixed `dt`, the RTC advances with simulation time, so there is no wall-clock dependency:
 
 ```python
 from datetime import datetime
@@ -113,7 +113,7 @@ def test_rise_fires_once():
 
 ## Forces
 
-Forces override tag values independently of logic — the simulation equivalent of PLC "override" mode. Use them for edge-case testing, known-state setup, and debugging.
+Forces override tag values independently of logic. They are the simulation equivalent of PLC "override" mode. Use them for edge-case testing, known-state setup, and debugging.
 
 ### Force vs patch
 
@@ -152,7 +152,7 @@ def test_fault_during_operation():
         # All forces released
 ```
 
-Safe to nest — inner blocks add to (and restore from) the outer block's forces:
+They are safe to nest. Inner blocks add to (and restore from) the outer block's forces:
 
 ```python
 with plc.forced({AutoMode: True}):
@@ -208,7 +208,7 @@ runner.run_until(Temp > 150.0)                    # Temperature exceeded
 runner.run_until(Or(AlarmA, AlarmB, AlarmC))  # Any alarm triggered
 ```
 
-`run_until` stops as soon as the condition is met, or after `max_cycles` — whichever comes first.
+`run_until` stops at whichever comes first: the condition is met, or `max_cycles` is reached.
 
 ## Forking: test alternate outcomes
 
@@ -234,7 +234,7 @@ def test_fault_vs_normal():
             assert Motor.value is True
 ```
 
-Each fork is an independent runner starting from the same snapshot. No need to duplicate a long warmup sequence in every test.
+Each fork is an independent runner starting from the same snapshot. You don't need to repeat a long warmup sequence in every test.
 
 ## Monitoring changes
 
@@ -272,7 +272,7 @@ def test_capture_fault_state():
             assert snap.scan_id > 0
 ```
 
-`when(condition).pause()` halts `run()` / `run_for()` / `run_until()` after committing the triggering scan — useful for debugging a long simulation without stepping through every scan.
+`when(condition).pause()` halts `run()` / `run_for()` / `run_until()` after committing the triggering scan. This is useful for debugging a long simulation without stepping through every scan.
 
 ## Comparing states
 
@@ -293,7 +293,7 @@ def test_inspect_changes():
 
 ## Checking bounds
 
-Tags with `min`/`max` or `choices` get runtime bounds checking at the end of every scan. Values are never clamped — the write goes through, but a warning fires and the violation lands in `plc.bounds_violations`:
+Tags with `min`/`max` or `choices` get runtime bounds checking at the end of every scan. Values are never clamped. The write goes through, a warning fires, and the violation lands in `plc.bounds_violations`:
 
 ```python
 from pyrung import Bool, Int, Real, PLC, Program, rung, math, copy
@@ -339,9 +339,9 @@ def test_clean_scan_clears_violations():
         assert plc.bounds_violations == {}
 ```
 
-Violations also emit `warnings.warn()`, so `pytest -W error::UserWarning` will fail any test that triggers one — useful as a catch-all without explicit assertions.
+Violations also emit `warnings.warn()`, so `pytest -W error::UserWarning` will fail any test that triggers one. This is useful as a catch-all without explicit assertions.
 
-The check runs after all instructions, forces, and system runtime writes — it sees the final committed values. Tags without `min`/`max`/`choices` are never checked (zero overhead). `copy()` still clamps to type limits (INT ±32768, etc.) before the bounds check runs, so a `copy(40000, IntTag)` where `IntTag` has `max=500` will show a violation for 32767 (type-clamped), not 40000.
+The check runs after all instructions, forces, and system runtime writes. It sees the final committed values. Tags without `min`/`max`/`choices` are never checked (zero overhead). `copy()` still clamps to type limits (INT -32768..32767, etc.) before the bounds check runs, so a `copy(40000, IntTag)` where `IntTag` has `max=500` will show a violation for 32767 (type-clamped), not 40000.
 
 ## Pytest fixtures
 
@@ -389,7 +389,7 @@ pytest tests/   # or directly
 
 ## Autoharness: automatic feedback for device-heavy programs
 
-When your UDTs declare `physical=` and `link=` on feedback fields, the autoharness can drive all feedback patches automatically — no manual toggling. See [Physical Annotations and Autoharness](physical-harness.md).
+When your UDTs declare `physical=` and `link=` on feedback fields, the autoharness can drive all feedback patches automatically, with no manual toggling. See [Physical Annotations and Autoharness](physical-harness.md).
 
 ## Next steps
 

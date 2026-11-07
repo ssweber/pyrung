@@ -4,7 +4,7 @@ Once you have a working program with UDTs, you can annotate the physical behavio
 
 ## The problem
 
-A typical device-heavy test file is 80% feedback toggling:
+Much of a device-heavy test file is feedback toggling:
 
 ```python
 def test_gripper_cycle():
@@ -19,7 +19,7 @@ def test_gripper_cycle():
         assert Gripper[1].Sts.value is True
 ```
 
-Twenty devices, twenty feedback loops, twenty blocks of this — maintained by hand, diverging from reality over time, and wrong in subtle ways when someone changes a delay in the test but not the device, or vice versa.
+Twenty devices means twenty feedback loops and twenty blocks of this. You maintain them by hand. They diverge from reality over time. They go wrong in subtle ways when someone changes a delay in the test but not the device, or the other way round.
 
 ## Declaring physical behavior
 
@@ -44,7 +44,7 @@ PRESSURE     = Physical("Pressure",     profile=Approach(toward=100.0, rate=0.3)
 ENCODER      = Physical("Encoder",      profile=Pulse(on_dwell="8ms", off_dwell="8ms"))
 ```
 
-A `Physical` has either timing (on_delay/off_delay) or a `profile=` spec, never both. Bool fields accept either form — use timing for simple delayed transitions (contactors, limit switches) and a `Pulse` profile for signals that oscillate like pulse trains; `Ramp`/`Approach` drive analog registers. Delays and dwells accept duration strings: `"5ms"`, `"2s"`, `"1s500ms"`.
+A `Physical` has either timing (on_delay/off_delay) or a `profile=` spec, never both. Bool fields accept either form. Use timing for simple delayed transitions (contactors, limit switches) and a `Pulse` profile for signals that oscillate like pulse trains. `Ramp`/`Approach` drive analog registers. Delays and dwells accept duration strings: `"5ms"`, `"2s"`, `"1s500ms"`.
 
 ## Linking feedback to commands
 
@@ -62,15 +62,15 @@ class Gripper:
     Fb_Vacuum: Bool = Field(physical=VACUUM_SENSOR, link="En")
 ```
 
-`Fb_Contact` and `Fb_Vacuum` both link to `En`. When `En` rises, both feedback signals will respond — each with the timing declared by their `Physical`. The link must refer to a field in the same structure.
+`Fb_Contact` and `Fb_Vacuum` both link to `En`. When `En` rises, both feedback signals will respond. Each uses the timing declared by its `Physical`. The link must refer to a field in the same structure.
 
 Do not put `physical=` on `En` just because `En` represents a real output. The harness discovers couplings from linked feedback fields (`Fb_*` with `link="En"`). An unlinked bool `physical=` annotation is metadata only and does not create a harness loop.
 
 ### Standalone tags — linking across the program
 
-`link=` also works on standalone tags, not just UDT fields. This is useful for modeling process physics — responses that happen in the real world but aren't electrical feedback on the same device.
+`link=` also works on standalone tags, not just UDT fields. This is useful for modeling process physics. These are responses that happen in the real world but aren't electrical feedback on the same device.
 
-A conveyor sorts large boxes by extending a diverter. After the diverter fires, a box arrives at the bin sensor — that's a physical consequence with a real delay:
+A conveyor sorts large boxes by extending a diverter. After the diverter fires, a box arrives at the bin sensor. That's a physical consequence with a real delay:
 
 ```python
 from pyrung import Bool, Physical
@@ -82,9 +82,9 @@ BinSensor = Bool(
 )
 ```
 
-When `DiverterCmd` goes True, the harness schedules `BinSensor=True` 2 seconds later. When it drops, `BinSensor` clears after 500ms. No UDT needed — the link names any tag in the program.
+When `DiverterCmd` goes True, the harness schedules `BinSensor=True` 2 seconds later. When `DiverterCmd` drops, `BinSensor` clears after 500ms. No UDT is needed. The link names any tag in the program.
 
-The distinction: UDT links model device-level feedback (motor command → motor contactor feedback). Standalone links model process-level physics (diverter fires → box arrives at bin). Both use the same `Physical` timing and the same harness machinery.
+UDT links model device-level feedback (motor command → motor contactor feedback). Standalone links model process-level physics (diverter fires → box arrives at bin). Both use the same `Physical` timing and the same harness machinery.
 
 ### Normally closed — `~`
 
@@ -102,7 +102,7 @@ VentOpen = Bool(
 
 ### Value triggers — linking to specific states
 
-Plain `link=` watches for bool edges (truthy ↔ falsy). When the enable tag is an Int with a choices map — a state machine, a mode selector — you often want feedback to fire when the tag enters a *specific* value, not just any nonzero value.
+Plain `link=` watches for bool edges (truthy ↔ falsy). When the enable tag is an Int with a choices map (a state machine, a mode selector), you often want feedback to fire when the tag enters a *specific* value, not just any nonzero value.
 
 The `link="Tag:value"` syntax triggers on a specific value. The part after the colon is either a choices label or a literal integer:
 
@@ -124,7 +124,7 @@ class Sorter:
     )
 ```
 
-When `State` transitions to the value matching `SORTING` (2), the harness schedules `BinSensor=True` after 2 seconds. When `State` transitions away from that value — to anything else — the harness schedules `BinSensor=False` after 500ms.
+When `State` transitions to the value matching `SORTING` (2), the harness schedules `BinSensor=True` after 2 seconds. When `State` changes to any other value, the harness schedules `BinSensor=False` after 500ms.
 
 Both forms are valid:
 
@@ -143,7 +143,7 @@ Ready = Bool(
 )
 ```
 
-Value triggers work with profile-driven feedback too. The profile's enable is active when the enable tag matches the trigger value and inactive otherwise — the same interface as a plain bool link:
+Value triggers work with profile-driven feedback too. The profile's enable is active when the enable tag matches the trigger value and inactive otherwise. This is the same interface as a plain bool link:
 
 ```python
 THERMOCOUPLE = Physical("Thermocouple", profile=Ramp(up=0.6, down=-0.1))
@@ -155,7 +155,7 @@ class Oven:
                        min=0, max=300, uom="degC")
 ```
 
-When `Mode` enters `BAKE`, the ramp climbs; when `Mode` leaves `BAKE`, it applies the `down` ambient decay.
+When `Mode` enters `BAKE`, the ramp climbs. When `Mode` leaves `BAKE`, the ramp applies the `down` ambient decay.
 
 Multiple feedback fields can watch the same enable tag with different trigger values:
 
@@ -186,7 +186,7 @@ class Heater:
                           min=0, max=250, uom="degC")
 ```
 
-`Fb_Contact` is bool — the harness drives it with on/off delays. `Fb_Temp` is analog — the harness drives it with a ramp. Both link to the same `En` and respond independently.
+`Fb_Contact` is a bool, so the harness drives it with on/off delays. `Fb_Temp` is analog, so the harness drives it with a ramp. Both link to the same `En` and respond independently.
 
 ## Using the autoharness
 
@@ -208,11 +208,11 @@ The test never toggles the feedback by hand.
 
 ### How bool feedback works
 
-Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), scanned as a **plant at the top of each scan** — the input-read phase. The on-delay accumulates while the command is sustained. Once it crosses `on_delay`, `Fb` asserts. The off-delay then holds `Fb` for `off_delay` after the command drops. A command pulse shorter than `on_delay` never sustains the timer, so the pulse never fabricates feedback — this is **dwell**, not a transport delay. The on-delay is rounded up to scan ticks based on the PLC's `dt`.
+Each bool coupling is a real on-delay/off-delay timer pair (a `TON`→`TOF`), scanned as a **plant** (the harness's model of the device) at the top of each scan (the input-read phase). The on-delay accumulates while the command is sustained. Once it crosses `on_delay`, `Fb` asserts. The off-delay then holds `Fb` for `off_delay` after the command drops. A command pulse shorter than `on_delay` never sustains the timer, so the pulse never fabricates feedback. This is **dwell**, not a transport delay. The on-delay is rounded up to scan ticks based on the PLC's `dt`.
 
-Feedback is an **input**: the plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan — with `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model: a sensor can't respond to an output before it's written.)
+Feedback is an **input**. The plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan. With `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model. A sensor can't respond to an output before it's written.)
 
-A delay longer than 32.767 s counts in whole seconds, rounded up, and past about 9 hours in whole minutes. The same goes for a `Pulse` dwell.
+A delay longer than 32.767 s counts in whole seconds, rounded up. A delay longer than about 9 hours counts in whole minutes. The same goes for a `Pulse` dwell.
 
 Multiple `Fb` fields linked to the same `En` are independent timers, each with its own `Physical` timing. A vacuum gripper's `Fb_Contact` (5ms) and `Fb_Vacuum` (80ms) assert at different scans from the same `En` edge.
 
@@ -220,7 +220,7 @@ Multiple `Fb` fields linked to the same `En` are independent timers, each with i
 
 A `profile=` spec is **declarative data**, not a Python function. There are three specs.
 
-**`Ramp`** — a constant-slope analog response. `Fb` moves `up` units per second while `En` is active and `down` units per second otherwise (`down` is usually negative — an ambient decay or bleed-down; `0` means "hold on En fall"). Rates are per **second**, applied against the `sys.dt` system tag, so they're stable across scan periods:
+**`Ramp`** — a constant-slope analog response. `Fb` moves `up` units per second while `En` is active and `down` units per second otherwise. `down` is usually negative, for an ambient decay or bleed-down. A `down` of `0` holds the value when `En` drops. Rates are per **second**, applied against the `sys.dt` system tag, so they're stable across scan periods:
 
 ```python
 from pyrung import Ramp
@@ -229,9 +229,9 @@ BURNER   = Physical("Burner",   profile=Ramp(up=0.8, down=-0.05))  # heat 0.8°/
 PRESSURE = Physical("Pressure", profile=Ramp(up=10.0, down=-5.0))  # +10 PSI/s, bleed -5 PSI/s
 ```
 
-The program's own logic controls when `En` drops. A heater turns off `En` when `Fb_Temp` hits the setpoint — the ramp was climbing, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
+The program's own logic controls when `En` drops. A heater turns off `En` when `Fb_Temp` hits the setpoint. The ramp was climbing, but the program cut it off at 180°C. The harness doesn't need to know the settling point. The program does.
 
-**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or the name of a setpoint tag (a name no rung uses and nothing has written warns at install and reads 0 until something writes it):
+**`Approach`** — a first-order (exponential) lag. `Fb` moves toward `toward` by fraction `rate` per second and holds on `En` fall. `toward` is a constant or the name of a setpoint tag. If no rung uses that tag and nothing has written it, pyrung warns at install, and the tag reads 0 until something writes it.
 
 ```python
 from pyrung import Approach
@@ -239,7 +239,7 @@ from pyrung import Approach
 OVEN = Physical("Oven", profile=Approach(toward=180.0, rate=0.3))   # exponential to 180°C
 ```
 
-**`Pulse`** — a bool pulse train (an astable "flasher") for a discrete pulse sensor like a shaft encoder or flow-meter output. While `En` is active, `Fb` cycles high for `on_dwell` then low for `off_dwell`; it rests low when disabled:
+**`Pulse`** — a bool pulse train (an astable "flasher") for a discrete pulse sensor like a shaft encoder or flow-meter output. While `En` is active, `Fb` cycles high for `on_dwell` then low for `off_dwell`. It rests low when disabled:
 
 ```python
 from pyrung import Pulse
@@ -252,7 +252,7 @@ class Conveyor:
     Fb_Encoder: Bool = Field(physical=ENCODER, link="En")
 ```
 
-A counter instruction in the logic counts the rising edges — the harness produces the pulse train, the program counts it.
+A counter instruction in the logic counts the rising edges. The harness produces the pulse train and the program counts it.
 
 In a CLICK nickname comment the spec is a comma-free token: `profile=ramp:up=0.8|down=-0.05`, `profile=approach:toward=180|rate=0.3`, or `profile=pulse:on_dwell=8ms|off_dwell=8ms`.
 
@@ -263,13 +263,13 @@ In a comment, `link=` names the enable by nickname or by CLICK address, with the
 pyrung validates UDT and named-array field annotations at construction time:
 
 - **Bool Fb field + `link=` but no physical** — rejected. A linked bool feedback field must declare either `physical=Physical(..., on_delay=..., off_delay=...)` or `physical=Physical(..., profile=...)`.
-- **Physical profile without `link=`** — rejected on tags and fields. A profile defines a response to a linked command; without a link there's nothing to respond to.
-- **Trigger value on Bool enable** — rejected. `link="En:1"` where `En` is a Bool field is invalid; use `link="En"` to drive while it is on, or `link="~En"` while it is off.
-- **`~` on a non-Bool enable** — rejected. `link="~Mode"` where `Mode` is an Int raises `ValueError`; write `link="Mode:0"`.
+- **Physical profile without `link=`** — rejected on tags and fields. A profile defines a response to a linked command. Without a link there's nothing to respond to.
+- **Trigger value on Bool enable** — rejected. `link="En:1"` where `En` is a Bool field is invalid. Use `link="En"` to drive while it is on, or `link="~En"` while it is off.
+- **`~` on a non-Bool enable** — rejected. `link="~Mode"` where `Mode` is an Int raises `ValueError`. Write `link="Mode:0"`.
 - **Unknown choices label** — `link="State:MISSING"` raises `ValueError` when `MISSING` is not in the enable field's choices map.
 - **Non-numeric trigger without choices** — `link="State:SORTING"` on an Int field with no choices map raises `ValueError`. Use `link="State:2"` for literal values.
 
-`Program.check()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`, and a `link=` whose enable the program never uses (`PHYS_LINK_UNKNOWN`) — the harness has nothing to drive that feedback from.
+`Program.check()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`, and a `link=` whose enable the program never uses (`PHYS_LINK_UNKNOWN`). For that link, the harness has nothing to drive the feedback from.
 
 ## Forces override the harness
 
@@ -286,7 +286,7 @@ with PLC(logic, dt=0.010) as plc:
     assert Gripper[1].Fb_Contact.value is False  # force wins
 ```
 
-This is how you test "what happens when feedback never arrives" — force the Fb off and let the program's fault timer trip.
+This is how you test "what happens when feedback never arrives". Force the Fb off and let the program's fault timer trip.
 
 ## Tag metadata: min, max, uom
 
@@ -297,11 +297,11 @@ Fb_Temp: Real = Field(physical=THERMOCOUPLE, link="En",
                       min=0, max=250, uom="degC")
 ```
 
-The [`TAG_RANGE_VIOLATION` ladder lint](ladder-lints.md#rule-reference) catches literal writes outside these bounds, and the runtime bounds checker flags dynamic writes that land outside the declared range after each scan — see [Testing: Checking bounds](testing.md#checking-bounds). Values are never clamped. The check sets a warning and populates `plc.bounds_violations`. The debugger's Data View shows declared ranges as hints.
+The [`TAG_RANGE_VIOLATION` ladder lint](ladder-lints.md#rule-reference) catches literal writes outside these bounds, and the runtime bounds checker flags dynamic writes that land outside the declared range after each scan. See [Testing: Checking bounds](testing.md#checking-bounds). Values are never clamped. The check sets a warning and populates `plc.bounds_violations`. The debugger's Data View shows declared ranges as hints.
 
 ## Fault coverage
 
-For fault coverage — proving every device has an alarm path — see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `always()` to check structural detection paths.
+For fault coverage (proving every device has an alarm path), see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `always()` to check structural detection paths.
 
 ## Next steps
 
