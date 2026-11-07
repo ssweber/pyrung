@@ -1048,16 +1048,15 @@ def _coast_until(
         return reached
 
     memo = memo_of(plc)
-    kernel = None
+    # Compiled at the first attempt at a stretch, so a call that ends before one compiles
+    # nothing.  Which kernel a runner gets does not depend on its state.
+    kernel: CompiledKernel | None = None
     can_loop = (
         plc._program is not None
         and not plc._replay_mode
         and plc._time_mode == TimeMode.FIXED_STEP
         and not any(r.enabled and not r.removed for r in plc._breakpoints_by_id.values())
     )
-    if can_loop:
-        kernel = _kernel_for(plc, memo)
-        can_loop = kernel is not None
     monitored = (
         frozenset(r.tag_name for r in plc._monitors_by_id.values() if r.enabled and not r.removed)
         if can_loop
@@ -1069,7 +1068,7 @@ def _coast_until(
         if run is not None:
             jit_stats.add_decline("interpreted: a watched tag moves without a write")
     elif not can_loop and run is not None:
-        jit_stats.add_decline(f"interpreted: {_why_interpreted(plc, kernel)}")
+        jit_stats.add_decline(f"interpreted: {_why_interpreted(plc)}")
     wait = ENTRY_WAIT
     since = 0
     fails = 0
@@ -1136,7 +1135,13 @@ def _coast_until(
                     )
                 continue
             watched = monitored | {str(name) for name in traced}
-        assert kernel is not None
+        if kernel is None:
+            kernel = _kernel_for(plc, memo)
+            if kernel is None:
+                can_loop = False
+                if run is not None:
+                    jit_stats.add_decline("interpreted: no kernel")
+                continue
         used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, run)
         if used:
             stretches += 1
@@ -1156,15 +1161,13 @@ def _coast_until(
     return finish(bool(predicate(plc.state)))
 
 
-def _why_interpreted(plc: PLC, kernel: CompiledKernel | None) -> str:
+def _why_interpreted(plc: PLC) -> str:
     if plc._program is None:
         return "no program"
     if plc._replay_mode:
         return "replay mode"
     if plc._time_mode != TimeMode.FIXED_STEP:
         return "not fixed-step time"
-    if kernel is None and plc._compiled_replay_kernel is False:
-        return "no kernel"
     return "a breakpoint"
 
 

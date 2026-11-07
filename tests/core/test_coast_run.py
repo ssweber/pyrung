@@ -610,6 +610,13 @@ def test_a_long_wait_runs_in_the_loop() -> None:
     assert memo_of(plc).compiles == 1
 
 
+def test_a_coast_that_ends_before_its_first_attempt_compiles_nothing() -> None:
+    plc = _runner(_ramp, 0.01)
+    coast_until(plc, lambda _s: False, budget=coast_run.ENTRY_WAIT - 1, predicate_reads=frozenset())
+    assert memo_of(plc).compiles == 0
+    assert plc._compiled_replay_kernel is None
+
+
 def test_a_monitor_fires_on_the_scan_stepping_fires_it() -> None:
     plc = _runner(_ramp, 0.01)
     twin = plc.fork()
