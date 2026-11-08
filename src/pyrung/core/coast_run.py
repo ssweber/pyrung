@@ -139,6 +139,8 @@ MAX_PREDICTED_CYCLES = 4096
 MAX_PREDICTED_PERIOD = 1024
 # The most cycles a loop run waits to predict again after a prediction it could not make.
 MAX_PREDICTION_WAIT = 64
+# The most stop predicate answers a prediction keeps, so its memory stays small.
+MAX_KEPT_ANSWERS = 1024
 
 
 @dataclass(eq=False)
@@ -1092,22 +1094,28 @@ def _try_stretch(
     checking = CYCLE_PREDICTIONS == "shadow" or STRICT_CYCLE_CHECK
 
     asked_on: dict[Any, bool] = {}
+    # The tags a prediction shows the predicate.  One copy serves every ask, as ``seen`` does.
+    # Each ask sets the same cells, so the tags it does not set stay as ``seen`` holds them.
+    shown = _Seen({}, declared)
+    shown_state = _SeenState(shown)
 
     def stops_on(values: Any, names: dict[tuple[Any, ...], str]) -> bool:
         # A prediction asks about the same values on many scans, so each answer is kept until
-        # the next prediction.  The tags it does not show may change by then.
-        try:
-            key = tuple((cell, type(value), value) for cell, value in values.items())
-            return asked_on[key]
-        except TypeError:
-            key = None
-        except KeyError:
-            pass
-        shown = _Seen(dict(dict.items(seen)), declared)
+        # the next prediction.  The predicate's other tags may change before the next prediction.
+        # Values that move with the cycle are seldom asked twice, so the answers kept are few.
+        key = None
+        if len(asked_on) < MAX_KEPT_ANSWERS:
+            try:
+                key = tuple((cell, type(value), value) for cell, value in values.items())
+                answer = asked_on.get(key)
+            except TypeError:
+                key = answer = None
+            if answer is not None:
+                return answer
         for cell, value in values.items():
             dict.__setitem__(shown, names[cell], value)
         try:
-            answer = bool(predicate(_SeenState(shown)))
+            answer = bool(predicate(shown_state))
         except Exception:
             answer = True
         if key is not None:
@@ -1140,6 +1148,8 @@ def _try_stretch(
         found: cycle_jump.Prediction | str = why or ""
         if why is None:
             asked_on.clear()
+            dict.clear(shown)
+            dict.update(shown, dict.items(seen))
             saved = (replay._rtc_fields, replay._rtc_fields_from, replay._rtc_fields_until)
             called = time.perf_counter() if run is not None else 0.0
             try:
@@ -1152,6 +1162,7 @@ def _try_stretch(
                     horizon,
                     lambda values: stops_on(values, names),
                     frozenset(names),
+                    least=WARM_CYCLES + 2,
                 )
             finally:
                 replay._rtc_fields, replay._rtc_fields_from, replay._rtc_fields_until = saved

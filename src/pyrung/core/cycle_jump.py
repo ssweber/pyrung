@@ -77,6 +77,9 @@ from pyrung.core.scan_trace import (
 )
 from pyrung.core.system_points import clock_high
 
+# The most times one prediction asks the stop predicate about values that move.
+MAX_ASKS = 65536
+
 
 class Lin:
     """The whole number ``a + b * k`` on cycle k.  ``b`` is never 0."""
@@ -704,11 +707,13 @@ def predict(
     horizon: int,
     stops: Callable[[Mapping[tuple[Any, ...], Any]], bool],
     stop_cells: frozenset[tuple[Any, ...]],
+    least: int = 1,
 ) -> Prediction | str:
     """How many of the next *horizon* cycles run as the next one does, or why none can be told.
 
     *read_cell* reads the state now, at the start of the cycle.  *stops* is the stop
-    predicate, given the values of those of *stop_cells* the cycle loads.
+    predicate, given the values of those of *stop_cells* the cycle loads.  If the cap on asks
+    leaves fewer than *least* cycles, the prediction declines.
     """
     cells: dict[tuple[Any, ...], None] = {}
     for step in steps:
@@ -762,7 +767,16 @@ def predict(
             return "a cell does not move by the same step each cycle"
     # Each cut keeps the cycles before some cycle, so the cuts can come in any order.  These
     # two cost a call for each cycle, so they come last, after the cheap cuts.
-    last = asked.last_running(times.confirm(bound.last))
+    last = bound.last
+    if asked.moving:
+        # The predicate is asked once a cycle for each value it is shown that moves.  The cap
+        # keeps one prediction's asks short, and the run polls its limits between predictions.
+        asks_allow = MAX_ASKS // len(asked.moving) - 1
+        if asks_allow < last:
+            if asks_allow + 1 < least:
+                return "the stop predicate would be asked too often"
+            last = asks_allow
+    last = asked.last_running(times.confirm(last))
     if last < 0:
         return "the stop predicate ends the next cycle"
     period = sum(step.count for step in steps)
