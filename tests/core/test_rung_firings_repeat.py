@@ -502,3 +502,49 @@ def test_a_column_the_loop_could_not_speak_for_goes_unknown() -> None:
     assert record.value_at(0, "n", 4) is _UNKNOWN_VALUE
     # A column of bools never holds a hundred values, so it keeps them.
     assert record.value_at(0, "flag", 4) is True
+
+
+_UNSETTLED_GAP = "history after a gap that has not been settled counts values from the gap's end"
+
+
+def _squares(record: RungFiringTimelines, first: int, last: int) -> None:
+    """A new value nearly every scan, with no run that steps by one amount."""
+    for scan_id in range(first, last + 1):
+        record.append(0, scan_id, {"a": (scan_id * scan_id) % 1009})
+
+
+@pytest.mark.xfail(
+    strict=True, reason=f"{_UNSETTLED_GAP}.  So it stays known after stepping goes unknown."
+)
+def test_scans_after_a_gap_not_yet_settled_go_unknown_when_stepping_does() -> None:
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    _squares(stepped, 1, 400)
+    live: RungFiringTimelines = RungFiringTimelines()
+    _squares(live, 1, 40)
+    _squares(live, 161, 400)
+    assert stepped.value_at(0, "a", 200) is _UNKNOWN_VALUE
+    assert live.value_at(0, "a", 200) is _UNKNOWN_VALUE
+
+
+def _squares_then_a_ramp(record: RungFiringTimelines, scans: Any) -> None:
+    """97 values, then a ramp that stepping keeps as one range, so it never counts 100."""
+    for scan_id in scans:
+        value = (scan_id * scan_id) % 1009 if scan_id < 98 else 5000 + scan_id
+        record.append(0, scan_id, {"a": value})
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=f"{_UNSETTLED_GAP}.  So settling the back half first sends the column unknown "
+    "early, and settling the front half cannot bring the values back.",
+)
+def test_a_gap_settled_back_half_first_leaves_what_stepping_leaves() -> None:
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    _squares_then_a_ramp(stepped, range(1, 301))
+    live: RungFiringTimelines = RungFiringTimelines()
+    _squares_then_a_ramp(live, [*range(1, 150), *range(251, 301)])
+    for first, last in ((201, 250), (150, 200)):
+        settled: RungFiringTimelines = RungFiringTimelines()
+        _squares_then_a_ramp(settled, range(first, last + 1))
+        live.replace_range(settled, first, last)
+    _assert_same(stepped, live, 300)
