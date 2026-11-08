@@ -413,7 +413,7 @@ def _irregular(writes: Callable[[int], Scan], count: int) -> list[Scan]:
 
 
 def _staggered(gap: int) -> list[Scan]:
-    """Values that bring each rung's count *gap* values nearer its hundredth than the last's."""
+    """Values that bring each rung's column *gap* entries nearer its limit than the last's."""
     ahead = [
         {rung: ({"a": 50_000 + 1000 * rung + value * value}, frozenset())}
         for rung in RUNGS

@@ -455,7 +455,7 @@ class RungFiringTimelines(Generic[K]):
                 later[0].start_scan_id - 1 if later else None,
             )
             self._rejoined(timeline, [*missing, *later], len(missing))
-            self._recount(key, timeline, first, dropped)
+            self._recount(key, timeline, first, dropped, settled._unknown_keys.get(key))
             if floor is not None:
                 timeline = self._cut(key, timeline, dropped, floor)
             self._value_timelines[key] = timeline
@@ -463,17 +463,20 @@ class RungFiringTimelines(Generic[K]):
         self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
 
-    def _recount(self, key: tuple[K, str], timeline: list[Any], first: int, trimmed: int) -> None:
+    def _recount(
+        self, key: tuple[K, str], timeline: list[Any], first: int, trimmed: int, replayed: int | None
+    ) -> None:
         """Count a column filled in from *first*, and turn it Unknown where stepping would.
 
         The scans after the window kept values this record counted without the window's
         ranges.  So the column may reach the limit sooner than this record said, never later.
+        The replay may have turned the column Unknown inside the window.  It stays Unknown.
         """
         gone = self._unknown_keys.get(key)
         if gone is None or gone >= first:
-            found = _limit_scan(timeline, trimmed)
-            if found is not None and (gone is None or found < gone):
-                gone = found
+            for found in (_limit_scan(timeline, trimmed), replayed):
+                if found is not None and (gone is None or found < gone):
+                    gone = found
         if gone is None:
             self._entries[key] = trimmed + _written_out_length(timeline)
             return
