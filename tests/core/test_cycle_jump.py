@@ -31,7 +31,8 @@ from pyrung.core import (
     system,
 )
 from pyrung.core.coast_run import coast_until, memo_of
-from pyrung.core.cycle_jump import Lin, _Bound, _bin, _call, _cmp, _value_at
+from pyrung.core.cycle_jump import Lin, _bin, _Bound, _call, _cmp, _value_at
+from tests import fold_check
 
 HORIZON = 4095
 
@@ -227,7 +228,9 @@ class TestShadow:
         plc = _coast_and_step(_real_flip, 0.01, stop_at=None, budget=6000)
         counts = memo_of(plc).counts
         assert counts["cycle predictions"] == 0
-        assert counts["cycle prediction declined: a value other than a whole number changes over a cycle"]
+        assert counts[
+            "cycle prediction declined: a value other than a whole number changes over a cycle"
+        ]
 
 
 def _wrong_by_one(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,20 +243,15 @@ def _wrong_by_one(monkeypatch: pytest.MonkeyPatch) -> None:
         return found
 
     monkeypatch.setattr(cycle_jump, "predict", wrong)
-    # The miss is meant, so --fold-check must not count it.
-    monkeypatch.setattr(scan_trace, "SELF_CHECK_OBSERVERS", [])
 
 
-def test_a_wrong_prediction_fails_a_strict_check(
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
-) -> None:
-    if request.config.getoption("fold_check", default=False):
-        pytest.skip("--fold-check judges a run that raises as a miss")
+def test_a_wrong_prediction_fails_a_strict_check(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(coast_run, "CYCLE_PREDICTIONS", "shadow")
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", True)
+    monkeypatch.setattr(scan_trace, "SELF_CHECK_OBSERVERS", [fold_check._note_self_check_mismatch])
     _wrong_by_one(monkeypatch)
     plc = _runner(_timer_flip, 0.01)
-    with pytest.raises(coast_run.CycleMismatch):
+    with fold_check.deliberate(), pytest.raises(coast_run.CycleMismatch):
         coast_until(plc, lambda _s: False, budget=20_000, predicate_reads=frozenset())
 
 
@@ -262,6 +260,8 @@ def test_a_wrong_prediction_is_counted_and_the_run_still_steps(
 ) -> None:
     monkeypatch.setattr(coast_run, "CYCLE_PREDICTIONS", "shadow")
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", False)
+    # Each prediction after the first misses as well, and --fold-check must count none.
+    monkeypatch.setattr(scan_trace, "SELF_CHECK_OBSERVERS", [])
     _wrong_by_one(monkeypatch)
     plc = _coast_and_step(_timer_flip, 0.01, stop_at=None, budget=20_000)
     assert memo_of(plc).counts["cycle prediction mismatches"] >= 1

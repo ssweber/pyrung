@@ -1,9 +1,9 @@
-"""How many more times a stretch's cycle of loop paths repeats, found without running it.
+"""How many more times the guarded loop repeats a cycle of its paths, found without running it.
 
-Under a bang-bang hold a stretch hands over between a few loop paths in the same order,
+Under a bang-bang hold the loop hands over between a few of its paths in the same order,
 again and again.  A slow timer or the clock moves a whole number by the same amount on each
 turn of that order, and nothing else changes from one turn to the next.  This module takes
-one turn, a *cycle*, and says how many turns run exactly as it does.  The coast can then
+one turn, a *cycle*, and says how many turns run exactly as it does.  The caller can then
 check that claim against the scans it runs, and later move the state that many turns at once.
 
 Why the prediction is exact
@@ -335,7 +335,7 @@ def _if(bound: _Bound, test: Any, body: Callable[[], Any], orelse: Callable[[], 
     return body() if _truth(bound, test) else orelse()
 
 
-_AST_BINARY = {
+_AST_BINARY: dict[type[ast.operator], str] = {
     ast.Add: "add",
     ast.Sub: "sub",
     ast.Mult: "mul",
@@ -349,7 +349,7 @@ _AST_BINARY = {
     ast.LShift: "lshift",
     ast.RShift: "rshift",
 }
-_AST_COMPARE = {
+_AST_COMPARE: dict[type[ast.cmpop], str] = {
     ast.Eq: "eq",
     ast.NotEq: "ne",
     ast.Lt: "lt",
@@ -361,7 +361,12 @@ _AST_COMPARE = {
     ast.In: "in",
     ast.NotIn: "not_in",
 }
-_AST_UNARY = {ast.Not: "not_", ast.USub: "neg", ast.UAdd: "pos", ast.Invert: "invert"}
+_AST_UNARY: dict[type[ast.unaryop], str] = {
+    ast.Not: "not_",
+    ast.USub: "neg",
+    ast.UAdd: "pos",
+    ast.Invert: "invert",
+}
 
 
 def _helper(name: str, *arguments: ast.expr) -> ast.expr:

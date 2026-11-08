@@ -837,7 +837,7 @@ class _Segment:
     ends: dict[str, Any]
 
 
-class CycleMismatch(AssertionError):
+class CycleMismatch(scan_trace.SelfCheckMismatch):
     """The scans a stretch ran disagree with a prediction of its cycle."""
 
 
@@ -1165,7 +1165,9 @@ def _try_stretch(
                 for cell, form in prediction.segment_ends[index].items()
             }
         wrong = [
-            cell for cell, value in expected.items() if not same(_cell_value(state_kernel, cell), value)
+            cell
+            for cell, value in expected.items()
+            if not same(_cell_value(state_kernel, cell), value)
         ]
         if not wrong and into == 0 and STRICT_CYCLE_CHECK:
             at, timestamp = watch.time_mark
