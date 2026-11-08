@@ -20,7 +20,8 @@ The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
 with the twin too, so an intermediate scan cannot diverge unseen.  A self check
 mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  Every coast
-traces with any room left (``coast_run.TRACE_ROOM``), so short coasts are checked too.  The summary counts the scans the loop ran and why it declined; a session that checks
+traces with any room left (``coast_run.TRACE_ROOM``), so short coasts are checked too.  The
+summary counts the scans the loop ran and why it declined; a session that checks
 compiled runs while the loop never fires fails (:func:`vacuous`), since it would
 have proved nothing about the loop.
 
