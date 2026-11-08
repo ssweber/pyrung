@@ -364,3 +364,71 @@ def test_a_count_the_column_folds_away_is_counted_as_stepping_counts_it() -> Non
     assert planned
     assert (0, "a") in stepped._unknown_keys
     _assert_same(stepped, repeated, last)
+
+
+def test_a_settle_keeps_counting_as_stepping_counts() -> None:
+    # The count folds into a range of whole numbers, and stepping still counts its first values.
+    scans = [w for index in range(120) for w in _ramp_rows(index)]
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    for scan_id, writes in enumerate(scans, start=1):
+        stepped.append(0, scan_id, writes)
+    ours: RungFiringTimelines = RungFiringTimelines()
+    settled: RungFiringTimelines = RungFiringTimelines()
+    for scan_id, writes in enumerate(scans[:40], start=1):
+        ours.append(0, scan_id, writes)
+        settled.append(0, scan_id, writes)
+    ours.replace_range(settled, 1, 40)
+    for scan_id, writes in enumerate(scans[40:], start=41):
+        ours.append(0, scan_id, writes)
+    _assert_same(stepped, ours, len(scans))
+    assert not ours.value_is_known(0, "a")
+
+
+def _ramp_rows(index: int) -> list[dict[str, Any]]:
+    return [{"a": 10 * index}, {"a": 10 * index + 1}, {"a": 10 * index + 2}, {}]
+
+
+def _typed_scan(rng: random.Random, scan_id: int, kind: str) -> Scan:
+    """A scan whose tags each keep one type, as a tag does.
+
+    ``True == 1`` in Python, so a column of both may read back either.
+    """
+    scan: Scan = {}
+    for rung in RUNGS:
+        if rng.random() < 0.6:
+            writes: dict[str, Any] = {}
+            if rng.random() < 0.7:
+                if kind == "many":
+                    writes["a"] = rng.randrange(150)
+                elif kind == "ramp":
+                    writes["a"] = scan_id // rng.choice((1, 1, 3))
+                else:
+                    writes["a"] = rng.choice((0, 1, 2, 7))
+            if rng.random() < 0.7:
+                writes["b"] = rng.choice((True, False))
+            varied = frozenset(tag for tag in writes if rng.random() < 0.2)
+            scan[rung] = (writes, varied)
+    return scan
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
+    rng = random.Random(seed)
+    kind = rng.choice(("pool", "many", "ramp"))
+    count = rng.randrange(10, 500)
+    scans = [_typed_scan(rng, scan_id, kind) for scan_id in range(1, count + 1)]
+    first = rng.randrange(1, count + 1)
+    last = rng.randrange(first, count + 1)
+    # The replay steps from a checkpoint at or before *first*, with records of its own.
+    anchor = rng.randrange(1, first + 1)
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    ours: RungFiringTimelines = RungFiringTimelines()
+    settled: RungFiringTimelines = RungFiringTimelines()
+    for scan_id, scan in enumerate(scans, start=1):
+        _record(stepped, scan_id, scan)
+        if not first <= scan_id <= last:
+            _record(ours, scan_id, scan)
+        if anchor <= scan_id <= last:
+            _record(settled, scan_id, scan)
+    ours.replace_range(settled, first, last)
+    _assert_same(stepped, ours, count)

@@ -461,14 +461,34 @@ class RungFiringTimelines(Generic[K]):
     def replace_range(self, settled: RungFiringTimelines[K], first: int, last: int) -> None:
         """Take scans *first*..*last* from *settled*, an index of them made later."""
         _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
-        _replace_ranges(
-            self._value_timelines, settled._value_timelines, _trim_value_ranges, first, last
-        )
         _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
-        self._unknown_keys |= settled._unknown_keys
+        # *settled* counts each column's values from its own first scan.  Stepping counts them
+        # from the column's first scan, and goes unknown at the hundredth.  So each column the
+        # settle touches is appended again from *first* on, with stepping's count.
+        for key in settled._value_timelines.keys() | self._value_timelines.keys():
+            middle = _trim_value_ranges(settled._value_timelines.get(key, []), first, last)
+            mine = self._value_timelines.get(key, [])
+            prefix = _trim_value_ranges(mine, None, first - 1)
+            fired = self._fired_ranges.get(key[0], [])
+            if not middle and not (prefix and next(_expanded(fired, first, last), None)):
+                continue  # Nothing to add, and the column and its count stay as they were.
+            later = _trim_value_ranges(mine, last + 1, None)
+            count, unknown = _restepped([], prefix, None, False)
+            timeline = list(prefix)
+            column_from = (prefix or middle)[0].start_scan_id
+            again = _with_missing_writes([*middle, *later], fired, max(first, column_from + 1))
+            count, unknown = _restepped(timeline, again, count, unknown)
+            self._value_timelines[key] = timeline
+            if unknown:
+                self._unknown_keys.add(key)
+                self._distinct_values.pop(key, None)
+            else:
+                self._unknown_keys.discard(key)
+                if count is None:
+                    self._distinct_values.pop(key, None)
+                else:
+                    self._distinct_values[key] = count
         self._partly_unknown |= settled._partly_unknown
-        # Worked out again from the columns if one fragments.
-        self._distinct_values.clear()
         self._rebuild_indexes()
 
     def fired_throughout(self, first_scan_id: int, last_scan_id: int) -> set[K]:
@@ -1465,6 +1485,101 @@ def _counts_as_stepping(
         else:
             quiet = 0
     return tuple(counts), len(counts)
+
+
+def _restepped(
+    timeline: list[Any], ranges: Sequence[Any], count: list[Any] | None, unknown: bool
+) -> tuple[list[Any] | None, bool]:
+    """Append *ranges* to *timeline* scan by scan, as stepping appends them.
+
+    *count* and *unknown* are the column's count of values and whether it went unknown.  It
+    gives them as stepping leaves them after the last scan.  A column that goes unknown
+    takes ``Unknown`` for each value written after that.
+    """
+    for range_ in _expanded(ranges, None, None):
+        low, high = range_.start_scan_id, range_.end_scan_id
+        placed = _as_unknown(range_) if unknown else range_
+        scan_id = low
+        while scan_id <= high:
+            value = _value_at(placed, scan_id)
+            if unknown and value is not _MISSING_WRITE:
+                value = _UNKNOWN_VALUE
+            new = _append_value(timeline, scan_id, value)
+            if new and value is not _MISSING_WRITE and value is not _UNKNOWN_VALUE:
+                if len(timeline) >= _TRACK_DISTINCT_AFTER or (
+                    _written_out_length(timeline) >= _TRACK_DISTINCT_AFTER
+                ):
+                    if count is None:
+                        count = _known_distinct_values(timeline)
+                    elif not any(_equal(value, prior) for prior in count):
+                        count.append(value)
+                    if len(count) >= _VALUE_VARIETY_THRESHOLD:
+                        count, unknown = None, True
+                        if scan_id < high:
+                            placed = _as_unknown(_trim_value_ranges([range_], scan_id + 1, high)[0])
+            scan_id += 1
+            tail = timeline[-1]
+            # A tail of the same kind that agrees on the last two scans carries the rest, so
+            # stepping would only lengthen it.
+            if (
+                scan_id <= high
+                and scan_id - low >= 2
+                and type(tail.payload) is type(placed.payload)
+                and _equal(_value_at(tail, high), _value_at(placed, high))
+                and _equal(_value_at(tail, high - 1), _value_at(placed, high - 1))
+            ):
+                timeline[-1] = ValueRange(tail.start_scan_id, high, tail.payload)
+                break
+    return count, unknown
+
+
+def _with_missing_writes(ranges: list[Any], fired: list[Any], first: int) -> list[Any]:
+    """*ranges* with a scan of no write on each firing from *first* on that none of them covers.
+
+    Stepping appends that to each column of a rung that fires without writing its tag.  A
+    record made from a later scan has no column for a tag until its rung writes it.
+    """
+    written = list(_expanded(ranges, None, None))
+    added: list[Any] = []
+    position = 0
+    for span in _expanded(fired, first, None):
+        low = max(span.start_scan_id, first)
+        while low <= span.end_scan_id:
+            while position < len(written) and written[position].end_scan_id < low:
+                position += 1
+            if position < len(written) and written[position].start_scan_id <= low:
+                low = written[position].end_scan_id + 1
+                continue
+            high = span.end_scan_id
+            if position < len(written):
+                high = min(high, written[position].start_scan_id - 1)
+            added.append(ValueRange(low, high, Constant(_MISSING_WRITE)))
+            low = high + 1
+    if not added:
+        return written
+    return sorted([*written, *added], key=_start_of)
+
+
+def _as_unknown(range_: ValueRange) -> ValueRange:
+    """*range_* as a column that went unknown records it.  A scan with no write stays so."""
+    payload = range_.payload
+    if isinstance(payload, Constant) and payload.value is _MISSING_WRITE:
+        return range_
+    if isinstance(payload, Alternating) and _MISSING_WRITE in (
+        payload.value_on_even,
+        payload.value_on_odd,
+    ):
+        return ValueRange(
+            range_.start_scan_id,
+            range_.end_scan_id,
+            Alternating(
+                payload.value_on_even
+                if payload.value_on_even is _MISSING_WRITE
+                else _UNKNOWN_VALUE,
+                payload.value_on_odd if payload.value_on_odd is _MISSING_WRITE else _UNKNOWN_VALUE,
+            ),
+        )
+    return ValueRange(range_.start_scan_id, range_.end_scan_id, Unknown())
 
 
 def _step_of(range_: Any, step: int) -> int:
