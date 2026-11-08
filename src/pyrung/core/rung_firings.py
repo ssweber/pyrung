@@ -353,6 +353,9 @@ class RungFiringTimelines(Generic[K]):
         held = len(known) if known is not None else len(_known_distinct_values(ranges))
         limit = (_VALUE_VARIETY_THRESHOLD - 1 - held) // (2 * sum(1 for shift in steps if shift))
         if limit < 1:
+            # The column goes unknown now, so the cycles after the next one may repeat.
+            self._unknown_keys.add(key)
+            self._distinct_values.pop(key, None)
             return None
         return _Cycle(cycle, steps, step, trailing, limit)
 

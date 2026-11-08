@@ -751,21 +751,21 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
             # range the loop could not speak for.
             partly = key in ours._partly_unknown
             capped: list[Any] = []
-            gone = False
-            if key in ours._unknown_keys or _unknown_scans(a, first, end):
-                capped, gone = _capped(twin, attribute, key)
-            if key in ours._unknown_keys and not partly and not gone:
-                raise _mismatch(f"fold-check ({kind}): {name} {key!r} unknown, stepped not")
-            # The loop's Unknown covers scans up to the column's last known value.  After that
-            # a column ours sent unknown by its count needs stepping's Unknown too.
-            loop_until = end if key not in ours._unknown_keys else _last_known(a, end)
+            if _unknown_scans(a, first, end):
+                capped, _gone = _capped(twin, attribute, key)
+            # A column may go unknown sooner than stepping, by its own count.  Its Unknown
+            # after its last known value needs nothing more.  Before that, the loop's Unknown
+            # or stepping's is needed.
+            mine_from = _last_known(a, end) if key in ours._unknown_keys else end
 
             def unknown_ok(
-                scan: int, partly: bool = partly, capped: Any = capped, until: int = loop_until
+                scan: int, partly: bool = partly, capped: Any = capped, since: int = mine_from
             ) -> bool:
-                return (partly and scan <= until) or _column_at(
-                    capped, scan
-                ) is rung_firings._UNKNOWN_VALUE
+                return (
+                    scan > since
+                    or partly
+                    or _column_at(capped, scan) is rung_firings._UNKNOWN_VALUE
+                )
 
             scan = _column_differs(a, b, first, end, unknown_ok, capped)
             if scan is not None:
