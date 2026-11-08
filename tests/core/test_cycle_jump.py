@@ -33,6 +33,7 @@ from pyrung.core import (
 from pyrung.core.coast_run import coast_until, memo_of
 from pyrung.core.cycle_jump import Lin, _bin, _Bound, _call, _cmp, _value_at
 from tests import fold_check
+from tests.fold_check import compare_records
 
 HORIZON = 4095
 
@@ -190,10 +191,17 @@ def shadow(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", True)
 
 
+@pytest.fixture
+def jump(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(coast_run, "CYCLE_PREDICTIONS", "jump")
+    monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", False)
+
+
 def _coast_and_step(build: Any, dt: float, stop_at: int | None, budget: int) -> PLC:
     """Coast *build* until Count reaches *stop_at*, and check a stepped twin lands alike."""
     plc = _runner(build, dt)
     twin = plc.fork()
+    start = plc.current_state.scan_id
 
     def reached(state: Any) -> bool:
         return stop_at is not None and state.tags[Count.name] >= stop_at
@@ -205,7 +213,9 @@ def _coast_and_step(build: Any, dt: float, stop_at: int | None, budget: int) -> 
     ):
         twin.step()
     assert twin.current_state.scan_id == plc.current_state.scan_id
+    assert twin.current_state.timestamp == plc.current_state.timestamp
     assert dict(twin.current_state.tags) == dict(plc.current_state.tags)
+    compare_records("cycles", plc, twin, start)
     return plc
 
 
@@ -231,6 +241,26 @@ class TestShadow:
         assert counts[
             "cycle prediction declined: a value other than a whole number changes over a cycle"
         ]
+
+
+@pytest.mark.usefixtures("jump")
+class TestJump:
+    def test_a_jump_stops_where_the_stop_predicate_does(self) -> None:
+        plc = _coast_and_step(_timer_flip, 0.01, stop_at=6000, budget=20_000)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        assert plc.current_state.tags[Count.name] == 6000
+
+    def test_a_jump_over_the_rtc_second_lands_as_stepping(self) -> None:
+        plc = _coast_and_step(_rtc_flip, 0.5, stop_at=None, budget=6000)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+
+    def test_a_wrong_prediction_never_jumps(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(scan_trace, "SELF_CHECK_OBSERVERS", [])
+        _wrong_by_one(monkeypatch)
+        plc = _coast_and_step(_timer_flip, 0.01, stop_at=None, budget=20_000)
+        counts = memo_of(plc).counts
+        assert counts["cycle prediction mismatches"] >= 1
+        assert counts["cycle jumps"] == 0
 
 
 def _wrong_by_one(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -56,7 +56,7 @@ from pyrung.core import compiled_run, cycle_jump, jit_stats, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.compiled_run import _BoundsWatch, _install, _kernel_cannot_say_what_it_adds
 from pyrung.core.read_trace import _FIELD_READ, _READ_ALL, _traced_call
-from pyrung.core.rung_firings import _MISSING_WRITE, _UNKNOWN_VALUE
+from pyrung.core.rung_firings import _MISSING_WRITE, _UNKNOWN_VALUE, RepeatPlan
 from pyrung.core.rung_firings import _equal as _same_value
 from pyrung.core.scan_trace import (
     _CLASSIFIED_SYSTEM_TAGS,
@@ -77,7 +77,13 @@ from pyrung.core.scan_trace import (
     start_counting_exit,
 )
 from pyrung.core.scan_trace import _current_value as _cell_value
-from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+from pyrung.core.system_points import (
+    _SCAN_START_MEMORY_KEYS,
+    _SD_DELETE_ALL_NAME,
+    _SD_EJECT_NAME,
+    HOOK_BOUND_TAG_NAMES,
+    SYSTEM_TAGS_BY_NAME,
+)
 from pyrung.core.time_mode import TimeMode
 
 if TYPE_CHECKING:
@@ -123,7 +129,8 @@ MAX_WAIT_AFTER_NONE = 256
 PAYING_STRETCH = 16
 # What a stretch does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
 # how many cycles repeat exactly, and checks each scan the loop then runs against that.
-CYCLE_PREDICTIONS = "off"
+# "jump" predicts too, and moves the state over the cycles predicted without running them.
+CYCLE_PREDICTIONS = "jump"
 # True: a prediction the scans disagree with raises (tests/fold_check.py sets it).
 STRICT_CYCLE_CHECK = False
 # The most cycles one prediction looks ahead, and the longest cycle in scans it is made for.
@@ -837,6 +844,23 @@ class _Segment:
     ends: dict[str, Any]
 
 
+# The cells the scan hooks read between scans.  A jump skips those reads, so none may move.
+_HOOK_CELLS = frozenset(
+    [("tags", name) for name in (*HOOK_BOUND_TAG_NAMES, _SD_EJECT_NAME, _SD_DELETE_ALL_NAME)]
+    + [("memory", key) for key in _SCAN_START_MEMORY_KEYS]
+)
+
+
+def _set_cell(kernel: Any, key: tuple[Any, ...], value: Any) -> None:
+    domain = key[0]
+    if domain == "tags":
+        kernel.tags[key[1]] = value
+    elif domain == "memory":
+        kernel.memory[key[1]] = value
+    else:
+        kernel.blocks[key[1]][key[2]] = value
+
+
 class CycleMismatch(scan_trace.SelfCheckMismatch):
     """The scans a stretch ran disagree with a prediction of its cycle."""
 
@@ -855,6 +879,8 @@ class _CycleWatch:
         self.ends: dict[int, int] = {}  # scans into a cycle -> the segment that ends there
         self.wait_until = 0
         self.wait = 1
+        self.names: dict[tuple[Any, ...], str] = {}  # the cells the stop predicate reads
+        self.hooked = False  # whether a moving cell is one a scan hook reads
 
     def note(self, segment: _Segment) -> bool:
         """Follow one more segment.  True if it ends a cycle."""
@@ -1062,6 +1088,7 @@ def _try_stretch(
     # What ended the last firing and whether a guard did, while the jit counters count.
     left_by: tuple[str, bool] | None = None
     watch = _CycleWatch() if CYCLE_PREDICTIONS != "off" else None
+    checking = CYCLE_PREDICTIONS == "shadow" or STRICT_CYCLE_CHECK
 
     asked_on: dict[Any, bool] = {}
 
@@ -1135,6 +1162,8 @@ def _try_stretch(
             return
         watch.wait = 1
         watch.prediction = found
+        watch.names = names
+        watch.hooked = any(cell in _HOOK_CELLS for cell in found.steps)
         watch.start_scan = state_kernel.scan_id
         watch.time_mark = (state_kernel.scan_id, state_kernel.timestamp)
         offset = 0
@@ -1151,10 +1180,14 @@ def _try_stretch(
         prediction = watch.prediction
         scan_id = state_kernel.scan_id
         k, into = divmod(scan_id - watch.start_scan, prediction.period)
-        if into == 0:
-            if k > prediction.cycles:
+        if into == 0 and k > prediction.cycles:
+            watch.prediction = None
+            return
+        if not checking:
+            if into == 0 and k == prediction.cycles:
                 watch.prediction = None
-                return
+            return
+        if into == 0:
             expected = {cell: prediction.cell_at(cell, k) for cell in prediction.start}
         else:
             index = watch.ends.get(into)
@@ -1177,26 +1210,108 @@ def _try_stretch(
             if timestamp != state_kernel.timestamp:
                 wrong = [("timestamp",)]
         if wrong:
-            message = (
-                f"cycle prediction: scan {scan_id}, {k} cycles of {prediction.cycles} in,"
-                f" disagrees on {wrong[:5]}"
-            )
-            for observer in scan_trace.SELF_CHECK_OBSERVERS:
-                observer(message)
-            if STRICT_CYCLE_CHECK:
-                raise CycleMismatch(message)
-            memo.counts["cycle prediction mismatches"] += 1
-            watch.prediction = None
+            missed(f"scan {scan_id}, {k} cycles of {prediction.cycles} in, disagrees on {wrong[:5]}")
             return
         if into == 0 and k == prediction.cycles:
             watch.prediction = None  # used up, so the next cycle start predicts again
+
+    def missed(what: str) -> None:
+        assert watch is not None
+        message = f"cycle prediction: {what}"
+        for observer in scan_trace.SELF_CHECK_OBSERVERS:
+            observer(message)
+        if STRICT_CYCLE_CHECK:
+            raise CycleMismatch(message)
+        memo.counts["cycle prediction mismatches"] += 1
+        watch.prediction = None
+
+    def jump() -> None:
+        """Move the state over the predicted cycles left, up to the next checkpoint.
+
+        The records of the cycles skipped go in as a repeat of the last cycle.  That needs
+        the last few cycles in the records to be cycles of this prediction.
+        """
+        nonlocal total, segments
+        assert watch is not None and watch.prediction is not None
+        prediction = watch.prediction
+        period = prediction.period
+        scan_id = state_kernel.scan_id
+        k, into = divmod(scan_id - watch.start_scan, period)
+        if into or k < WARM_CYCLES:
+            return
+        room = min(limit - total, interval - scan_id % interval)
+        cycles = min(prediction.cycles - k, room // period)
+        if cycles < 1:
+            return
+        if watch.hooked:
+            memo.counts["cycle jump declined: a scan hook reads a cell that moves"] += 1
+            return
+        # Stepping must have reached the state the prediction says, as a check on it.
+        wrong = [
+            cell
+            for cell in prediction.start
+            if not same(_cell_value(state_kernel, cell), prediction.cell_at(cell, k))
+        ]
+        if wrong:
+            missed(f"scan {scan_id}, at a jump, disagrees on {wrong[:5]}")
+            return
+        _record_segments(plc, segments, paths)
+        segments = []
+        timelines_held = (
+            plc._rung_firing_timelines,
+            plc._node_firing_timelines,
+            plc._committed_tag_timelines,
+        )
+        recorded = sum(timelines.run_count() for timelines in timelines_held) < MAX_RECORD_RUNS
+        plans: list[RepeatPlan] = []
+        if recorded:
+            for timelines in timelines_held:
+                plan = timelines.plan_repeat(scan_id, period)
+                if plan is None:
+                    memo.counts["cycle jump declined: the records do not repeat"] += 1
+                    return
+                cycles = min(cycles, plan.limit)
+                plans.append(plan)
+            if cycles < 1:
+                return
+        scans = cycles * period
+        if recorded:
+            for plan in plans:
+                plan.apply(cycles)
+        else:
+            plc._note_unrecorded_scans(scan_id + 1, scan_id + scans)
+        landing = k + cycles
+        for cell in prediction.steps:
+            _set_cell(state_kernel, cell, prediction.cell_at(cell, landing))
+        for cell, name in watch.names.items():
+            dict.__setitem__(seen, name, _cell_value(state_kernel, cell))
+        # The time each scan adds, one scan at a time, as the loop adds it.
+        timestamp = state_kernel.timestamp
+        dt = replay._dt
+        for _ in range(scans):
+            timestamp += dt
+        state_kernel.timestamp = timestamp
+        state_kernel.scan_id += scans
+        watch.time_mark = (state_kernel.scan_id, timestamp)
+        total += scans
+        scan_trace.TOTALS["loop scans"] += scans
+        scan_trace.TOTALS["jumped scans"] += scans
+        memo.counts["cycle jumps"] += 1
+        memo.counts["cycles jumped"] += cycles
+        if landing == prediction.cycles:
+            watch.prediction = None
+            if state_kernel.scan_id >= watch.wait_until:
+                predict_cycle()
 
     def follow_cycle(segment: _Segment) -> None:
         assert watch is not None
         ends_a_cycle = watch.note(segment)
         if watch.prediction is not None:
             check_prediction()
-        if ends_a_cycle and watch.prediction is None and state_kernel.scan_id >= watch.wait_until:
+        if watch.prediction is not None:
+            if CYCLE_PREDICTIONS == "jump":
+                jump()
+        elif ends_a_cycle and state_kernel.scan_id >= watch.wait_until:
             predict_cycle()
 
     def fire(path: _Path) -> int:

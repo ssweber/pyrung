@@ -15,7 +15,7 @@ iteration is the scan it stands for, wherever the path's constants hold and its 
 every constant holds and every guard passes, on every scan, ends in the state stepping
 would reach.
 
-The prediction runs the cycle twice, on values rather than on the kernel:
+The prediction takes three steps, on values rather than on the kernel:
 
 1. Once on the state now, which gives the state one cycle later.  Each cell the cycle loads
    either ends where it began or, as a whole number, moves by some step.  Any other change
@@ -38,6 +38,24 @@ If the second run ends with each cell at its form one cycle on, then for each k 
 last kept, cycle k takes every decision cycle 0 takes.  So cycle k maps the state of cycle k
 to that of cycle k + 1, and by induction each of those cycles runs as cycle 0 does.  A path's
 constant on a cell no path of the cycle writes holds on every cycle once it holds now.
+
+Why a jump lands where stepping does
+------------------------------------
+
+A run jumps only at the start of a cycle k the prediction covers, and first checks that
+each cell there holds its form on k.  It then skips the cycles from k to the last kept, as far
+as the next checkpoint goes, so each checkpoint still holds a state a scan left.
+
+- Each moving cell takes its form on the cycle it lands on.  Every other cell already holds
+  the value the prediction found for it.
+- The timestamp adds dt once for each scan skipped, in order, as the loop adds it.  So the
+  float is the one stepping reaches.
+- The scan hooks read their cells between scans.  The jump declines if one of those moves,
+  so the hooks stay quiet on every scan skipped, as they were on the cycles run.
+- The stop predicate said no on every scan of the cycles kept.
+- The records of the skipped cycles go in as a repeat of the last cycle.  The repeat reads
+  the last few cycles of the records, so a jump waits until three cycles of this prediction
+  have run (``WARM_CYCLES``).
 """
 
 from __future__ import annotations
