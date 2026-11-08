@@ -454,7 +454,7 @@ def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[float, in
     tracemalloc.start()
     started = time.perf_counter()
     try:
-        # Past --fold-check's twin, which would step every scan of both runs.
+        # Under --fold-check the public call steps a twin through every scan of both runs.
         coast_run._coast_until(
             plc,
             lambda state: state.tags[moving.name] >= 2_000_000_000,

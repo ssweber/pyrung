@@ -530,7 +530,7 @@ def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
     least = WARM_CYCLES + 2
     # Where the keys stop repeating every so many segments, found from some earlier first.
     # Keys that repeat from that first repeat from any later one too, up to the same end.
-    # Without this, a long periodic stretch is walked again from each first.
+    # Without this, a long run of repeating keys is walked again from each first.
     known: dict[int, tuple[int, int]] = {}
     first = 0
     while first + least <= count:
