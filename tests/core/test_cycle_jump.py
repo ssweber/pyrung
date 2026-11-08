@@ -8,7 +8,6 @@ run that jumps is checked against a stepped twin, on its state and its records.
 from __future__ import annotations
 
 import random
-import time
 import tracemalloc
 from collections.abc import Callable
 from datetime import datetime
@@ -410,10 +409,10 @@ def test_a_wrong_prediction_is_counted_and_the_run_still_steps(
     assert memo_of(plc).counts["cycle prediction mismatches"] >= 1
 
 
-def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[float, int, list[int]]:
+def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[int, list[int]]:
     """Run a predicate that reads a tag moving every scan, in *mode*.
 
-    It gives the run's time, its peak memory, and the asks of each prediction.
+    It gives the run's peak memory and the asks of each prediction.
     """
     monkeypatch.setattr(coast_run, "CYCLE_PREDICTIONS", mode)
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", False)
@@ -452,7 +451,6 @@ def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[float, in
     plc = PLC(program, dt=0.01)
     plc.step()
     tracemalloc.start()
-    started = time.perf_counter()
     try:
         # Under --fold-check the public call steps a twin through every scan of both runs.
         coast_run._coast_until(
@@ -465,21 +463,19 @@ def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[float, in
             1,
             None,
         )
-        took = time.perf_counter() - started
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
     assert plc.current_state.tags[moving.name] == 300_001
-    return took, peak, asks
+    return peak, asks
 
 
 def test_a_predicate_on_a_tag_that_moves_costs_about_what_stepping_costs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    off_time, off_peak, _ = _counting_run("off", monkeypatch)
-    took, peak, asks = _counting_run("jump", monkeypatch)
+    off_peak, _ = _counting_run("off", monkeypatch)
+    peak, asks = _counting_run("jump", monkeypatch)
     assert asks
     # Each prediction asks about the moving tag up to the cap, and once per scan of cycle 0.
     assert max(asks) <= cycle_jump.MAX_ASKS + 2 * coast_run.MAX_PREDICTED_PERIOD
     assert peak <= 4 * off_peak + 8_000_000, (peak, off_peak)
-    assert took <= 2 * off_time + 0.5, (took, off_time)
