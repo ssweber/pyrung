@@ -265,6 +265,30 @@ class TestJump:
         assert counts["cycle prediction mismatches"] >= 1
         assert counts["cycle jumps"] == 0
 
+    def test_a_path_keeps_few_compiled_iterations(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cycle_jump, "MAX_VARIANTS", 1)
+        made: list[cycle_jump.Iteration] = []
+        iteration_of = cycle_jump.iteration_of
+
+        def noted(shape: Any) -> cycle_jump.Iteration:
+            made.append(iteration_of(shape))
+            return made[-1]
+
+        monkeypatch.setattr(cycle_jump, "iteration_of", noted)
+        compiled: list[frozenset[str]] = []
+        variant = cycle_jump.Iteration._variant
+
+        def counted(self: cycle_jump.Iteration, moving: frozenset[str]) -> Any:
+            compiled.append(moving)
+            return variant(self, moving)
+
+        monkeypatch.setattr(cycle_jump.Iteration, "_variant", counted)
+        plc = _coast_and_step(_timer_flip, 0.01, stop_at=6000, budget=20_000)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        # Each prediction runs a path on values and then on forms, so one kept is too few.
+        assert len(compiled) > len(set(compiled))
+        assert all(len(iteration._variants) <= 1 for iteration in made)
+
 
 def _wrong_by_one(monkeypatch: pytest.MonkeyPatch) -> None:
     predict = cycle_jump.predict

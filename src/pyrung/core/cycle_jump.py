@@ -79,6 +79,8 @@ from pyrung.core.system_points import clock_high
 
 # The most times one prediction asks the stop predicate about values that move.
 MAX_ASKS = 65536
+# The compiled iterations kept for each path, one for each set of locals that hold forms.
+MAX_VARIANTS = 8
 
 
 class Lin:
@@ -512,9 +514,14 @@ class Iteration:
             [local for cell, local in self._loads if type(S[cell]) is Lin]
             + [local for local, value in T.items() if type(value) is Lin]
         )
-        function = self._variants.get(moving)
+        variants = self._variants
+        function = variants.pop(moving, None)
         if function is None:
-            function = self._variants[moving] = self._variant(moving)
+            function = self._variant(moving)
+            if len(variants) >= MAX_VARIANTS:
+                del variants[next(iter(variants))]
+        # The last used comes last, so the one dropped is the least recently used.
+        variants[moving] = function
         return function(S, T, R)
 
     def _variant(self, moving: frozenset[str]) -> Callable[..., bool]:
