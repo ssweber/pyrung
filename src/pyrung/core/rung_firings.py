@@ -514,7 +514,10 @@ class RungFiringTimelines(Generic[K]):
                 ],
             )
             self._value_timelines[key] = timeline
-        self._partly_unknown |= settled._partly_unknown
+        # A column the replay sent unknown by its own count brings its Unknown in too.
+        self._partly_unknown |= settled._partly_unknown | (
+            settled._unknown_keys & self._value_timelines.keys()
+        )
         self._rebuild_indexes()
 
     def fired_throughout(self, first_scan_id: int, last_scan_id: int) -> set[K]:
