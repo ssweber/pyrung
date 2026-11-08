@@ -57,6 +57,21 @@ non-blocking findings may be deferred: log them in the ledger.
 
 A branch is READY when its review has no open BLOCKING finding and its fast gate is green.
 
+### When the same kind of finding keeps coming back
+
+Routing fix after fix is not enough when the rounds keep finding the same kind of bug. Two
+rounds that break one invariant, or a third fix round on one subsystem, mean the structure is
+wrong, not the instance. Widening the scope is then part of your job:
+- Read the internals yourself until you can name the kind of bug in one sentence ("totals kept
+  beside the data drift, because eight write paths update them by hand").
+- Spawn a fresh agent to propose a structure that makes that kind of bug impossible. Use a
+  `bob-investigator` for a design read, or a `bob-builder` in a scratch worktree for a prototype.
+  Give it the code, the review history and the invariant, but not your diagnosis.
+- Take the kind of bug, the proposal and its cost to the user. Then decide with them whether the
+  branch lands with its instance fixes or waits for the restructure.
+- Log the kind of bug in the ledger. When the same kind turns up on a later branch, start from
+  the structure, not from another instance fix.
+
 ## 3. Trains: gate READY branches together, land the tested merge
 
 Landing branches one at a time makes every queued full gate stale (`land` refuses once the base
@@ -96,7 +111,8 @@ A lone urgent branch may land on `--stages heavy`/`train` by itself.
 - Decide routine questions yourself and log them in the ledger as
   `Ruling: <decided> - <why> - <cost if wrong>`. Ask the user (one self-contained question per
   message) only for: semantics only they or ground truth can settle, scope changes, anything
-  irreversible or outward-facing (push, publish), or two failed fix rounds.
+  irreversible or outward-facing (push, publish), two failed fix rounds, or a kind of bug that
+  keeps coming back (section 2).
 - Report milestones only: landed trains, blocking findings that change the plan, decisions
   needed, soundness discoveries, ground-truth questions for the next hardware/probe round. Not
   every queue hop.

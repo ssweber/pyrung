@@ -64,6 +64,9 @@ wait for every run you started, or stop it: no test run may outlive your report.
   failure scenario (inputs or program -> wrong result).
 - NON-BLOCKING: real but safe to defer, with file:line.
 - Say plainly when nothing is blocking. No preamble.
+- When a finding is the same kind as one from an earlier round (in the review history you were
+  given, or in your own earlier review), say so and name the kind in one sentence. The
+  orchestrator then looks at the structure rather than ordering one more instance fix.
 
 ## Re-review (when resumed with a fix commit)
 
