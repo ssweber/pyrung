@@ -65,7 +65,7 @@ def _code_of(source: str) -> tuple[CodeType, bool]:
 _SKIP, _TAG, _RANGE, _DICT, _MAPPING, _ITEMS, _OBJECT = range(7)
 # Exact types the walk never looks inside.
 _PLAIN_TYPES = frozenset({type(None), str, bytes, bytearray, int, float, bool})
-# Exact container types push() may read twice: a dict's views among them.
+# Exact container types push() may read twice.  A dict's views are among them.
 _SEQUENCE_TYPES = frozenset({list, tuple, set, frozenset, type({}.keys()), type({}.values())})
 _OBJECT_CLASS = object.__dict__["__class__"]
 
