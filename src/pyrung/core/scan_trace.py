@@ -73,13 +73,16 @@ import ast
 import logging
 import math
 import operator
+import threading
 import time
+import types
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.circuitpy.codegen._helpers import _HELPER_DEFS
+from pyrung.core import jit_stats
 from pyrung.core.bounds import TagConstraint, _check_one
 from pyrung.core.compiled_plc import _KernelRuntimeContext, _TrackedList
 from pyrung.core.condition import (
@@ -309,10 +312,10 @@ class KernelSource:
             if isinstance(value, (*_SCALAR_TYPES, tuple, frozenset)):
                 self.constants[target.id] = value
         self.step_functions = tuple(
-            self.functions[name]
-            for name in ("_kernel_step_pre", "_kernel_step")
-            if name in self.functions
+            self.functions[name] for name in _STEP_FUNCTION_NAMES if name in self.functions
         )
+        self._kernel_source = kernel.source
+        self._snippets: dict[tuple[int, int], str] = {}
         self.scalar_writes, self.opaque_tag_writes = _scalar_writes(tree)
         # A kernel global loaded from a tag at the top of a scan is its working copy.
         self.working_copies: dict[str, str] = {
@@ -328,7 +331,36 @@ class KernelSource:
             and isinstance(statement.value.slice, ast.Constant)
         }
 
+    def snippet(self, guard: _Guard) -> str:
+        """The function, line number and source text of the statement that made *guard*."""
+        if guard.why:
+            return guard.why
+        key = (guard.line, guard.inner)
+        found = self._snippets.get(key)
+        if found is None:
+            lines = self._kernel_source.splitlines()
+            if not guard.line:
+                found = "the end of the scan, on a moving bit"
+            else:
+                found = self._line_of(lines, guard.line)
+                if guard.inner and guard.inner != guard.line:
+                    found += f" (in {self._line_of(lines, guard.inner)})"
+            self._snippets[key] = found
+        return found
 
+    def _line_of(self, lines: list[str], line: int) -> str:
+        name = next(
+            (
+                name
+                for name, function in self.functions.items()
+                if function.node.lineno <= line <= (function.node.end_lineno or line)
+            ),
+            "?",
+        )
+        return f"{name}:{line}: {lines[line - 1].strip()}"
+
+
+_STEP_FUNCTION_NAMES = ("_kernel_step_pre", "_kernel_step")
 _NOT_LITERAL = object()
 
 
@@ -581,6 +613,12 @@ class _Op:
 class _Guard:
     leave_if: str
     uses: tuple[str, ...]
+    # Where the jit counters say it came from.  The lines are the kernel source lines of the
+    # step function's statement and of the innermost one, 0 if none.  A guard a coast adds has
+    # no line, so it says in *why* what it watches.
+    line: int = 0
+    inner: int = 0
+    why: str = ""
 
 
 # --- Stop predicates ----------------------------------------------------------
@@ -691,6 +729,9 @@ class _Tracer:
         self._known_truth: dict[str, bool] = {}
         self._own_lists: dict[int, list[Any]] = {}
         self._temp_count = 0
+        # The statement being traced, in the step function and innermost, for _Guard.
+        self._line = 0
+        self._inner = 0
         self._statements: dict[type, Callable[[Any, _Frame], None]] = {
             ast.Assign: self._assign,
             ast.AugAssign: self._augmented_assign,
@@ -736,6 +777,7 @@ class _Tracer:
                 self._enter(function, state_arguments)
         except _KernelRaised as raised:
             raise Decline(f"scan raises {type(raised.original).__name__}") from raised
+        self._line = self._inner = 0
         for key, cell in self.cells.items():
             if key in self.entries and self._is_moving(key) and cell is not self.entries[key]:
                 raise Decline("scan writes a moving tag")
@@ -746,17 +788,25 @@ class _Tracer:
         if len(arguments) != len(function.params):
             raise Decline(f"call of {function.node.name} with other arguments")
         frame = _Frame(function, dict(zip(function.params, arguments, strict=True)))
+        # A guard after the call names the caller's statement, not the helper's last one.
+        inner = self._inner
         try:
             self._block(function.node.body, frame)
         except _Returned as returned:
             return returned.value
+        finally:
+            self._inner = inner
         return _Value(None)
 
     def _block(self, statements: list[ast.stmt], frame: _Frame) -> None:
+        step = frame.function.node.name in _STEP_FUNCTION_NAMES
         for statement in statements:
             handler = self._statements.get(type(statement))
             if handler is None:
                 raise Decline(f"statement {type(statement).__name__}")
+            self._inner = statement.lineno
+            if step:
+                self._line = statement.lineno
             handler(statement, frame)
 
     def _eval(self, node: ast.expr, frame: _Frame) -> _Value:
@@ -869,7 +919,7 @@ class _Tracer:
 
     def _guard(self, leave_if: str, operands: tuple[_Value, ...]) -> None:
         uses = tuple(v.local for v in operands if v.local is not None)
-        self.ops.append(_Guard(leave_if, uses))
+        self.ops.append(_Guard(leave_if, uses, self._line, self._inner))
 
     def _truth(self, value: _Value) -> bool:
         """Decide on *value*: its truth now, and a guard to keep it."""
@@ -1000,7 +1050,7 @@ class _Tracer:
         iterable = self._eval(statement.iter, frame)
         if iterable.local is not None:
             raise Decline("moving iterable")
-        if not isinstance(iterable.concrete, (list, tuple, range)):
+        if not isinstance(iterable.concrete, _ITERABLE_TYPES):
             raise Decline("iteration over an unknown value")
         for item in iterable.concrete:
             self._store(statement.target, _wrapped(item), frame)
@@ -1220,7 +1270,7 @@ class _Tracer:
         if generator.ifs or generator.is_async:
             raise Decline("filtered comprehension")
         iterable = self._eval(generator.iter, frame)
-        if iterable.local is not None or not isinstance(iterable.concrete, (list, tuple, range)):
+        if iterable.local is not None or not isinstance(iterable.concrete, _ITERABLE_TYPES):
             raise Decline("comprehension over an unknown value")
         # A comprehension's target has a scope of its own: it must not outlive the
         # comprehension or disturb a local, or a global, of the same name.
@@ -1264,6 +1314,11 @@ class _Tracer:
             return self._enter(target, tuple(arguments))
         if name in ("range", "zip", "enumerate"):
             return self._iterator(name, arguments)
+        if name == "len" and len(arguments) == 1:
+            reference = arguments[0].concrete
+            if isinstance(reference, _Ref) and reference.kind == "block":
+                # A kernel's block keeps the size its spec gives it, as _cell_key assumes.
+                return _Value(len(self._kernel.blocks[reference.name]))
         pure = _PURE_BUILTINS.get(name)
         if pure is None:
             raise Decline(f"call {name}")
@@ -1302,7 +1357,7 @@ class _Tracer:
         if name == "range":
             return _Value(range(*[_plain(argument) for argument in arguments]))
         for argument in arguments:
-            if not isinstance(argument.concrete, (list, tuple, range)):
+            if not isinstance(argument.concrete, _ITERABLE_TYPES):
                 raise Decline(f"{name} over an unknown value")
         columns = [argument.concrete for argument in arguments]
         if name == "enumerate":
@@ -1445,6 +1500,11 @@ def _as_load(target: ast.expr) -> ast.expr:
     raise Decline(f"augmented assignment to {type(target).__name__}")
 
 
+# What the tracer iterates.  A constant one gives the same items on every scan, and a constant
+# str the same characters.  An item of a list may still be moving.
+_ITERABLE_TYPES = (list, tuple, range, str)
+
+
 def _wrapped(item: Any) -> _Value:
     return item if isinstance(item, _Value) else _Value(item)
 
@@ -1525,9 +1585,27 @@ class ScanTrace:
         }
 
 
+@dataclass(frozen=True)
+class LoopShape:
+    """One iteration of a loop, as data, for :mod:`~pyrung.core.cycle_jump` to reason about.
+
+    An iteration loads ``loads`` and the clock and RTC values, runs ``body`` in order, and
+    then assigns each of ``commits`` at once.
+    """
+
+    loads: tuple[tuple[tuple[Any, ...], str], ...]  # (cell, local)
+    clocks: tuple[tuple[str, float], ...]  # (local, half period)
+    rtc: tuple[tuple[str, str], ...]  # (local, field tag)
+    body: tuple[_Op | _Guard, ...]
+    commits: tuple[tuple[str, str], ...]  # (local, the value it takes, spelled)
+    constants: Mapping[str, Any]
+    seen: tuple[tuple[str, tuple[Any, ...], bool], ...]
+
+
 def _render_loop(tracer: _Tracer) -> ScanTrace:
     """The trace a finished tracer describes, with its plain loop."""
-    loop, source, body = _loop_function(tracer)
+    loop, source, shape = _loop_function(tracer)
+    body = shape.body
     block_writes: dict[str, set[int]] = {}
     for key in tracer.written:
         if key[0] == "block":
@@ -1549,8 +1627,8 @@ def _loop_function(
     tracer: _Tracer,
     *,
     guards: tuple[_Guard, ...] = (),
-    seen: tuple[tuple[str, tuple[Any, ...]], ...] = (),
-) -> tuple[Callable[..., tuple[int, float]], str, list[_Op | _Guard]]:
+    seen: tuple[tuple[str, tuple[Any, ...], bool], ...] = (),
+) -> tuple[Callable[..., tuple[int, float]], str, LoopShape]:
     """Write the loop a finished tracer describes.
 
     An iteration computes into temporaries and assigns the moving locals last, in
@@ -1558,8 +1636,10 @@ def _loop_function(
     Only what changed goes back to the kernel, and only if a scan ran.
 
     *guards* are extra, checked after the scan's own and before its commit.  *seen*
-    lists (name, cell): after each commit those values go in the loop's ``seen``
-    argument and it asks its ``stop`` argument whether to leave.
+    lists (name, cell, whether every scan changes it).  After a commit that changed
+    one of those values, the loop copies them into its ``seen`` argument and asks its
+    ``stop`` argument whether to leave.  A stop predicate reads only what ``seen``
+    holds, so after a scan that changed none of it the answer is the one it gave last.
     """
     arrays: dict[str, str] = {}
     loads: list[str] = []
@@ -1568,16 +1648,23 @@ def _loop_function(
     commit_values: list[str] = []
     live: set[str] = set()
     stores: list[str] = []
+    new_values: dict[tuple[Any, ...], str] = {}
+    shape_loads: list[tuple[tuple[Any, ...], str]] = []
+    clocks: list[tuple[str, float]] = []
+    rtc: list[tuple[str, str]] = []
     needs_rtc = False
     for key, entry in tracer.entries.items():
         local = tracer.entry_locals[key]
         if key[0] == "tags" and key[1] in _CLOCK_HALF_PERIODS:
             refresh.append(f"{local} = clock_high(ts, {_CLOCK_HALF_PERIODS[key[1]]!r})")
+            clocks.append((local, _CLOCK_HALF_PERIODS[key[1]]))
             continue
         if key[0] == "tags" and key[1] in RTC_FIELD_TAG_NAMES:
             refresh.append(f"{local} = rtc_now[{key[1]!r}]")
+            rtc.append((local, key[1]))
             needs_rtc = True
             continue
+        shape_loads.append((key, local))
         if key[0] == "block":
             array = arrays.setdefault(key[1], f"B{len(arrays)}")
             place = f"{array}[{key[2]!r}]"
@@ -1587,7 +1674,8 @@ def _loop_function(
         cell = tracer.cells[key]
         if cell is not entry:
             commit_targets.append(local)
-            commit_values.append(tracer._atom(cell))
+            new_values[key] = tracer._atom(cell)
+            commit_values.append(new_values[key])
             stores.append(f"{place} = {local}")
             if cell.local is not None:
                 live.add(cell.local)
@@ -1610,11 +1698,23 @@ def _loop_function(
             "                rtc_now, rtc_from, rtc_until = rtc_fields(ts)",
         ]
     lines += [f"            {line}" for line in refresh]
+    guard_list: list[_Guard] = []
     for op in body:
         if isinstance(op, _Guard):
-            lines.append(f"            if {op.leave_if}: break")
+            # Only a guard that fails writes EXIT, so the scans that pass pay nothing for it.
+            lines.append(f"            if {op.leave_if}: EXIT[0] = {len(guard_list)}; break")
+            guard_list.append(op)
         else:
             lines.append(f"            {op.target} = {op.expression}")
+    # Whether this scan changes what the stop predicate reads, if not every scan does.
+    ask_when_changed = bool(seen) and not any(always for _name, _key, always in seen)
+    if ask_when_changed:
+        # same() tests identity first.  An "is" here would compare a stored literal, which warns.
+        changes = " or ".join(
+            f"not same({new_values[key]}, {tracer.entry_locals[key]})"
+            for _name, key, _always in seen
+        )
+        lines.append(f"            changed = {changes}")
     if commit_targets:
         lines.append(f"            {', '.join(commit_targets)}, = {', '.join(commit_values)},")
     lines += [
@@ -1622,21 +1722,73 @@ def _loop_function(
         "            ts += dt",
     ]
     if seen:
-        lines += [f"            seen[{name!r}] = {tracer.entry_locals[key]}" for name, key in seen]
-        lines.append("            if stop(): break")
+        indent = "            "
+        if ask_when_changed:
+            lines.append(f"{indent}if changed:")
+            indent += "    "
+        lines += [f"{indent}seen[{name!r}] = {tracer.entry_locals[key]}" for name, key, _ in seen]
+        lines.append(f"{indent}if stop(): EXIT[0] = {_LEFT_ON_STOP}; break")
     lines += [
         "    except Exception:",
-        "        pass",  # As a failed guard: the real scan runs this iteration.
+        # As a failed guard: the real scan runs this iteration.
+        f"        EXIT[0] = {_LEFT_ON_RAISE}",
     ]
     if stores:
         lines.append("    if used:")
         lines += [f"        {store}" for store in stores]
     lines.append("    return used, ts")
     source = "\n".join(lines)
-    namespace: dict[str, Any] = {"clock_high": clock_high, "math": math}
-    namespace.update({f"K{i}": value for i, value in enumerate(tracer.loop_constants)})
+    namespace: dict[str, Any] = {
+        "clock_high": clock_high,
+        "math": math,
+        "same": same,
+        "EXIT": [_LEFT_AT_LIMIT],
+        "GUARDS": tuple(guard_list),
+    }
+    constants = {f"K{i}": value for i, value in enumerate(tracer.loop_constants)}
+    namespace.update(constants)
     exec(compile(source, "<scan loop>", "exec"), namespace)  # noqa: S102
-    return namespace["_scan_loop"], source, body
+    shape = LoopShape(
+        tuple(shape_loads),
+        tuple(clocks),
+        tuple(rtc),
+        tuple(body),
+        tuple(zip(commit_targets, commit_values, strict=True)),
+        constants,
+        seen,
+    )
+    return namespace["_scan_loop"], source, shape
+
+
+# What a loop function writes in its EXIT when no guard failed.
+_LEFT_AT_LIMIT = -1
+_LEFT_ON_RAISE = -2
+_LEFT_ON_STOP = -3
+
+
+def _loop_globals(function: Callable[..., Any]) -> dict[str, Any]:
+    return cast("types.FunctionType", function).__globals__
+
+
+def start_counting_exit(function: Callable[..., Any]) -> None:
+    """Clear what *function* says ended its last call.  The jit counters call this."""
+    _loop_globals(function)["EXIT"][0] = _LEFT_AT_LIMIT
+
+
+def exit_of(function: Callable[..., Any], source: KernelSource) -> tuple[str, bool]:
+    """What ended *function*'s last call, and whether it was a guard or a raise.
+
+    Ask only after :func:`start_counting_exit` and a call that ran fewer scans than its limit.
+    """
+    names = _loop_globals(function)
+    left = names["EXIT"][0]
+    if left >= 0:
+        return f"a guard at {source.snippet(names['GUARDS'][left])}", True
+    if left == _LEFT_ON_RAISE:
+        return "an operation raised", True
+    if left == _LEFT_ON_STOP:
+        return "the stop predicate asked", False
+    return "its scan limit", False
 
 
 def _live_operations(ops: list[_Op | _Guard], live: set[str]) -> list[_Op | _Guard]:
@@ -1771,19 +1923,19 @@ def coast_loop(
     block_names: Mapping[str, Mapping[int, str]],
     watched: frozenset[str],
     seen: frozenset[str],
-) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str]:
+) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str, LoopShape]:
     """This trace's loop, kept to :class:`CoastMoves`.
 
     It leaves before the scan that would change a *watched* tag, which is the only
     thing it asks of that tag: where this trace moved it, the scans the loop runs are
     not the trace's own, and the moves it returns and :func:`coast_moves` differ on the
-    tag.  A coast does not fire such a loop.  After each scan it hands the moving tags
-    in *seen* to its ``seen`` argument and asks ``stop``, and those are only further
-    reasons to leave.
+    tag.  A coast does not fire such a loop.  After a scan that changes a moving tag in
+    *seen*, the loop puts those tags in its ``seen`` argument and asks ``stop``.  A stop is
+    one more reason to leave.
     """
     guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
-    loop, source, _body = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
-    return loop, moves, source
+    loop, source, shape = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
+    return loop, moves, source, shape
 
 
 def _coast_guards(
@@ -1791,13 +1943,14 @@ def _coast_guards(
     block_names: Mapping[str, Mapping[int, str]],
     watched: frozenset[str],
     seen: frozenset[str],
-) -> tuple[list[_Guard], CoastMoves, list[tuple[str, tuple[Any, ...]]]]:
+) -> tuple[list[_Guard], CoastMoves, list[tuple[str, tuple[Any, ...], bool]]]:
     guards: list[_Guard] = []
     moved: list[tuple[str, int]] = []
     free: list[str] = []
     flips: list[tuple[str, Any, Any]] = []
     held: list[str] = []
-    seen_cells: list[tuple[str, tuple[Any, ...]]] = []
+    # (name, cell, whether every scan changes it)
+    seen_cells: list[tuple[str, tuple[Any, ...], bool]] = []
     for key, name in moving_tags(plan, block_names).items():
         cell = plan.cells[key]
         old = plan.entry_locals[key]
@@ -1805,47 +1958,83 @@ def _coast_guards(
         uses = (old,) if cell.local is None else (old, cell.local)
         before = plan.entries[key].concrete
         after = cell.concrete
-        if name in seen:
-            seen_cells.append((name, key))
+        always = False
         free_to_move = name not in watched and cell.local is not None
         if free_to_move and type(after) is int and type(before) is int:
             delta = after - before
-            guards.append(_Guard(f"{new} - {old} != {delta!r}", uses))
+            guards.append(
+                _Guard(
+                    f"{new} - {old} != {delta!r}", uses, why=f"{name} moves by other than {delta}"
+                )
+            )
             if delta:
                 moved.append((name, delta))
+                always = True
             else:
                 held.append(name)
         elif free_to_move and type(after) is float and type(before) is float:
             # Nothing says how far a Real moves, only whether it does, and a scan that holds
             # it is another path: a record of it says "moved" on every scan it runs.
             if after == before:
-                guards.append(_Guard(f"{new} != {old}", uses))
+                guards.append(_Guard(f"{new} != {old}", uses, why=f"{name} starts moving"))
                 held.append(name)
             else:
-                guards.append(_Guard(f"{new} == {old}", uses))
+                guards.append(_Guard(f"{new} == {old}", uses, why=f"{name} stops moving"))
                 free.append(name)
+                always = True
         elif name in watched or same(after, before) or after == before:
             # Equal across types too: 0 to False on an Int driven by out() is no transition.
-            guards.append(_Guard(f"{old} != {new}", uses))
+            why = f"watched {name} changes" if name in watched else f"{name} changes"
+            guards.append(_Guard(f"{old} != {new}", uses, why=why))
             if cell.local is not None and same(after, before):
                 held.append(name)
         else:
-            guards.append(_Guard(f"{old} != {plan._atom(_Value(before))}", (old,)))
+            flip = f"{name} flips other than {before!r} to {after!r}"
+            guards.append(_Guard(f"{old} != {plan._atom(_Value(before))}", (old,), why=flip))
             if cell.local is not None:
-                guards.append(_Guard(f"{new} != {plan._atom(_Value(after))}", (cell.local,)))
+                guards.append(
+                    _Guard(f"{new} != {plan._atom(_Value(after))}", (cell.local,), why=flip)
+                )
             flips.append((name, before, after))
+            always = True
+        if name in seen:
+            seen_cells.append((name, key, always))
     return guards, CoastMoves(tuple(moved), tuple(free), tuple(flips), tuple(held)), seen_cells
 
 
 # --- Driving the loop through a run --------------------------------------------
 
 
+# Parsed kernel sources by source text, least recently used first.  A parse depends on the
+# text alone, so kernels compiled from one source share it.  Only ``snippet()`` writes to a
+# parse later, and it stores lines of that same text.  Each parse is several megabytes on a
+# large program.
+MAX_PARSED_SOURCES = 2
+_PARSED_BY_SOURCE: dict[str, KernelSource] = {}
+_PARSED_LOCK = threading.Lock()
+
+
 def _source_of(kernel: CompiledKernel) -> KernelSource:
     """The parsed source, kept on the kernel: a kernel serves many runs."""
     cached = kernel.__dict__.get("_scan_trace_source")
+    if cached is not None:
+        return cached
+    text = kernel.source
+    with _PARSED_LOCK:
+        cached = _PARSED_BY_SOURCE.pop(text, None)
+        if cached is not None:
+            _PARSED_BY_SOURCE[text] = cached
     if cached is None:
+        counting = bool(jit_stats.ACTIVE)
+        started = time.perf_counter() if counting else 0.0
         cached = KernelSource(kernel)
-        object.__setattr__(kernel, "_scan_trace_source", cached)
+        if counting:
+            jit_stats.add_cost("parse the kernel source", time.perf_counter() - started)
+        with _PARSED_LOCK:
+            _PARSED_BY_SOURCE[text] = cached
+            while len(_PARSED_BY_SOURCE) > MAX_PARSED_SOURCES:
+                _PARSED_BY_SOURCE.pop(next(iter(_PARSED_BY_SOURCE)))
+    object.__setattr__(kernel, "_scan_trace_source", cached)
     return cached
 
 
@@ -1865,6 +2054,13 @@ class ScanLoop:
     """One run's guarded loop.  Ask :meth:`advance` before every real scan."""
 
     _keep_plans = False
+    # The jit counters' record of this run's stretches.  The run sets it while they count.
+    jit: jit_stats.Run | None = None
+    # What the jit counters call this loop's real scans.
+    _real_scans_are = "compiled"
+    # While the counters count, this holds the stretch the last firing left open, as
+    # [first scan, scans run].
+    _open: list[int] | None = None
 
     def __init__(
         self,
@@ -1976,8 +2172,17 @@ class ScanLoop:
             self._mismatch(f"its guards passed where the real scan {reason}", pending)
 
     def finish(self) -> None:
-        """Add this run to :data:`TOTALS`."""
+        """Add this run to :data:`TOTALS`, and to the jit counters while they count."""
         TOTALS.update(self.counts)
+        if jit_stats.ACTIVE:
+            self._close_open("the run's end")
+            for key, n in self.counts.items():
+                if key == "real scans":
+                    jit_stats.add_scans(self._real_scans_are, n)
+                elif key.startswith(("decline: ", "run declined: ")):
+                    jit_stats.add_decline(key, n)
+                elif key not in ("loop scans", "trace microseconds"):
+                    jit_stats.add_event(key, n)
 
     # -- Entry ------------------------------------------------------------------
 
@@ -2031,6 +2236,10 @@ class ScanLoop:
 
     def _fire(self, trace: ScanTrace, limit: int) -> int:
         kernel = self._replay._kernel
+        called = 0.0
+        if self.jit is not None:
+            start_counting_exit(trace.loop)
+            called = time.perf_counter()
         used, timestamp = trace.loop(
             kernel.tags,
             kernel.blocks,
@@ -2040,12 +2249,37 @@ class ScanLoop:
             limit,
             self._rtc_fields,
         )
+        if self.jit is not None:
+            jit_stats.add_cost("loop", time.perf_counter() - called)
         if used:
+            if self.jit is not None:
+                self._count_firing(trace, kernel.scan_id + 1, used, limit)
             kernel.scan_id += used
             kernel.timestamp = timestamp
             _record_block_writes(trace, kernel.blocks)
             self.counts["loop scans"] += used
         return used
+
+    def _count_firing(self, trace: ScanTrace, first: int, used: int, limit: int) -> None:
+        """Firings in a row make one stretch, which a failed guard ends."""
+        stretch = self._open
+        if stretch is not None and stretch[0] + stretch[1] == first:
+            stretch[1] += used
+        else:
+            # The scan after the open stretch ran outside the loop, a real change.
+            self._close_open("its scan limit, and no loop took the next scan", guard_failed=True)
+            stretch = self._open = [first, used]
+        if used < limit:
+            self._open = None
+            left_by, failed = exit_of(trace.loop, _source_of(self._artifact))
+            assert self.jit is not None
+            self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=failed)
+
+    def _close_open(self, left_by: str, *, guard_failed: bool = False) -> None:
+        stretch = self._open
+        if stretch is not None and self.jit is not None:
+            self._open = None
+            self.jit.stretch(stretch[0], stretch[1], left_by, guard_failed=guard_failed)
 
     def _after_firing(self, used: int, limit: int) -> None:
         if used >= min(limit, UNPRODUCTIVE_BELOW):
@@ -2094,7 +2328,10 @@ class ScanLoop:
             self._note_decline(f"tracer error: {type(exc).__name__}")
             return
         finally:
-            self.counts["trace microseconds"] += int((time.perf_counter() - started) * 1e6)
+            spent = time.perf_counter() - started
+            self.counts["trace microseconds"] += int(spent * 1e6)
+            if jit_stats.ACTIVE:
+                jit_stats.add_cost("trace", spent)
         self.counts["traces"] += 1
         self._begin_self_check(trace)
 

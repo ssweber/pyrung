@@ -25,6 +25,7 @@ from collections.abc import Callable
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core import jit_stats
 from pyrung.core.bounds import TagConstraint, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
 from pyrung.core.scan_trace import TOTALS, ScanLoop, may_store_a_default
@@ -99,7 +100,11 @@ def _step(
         pause_requested = plc._consume_pause_request()
         hit = predicate is not None and bool(predicate(plc._state))
         if hit or pause_requested:
+            if jit_stats.ACTIVE:
+                jit_stats.add_scans("interpreted", used)
             return used, True
+    if jit_stats.ACTIVE:
+        jit_stats.add_scans("interpreted", scans)
     return scans, False
 
 
@@ -115,35 +120,70 @@ def run_scans(
     *compiled_predicate* says *predicate* depends only on the state it is
     handed.  A callable cannot promise that, so it keeps the run interpreted.
     """
+    if not jit_stats.ACTIVE:
+        return _run_scans(plc, scans, predicate, compiled_predicate, None)
+    run = jit_stats.Run("run_for()/run_until()")
+    try:
+        return _run_scans(plc, scans, predicate, compiled_predicate, run)
+    finally:
+        run.end(plc._state.scan_id + 1)
+
+
+def _run_scans(
+    plc: PLC,
+    scans: int,
+    predicate: Callable[[SystemState], bool] | None,
+    compiled_predicate: bool,
+    run: jit_stats.Run | None,
+) -> SystemState:
     prefix = max(1, INTERPRETED_PREFIX)
     used, stopped = _step(plc, min(scans, prefix), predicate)
     if stopped or used >= scans:
+        if run is not None:
+            jit_stats.add_decline("interpreted: ended in the interpreted prefix")
         return plc._state
-    if (
-        (predicate is not None and not compiled_predicate)
-        or plc._replay_mode
-        or plc._program is None
-        or plc._time_mode != TimeMode.FIXED_STEP
-        or _someone_watches_each_scan(plc)
-    ):
+    stays_interpreted = _why_interpreted(plc, predicate, compiled_predicate)
+    if stays_interpreted is not None:
+        if run is not None:
+            jit_stats.add_decline(f"interpreted: {stays_interpreted}")
         _step(plc, scans - used, predicate)
         return plc._state
     kernel = plc._compiled_replay_supported_kernel()
     if kernel is None:
+        if run is not None:
+            jit_stats.add_decline("interpreted: no kernel")
         _step(plc, scans - used, predicate)
         return plc._state
     remaining = scans - used
     while remaining and _kernel_cannot_say_what_it_adds(plc, kernel):
         ran, stopped = _step(plc, min(remaining, prefix), predicate)
         TOTALS["interpreted: a tag not in the state may get its default"] += ran
+        if run is not None:
+            jit_stats.add_decline("interpreted: a tag not in the state may get its default")
         remaining -= ran
         if stopped:
             return plc._state
     if remaining:
-        remaining = _run_compiled(plc, kernel, remaining, predicate)
+        remaining = _run_compiled(plc, kernel, remaining, predicate, run)
     if remaining:
         _step(plc, remaining, predicate)
     return plc._state
+
+
+def _why_interpreted(
+    plc: PLC, predicate: Callable[[SystemState], bool] | None, compiled_predicate: bool
+) -> str | None:
+    if predicate is not None and not compiled_predicate:
+        return "a callable stop predicate"
+    if plc._replay_mode:
+        return "replay mode"
+    if plc._program is None:
+        return "no program"
+    if plc._time_mode != TimeMode.FIXED_STEP:
+        return "not fixed-step time"
+    if _someone_watches_each_scan(plc):
+        return "a breakpoint or monitor"
+    return None
 
 
 def _kernel_cannot_say_what_it_adds(plc: PLC, kernel: CompiledKernel) -> bool:
@@ -156,6 +196,7 @@ def _run_compiled(
     kernel: CompiledKernel,
     budget: int,
     predicate: Callable[[SystemState], bool] | None,
+    run: jit_stats.Run | None = None,
 ) -> int:
     """Run up to *budget* kernel scans; return the scans left to step interpreted.
 
@@ -181,11 +222,16 @@ def _run_compiled(
     bounds = _BoundsWatch(replay, plc._constrained_tags) if plc._constrained_tags else None
     if bounds is not None and bounds.violated():
         # A value already out of range: a scan rewriting it warns, unseen here.
+        if run is not None:
+            jit_stats.add_decline("interpreted: a value already out of its bounds")
         return budget
     settled = start  # the last state known exact, and where a failed run resumes
     used = 0
     undone = False
+    # Loop scans and real scans past *settled*, which an undone run takes back.
+    unsettled = [0, 0]
     loop = ScanLoop(replay, kernel, budget, predicate, plc._constrained_tags)
+    loop.jit = run
     plc._epoch_caches.on_tip_advanced()
     while used < budget:
         # Stop the loop at each checkpoint: it has to be installed on its scan.
@@ -193,9 +239,11 @@ def _run_compiled(
         ran = loop.advance(min(budget - used, to_checkpoint))
         if ran:
             used += ran
+            unsettled[0] += ran
             checkpoint = replay._kernel.scan_id % interval == 0
             if checkpoint or LOOP_OBSERVERS:
                 settled = replay._materialize_replay_state()
+                unsettled = [0, 0]
                 if checkpoint:
                     _install(plc, replay, settled)
                 for observer in LOOP_OBSERVERS:
@@ -213,12 +261,14 @@ def _run_compiled(
             break
         loop.real_scan_ran()
         used += 1
+        unsettled[1] += 1
         scan_id = replay._kernel.scan_id
         checkpoint = scan_id % interval == 0
         if predicate is None and not checkpoint:
             continue
         state = replay._materialize_replay_state()
         settled = state
+        unsettled = [0, 0]
         if checkpoint:
             _install(plc, replay, state)
         if predicate is not None and predicate(state):
@@ -227,6 +277,13 @@ def _run_compiled(
     loop.finish()
     if undone:
         used = settled.scan_id - start.scan_id
+        if run is not None:
+            # These scans run again interpreted, and count there.
+            run.undo(settled.scan_id)
+            if unsettled[1]:
+                jit_stats.add_scans("compiled", -unsettled[1])
+            if any(unsettled):
+                jit_stats.add_scans("undone", sum(unsettled))
     elif settled.scan_id != replay._kernel.scan_id:
         settled = replay._materialize_replay_state()
     if settled.scan_id != plc._state.scan_id:

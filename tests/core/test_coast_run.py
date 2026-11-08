@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math as pymath
 import random
+import warnings
 from types import SimpleNamespace
 from typing import Any
 
@@ -33,6 +34,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung_firings,
     runner,
     scan_trace,
     system,
@@ -40,12 +42,13 @@ from pyrung.core import (
 from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
 from pyrung.core.rung_firings import (
     _UNKNOWN_VALUE,
+    Repeat,
     RungFiringTimelines,
     SearchQuestionRefused,
     UnrecordedScansError,
 )
 from pyrung.core.tag import Dint
-from tests.fold_check import compare_records
+from tests.fold_check import compare_records, seed_records
 
 CASES = {}
 
@@ -246,6 +249,12 @@ def _same_tags(ours: dict[str, Any], theirs: dict[str, Any]) -> None:
 
 
 @pytest.fixture
+def small_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A column turns Unknown after a hundred entries, so a short run reaches the limit."""
+    monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
+
+
+@pytest.fixture
 def strict(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(scan_trace, "STRICT_SELF_CHECK", True)
     monkeypatch.setattr(compiled_run, "LOOP_OBSERVERS", [])
@@ -281,6 +290,7 @@ class TestAgainstStepping:
     def test_leaves_the_records_stepping_leaves(self, strict, name: str) -> None:
         plc = _runner(CASES[name], 0.3)
         twin = plc.fork()
+        seed_records(twin, plc)
         whole = _runner(CASES[name], 0.3)  # the surveys read a runner's own epoch, not a fork's
         for _ in range(SCANS):
             twin.step()
@@ -438,6 +448,7 @@ class TestRecordedRuns:
         assert runs._unknown_keys == scans._unknown_keys
         assert runs._partly_unknown == scans._partly_unknown
 
+    @pytest.mark.usefixtures("small_limit")
     def test_a_tag_of_many_values_goes_unknown_as_it_would(self) -> None:
         path = _FakePath({"rung": _Recording({}, (("A", None, False),), frozenset())})
         runs: RungFiringTimelines[str] = RungFiringTimelines()
@@ -448,9 +459,11 @@ class TestRecordedRuns:
             scans.append("rung", scan, {"A": value})
             segments.append(SimpleNamespace(path=path, first=scan, count=1, ends={"A": value}))
         _record_columns(runs, segments, 0, frozenset())
+        assert scans._unknown_keys
         assert runs._unknown_keys == scans._unknown_keys
         assert runs._value_timelines == scans._value_timelines
 
+    @pytest.mark.usefixtures("small_limit")
     def test_a_column_that_goes_unknown_in_a_head_stays_unknown(self) -> None:
         repeated: RungFiringTimelines[str] = RungFiringTimelines()
         tag_run: RungFiringTimelines[str] = RungFiringTimelines()
@@ -553,6 +566,7 @@ def _writes_too_many_values() -> None:
         out(Hit)
 
 
+@pytest.mark.usefixtures("small_limit")
 class TestRungFiringsAlwaysHaveTheirValues:
     SCANS = 1000
 
@@ -608,6 +622,13 @@ def test_a_long_wait_runs_in_the_loop() -> None:
     coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset(), stats=stats)
     assert stats["stretched_scans"] > SCANS / 2
     assert memo_of(plc).compiles == 1
+
+
+def test_a_coast_that_ends_before_its_first_attempt_compiles_nothing() -> None:
+    plc = _runner(_ramp, 0.01)
+    coast_until(plc, lambda _s: False, budget=coast_run.ENTRY_WAIT - 1, predicate_reads=frozenset())
+    assert memo_of(plc).compiles == 0
+    assert plc._compiled_replay_kernel is None
 
 
 def test_a_monitor_fires_on_the_scan_stepping_fires_it() -> None:
@@ -674,6 +695,7 @@ def test_columns_kept_by_content_have_their_cap(monkeypatch: pytest.MonkeyPatch)
     assert all(len(held.interned) <= 2 for held in memo_of(plc).paths.values())
     # Past the cap two paths may no longer see they agree, and the answers are the same.
     twin = _runner(CASES["staircase_mirror"], 0.3)
+    seed_records(twin, twin)
     for _ in range(plc.state.scan_id - twin.state.scan_id):
         twin.step()
     compare_records("capped columns", plc, twin, 0)
@@ -842,6 +864,69 @@ def _fires_every_other_scan() -> None:
         on_delay(T, 30000)
 
 
+def test_a_count_with_values_before_the_loop_goes_unknown_on_the_scan_stepping_does(
+    strict, small_limit
+) -> None:
+    # Forty scans first give the count twenty entries, so the loop counts on from them.
+    plc = _runner(_fires_every_other_scan, 0.01)
+    for _ in range(40):
+        plc.step()
+    twin = plc.fork()
+    seed_records(twin, plc)
+    start = plc.current_state.scan_id
+    coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert any(tag == X.name for _rung, tag in plc._rung_firing_timelines._unknown_keys)
+    compare_records("count", plc, twin, start)
+
+
+Counts = [Int(f"AdvCount{rung}") for rung in range(3)]
+
+
+def _three_counts() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    for count in Counts:
+        with Rung(Toggle):
+            math(count + 1, count)
+
+
+def test_counts_that_go_unknown_cycles_apart_keep_the_loop_planning(
+    strict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plc = _runner(_three_counts, 0.01)
+    # Each count first takes squares, three more than the count before.  So the counts reach
+    # the entry limit three cycles apart.
+    for value in range(19):
+        plc.patch(
+            {
+                c: 50_000 + 1000 * j + value * value
+                for j, c in enumerate(Counts)
+                if value < 10 + 3 * j
+            }
+        )
+        plc.step()
+        plc.step()
+    twin = plc.fork()
+    seed_records(twin, plc)
+    start = plc.current_state.scan_id
+    stepped: list[int] = []
+    record = coast_run._record_scan_by_scan
+
+    def counted(plc: PLC, segments: list[Any], kernel_paths: Any) -> None:
+        stepped.append(sum(segment.count for segment in segments))
+        record(plc, segments, kernel_paths)
+
+    monkeypatch.setattr(coast_run, "_record_scan_by_scan", counted)
+    coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset())
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert len(plc._rung_firing_timelines._unknown_keys) >= 3
+    assert sum(stepped) < SCANS // 2
+    compare_records("counts", plc, twin, start)
+
+
 class TestRecordsPastTheirCap:
     SCANS = 12_000
 
@@ -853,6 +938,7 @@ class TestRecordsPastTheirCap:
 
     def _stepped(self, plc: PLC) -> PLC:
         stepped = _runner(_fires_every_other_scan, 0.01)
+        seed_records(stepped, stepped)
         while stepped.state.scan_id < plc.state.scan_id:
             stepped.step()
         return stepped
@@ -909,3 +995,177 @@ class TestRecordsPastTheirCap:
         monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
         with pytest.raises(UnrecordedScansError):
             plc.query.cold_rungs()
+
+
+def test_a_loop_asks_the_stop_predicate_only_after_a_scan_that_changes_its_reads() -> None:
+    # X steps once in 50 scans.  In between, the loop writes X but holds it.
+    plc = _runner(_ramp, 0.01)
+    twin = plc.fork()
+    asked_in_the_loop = 0
+
+    def reached(state: Any) -> bool:
+        nonlocal asked_in_the_loop
+        if isinstance(state, coast_run._SeenState):
+            asked_in_the_loop += 1
+        return state.tags[X.name] >= 5
+
+    stats: dict[str, int] = {}
+    hit = coast_until(plc, reached, budget=SCANS, predicate_reads=frozenset((X.name,)), stats=stats)
+    while twin.current_state.tags[X.name] < 5:
+        twin.step()
+    assert hit
+    assert plc.current_state.scan_id == twin.current_state.scan_id
+    assert stats["stretched_scans"] > 150
+    assert asked_in_the_loop <= 5
+
+
+SetY = Int("AdvSetY")
+
+
+def _ramp_then_set() -> None:
+    with Rung():
+        on_delay(T, 30000)
+    with Rung():
+        copy(T.Acc // 500, X)
+    with Rung(X >= 1):
+        copy(7, SetY)
+
+
+def test_a_loop_that_stores_a_constant_in_a_read_tag_compiles_without_a_warning() -> None:
+    # SetY moves once, so later traces store the literal 7 into a tag the predicate reads.
+    plc = _runner(_ramp_then_set, 0.01)
+    twin = plc.fork()
+
+    def reached(state: Any) -> bool:
+        return state.tags[X.name] >= 5 and state.tags[SetY.name] == 7
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        hit = coast_until(
+            plc, reached, budget=SCANS, predicate_reads=frozenset((X.name, SetY.name))
+        )
+    while twin.current_state.tags[X.name] < 5:
+        twin.step()
+    assert hit
+    assert plc.current_state.scan_id == twin.current_state.scan_id
+
+
+FlipY = Int("AdvFlipY")
+
+
+def _flips_between_two_values() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        copy(5, FlipY)
+    with Rung(~Toggle):
+        copy(7, FlipY)
+
+
+@pytest.mark.parametrize(
+    "build, steps",
+    [(_flips_between_two_values, False), (_fires_every_other_scan, True)],
+    ids=["same values", "a count that steps"],
+)
+def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(
+    strict, build, steps: bool
+) -> None:
+    plc = _runner(build, 0.01)
+    stepped = _runner(build, 0.01)  # the surveys read a runner's own epoch
+    seed_records(stepped, plc)
+    start = plc.current_state.scan_id
+    coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset())
+    while stepped.current_state.scan_id < plc.current_state.scan_id:
+        stepped.step()
+    timelines = plc._rung_firing_timelines
+    tables = (timelines._fired_ranges, timelines._value_timelines)
+    repeats = [e for t in tables for ranges in t.values() for e in ranges if type(e) is Repeat]
+    assert repeats
+    assert any(repeat.steps for repeat in repeats) == steps
+    assert timelines.run_count() < 100 < stepped._rung_firing_timelines.run_count()
+    compare_records("repeat", plc, stepped, start)
+    assert plc.query.cold_rungs() == stepped.query.cold_rungs()
+    assert plc.query.hot_rungs() == stepped.query.hot_rungs()
+    tip = plc.current_state.scan_id
+    middle = start + SCANS * 5 // 2
+    for scan in (start + 1, start + 2, middle, middle + 1, tip - 1, tip):
+        assert plc.rung_firings(scan) == stepped.rung_firings(scan), scan
+        assert dict(plc.history.at(scan).tags) == dict(stepped.history.at(scan).tags), scan
+        for tag in (Toggle, FlipY, X):
+            assert str(plc.cause(tag, scan)) == str(stepped.cause(tag, scan)), (tag, scan)
+            assert str(plc.effect(tag, scan, max_scans=50)) == str(
+                stepped.effect(tag, scan, max_scans=50)
+            ), (tag, scan)
+
+
+def _cycles_in_walked_from_each_first(segments: list[Any]) -> list[tuple[int, int, int]]:
+    """``_cycles_in`` as it was, walking the keys again from each first segment."""
+    found: list[tuple[int, int, int]] = []
+    count = len(segments)
+    keys = [(id(segment.path), segment.count) for segment in segments]
+    least = coast_run.WARM_CYCLES + 2
+    first = 0
+    while first + least <= count:
+        cover, length = 0, 0
+        top = first + min(coast_run.MAX_CYCLE_SEGMENTS, (count - first) // least)
+        for at in range(first + 1, top + 1):
+            if keys[at] != keys[first]:
+                continue
+            candidate = at - first
+            end = coast_run._periodic_end(keys, first, candidate)
+            reach = (end - first) // candidate * candidate
+            if reach > cover:
+                cover, length = reach, candidate
+        if not length:
+            first += 1
+            continue
+        if coast_run._worth_a_repeat(segments, first, length, cover // length):
+            end = coast_run._stepping_end(segments, first, length, first + cover)
+            cycles = (end - first) // length
+            if coast_run._worth_a_repeat(segments, first, length, cycles):
+                found.append((first, length, cycles))
+                first += cycles * length
+                continue
+            cover = end - first
+        first = max(first + 1, first + cover - length)
+    return found
+
+
+def _random_segments(rng: random.Random, count: int) -> list[Any]:
+    paths = [object() for _ in range(3)]
+    pattern = [rng.choice(paths) for _ in range(rng.randint(1, 4))]
+    every = rng.choice([9, 40, 1000])  # segments between changes of a text value
+    segments = []
+    for position in range(count):
+        if rng.random() < 0.01:
+            pattern = [rng.choice(paths) for _ in range(rng.randint(1, 4))]
+        path = pattern[position % len(pattern)]
+        ends = {"step": position // len(pattern), "text": f"t{position // every}"}
+        segments.append(coast_run._Segment(path, position * 60, 60, ends))
+    return segments
+
+
+def test_the_cycles_found_do_not_depend_on_walking_the_keys_again() -> None:
+    for seed in range(30):
+        segments = _random_segments(random.Random(seed), 600)
+        assert coast_run._cycles_in(segments) == _cycles_in_walked_from_each_first(segments), seed
+
+
+def test_a_long_repeating_stretch_is_walked_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    paths = (object(), object())
+    # The paths take turns, and a text value that changes every seven cycles ends each run.
+    segments = [
+        coast_run._Segment(paths[position % 2], position * 40, 40, {"x": f"v{position // 14}"})
+        for position in range(4000)
+    ]
+    walks: list[int] = []
+    periodic_end = coast_run._periodic_end
+
+    def counted(keys: Any, first: int, length: int) -> int:
+        walks.append(first)
+        return periodic_end(keys, first, length)
+
+    monkeypatch.setattr(coast_run, "_periodic_end", counted)
+    runs = coast_run._cycles_in(segments)
+    assert len(runs) == 285
+    assert len(walks) <= coast_run.MAX_CYCLE_SEGMENTS

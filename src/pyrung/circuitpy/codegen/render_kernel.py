@@ -7,7 +7,10 @@ dicts instead of module-level globals backed by hardware I/O.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Mapping
+from types import CodeType
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -34,6 +37,71 @@ from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import dt_to_ns
 
+# Code objects by kernel source, least recently used first.  A code object is immutable.
+# Each kernel runs the shared code in a namespace of its own, so kernels share no state
+# through it.  Runners on one program compile the same source, and so do how() forks with
+# the same synthesis.
+MAX_CACHED_CODE = 4
+_CODE_BY_SOURCE: dict[str, CodeType] = {}
+_CODE_LOCK = threading.Lock()
+
+
+def _code_of(source: str) -> tuple[CodeType, bool]:
+    """The kernel source's code object, and whether an earlier compile made it."""
+    with _CODE_LOCK:
+        code = _CODE_BY_SOURCE.pop(source, None)
+        if code is not None:
+            _CODE_BY_SOURCE[source] = code
+            return code, True
+    code = compile(source, "<kernel>", "exec", dont_inherit=True)
+    with _CODE_LOCK:
+        _CODE_BY_SOURCE[source] = code
+        while len(_CODE_BY_SOURCE) > MAX_CACHED_CODE:
+            _CODE_BY_SOURCE.pop(next(iter(_CODE_BY_SOURCE)))
+    return code, False
+
+
+# What the materialized-tag walk does with an object, by its type (see ``_kind_of``).
+_SKIP, _TAG, _RANGE, _DICT, _MAPPING, _ITEMS, _OBJECT = range(7)
+# Exact types the walk never looks inside.
+_PLAIN_TYPES = frozenset({type(None), str, bytes, bytearray, int, float, bool})
+# Exact container types push() may read twice.  A dict's views are among them.
+_SEQUENCE_TYPES = frozenset({list, tuple, set, frozenset, type({}.keys()), type({}.values())})
+_OBJECT_CLASS = object.__dict__["__class__"]
+
+
+def _kind_is_per_type(cls: type) -> bool:
+    """Whether every instance of *cls* answers ``__class__`` and isinstance() alike.
+
+    A proxy, or a class that overrides attribute lookup, may answer per instance.
+    """
+    if cls.__getattribute__ is not object.__getattribute__:
+        return False
+    for base in cls.__mro__:
+        if "__class__" in base.__dict__:
+            return base.__dict__["__class__"] is _OBJECT_CLASS
+    return False
+
+
+def _kind_of(current: Any) -> int:
+    if current is None:
+        return _SKIP
+    if isinstance(current, Tag):
+        return _TAG
+    if isinstance(current, (str, bytes, bytearray, int, float, bool, Block, Program)):
+        return _SKIP
+    if type(current) is BlockRange:
+        return _SKIP
+    if isinstance(current, BlockRange):
+        return _RANGE
+    if type(current) is dict:
+        return _DICT
+    if isinstance(current, Mapping):
+        return _MAPPING
+    if isinstance(current, tuple | list | set | frozenset):
+        return _ITEMS
+    return _OBJECT
+
 
 def _collect_materialized_tag_names(
     program: Program,
@@ -45,6 +113,13 @@ def _collect_materialized_tag_names(
     into that block would make the result depend on ``Block._tag_cache`` and on
     whether compilation has already expanded static ranges.  For state seeding,
     only concrete ``Tag`` objects that appear in the program graph should count.
+
+    A rung points back to the program that bound it (``_site_owner``).  The walk stops
+    there, so the names do not depend on which analyses of the program have run.  The
+    rungs and subroutines it starts from are the program's own.
+
+    The walk asks what each type is once, and skips a container of plain values without
+    queueing them.  The walk finds the same names as a walk that queues every item.
     """
 
     found: set[str] = set()
@@ -53,22 +128,31 @@ def _collect_materialized_tag_names(
     queue.extend(program.rungs)
     for subroutine_rungs in program.subroutines.values():
         queue.extend(subroutine_rungs)
+    kinds: dict[type, int] = dict.fromkeys(_PLAIN_TYPES, _SKIP)
+
+    def push(items: Any) -> None:
+        # push() reads the items twice, so it takes only a container that gives the same items
+        # each time.
+        if type(items) not in _SEQUENCE_TYPES:
+            queue.extend(items)
+        elif not _PLAIN_TYPES.issuperset(map(type, items)):
+            queue.extend(items)
 
     while queue:
         current = queue.pop()
-        if current is None:
+        cls = type(current)
+        kind = kinds.get(cls)
+        if kind is None:
+            kind = _kind_of(current)
+            if _kind_is_per_type(cls):
+                kinds[cls] = kind
+        if kind == _SKIP:
             continue
-        if isinstance(current, Tag):
+        if kind == _TAG:
             if current.name not in SYSTEM_TAGS_BY_NAME:
                 found.add(current.name)
             continue
-        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
-            continue
-        if isinstance(current, Block):
-            continue
-        if type(current) is BlockRange:
-            continue
-        if isinstance(current, BlockRange):
+        if kind == _RANGE:
             layout = (
                 ctx.static_range_layout(current)
                 if ctx is not None
@@ -83,18 +167,17 @@ def _collect_materialized_tag_names(
             continue
         visited.add(current_id)
 
-        if isinstance(current, Mapping):
+        if kind == _DICT:
+            push(current.keys())
+            push(current.values())
+        elif kind == _MAPPING:
             queue.extend(current.keys())
             queue.extend(current.values())
-            continue
-        if isinstance(current, tuple | list | set | frozenset):
-            queue.extend(current)
-            continue
-
-        if hasattr(current, "__dict__"):
-            queue.extend(vars(current).values())
-            continue
-        if hasattr(current, "__slots__"):
+        elif kind == _ITEMS:
+            push(current)
+        elif hasattr(current, "__dict__"):
+            push(vars(current).values())
+        elif hasattr(current, "__slots__"):
             for slot in current.__slots__:
                 if slot in {"__weakref__", "__dict__"}:
                     continue
@@ -102,6 +185,10 @@ def _collect_materialized_tag_names(
                     queue.append(getattr(current, slot))
 
     return frozenset(found)
+
+
+def _no_clock() -> float:
+    return 0.0
 
 
 def compile_kernel(
@@ -112,6 +199,7 @@ def compile_kernel(
     proof_metadata: bool = False,
     abstract_timers: bool = False,
     split_after: int | None = None,
+    timings: dict[str, float] | None = None,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel.
 
@@ -125,7 +213,11 @@ def compile_kernel(
     leading rungs — the synthesis ``plant`` pass — so the caller can drain inputs
     *between* the two passes (the plant reads the previous commit, the input-read
     phase).  ``None`` ⇒ a single ``step_fn`` for the whole program.
+
+    The jit counters pass ``timings`` to get the seconds each step took.
     """
+    clock = time.perf_counter if timings is not None else _no_clock
+    started = clock()
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
@@ -134,6 +226,7 @@ def compile_kernel(
         abstract_timers=abstract_timers,
     )
     source, lock_source = _render_kernel_source(ctx, split_after=split_after)
+    rendered = clock()
 
     namespace: dict[str, Any] = {
         **ctx.function_objects,
@@ -143,8 +236,10 @@ def compile_kernel(
         "_ForIterationsBeyondCap": ForIterationsBeyondCap,
         "_for_cap_sites": tuple(ctx.for_cap_sites),
     }
-    code = compile(source, "<kernel>", "exec", dont_inherit=True)
+    code, reused = _code_of(source)
+    compiled = clock()
     exec(code, namespace)  # noqa: S102
+    executed = clock()
     step_fn = namespace["_kernel_step"]
     pre_step_fn = namespace.get("_kernel_step_pre")
 
@@ -163,8 +258,11 @@ def compile_kernel(
         )
 
     block_specs = _build_block_specs(ctx)
+    built = clock()
+    materialized = _collect_materialized_tag_names(program, ctx)
+    walked = clock()
 
-    return CompiledKernel(
+    kernel = CompiledKernel(
         step_fn=step_fn,
         pre_step_fn=pre_step_fn,
         calls_functions=bool(ctx.function_objects),
@@ -178,9 +276,17 @@ def compile_kernel(
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
-        materialized_tag_names=_collect_materialized_tag_names(program, ctx),
+        materialized_tag_names=materialized,
         timer_unit_ns=dict(ctx.timer_unit_ns),
     )
+    if timings is not None:
+        timings["source"] = rendered - started
+        if not reused:
+            timings["python compile"] = compiled - rendered
+        timings["exec"] = executed - compiled
+        timings["build"] = built - executed + clock() - walked
+        timings["materialized tags"] = walked - built
+    return kernel
 
 
 def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:

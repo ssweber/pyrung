@@ -2043,7 +2043,7 @@ class PLC:
         already-pending value. Transition consumers compare committed state;
         causal execution consumers retain the exact writer occurrence.
 
-        A column of values too various to keep, or that a loop's record cannot speak for,
+        A column that grew too long to keep, or that a loop's record cannot speak for,
         is read by stepping the scan again from the nearest checkpoint, up to
         ``UnrecordedScansError`` where that is too far.
         """
@@ -2084,7 +2084,7 @@ class PLC:
                 check_limits()
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             if scan_id == target:
-                # One scan's values, which the run-up cannot have made too various to keep.
+                # A fresh record keeps every value of this one scan.
                 replay._rung_firing_timelines = RungFiringTimelines()
             replay.step()
         return replay._rung_firing_timelines.at(target)
@@ -2520,6 +2520,13 @@ class PLC:
         """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+        # The replay counts each column on from here, so it keeps the values this record would.
+        for name in (
+            "_rung_firing_timelines",
+            "_committed_tag_timelines",
+            "_node_firing_timelines",
+        ):
+            setattr(replay, name, getattr(self, name).carried_to(anchor_scan_id))
         for scan_id in range(anchor_scan_id + 1, last + 1):
             if check_limits is not None:
                 check_limits()
@@ -3259,6 +3266,7 @@ class PLC:
 
     def _compiled_replay_supported_kernel(self) -> CompiledKernel | None:
         from pyrung.circuitpy.codegen import compile_kernel
+        from pyrung.core import jit_stats
 
         cached = self._compiled_replay_kernel
         if isinstance(cached, CompiledKernel):
@@ -3284,8 +3292,12 @@ class PLC:
         split_after = (
             len(syn.plant) + len(syn.holds) if (syn is not None and not syn.is_empty()) else None
         )
+        timings: dict[str, float] | None = {} if jit_stats.ACTIVE else None
+        started = time.perf_counter()
         try:
-            kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
+            kernel = compile_kernel(
+                self._soft_exec_program(), split_after=split_after, timings=timings
+            )
         except Exception as exc:
             # A gap is expected.  Anything else is pyrung's own bug and is said, but the kernel
             # is only speed: what the scans would answer, an interpreted scan answers too.
@@ -3298,6 +3310,11 @@ class PLC:
                 )
             self._compiled_replay_kernel = False
             return None
+        finally:
+            if jit_stats.ACTIVE:
+                jit_stats.add_cost("compile", time.perf_counter() - started)
+                for step, seconds in (timings or {}).items():
+                    jit_stats.add_cost(f"compile: {step}", seconds)
         if kernel.has_io_gaps:
             self._compiled_replay_kernel = False
             return None

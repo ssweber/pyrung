@@ -17,7 +17,7 @@ import pytest
 from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, math, on_delay, out, system
 from pyrung.core import PLC
 from pyrung.core.coast_run import coast_until
-from tests.fold_check import compare_records
+from tests.fold_check import compare_records, seed_records
 
 
 def _timer_tick() -> Program:
@@ -89,6 +89,13 @@ def _plc(build: Callable[[], Program]) -> PLC:
     return plc
 
 
+def _reference(build: Callable[[], Program]) -> PLC:
+    """A runner that steps every scan, keeping every value its records see."""
+    ref = _plc(build)
+    seed_records(ref, ref)
+    return ref
+
+
 def _read(plc: PLC, tag: str, scan: int) -> tuple[Any, ...]:
     return (
         {rung: dict(writes) for rung, writes in plc.rung_firings(scan).items()},
@@ -112,7 +119,7 @@ def test_a_predicate_that_does_not_declare_its_reads(name: str) -> None:
     def stop(state: Any) -> bool:
         return state.tags.get(tag) == value
 
-    ref = _plc(build)
+    ref = _reference(build)
     for _ in range(1_500):
         ref.step()
         if stop(ref.state):
@@ -128,7 +135,7 @@ def test_a_predicate_that_does_not_declare_its_reads(name: str) -> None:
 @pytest.mark.parametrize("name", sorted(_PROGRAMS))
 def test_a_monitor(name: str) -> None:
     build, tag, _value = _PROGRAMS[name]
-    ref = _plc(build)
+    ref = _reference(build)
     stepped: list[tuple[Any, Any]] = []
     ref.monitor(tag, lambda now, before: stepped.append((now, before)))
     for _ in range(800):
@@ -153,7 +160,7 @@ def test_a_real_that_moves_on_each_scan_says_its_values() -> None:
                 math(R + 0.5, R)
         return prog
 
-    ref = _plc(build)
+    ref = _reference(build)
     for _ in range(150):
         ref.step()
     plc = _plc(build)

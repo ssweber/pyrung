@@ -58,6 +58,7 @@ from pyrung import (
 from pyrung import Counter as CounterBlock
 from pyrung.core import compiled_run, scan_trace
 from pyrung.core.context import same_stored_value
+from pyrung.core.copy_converters import to_ascii
 from pyrung.core.expression import randint
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
@@ -91,6 +92,7 @@ Big = Dint("TrBig")
 Temp = Real("TrTemp")
 Ds = Block("TrDs", TagType.INT, 1, 8)
 Bits = Block("TrBits", TagType.BOOL, 1, 6)
+Txt = Block("TrTxt", TagType.CHAR, 1, 4)
 
 
 @pytest.fixture
@@ -530,6 +532,19 @@ def _corpus_forloop() -> None:
         latch(Hit)
 
 
+def _corpus_text_to_codes() -> None:
+    # Copy to text iterates the text's characters, and bounds the store by the block's length.
+    with Rung():
+        copy("A", Txt[1])
+    with Rung(Run):
+        on_delay(T, 2_000)
+    with Rung(Run):
+        copy(Txt[1], Ds[1], convert=to_ascii)
+    with Rung(T.Done):
+        copy(Txt[2], Ds[2], convert=to_ascii)
+        copy(T.Acc, N)
+
+
 CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, Any]]]]] = {
     "timer_long_preset": (
         _corpus_timer_long_preset,
@@ -609,6 +624,11 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     "rtc_apply_held": (_corpus_rtc_apply_held, 0.01, [(1.5, {Run: True}), (1.0, {})]),
     "mode_stop": (_corpus_mode_stop, 0.01, [(1.0, {Run: True}), (4.0, {}), (1.0, {})]),
     "mode_stop_at_once": (_corpus_mode_stop_at_once, 0.01, [(1.0, {Run: True}), (1.0, {})]),
+    "text_to_codes": (
+        _corpus_text_to_codes,
+        0.01,
+        [(3.0, {Run: True}), (0.5, {Txt[1]: "B"}), (0.5, {Run: False}), (1.0, {Run: True})],
+    ),
 }
 
 # Cases where the loop has every right to run nothing: each scan is a decision.
@@ -657,6 +677,17 @@ def test_corpus_as_a_whole_mostly_runs_in_the_loop(fine_loop: None) -> None:
         loop += counts["loop scans"]
         real += counts["real scans"]
     assert loop > real
+
+
+def test_a_copy_to_text_runs_in_the_loop(fine_loop: None) -> None:
+    fill_program, dt, segments = CORPUS["text_to_codes"]
+    counts = _lockstep(_build(fill_program), segments, dt=dt)
+    declines = {key for key in counts if key.startswith("decline: ") and counts[key]}
+    assert counts["loop scans"] > counts["real scans"], dict(counts)
+    assert not declines & {
+        "decline: iteration over an unknown value",
+        "decline: state container as an argument",
+    }, dict(counts)
 
 
 def test_long_preset_lands_on_the_stepped_scan_at_production_settings() -> None:

@@ -297,6 +297,7 @@ def _twin(plc: Any) -> Any:
     )
     # The twin starts forced, unlike a new runner: its log has to say so.
     twin._forces_last_recorded = {}
+    seed_records(twin, plc)
     return twin
 
 
@@ -539,7 +540,8 @@ def compare_runners(
 
 
 def _touching(ranges: Any, first: int, last: int) -> list[Any]:
-    return [r for r in ranges if r.start_scan_id <= last and r.end_scan_id >= first]
+    """The written-out ranges with a scan in *first*..*last*, a repeat read as its copies."""
+    return list(rung_firings._expanded(ranges, first, last))
 
 
 def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
@@ -556,17 +558,23 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
 
 def _column_at(ranges: Any, scan: int) -> Any:
     """A column's value at *scan*; a scan no range covers is a scan with no write."""
-    for r in ranges:
-        if r.start_scan_id <= scan <= r.end_scan_id:
-            return rung_firings._value_at(r, scan)
+    for r in _touching(ranges, scan, scan):
+        return rung_firings._value_at(r, scan)
     return rung_firings._MISSING_WRITE
 
 
-def _column_differs(ours: Any, theirs: Any, first: int, last: int) -> int | None:
-    """Scan where two value columns differ, ``Unknown`` on ours agreeing with anything.
+def _column_differs(
+    ours: Any, theirs: Any, first: int, last: int, partly: bool, full: int | None = None
+) -> int | None:
+    """Scan where ours holds another value than stepping's, or None.
+
+    A column the loop wrote Unknown into holds other ranges than stepping's.  So ours may
+    turn Unknown first, and only their known values must agree.  A scan with a write must
+    still be one in both.  The loop counts each run it wrote Unknown as one range.  So such a
+    column may stay known after stepping's column reached its limit on scan *full*.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
-    two scans at each end of a stretch of no boundary settle the whole of it.
+    two scans at each end of a run of scans with no boundary settle the whole of it.
     """
     ours, theirs = _touching(ours, first, last), _touching(theirs, first, last)
     cuts = sorted(
@@ -574,59 +582,89 @@ def _column_differs(ours: Any, theirs: Any, first: int, last: int) -> int | None
         | {r.start_scan_id for r in (*ours, *theirs) if first < r.start_scan_id <= last}
         | {r.end_scan_id + 1 for r in (*ours, *theirs) if first < r.end_scan_id + 1 <= last}
     )
+    unknown, missing = rung_firings._UNKNOWN_VALUE, rung_firings._MISSING_WRITE
     for low, stop in zip(cuts, cuts[1:], strict=False):
         high = stop - 1
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
-            mine = _column_at(ours, scan)
-            if mine is rung_firings._UNKNOWN_VALUE:
-                continue
-            stepped = _column_at(theirs, scan)
-            if stepped is rung_firings._UNKNOWN_VALUE:
-                continue  # a fragmented column, where each counted its own values
-            if _exact(mine) != _exact(stepped):
+            mine, stepped = _column_at(ours, scan), _column_at(theirs, scan)
+            if partly and mine is unknown:
+                if stepped is missing:
+                    return scan
+            elif partly and full is not None and scan >= full and stepped is unknown:
+                if mine is missing:
+                    return scan
+            elif _exact(mine) != _exact(stepped):
                 return scan
     return None
 
 
 def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
-    return _spans([r for r in ranges if isinstance(r.payload, rung_firings.Unknown)], first, last)
+    touching = _touching(ranges, first, last)
+    return _spans([r for r in touching if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
-def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int]]:
-    """Who holds the records of *first*..*end*: *plc*, or for scans it left out a replay of them.
+def _as_settled(plc: Any, first: int, end: int) -> Any:
+    """*plc*'s records of *first*..*end*, with the scans it left out settled as a settle would.
 
-    It is what a settle would install, stepped here on the side, since a settle changes the
-    runner under test: a question that comes later still has to find those scans as it left them.
+    The settle happens on copies, since a settle changes the runner under test.  A question
+    that comes later still has to find those scans as the run left them.
     """
-    pieces = []
-    cursor = first
+    gaps = []
     for low, high in sorted(plc._unrecorded_scans):
         low, high = max(low, first), min(high, end)
-        if low > high:
-            continue
-        if cursor < low:
-            pieces.append((plc, cursor, low - 1))
-        pieces.append((plc._stepped_again(low, high, None), low, high))
+        if low <= high:
+            gaps.append((low, high))
+    if not gaps:
+        return plc
+    copies = types.SimpleNamespace(
+        _rung_firing_timelines=plc._rung_firing_timelines.snapshot(),
+        _node_firing_timelines=plc._node_firing_timelines.snapshot(),
+        _committed_tag_timelines=plc._committed_tag_timelines.snapshot(),
+    )
+    held = {name: getattr(plc, name) for name in _RECORDS}
+    for low, high in gaps:
+        # Each replay starts from the records the settles before it left, as the runner's do.
+        try:
+            for name in _RECORDS:
+                setattr(plc, name, getattr(copies, name))
+            replay = plc._stepped_again(low, high, None)
+        finally:
+            for name, records in held.items():
+                setattr(plc, name, records)
+        for name in _RECORDS:
+            getattr(copies, name).replace_range(getattr(replay, name), low, high)
         STATS["scans out of the records, settled to compare"] += high - low + 1
-        cursor = high + 1
-    if cursor <= end:
-        pieces.append((plc, cursor, end))
-    return pieces
+    return copies
 
 
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
-    """What scans after *start* left in the firing indexes, against what stepping left."""
-    for holder, first, last in _record_pieces(plc, start + 1, plc._state.scan_id):
-        _compare_records_over(kind, holder, twin, first, last)
+    """What scans after *start* left in the firing indexes, against what stepping left.
+
+    The twin must start from *plc*'s records at *start* (:func:`seed_records`).
+    """
+    assert hasattr(twin, "_fold_seed"), "seed the twin with seed_records() first"
+    end = plc._state.scan_id
+    records = _as_settled(plc, start + 1, end)
+    _compare_records_over(kind, records, twin, start + 1, end)
     STATS[f"records compared: {kind}"] += 1
 
 
+_RECORDS = ("_rung_firing_timelines", "_node_firing_timelines", "_committed_tag_timelines")
+
+
+def seed_records(twin: Any, plc: Any) -> None:
+    """Give *twin* a copy of *plc*'s records, as a twin made now of *plc* should start."""
+    for name in _RECORDS:
+        theirs = getattr(twin, name)
+        copy = getattr(plc, name).snapshot()
+        for slot in rung_firings.RungFiringTimelines.__slots__:
+            setattr(theirs, slot, getattr(copy, slot))
+    twin._fold_seed = plc._state.scan_id
+
+
 def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
-    for name, ours, theirs in (
-        ("rung", plc._rung_firing_timelines, twin._rung_firing_timelines),
-        ("node", plc._node_firing_timelines, twin._node_firing_timelines),
-        ("committed", plc._committed_tag_timelines, twin._committed_tag_timelines),
-    ):
+    for name, attribute in zip(("rung", "node", "committed"), _RECORDS, strict=True):
+        ours, theirs = getattr(plc, attribute), getattr(twin, attribute)
         for key in ours._fired_ranges.keys() | theirs._fired_ranges.keys():
             a = _spans(ours._fired_ranges.get(key, ()), first, end)
             b = _spans(theirs._fired_ranges.get(key, ()), first, end)
@@ -637,7 +675,19 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
         for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
             a = ours._value_timelines.get(key, ())
             b = theirs._value_timelines.get(key, ())
-            scan = _column_differs(a, b, first, end)
+            # A column the loop wrote Unknown into counts fewer ranges than stepping's.  Every
+            # other column holds stepping's ranges, so it turns Unknown on stepping's scan.
+            partly = key in ours._partly_unknown
+            if not partly:
+                for counts in ("_entries", "_unknown_keys"):
+                    held, stepped = getattr(ours, counts).get(key), getattr(theirs, counts).get(key)
+                    if held != stepped:
+                        raise _mismatch(
+                            f"fold-check ({kind}): {name} {key!r} {counts} {held!r}, "
+                            f"stepped {stepped!r}"
+                        )
+            full = theirs._unknown_keys.get(key)
+            scan = _column_differs(a, b, first, end, partly, full)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
@@ -850,7 +900,9 @@ class _PrivateCopy:
 
     - a function this copier did not make
     - a bound method whose function is not its class's own
-    - a builtin bound to an object that was not copied
+    - a method or a builtin bound to an object that was not copied
+    - a live weak reference or weak proxy to an object that was not copied
+    - a module
     - a runner other than the one shared
     - more than ``MAX_WALK`` objects
     """
@@ -938,16 +990,24 @@ class _PrivateCopy:
     def _own_deepcopy(self, obj: Any, copier: Callable[[dict[int, Any]], Any]) -> Any:
         """*obj*'s own ``__deepcopy__``, refused where its copy still reaches the original's code.
 
-        That copy goes through ``copy.deepcopy()``, which never clones a function.  So a function
-        in it that this copier did not make is the user's own.  The check walks the copy through
-        ``gc.get_referents()`` and refuses a copy too large to walk.
+        That copy usually goes through ``copy.deepcopy()``, which never clones a function.  So a
+        function in it that this copier did not make is the user's own.  The check walks the copy
+        through ``gc.get_referents()`` and refuses a copy too large to walk.  It follows a weak
+        reference or a weak proxy too, which ``gc.get_referents()`` does not.
+
+        Some refusals fail closed and refuse a copy that would have been private.  A method, a
+        weak reference or a weak proxy in the copy must point to one of the copies in the memo,
+        or to the copy itself.  So the check refuses one that points to an object the copy made
+        without putting it in the memo.  It refuses a weak proxy to a shared object too, since a
+        proxy does not say what it points to.
         """
         made = {id(v) for v in self.memo.values()}
         new = copier(self.memo)
         name = type(obj).__name__
         if new is obj and callable(obj):
             raise TypeError(f"{name}.__deepcopy__ returns the callable itself")
-        copied = {id(v) for v in self.memo.values()}
+        # An object bound to a method or a builtin must be one of the copies, or the copy itself.
+        copied = {id(v) for v in self.memo.values()} | {id(new)}
         seen: set[int] = set()
         todo = [new]
         while todo:
@@ -957,29 +1017,71 @@ class _PrivateCopy:
             seen.add(id(o))
             if len(seen) > self.MAX_WALK:
                 raise TypeError(f"{name}.__deepcopy__ made a copy too large to check")
+            if isinstance(o, weakref.ProxyTypes):
+                # Checked first, since isinstance() asks a proxy's target for its class.
+                target = self._proxied(o, new, name)
+                if target is not None:
+                    todo.append(target)
+                continue
             if type(o) is self.plc_type:
                 raise TypeError(f"{name}.__deepcopy__ copies the runner")
-            if isinstance(o, (type, types.ModuleType, *self.shared)):
+            if isinstance(o, (type, *self.shared)):
                 continue
+            if isinstance(o, types.ModuleType):
+                raise TypeError(
+                    f"{name}.__deepcopy__ keeps module {o.__name__}, shared with the run"
+                )
             if isinstance(o, types.FunctionType):
                 raise TypeError(f"{name}.__deepcopy__ keeps a function of the original")
+            if isinstance(o, weakref.ref):
+                referent = o()
+                if referent is None or self._is_shared(referent):
+                    continue
+                if isinstance(referent, types.MethodType):
+                    # A WeakMethod makes a new bound method on each call.
+                    if not (
+                        _defined_on_its_class(referent)
+                        and self._bound_to_a_copy(referent.__self__, copied)
+                    ):
+                        raise TypeError(f"{name}.__deepcopy__ keeps a method bound to the original")
+                    todo.append(referent.__self__)
+                    continue
+                if id(referent) not in copied:
+                    raise TypeError(f"{name}.__deepcopy__ keeps a weak reference to the original")
+                todo.append(referent)
+                continue
             if isinstance(o, types.MethodType):
                 if not _defined_on_its_class(o):
                     raise TypeError(f"{name}.__deepcopy__ keeps a method of the original")
+                if not self._bound_to_a_copy(o.__self__, copied):
+                    raise TypeError(f"{name}.__deepcopy__ keeps a method bound to the original")
                 todo.append(o.__self__)
                 continue
             if isinstance(o, (types.BuiltinFunctionType, types.MethodWrapperType)):
-                owner = o.__self__
-                if not (
-                    owner is None
-                    or isinstance(owner, (type, types.ModuleType))
-                    or self._is_shared(owner)
-                    or id(owner) in copied
-                ):
+                if not self._bound_to_a_copy(o.__self__, copied):
                     raise TypeError(f"{name}.__deepcopy__ keeps a builtin bound to the original")
                 continue
             todo.extend(gc.get_referents(o))
         return new
+
+    def _proxied(self, proxy: Any, new: Any, name: str) -> Any:
+        """The copy *proxy* points to, None for a dead one, or TypeError for any other."""
+        try:
+            proxy.__class__  # noqa: B018
+        except ReferenceError:
+            return None
+        for candidate in (*self.memo.values(), new):
+            if any(ref is proxy for ref in weakref.getweakrefs(candidate)):
+                return candidate
+        raise TypeError(f"{name}.__deepcopy__ keeps a weak proxy to an object it did not copy")
+
+    def _bound_to_a_copy(self, owner: Any, copied: set[int]) -> bool:
+        return (
+            owner is None
+            or isinstance(owner, (type, types.ModuleType))
+            or self._is_shared(owner)
+            or id(owner) in copied
+        )
 
     def _function(self, fn: types.FunctionType) -> types.FunctionType:
         cells = None
@@ -1624,6 +1726,10 @@ def install() -> None:
     setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
     setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
+    # The loop jumps the cycles it predicts.  STRICT_CYCLE_CHECK fails a run whose scans
+    # disagree with a prediction.
+    setattr(coast_run, "CYCLE_PREDICTIONS", "jump")  # noqa: B010
+    setattr(coast_run, "STRICT_CYCLE_CHECK", True)  # noqa: B010
     if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
         scan_trace.SELF_CHECK_OBSERVERS.append(_note_self_check_mismatch)
 
