@@ -1068,6 +1068,8 @@ def _known_distinct_values(timeline: Sequence[ValueRange]) -> list[Any]:
                 continue
             if not any(_equal(value, prior) for prior in distinct):
                 distinct.append(value)
+                if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
+                    return distinct  # enough to go unknown
     return distinct
 
 
@@ -1234,8 +1236,13 @@ def _templates(ranges: Sequence[Any]) -> Iterator[Any]:
         elif not element.steps:
             yield from element.ranges
         else:
-            # A plan stops a column with steps short of a hundred values.
-            for index in range(element.count):
+            # A range that steps holds new values in each repetition, and a count stops at a
+            # hundred.  A count skips a range of whole numbers that step by one amount.
+            counted = any(
+                step and not isinstance(range_.payload, Arithmetic)
+                for range_, step in zip(element.ranges, element.steps, strict=True)
+            )
+            for index in range(element.count if counted else 1):
                 yield from _repetition(element, index)
 
 
