@@ -189,6 +189,8 @@ def test_a_compiled_replay_seeds_no_tag_stepping_lacks(graph_first: bool) -> Non
     assert replayed.keys() <= stepped.keys()
     assert all(stepped[name] == value for name, value in replayed.items())
     if not graph_first:
+        # Only on a program this small.  A larger one may hold a cell that nothing in the
+        # program names, such as a bank slot a test asked for, and stepping seeds it.
         assert replayed == stepped
 
 

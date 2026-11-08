@@ -131,7 +131,8 @@ def _collect_materialized_tag_names(
     kinds: dict[type, int] = dict.fromkeys(_PLAIN_TYPES, _SKIP)
 
     def push(items: Any) -> None:
-        # Read twice, so only a container that gives the same items each time.
+        # push() reads the items twice, so it takes only a container that gives the same items
+        # each time.
         if type(items) not in _SEQUENCE_TYPES:
             queue.extend(items)
         elif not _PLAIN_TYPES.issuperset(map(type, items)):

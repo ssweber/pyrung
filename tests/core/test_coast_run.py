@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math as pymath
 import random
+import warnings
 from types import SimpleNamespace
 from typing import Any
 
@@ -938,3 +939,34 @@ def test_a_loop_asks_the_stop_predicate_only_after_a_scan_that_changes_its_reads
     assert plc.current_state.scan_id == twin.current_state.scan_id
     assert stats["stretched_scans"] > 150
     assert asked_in_the_loop <= 5
+
+
+SetY = Int("AdvSetY")
+
+
+def _ramp_then_set() -> None:
+    with Rung():
+        on_delay(T, 30000)
+    with Rung():
+        copy(T.Acc // 500, X)
+    with Rung(X >= 1):
+        copy(7, SetY)
+
+
+def test_a_loop_that_stores_a_constant_in_a_read_tag_compiles_without_a_warning() -> None:
+    # SetY moves once, so later traces store the literal 7 into a tag the predicate reads.
+    plc = _runner(_ramp_then_set, 0.01)
+    twin = plc.fork()
+
+    def reached(state: Any) -> bool:
+        return state.tags[X.name] >= 5 and state.tags[SetY.name] == 7
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        hit = coast_until(
+            plc, reached, budget=SCANS, predicate_reads=frozenset((X.name, SetY.name))
+        )
+    while twin.current_state.tags[X.name] < 5:
+        twin.step()
+    assert hit
+    assert plc.current_state.scan_id == twin.current_state.scan_id

@@ -1619,7 +1619,7 @@ def _loop_function(
 
     *guards* are extra, checked after the scan's own and before its commit.  *seen*
     lists (name, cell, whether every scan changes it).  After a commit that changed
-    one of those values, they go in the loop's ``seen`` argument and it asks its
+    one of those values, the loop copies them into its ``seen`` argument and asks its
     ``stop`` argument whether to leave.  A stop predicate reads only what ``seen``
     holds, so after a scan that changed none of it the answer is the one it gave last.
     """
@@ -1685,9 +1685,9 @@ def _loop_function(
     # Whether this scan changes what the stop predicate reads, if not every scan does.
     ask_when_changed = bool(seen) and not any(always for _name, _key, always in seen)
     if ask_when_changed:
+        # same() tests identity first.  An "is" here would compare a stored literal, which warns.
         changes = " or ".join(
-            f"not ({new_values[key]} is {tracer.entry_locals[key]} or "
-            f"same({new_values[key]}, {tracer.entry_locals[key]}))"
+            f"not same({new_values[key]}, {tracer.entry_locals[key]})"
             for _name, key, _always in seen
         )
         lines.append(f"            changed = {changes}")
@@ -1896,8 +1896,8 @@ def coast_loop(
     thing it asks of that tag: where this trace moved it, the scans the loop runs are
     not the trace's own, and the moves it returns and :func:`coast_moves` differ on the
     tag.  A coast does not fire such a loop.  After a scan that changes a moving tag in
-    *seen*, it hands them to its ``seen`` argument and asks ``stop``, and those are only
-    further reasons to leave.
+    *seen*, the loop puts those tags in its ``seen`` argument and asks ``stop``.  A stop is
+    one more reason to leave.
     """
     guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
     loop, source, _body = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
@@ -1947,6 +1947,7 @@ def _coast_guards(
             else:
                 guards.append(_Guard(f"{new} == {old}", uses, why=f"{name} stops moving"))
                 free.append(name)
+                always = True
         elif name in watched or same(after, before) or after == before:
             # Equal across types too: 0 to False on an Int driven by out() is no transition.
             why = f"watched {name} changes" if name in watched else f"{name} changes"

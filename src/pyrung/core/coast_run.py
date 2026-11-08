@@ -1002,7 +1002,9 @@ def coast_until(
     after a scan that asks to pause, or after the program stops itself.  Returns whether it
     holds there.  *loop_scans_per_unit* is how many loop scans one unit of *budget* pays
     for; an interpreted scan is always a unit.  *predicate_reads* is the exact set of tags
-    *predicate* reads through ``state.tags``; without it the reads are traced.  *stats* gets
+    *predicate* reads through ``state.tags``; without it the reads are traced.  The predicate
+    must answer from those tags alone, with no counter, clock or global of its own.  A loop
+    scan that changes none of them does not ask it again.  *stats* gets
     ``logical_scans``, ``kernel_scans``, ``stretches`` and ``stretched_scans`` (the logical
     scans ``kernel_scans`` leaves).  *on_kernel_scan* and ``kernel_scans`` have each
     interpreted scan and the landing, which a stretch may have run.
