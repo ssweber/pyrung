@@ -71,6 +71,7 @@ def test_a_run_past_its_prefix_runs_in_the_loop_to_its_end() -> None:
     reused = {"compile: python compile", "parse the kernel source"}
     # The loop function returns at each checkpoint, so the run may call it more than once.
     assert costs.pop("loop") >= 1
+    assert all(costs.get(name, 0) <= COMPILES for name in reused)
     assert {name: count for name, count in costs.items() if name not in reused} == {
         "compile": COMPILES,
         "compile: source": COMPILES,

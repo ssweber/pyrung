@@ -1949,8 +1949,9 @@ def _coast_guards(
 
 
 # Parsed kernel sources by source text, least recently used first.  A parse depends on the
-# text alone, so kernels compiled from one source share it.  Its one later write keeps
-# snippets of that text.  Each parse is several megabytes on a large program.
+# text alone, so kernels compiled from one source share it.  Only ``snippet()`` writes to a
+# parse later, and it stores lines of that same text.  Each parse is several megabytes on a
+# large program.
 MAX_PARSED_SOURCES = 2
 _PARSED_BY_SOURCE: dict[str, KernelSource] = {}
 _PARSED_LOCK = threading.Lock()
@@ -1967,9 +1968,10 @@ def _source_of(kernel: CompiledKernel) -> KernelSource:
         if cached is not None:
             _PARSED_BY_SOURCE[text] = cached
     if cached is None:
-        started = time.perf_counter()
+        counting = bool(jit_stats.ACTIVE)
+        started = time.perf_counter() if counting else 0.0
         cached = KernelSource(kernel)
-        if jit_stats.ACTIVE:
+        if counting:
             jit_stats.add_cost("parse the kernel source", time.perf_counter() - started)
         with _PARSED_LOCK:
             _PARSED_BY_SOURCE[text] = cached

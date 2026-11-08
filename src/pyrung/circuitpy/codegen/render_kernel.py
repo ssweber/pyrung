@@ -37,10 +37,10 @@ from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import dt_to_ns
 
-# Code objects by kernel source, least recently used first.  A code object is immutable,
-# and each kernel runs it in a namespace of its own, so two kernels share no state through
-# it.  Runners on one program, and a search's forks with the same overlay, compile the
-# same source.
+# Code objects by kernel source, least recently used first.  A code object is immutable.
+# Each kernel runs the shared code in a namespace of its own, so kernels share no state
+# through it.  Runners on one program compile the same source, and so do how() forks with
+# the same synthesis.
 MAX_CACHED_CODE = 4
 _CODE_BY_SOURCE: dict[str, CodeType] = {}
 _CODE_LOCK = threading.Lock()
@@ -65,6 +65,22 @@ def _code_of(source: str) -> tuple[CodeType, bool]:
 _SKIP, _TAG, _RANGE, _DICT, _MAPPING, _ITEMS, _OBJECT = range(7)
 # Exact types the walk never looks inside.
 _PLAIN_TYPES = frozenset({type(None), str, bytes, bytearray, int, float, bool})
+# Exact container types push() may read twice: a dict's views among them.
+_SEQUENCE_TYPES = frozenset({list, tuple, set, frozenset, type({}.keys()), type({}.values())})
+_OBJECT_CLASS = object.__dict__["__class__"]
+
+
+def _kind_is_per_type(cls: type) -> bool:
+    """Whether every instance of *cls* answers ``__class__`` and isinstance() alike.
+
+    A proxy, or a class that overrides attribute lookup, may answer per instance.
+    """
+    if cls.__getattribute__ is not object.__getattribute__:
+        return False
+    for base in cls.__mro__:
+        if "__class__" in base.__dict__:
+            return base.__dict__["__class__"] is _OBJECT_CLASS
+    return False
 
 
 def _kind_of(current: Any) -> int:
@@ -103,7 +119,7 @@ def _collect_materialized_tag_names(
     rungs and subroutines it starts from are the program's own.
 
     The walk asks what each type is once, and skips a container of plain values without
-    queueing them.  It finds the same names as a walk that queues every item.
+    queueing them.  The walk finds the same names as a walk that queues every item.
     """
 
     found: set[str] = set()
@@ -115,7 +131,10 @@ def _collect_materialized_tag_names(
     kinds: dict[type, int] = dict.fromkeys(_PLAIN_TYPES, _SKIP)
 
     def push(items: Any) -> None:
-        if not _PLAIN_TYPES.issuperset(map(type, items)):
+        # Read twice, so only a container that gives the same items each time.
+        if type(items) not in _SEQUENCE_TYPES:
+            queue.extend(items)
+        elif not _PLAIN_TYPES.issuperset(map(type, items)):
             queue.extend(items)
 
     while queue:
@@ -124,8 +143,7 @@ def _collect_materialized_tag_names(
         kind = kinds.get(cls)
         if kind is None:
             kind = _kind_of(current)
-            # isinstance() also asks __class__, which a proxy answers for its target.
-            if getattr(current, "__class__", None) is cls:
+            if _kind_is_per_type(cls):
                 kinds[cls] = kind
         if kind == _SKIP:
             continue
@@ -168,6 +186,10 @@ def _collect_materialized_tag_names(
     return frozenset(found)
 
 
+def _no_clock() -> float:
+    return 0.0
+
+
 def compile_kernel(
     program: Program,
     *,
@@ -191,9 +213,10 @@ def compile_kernel(
     *between* the two passes (the plant reads the previous commit, the input-read
     phase).  ``None`` ⇒ a single ``step_fn`` for the whole program.
 
-    ``timings``, when given, gets the seconds each step took, for the jit counters.
+    The jit counters pass ``timings`` to get the seconds each step took.
     """
-    started = time.perf_counter()
+    clock = time.perf_counter if timings is not None else _no_clock
+    started = clock()
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
@@ -202,7 +225,7 @@ def compile_kernel(
         abstract_timers=abstract_timers,
     )
     source, lock_source = _render_kernel_source(ctx, split_after=split_after)
-    rendered = time.perf_counter()
+    rendered = clock()
 
     namespace: dict[str, Any] = {
         **ctx.function_objects,
@@ -213,9 +236,9 @@ def compile_kernel(
         "_for_cap_sites": tuple(ctx.for_cap_sites),
     }
     code, reused = _code_of(source)
-    compiled = time.perf_counter()
+    compiled = clock()
     exec(code, namespace)  # noqa: S102
-    executed = time.perf_counter()
+    executed = clock()
     step_fn = namespace["_kernel_step"]
     pre_step_fn = namespace.get("_kernel_step_pre")
 
@@ -234,9 +257,9 @@ def compile_kernel(
         )
 
     block_specs = _build_block_specs(ctx)
-    built = time.perf_counter()
+    built = clock()
     materialized = _collect_materialized_tag_names(program, ctx)
-    walked = time.perf_counter()
+    walked = clock()
 
     kernel = CompiledKernel(
         step_fn=step_fn,
@@ -260,7 +283,7 @@ def compile_kernel(
         if not reused:
             timings["python compile"] = compiled - rendered
         timings["exec"] = executed - compiled
-        timings["build"] = built - executed + time.perf_counter() - walked
+        timings["build"] = built - executed + clock() - walked
         timings["materialized tags"] = walked - built
     return kernel
 
