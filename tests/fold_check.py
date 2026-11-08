@@ -555,8 +555,19 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return spans
 
 
-# Whether a loop run's records may say Unknown where stepping's know the value.
-LOOSE_UNKNOWN = False
+# The first scan a settle replaced in each timelines object, by id.  A settled range counts
+# its column's values from its own first scan, so the column may stay known after stepping's
+# went unknown.
+_SETTLED_FROM: dict[int, int] = {}
+_replace_range = rung_firings.RungFiringTimelines.replace_range
+
+
+def _noting_replace_range(self: Any, settled: Any, first: int, last: int) -> None:
+    _SETTLED_FROM[id(self)] = min(first, _SETTLED_FROM.get(id(self), first))
+    _replace_range(self, settled, first, last)
+
+
+rung_firings.RungFiringTimelines.replace_range = _noting_replace_range  # type: ignore[method-assign]
 
 
 def _column_at(ranges: Any, scan: int) -> Any:
@@ -567,11 +578,12 @@ def _column_at(ranges: Any, scan: int) -> Any:
 
 
 def _column_differs(
-    ours: Any, theirs: Any, first: int, last: int, ours_may_say_unknown: bool
+    ours: Any, theirs: Any, first: int, last: int, settled_from: int | None
 ) -> int | None:
-    """Scan where two value columns differ.  Each side says ``Unknown`` where the other does.
+    """Scan where two value columns differ.  Ours says ``Unknown`` wherever stepping does.
 
-    *ours_may_say_unknown* lets ours say ``Unknown`` where stepping knows the value.
+    Ours may also say ``Unknown`` where stepping knows the value.  From *settled_from* on, ours
+    may know a value where stepping says ``Unknown``.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a stretch of no boundary settle the whole of it.
@@ -587,12 +599,14 @@ def _column_differs(
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
             mine = _column_at(ours, scan)
             stepped = _column_at(theirs, scan)
-            if (mine is rung_firings._UNKNOWN_VALUE) != (stepped is rung_firings._UNKNOWN_VALUE):
-                if not (ours_may_say_unknown and mine is rung_firings._UNKNOWN_VALUE):
-                    return scan
+            if stepped is rung_firings._UNKNOWN_VALUE:
+                if mine is not rung_firings._UNKNOWN_VALUE and (
+                    settled_from is None or scan < settled_from
+                ):
+                    return scan  # a column counts its values as stepping does
                 continue
             if mine is rung_firings._UNKNOWN_VALUE:
-                continue
+                continue  # a range the loop could not speak for
             if _exact(mine) != _exact(stepped):
                 return scan
     return None
@@ -603,7 +617,7 @@ def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return _spans([r for r in touching if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
-def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int]]:
+def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int, bool]]:
     """Who holds the records of *first*..*end*: *plc*, or for scans it left out a replay of them.
 
     It is what a settle would install, stepped here on the side, since a settle changes the
@@ -616,23 +630,25 @@ def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int]]
         if low > high:
             continue
         if cursor < low:
-            pieces.append((plc, cursor, low - 1))
-        pieces.append((plc._stepped_again(low, high, None), low, high))
+            pieces.append((plc, cursor, low - 1, False))
+        pieces.append((plc._stepped_again(low, high, None), low, high, True))
         STATS["scans out of the records, settled to compare"] += high - low + 1
         cursor = high + 1
     if cursor <= end:
-        pieces.append((plc, cursor, end))
+        pieces.append((plc, cursor, end, False))
     return pieces
 
 
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
     """What scans after *start* left in the firing indexes, against what stepping left."""
-    for holder, first, last in _record_pieces(plc, start + 1, plc._state.scan_id):
-        _compare_records_over(kind, holder, twin, first, last)
+    for holder, first, last, settled in _record_pieces(plc, start + 1, plc._state.scan_id):
+        _compare_records_over(kind, holder, twin, first, last, settled)
     STATS[f"records compared: {kind}"] += 1
 
 
-def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
+def _compare_records_over(
+    kind: str, plc: Any, twin: Any, first: int, end: int, settled: bool
+) -> None:
     for name, ours, theirs in (
         ("rung", plc._rung_firing_timelines, twin._rung_firing_timelines),
         ("node", plc._node_firing_timelines, twin._node_firing_timelines),
@@ -648,7 +664,16 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
         for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
             a = ours._value_timelines.get(key, ())
             b = theirs._value_timelines.get(key, ())
-            scan = _column_differs(a, b, first, end, LOOSE_UNKNOWN)
+            # A column goes unknown at its hundredth value, so ours goes when stepping's does.
+            # Ours may say Unknown sooner for a range the loop could not speak for.
+            settled_from = first if settled else _SETTLED_FROM.get(id(ours))
+            if (
+                key in ours._unknown_keys
+                and key not in theirs._unknown_keys
+                and _SETTLED_FROM.get(id(theirs)) is None
+            ):
+                raise _mismatch(f"fold-check ({kind}): {name} {key!r} went unknown, stepped not")
+            scan = _column_differs(a, b, first, end, settled_from)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "

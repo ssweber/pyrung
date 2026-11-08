@@ -332,7 +332,19 @@ class RungFiringTimelines(Generic[K]):
             step = max(steps, key=abs)
         # The scans after the edge start the next cycle.  They move with the rest.
         trailing = tuple(_expanded(ranges, edge + 1, last))
-        if not values or key in self._unknown_keys:
+        if values and key in self._unknown_keys:
+            # Stepping writes Unknown into a column that went unknown.  A cycle that holds a
+            # value comes from before that, so it cannot repeat.
+            if any(
+                not isinstance(range_.payload, Unknown)
+                and not (
+                    isinstance(range_.payload, Constant) and range_.payload.value is _MISSING_WRITE
+                )
+                for range_ in cycle
+            ):
+                return None
+            return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
+        if not values:
             return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
         # A column that reaches a hundred values goes unknown, so the cycles stop short of it.
         # The plan works the count out on a copy and leaves the column's own count alone.  A
