@@ -14,7 +14,7 @@ replay only the selected kernel scans when they need that evidence.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
@@ -100,6 +100,24 @@ class ValueRange:
     start_scan_id: int
     end_scan_id: int
     payload: ValuePayload
+
+
+@dataclass(frozen=True, slots=True)
+class Repeat:
+    """Ranges that repeat unchanged every *period* scans, *count* times, in one entry.
+
+    ``ranges`` are the first repetition's.  Repetition r is the same ranges moved r * period
+    scans later.  A list holding one reads as the list with every repetition written out,
+    which is the list appending each scan would have made.  A later kind of span, one whose
+    values come from a closed form or from running a trace again, goes in as another entry
+    that reads as its written-out ranges.
+    """
+
+    start_scan_id: int
+    end_scan_id: int
+    period: int
+    ranges: tuple[Any, ...]
+    count: int
 
 
 class RungFiringTimelines(Generic[K]):
@@ -217,6 +235,81 @@ class RungFiringTimelines(Generic[K]):
             map(len, self._value_timelines.values())
         )
 
+    def plan_repeat(self, last_scan_id: int, period: int) -> RepeatPlan | None:
+        """How to record more cycles of the last *period* scans, or None if it cannot.
+
+        The caller vouches that each later cycle appends what scans up to *last_scan_id*
+        appended in the last cycle, one period later.  Each column must also have taken the same
+        shape on the last three cycles, so that appending the later cycles scan by scan would
+        repeat that shape.  Then each later cycle reads back as appending it would have.
+        """
+        actions: list[tuple[list[Any], Any]] = []
+        tables: tuple[tuple[Mapping[Any, list[Any]], bool], ...] = (
+            (self._fired_ranges, False),
+            (self._value_timelines, True),
+            (self._varied_ranges, False),
+        )
+        for table, values in tables:
+            for key, ranges in table.items():
+                action = self._repeat_action(key, ranges, last_scan_id, period, values)
+                if action is False:
+                    return None
+                if action is not None:
+                    actions.append((ranges, action))
+        return RepeatPlan(actions, period)
+
+    def _repeat_action(
+        self, key: Any, ranges: list[Any], last: int, period: int, values: bool
+    ) -> Any:
+        """None for a column the cycles leave alone, False if it cannot repeat."""
+        if not ranges:
+            return None
+        end = ranges[-1].end_scan_id
+        if end > last:
+            return False
+        if end <= last - 3 * period:
+            return None
+        if end <= last - period:
+            return False  # written lately, but not in the last cycle
+        tail = _last_written_out(ranges)
+        if tail.start_scan_id <= last - 2 * period + 1 and end == last:
+            # One range runs through the last two cycles, so each later scan extends it.
+            if values and not all(
+                _same_value(_value_at(tail, scan_id), _value_at(tail, scan_id + period))
+                for scan_id in range(last - period + 1, last + 1)
+            ):
+                return False
+            return _EXTEND
+        cycles = []
+        for back in (2, 1, 0):
+            first = last - (back + 1) * period + 1
+            cycle = list(_expanded(ranges, first, first + period - 1))
+            if any(
+                range_.start_scan_id < first or range_.end_scan_id > first + period - 1
+                for range_ in cycle
+            ):
+                return False
+            cycles.append(cycle)
+        if not (
+            cycles[2]
+            and _one_period_later(cycles[0], cycles[1], period)
+            and _one_period_later(cycles[1], cycles[2], period)
+        ):
+            return False
+        if values and key not in self._unknown_keys:
+            # Appending values a column holds already adds none to its count, unless no count
+            # is kept yet and a column of a hundred values would start one and go unknown.
+            distinct = self._distinct_values.get(key)
+            if distinct is None:
+                if len(_known_distinct_values(ranges)) >= _VALUE_VARIETY_THRESHOLD:
+                    return False
+            elif not all(
+                any(_equal(value, prior) for prior in distinct)
+                for value in _known_distinct_values(cycles[2])
+            ):
+                return False
+        return tuple(cycles[2])
+
     def tags_of(self, rung_index: K) -> Iterable[str]:
         """Every tag this rung has written."""
         return self._tags_by_rung.get(rung_index, ())
@@ -225,6 +318,7 @@ class RungFiringTimelines(Generic[K]):
         """The firing half of :meth:`append`, for each scan of the range."""
         self._tags_by_rung.setdefault(rung_index, set())
         ranges = self._fired_ranges.setdefault(rung_index, [])
+        _unroll_tail(ranges)
         if ranges and ranges[-1].end_scan_id == first_scan_id - 1:
             _extend_scan_range(ranges, last_scan_id)
         else:
@@ -304,7 +398,9 @@ class RungFiringTimelines(Generic[K]):
             self._note_new_value(key, timeline, value)
 
     def _note_new_value(self, key: tuple[K, str], timeline: list[ValueRange], value: Any) -> None:
-        if len(timeline) < _TRACK_DISTINCT_AFTER:
+        if len(timeline) < _TRACK_DISTINCT_AFTER and _written_out_length(timeline) < (
+            _TRACK_DISTINCT_AFTER
+        ):
             return
         distinct = self._distinct_values.get(key)
         if distinct is None:
@@ -432,11 +528,9 @@ class RungFiringTimelines(Generic[K]):
         selected: set[int] = set()
         first_scan, last_scan = scan_ids[0], scan_ids[-1]
 
-        for range_ in self._value_timelines.get((rung_index, tag_name), ()):
-            if range_.end_scan_id < first_scan:
-                continue
-            if range_.start_scan_id > last_scan:
-                break
+        for range_ in _expanded(
+            self._value_timelines.get((rung_index, tag_name), ()), first_scan, last_scan
+        ):
             lo = bisect_left(scan_ids, range_.start_scan_id)
             hi = bisect_right(scan_ids, range_.end_scan_id, lo)
             if lo == hi:
@@ -471,11 +565,9 @@ class RungFiringTimelines(Generic[K]):
             else:
                 selected.update(scan_ids[lo:hi])
 
-        for range_ in self._varied_ranges.get((rung_index, tag_name), ()):
-            if range_.end_scan_id < first_scan:
-                continue
-            if range_.start_scan_id > last_scan:
-                break
+        for range_ in _expanded(
+            self._varied_ranges.get((rung_index, tag_name), ()), first_scan, last_scan
+        ):
             lo = bisect_left(scan_ids, range_.start_scan_id)
             hi = bisect_right(scan_ids, range_.end_scan_id, lo)
             selected.update(scan_ids[lo:hi])
@@ -542,9 +634,8 @@ class RungFiringTimelines(Generic[K]):
     ) -> tuple[int, ...]:
         candidates: set[int] = set()
         for rung_index in writer_indices:
-            for range_ in self._value_timelines.get((rung_index, tag_name), ()):
-                if range_.start_scan_id >= before_scan_id:
-                    break
+            timeline = self._value_timelines.get((rung_index, tag_name), ())
+            for range_ in _expanded(timeline, None, before_scan_id - 1):
                 end = min(range_.end_scan_id, before_scan_id - 1)
                 payload = range_.payload
                 if isinstance(payload, Constant):
@@ -652,6 +743,7 @@ def _equal(left: Any, right: Any) -> bool:
 
 
 def _append_scan_range(ranges: list[ScanRange], scan_id: int) -> None:
+    _unroll_tail(ranges)
     if ranges and ranges[-1].end_scan_id == scan_id - 1:
         last = ranges[-1]
         ranges[-1] = ScanRange(last.start_scan_id, scan_id)
@@ -660,29 +752,49 @@ def _append_scan_range(ranges: list[ScanRange], scan_id: int) -> None:
 
 
 def _extend_scan_range(ranges: list[ScanRange], last_scan_id: int) -> None:
+    _unroll_tail(ranges)
     ranges[-1] = ScanRange(ranges[-1].start_scan_id, last_scan_id)
 
 
 def _coalesced(ranges: list[Any]) -> list[Any]:
     """Join ranges that touch and say the same thing, as appending them would have."""
-    out = ranges[:1]
-    for range_ in ranges[1:]:
-        last = out[-1]
-        touching = last.end_scan_id == range_.start_scan_id - 1
-        if touching and isinstance(range_, ScanRange):
-            out[-1] = ScanRange(last.start_scan_id, range_.end_scan_id)
-        elif (
-            touching
-            and isinstance(range_, ValueRange)
-            and isinstance(last, ValueRange)
-            and isinstance(range_.payload, (Constant, Unknown))
-            and type(range_.payload) is type(last.payload)
-            and _equal(_value_at(last, last.end_scan_id), _value_at(range_, range_.start_scan_id))
-        ):
-            out[-1] = ValueRange(last.start_scan_id, range_.end_scan_id, last.payload)
+    out: list[Any] = []
+    for range_ in ranges:
+        if type(range_) is not Repeat:
+            _push_joined(out, range_)
+        elif out and _joins(_last_written_out(out), range_.ranges[0]):
+            # Only the edges of a repeat can join a neighbour.  Its own ranges never do.
+            for piece in _repetition(range_, 0):
+                _push_joined(out, piece)
+            out.extend(_repeats(range_, 1, range_.count - 1))
         else:
             out.append(range_)
     return out
+
+
+def _push_joined(out: list[Any], range_: Any) -> None:
+    if out and _joins(_last_written_out(out), range_):
+        _unroll_tail(out)
+        last = out[-1]
+        if isinstance(range_, ScanRange):
+            out[-1] = ScanRange(last.start_scan_id, range_.end_scan_id)
+        else:
+            out[-1] = ValueRange(last.start_scan_id, range_.end_scan_id, last.payload)
+    else:
+        out.append(range_)
+
+
+def _joins(last: Any, range_: Any) -> bool:
+    touching = last.end_scan_id == range_.start_scan_id - 1
+    if isinstance(range_, ScanRange):
+        return touching
+    return (
+        touching
+        and isinstance(last, ValueRange)
+        and isinstance(range_.payload, (Constant, Unknown))
+        and type(range_.payload) is type(last.payload)
+        and _equal(_value_at(last, last.end_scan_id), _value_at(range_, range_.start_scan_id))
+    )
 
 
 def _append_unknown(timeline: list[ValueRange], scan_id: int) -> None:
@@ -691,6 +803,7 @@ def _append_unknown(timeline: list[ValueRange], scan_id: int) -> None:
 
 def _append_value(timeline: list[ValueRange], scan_id: int, value: Any) -> bool:
     """Append a scalar value; return whether complexity increased."""
+    _unroll_tail(timeline)
     if timeline:
         last = timeline[-1]
         adjacent = last.end_scan_id == scan_id - 1
@@ -743,7 +856,8 @@ def _value_at(range_: ValueRange, scan_id: int) -> Any:
     return _UNKNOWN_VALUE
 
 
-def _find_scan_range(ranges: Sequence[ScanRange], scan_id: int) -> ScanRange | None:
+def _find_range(ranges: Sequence[Any], scan_id: int) -> Any:
+    """The written-out range holding *scan_id*, or None."""
     lo, hi = 0, len(ranges)
     while lo < hi:
         mid = (lo + hi) // 2
@@ -752,43 +866,37 @@ def _find_scan_range(ranges: Sequence[ScanRange], scan_id: int) -> ScanRange | N
             hi = mid
         elif scan_id > range_.end_scan_id:
             lo = mid + 1
+        elif type(range_) is Repeat:
+            offset = (scan_id - range_.start_scan_id) // range_.period * range_.period
+            inner = _find_range(range_.ranges, scan_id - offset)
+            return None if inner is None else _moved(inner, offset)
         else:
             return range_
     return None
+
+
+def _find_scan_range(ranges: Sequence[ScanRange], scan_id: int) -> ScanRange | None:
+    return _find_range(ranges, scan_id)
 
 
 def _find_value_range(ranges: Sequence[ValueRange], scan_id: int) -> ValueRange | None:
-    lo, hi = 0, len(ranges)
-    while lo < hi:
-        mid = (lo + hi) // 2
-        range_ = ranges[mid]
-        if scan_id < range_.start_scan_id:
-            hi = mid
-        elif scan_id > range_.end_scan_id:
-            lo = mid + 1
-        else:
-            return range_
-    return None
+    return _find_range(ranges, scan_id)
 
 
 def _latest_scan(ranges: list[ScanRange], scan_id: int) -> int | None:
-    for range_ in reversed(ranges):
-        if range_.start_scan_id <= scan_id:
-            return min(scan_id, range_.end_scan_id)
+    for range_ in _expanded_reversed(ranges, scan_id):
+        return min(scan_id, range_.end_scan_id)
     return None
 
 
 def _latest_range_start(ranges: list[ScanRange], scan_id: int) -> int | None:
-    for range_ in reversed(ranges):
-        if range_.start_scan_id <= scan_id:
-            return range_.start_scan_id
+    for range_ in _expanded_reversed(ranges, scan_id):
+        return range_.start_scan_id
     return None
 
 
 def _latest_value_transition(timeline: list[ValueRange], value: Any, scan_id: int) -> int | None:
-    for range_ in reversed(timeline):
-        if range_.start_scan_id > scan_id:
-            continue
+    for range_ in _expanded_reversed(timeline, scan_id):
         end = min(scan_id, range_.end_scan_id)
         payload = range_.payload
         if isinstance(payload, Constant):
@@ -819,7 +927,7 @@ def _latest_value_transition(timeline: list[ValueRange], value: Any, scan_id: in
 
 
 def _last_value_before(timeline: list[ValueRange], before_scan_id: int) -> tuple[int, Any] | None:
-    for range_ in reversed(timeline):
+    for range_ in _expanded_reversed(timeline, before_scan_id - 1):
         if range_.start_scan_id < before_scan_id:
             scan_id = min(range_.end_scan_id, before_scan_id - 1)
             candidate = _latest_write_in_range(range_, scan_id)
@@ -844,7 +952,7 @@ def _latest_write_in_range(
 
 
 def _ranges_have_write(ranges: Sequence[ValueRange], first_scan: int, last_scan: int) -> bool:
-    for range_ in ranges:
+    for range_ in _expanded(ranges, first_scan, last_scan):
         overlap_start = max(range_.start_scan_id, first_scan)
         overlap_end = min(range_.end_scan_id, last_scan)
         if (
@@ -858,7 +966,7 @@ def _ranges_have_write(ranges: Sequence[ValueRange], first_scan: int, last_scan:
 def _known_distinct_values(timeline: Sequence[ValueRange]) -> list[Any]:
     """Known scalar values in a fragmented column; missing is not a value."""
     distinct: list[Any] = []
-    for range_ in timeline:
+    for range_ in _templates(timeline):
         payload = range_.payload
         if isinstance(payload, Constant):
             candidates = (payload.value,)
@@ -892,6 +1000,9 @@ def _trim_scan_ranges(
 ) -> list[ScanRange]:
     kept: list[ScanRange] = []
     for range_ in ranges:
+        if type(range_) is Repeat:
+            kept.extend(_trim_repeat(range_, min_scan, max_scan, _trim_scan_ranges))
+            continue
         start = (
             max(range_.start_scan_id, min_scan) if min_scan is not None else range_.start_scan_id
         )
@@ -906,6 +1017,9 @@ def _trim_value_ranges(
 ) -> list[ValueRange]:
     kept: list[ValueRange] = []
     for range_ in ranges:
+        if type(range_) is Repeat:
+            kept.extend(_trim_repeat(range_, min_scan, max_scan, _trim_value_ranges))
+            continue
         start = (
             max(range_.start_scan_id, min_scan) if min_scan is not None else range_.start_scan_id
         )
@@ -921,3 +1035,203 @@ def _trim_value_ranges(
                 payload = Arithmetic(payload.base + payload.delta * offset, payload.delta)
         kept.append(ValueRange(start, end, payload))
     return kept
+
+
+# --- Repeats ------------------------------------------------------------------------
+
+
+def _moved(range_: Any, offset: int) -> Any:
+    if not offset:
+        return range_
+    if isinstance(range_, ScanRange):
+        return ScanRange(range_.start_scan_id + offset, range_.end_scan_id + offset)
+    return ValueRange(range_.start_scan_id + offset, range_.end_scan_id + offset, range_.payload)
+
+
+def _repetition(repeat: Repeat, index: int) -> list[Any]:
+    offset = index * repeat.period
+    return [_moved(range_, offset) for range_ in repeat.ranges]
+
+
+def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
+    """Repetitions *first*..*last* of *repeat*: one entry, or plain ranges for one of them."""
+    if first > last:
+        return []
+    if first == last:
+        return _repetition(repeat, first)
+    head = _repetition(repeat, first)
+    end = repeat.ranges[-1].end_scan_id + last * repeat.period
+    return [Repeat(head[0].start_scan_id, end, repeat.period, tuple(head), last - first + 1)]
+
+
+def _overlapping(repeat: Repeat, first: int | None, last: int | None) -> tuple[int, int]:
+    """The first and last repetition with a scan in *first*..*last*."""
+    period = repeat.period
+    lo = 0 if first is None else max(0, -((repeat.ranges[-1].end_scan_id - first) // period))
+    hi = repeat.count - 1
+    if last is not None:
+        hi = min(hi, (last - repeat.start_scan_id) // period)
+    return lo, hi
+
+
+def _expanded(ranges: Sequence[Any], first: int | None, last: int | None) -> Iterator[Any]:
+    """The written-out ranges with a scan in *first*..*last*, in order."""
+    for element in ranges:
+        if last is not None and element.start_scan_id > last:
+            return
+        if first is not None and element.end_scan_id < first:
+            continue
+        if type(element) is not Repeat:
+            yield element
+            continue
+        lo, hi = _overlapping(element, first, last)
+        for index in range(lo, hi + 1):
+            for range_ in _repetition(element, index):
+                if last is not None and range_.start_scan_id > last:
+                    return
+                if first is None or range_.end_scan_id >= first:
+                    yield range_
+
+
+def _expanded_reversed(ranges: Sequence[Any], last: int | None) -> Iterator[Any]:
+    """The written-out ranges that start at or before *last*, latest first."""
+    for element in reversed(ranges):
+        if last is not None and element.start_scan_id > last:
+            continue
+        if type(element) is not Repeat:
+            yield element
+            continue
+        _lo, hi = _overlapping(element, None, last)
+        for index in range(hi, -1, -1):
+            for range_ in reversed(_repetition(element, index)):
+                if last is None or range_.start_scan_id <= last:
+                    yield range_
+
+
+def _templates(ranges: Sequence[Any]) -> Iterator[Any]:
+    """Each plain range once, a repeat's ranges once for all its repetitions."""
+    for element in ranges:
+        if type(element) is Repeat:
+            yield from element.ranges
+        else:
+            yield element
+
+
+def _written_out_length(ranges: Sequence[Any]) -> int:
+    return sum(
+        len(element.ranges) * element.count if type(element) is Repeat else 1 for element in ranges
+    )
+
+
+def _last_written_out(ranges: Sequence[Any]) -> Any:
+    last = ranges[-1]
+    if type(last) is Repeat:
+        return _moved(last.ranges[-1], (last.count - 1) * last.period)
+    return last
+
+
+def _unroll_tail(ranges: list[Any]) -> None:
+    """Write out a list's last repetition, so that an append may change its last range."""
+    if ranges and type(ranges[-1]) is Repeat:
+        repeat = ranges.pop()
+        ranges.extend(_repeats(repeat, 0, repeat.count - 2))
+        ranges.extend(_repetition(repeat, repeat.count - 1))
+
+
+def _trim_repeat(
+    repeat: Repeat, min_scan: int | None, max_scan: int | None, trim: Any
+) -> list[Any]:
+    first, last = _overlapping(repeat, min_scan, max_scan)
+    if first > last:
+        return []
+    period = repeat.period
+    whole_first = first
+    if min_scan is not None and repeat.start_scan_id + first * period < min_scan:
+        whole_first += 1
+    whole_last = last
+    if max_scan is not None and repeat.ranges[-1].end_scan_id + last * period > max_scan:
+        whole_last -= 1
+    if whole_first > whole_last:
+        pieces = [
+            range_ for index in range(first, last + 1) for range_ in _repetition(repeat, index)
+        ]
+        return trim(pieces, min_scan, max_scan)
+    kept: list[Any] = []
+    if whole_first > first:
+        kept += trim(_repetition(repeat, first), min_scan, max_scan)
+    kept += _repeats(repeat, whole_first, whole_last)
+    if whole_last < last:
+        kept += trim(_repetition(repeat, last), min_scan, max_scan)
+    return kept
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    return type(left) is type(right) and _equal(left, right)
+
+
+def _same_payload(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, Constant):
+        return _same_value(left.value, right.value)
+    if isinstance(left, Alternating):
+        return _same_value(left.value_on_even, right.value_on_even) and _same_value(
+            left.value_on_odd, right.value_on_odd
+        )
+    if isinstance(left, Arithmetic):
+        return left.base == right.base and left.delta == right.delta
+    return True
+
+
+def _one_period_later(earlier: Sequence[Any], later: Sequence[Any], period: int) -> bool:
+    """Whether *later* is *earlier* moved one period on, range for range."""
+    return len(earlier) == len(later) and all(
+        b.start_scan_id == a.start_scan_id + period
+        and b.end_scan_id == a.end_scan_id + period
+        and (isinstance(a, ScanRange) or _same_payload(a.payload, b.payload))
+        for a, b in zip(earlier, later, strict=True)
+    )
+
+
+_EXTEND = "extend"
+
+
+class RepeatPlan:
+    """How a timelines object takes more cycles of its last one.  See ``plan_repeat``."""
+
+    __slots__ = ("_actions", "_period")
+
+    def __init__(self, actions: list[tuple[list[Any], Any]], period: int) -> None:
+        self._actions = actions
+        self._period = period
+
+    def apply(self, cycles: int) -> None:
+        """Record *cycles* more cycles."""
+        period = self._period
+        added = cycles * period
+        for ranges, action in self._actions:
+            if action == _EXTEND:
+                tail = ranges[-1]
+                ranges[-1] = _moved_end(tail, tail.end_scan_id + added)
+                continue
+            cycle = action
+            _unroll_tail(ranges)
+            del ranges[-len(cycle) :]
+            before = ranges[-1] if ranges else None
+            end = cycle[-1].end_scan_id + added
+            if (
+                type(before) is Repeat
+                and before.period == period
+                and _one_period_later(_repetition(before, before.count - 1), cycle, period)
+            ):
+                ranges[-1] = Repeat(
+                    before.start_scan_id, end, period, before.ranges, before.count + 1 + cycles
+                )
+            else:
+                ranges.append(Repeat(cycle[0].start_scan_id, end, period, tuple(cycle), 1 + cycles))
+
+
+def _moved_end(range_: Any, end: int) -> Any:
+    if isinstance(range_, ScanRange):
+        return ScanRange(range_.start_scan_id, end)
+    return ValueRange(range_.start_scan_id, end, range_.payload)

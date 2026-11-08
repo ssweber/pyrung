@@ -104,6 +104,11 @@ MAX_PATHS = 256
 MAX_INTERNED = 4096
 MAX_LOOPS_PER_PATH = 8
 MAX_SUCCESSORS = 4
+# Segments in the longest cycle a stretch's record looks for.  Under a bang-bang hold the paths
+# take turns, and a cycle goes in as one repeat after its first few cycles go in scan by scan.
+MAX_CYCLE_SEGMENTS = 8
+# The cycles that go in scan by scan first, which the timelines check for the same shape.
+WARM_CYCLES = 3
 # Interpreted scans between attempts at a stretch: at entry and after a good stretch,
 # and how far apart they may get when stretches do not come or do not last.
 ENTRY_WAIT = 2
@@ -435,6 +440,57 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
     if sum(timelines.run_count() for timelines in timelines_held) >= MAX_RECORD_RUNS:
         plc._note_unrecorded_scans(start, start + total - 1)
         return
+    cycle = _cycle_of(segments)
+    if cycle is None:
+        _record_scan_by_scan(plc, segments, kernel_paths)
+        return
+    lead, length, cycles = cycle
+    warm = lead + WARM_CYCLES * length
+    _record_scan_by_scan(plc, segments[:warm], kernel_paths)
+    period = sum(segment.count for segment in segments[lead : lead + length])
+    last = segments[warm - 1].first + segments[warm - 1].count - 1
+    plans = [timelines.plan_repeat(last, period) for timelines in timelines_held]
+    if all(plan is not None for plan in plans):
+        for plan in plans:
+            assert plan is not None
+            plan.apply(cycles - WARM_CYCLES)
+        _record_scan_by_scan(plc, segments[lead + cycles * length :], kernel_paths)
+    else:
+        _record_scan_by_scan(plc, segments[warm:], kernel_paths)
+
+
+def _cycle_of(segments: list[_Segment]) -> tuple[int, int, int] | None:
+    """The longest run of segments that repeats a cycle, as (first, segments a cycle, cycles).
+
+    A segment's records follow from its path, its count and where it left the tags it moves.
+    So segments that agree on those record the same scans, a cycle later.
+    """
+    best: tuple[int, int, int] | None = None
+    covered = 0
+    count = len(segments)
+    for length in range(1, MAX_CYCLE_SEGMENTS + 1):
+        first = count - length
+        while first > 0 and _same_segment(segments[first - 1], segments[first - 1 + length]):
+            first -= 1
+        cycles = (count - first) // length
+        if cycles >= WARM_CYCLES + 2 and cycles * length > covered:
+            best = (first, length, cycles)
+            covered = cycles * length
+    return best
+
+
+def _same_segment(one: _Segment, other: _Segment) -> bool:
+    if one.path is not other.path or one.count != other.count:
+        return False
+    ends, others = one.ends, other.ends
+    return all(same(value, others[name]) for name, value in ends.items())
+
+
+def _record_scan_by_scan(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPaths) -> None:
+    if not segments:
+        return
+    start = segments[0].first
+    total = sum(segment.count for segment in segments)
     # A stretch that ran through several paths without a gap: a rung they all repeat
     # goes in once, which is most of them under a bang-bang hold.
     common = _common_columns(segments, kernel_paths)
