@@ -483,7 +483,9 @@
 
 ### Performance
 
-- A second `how()` on an unchanged program skips the prover's setup, and the first `how()` does less of it.
+- `how()` starts faster.
+  - A second `how()` on an unchanged program skips several seconds of setup.
+  - The first `how()` takes about half as long to set up.
 
 ## v0.15.2 (2026-10-11)
 
