@@ -24,7 +24,7 @@ _LIVE = ModbusTcpTarget("kio", "127.0.0.1", port=502, device_id=1)
 
 
 def _receive_program(target):
-    """examples/circuitpy_traffic_light_modbus.py in small: a timer, and a receive every scan."""
+    """A small examples/circuitpy_traffic_light_modbus.py, with a timer and a receive each scan."""
     with Program(strict=False) as program:
         with Rung(Enable):
             on_delay(Wait, 50)
@@ -59,7 +59,7 @@ def _nop_raw_program():
 
 def _run(program, *, stepped: bool) -> PLC:
     plc = PLC(program, dt=0.01)
-    plc.patch({Enable.name: True, Walk.name: True, RxCode.name: 7})
+    plc.patch({Enable.name: True, Walk.name: True, RxCode.name: 7, RxOk.name: True})
     if stepped:
         for _ in range(SCANS):
             plc.run_until(NEVER, max_cycles=1, jit=False)
@@ -90,9 +90,9 @@ def test_the_program_gets_a_kernel_and_runs_as_stepping_does(program) -> None:
 def test_a_string_target_writes_nothing_stepped_or_replayed() -> None:
     plc = _run(_receive_program("panel"), stepped=True)
     tags = plc.state.tags
-    # The patched values stay, and the status bits nobody patched were never written.
-    assert (tags[Walk.name], tags[RxCode.name]) == (True, 7)
-    assert {RxBusy.name, RxOk.name, RxErr.name, TxBusy.name, TxOk.name}.isdisjoint(tags)
+    # The patched values stay, and the other status bits keep their defaults.
+    assert (tags[Walk.name], tags[RxCode.name], tags[RxOk.name]) == (True, 7, True)
+    assert not any(tags[tag.name] for tag in (RxBusy, RxErr, TxBusy, TxOk))
     snapshot = plc._scan_log.snapshot()
     assert not snapshot.io_submits_by_scan and not snapshot.io_drains_by_scan
     replayed = plc.replay_to(SCANS - 1)
@@ -157,7 +157,7 @@ def test_a_fork_does_not_collect_its_parent_s_request(monkeypatch: pytest.Monkey
     reason="compiled replay writes recorded I/O after the scan, stepping writes it mid-scan",
 )
 def test_compiled_replay_of_live_io_matches_stepping(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unreachable today: a live program gets no kernel.  This pins what one would get wrong."""
+    """No run meets this today, since a live program gets no kernel.  It pins what one would do."""
     from pyrung.circuitpy.codegen import compile_kernel
 
     _answered_at_once(monkeypatch)

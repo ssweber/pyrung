@@ -1744,8 +1744,8 @@ class PLC:
         self._unrecorded_scans: list[tuple[int, int]] = []
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
-        # how() sets this on its forks: their send()/receive() do no I/O, as for a string
-        # target, and every runner made from one (a fork, a replay) keeps it.
+        # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
+        # string target.  Every runner made from one, such as a fork or a replay, keeps it.
         self._modbus_stubbed = False
         # What coasts keep for later coasts: a search's, shared with its forks.
         self._coast_memo: CoastMemo | None = None
@@ -3549,7 +3549,7 @@ class PLC:
         if kernel is None:
             return None
         if self._modbus_stubbed and self._scan_log.has_io_records():
-            # A kernel writes recorded I/O after its scan, and stepping wrote it at the
+            # A kernel writes recorded I/O after its scan, and stepping writes it at the
             # instruction.  A how() fork may hold the session's own recorded I/O.
             return None
         anchor = self._nearest_checkpoint_at_or_before(scan_id)
