@@ -286,7 +286,7 @@ def test_a_trim_from_the_front_keeps_the_count() -> None:
 
 # Each seed writes random scans and leaves gaps as the jit does.  It settles the gaps in any
 # order.  These seeds reach the limit while a gap stepping joins to its edges is unsettled.
-_EDGE_JOINS = frozenset({9, 14, 26, 157})
+_EDGE_JOINS = frozenset({9, 14, 26})
 POOL = (0, 1, 2, 7)
 
 

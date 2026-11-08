@@ -1197,6 +1197,22 @@ def _trim_scan_ranges(
 def _trim_value_ranges(
     ranges: list[ValueRange], min_scan: int | None, max_scan: int | None
 ) -> list[ValueRange]:
+    # A settle trims each column it touches several times.  Only the elements at each end
+    # can change, so the ones between go over as they are.
+    low = 0 if min_scan is None else bisect_left(ranges, min_scan, key=_end_of)
+    high = len(ranges) if max_scan is None else bisect_right(ranges, max_scan, key=_start_of)
+    if high - low <= 2:
+        return _trim_each(ranges[low:high], min_scan, max_scan)
+    return [
+        *_trim_each(ranges[low : low + 1], min_scan, max_scan),
+        *ranges[low + 1 : high - 1],
+        *_trim_each(ranges[high - 1 : high], min_scan, max_scan),
+    ]
+
+
+def _trim_each(
+    ranges: Sequence[ValueRange], min_scan: int | None, max_scan: int | None
+) -> list[ValueRange]:
     kept: list[ValueRange] = []
     for range_ in ranges:
         if type(range_) is Repeat:
