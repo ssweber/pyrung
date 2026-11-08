@@ -116,8 +116,8 @@ def _clean_block_state() -> Iterator[None]:
                     {addr: id(tag) for addr, tag in block._mapped_tags.items()}
                     != {addr: id(tag) for addr, tag in mapped_tags.items()}
                 ):
-                    # This undoes a test's slot settings behind the block's back, and a
-                    # shared program's cached prover facts may have been built with them.
+                    # This restore undoes a test's slot settings behind the block's back.
+                    # A shared program's cached prover facts may have been built with them.
                     note_metadata_edit()
                 block._slot_config = {addr: copy.copy(e) for addr, e in slot_config.items()}
                 block._mapped_tags = dict(mapped_tags)

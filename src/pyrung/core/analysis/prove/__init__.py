@@ -337,7 +337,7 @@ def _build_prior_facts(
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
 ) -> _PriorFacts | Intractable:
-    """Build how()'s domain prior: the value domains and state names it steers with.
+    """Build the value domains and state names how() steers with.
 
     It proves nothing and runs no search, so it skips the search's passes and freeze().
     """

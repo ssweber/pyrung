@@ -2336,7 +2336,7 @@ def _run_passes(ctx: _PassContext, passes: tuple[_PreBFSPass, ...]) -> Intractab
 
 
 def _run_prior_pipeline(ctx: _PassContext) -> _PriorFacts | Intractable:
-    """how()'s domain prior: the passes that decide its fields, then those fields."""
+    """Run the passes that decide how()'s prior fields, then read those fields."""
     stopped = _run_passes(ctx, _passes_answering(_PRIOR_FIELDS))
     return ctx.prior_facts() if stopped is None else stopped
 

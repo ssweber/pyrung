@@ -66,7 +66,7 @@ Program
   → Proven | Counterexample | Intractable
 ```
 
-See `passes.py` for the full pass sequence with data flow. The `how()` path is `_build_prior_facts`. It asks for the `_PriorFacts` fields, and `_passes_answering` runs only the passes whose `answers` name one of them, plus the passes those require. It never runs `freeze()`, so a pass or freeze step added for the search costs `how()` nothing. Its `_PassContext.domains_only=True` keeps the switches that change a pass's answer for `how()`. With it, classification absorbs and `build_prior_key_specs` builds PILOT's world-key Done specs.
+See `passes.py` for the full pass sequence with data flow. The `how()` path is `_build_prior_facts`. It asks for the `_PriorFacts` fields by name. `_passes_answering` runs each pass whose `answers` names one of those fields, and each pass those passes require. It never runs `freeze()`, so a pass or freeze step added for the search costs `how()` nothing. `_PassContext.domains_only=True` keeps the switches that change a pass's answer for `how()`. With it on, classification absorbs and `build_prior_key_specs` builds PILOT's world-key Done specs.
 
 `_OptConfig.all_off()` is a sound baseline: every remaining toggle is a reduction (`_REDUCTION_OPTIMIZATIONS`) the soundness fuzzer checks against plain BFS. `sound_baseline()` is `all_off()` with the declared-bounds check kept; `_skip_optimizations=True` selects it.
 

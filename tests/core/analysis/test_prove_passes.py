@@ -251,7 +251,7 @@ class TestPassManifest:
 
 
 class TestHowPrior:
-    """how() asks for the fields it reads, and the pipeline runs only what decides them."""
+    """how() runs only the passes that decide the fields it reads."""
 
     def test_prior_fields_are_what_how_reads(self) -> None:
         assert _PRIOR_FIELDS == {
