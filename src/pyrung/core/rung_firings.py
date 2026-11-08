@@ -446,9 +446,9 @@ class RungFiringTimelines(Generic[K]):
     def _note_unseen(self, key: tuple[K, str], timeline: list[ValueRange]) -> None:
         """Note a range the loop wrote as ``Unknown`` because it could not speak for it.
 
-        Stepping counts the values the loop did not see, so ours cannot tell when stepping's
-        count reaches a hundred.  So the column goes unknown now.  A column of bools keeps its
-        values, since it never holds more than two.
+        Stepping counts the values the loop did not see.  So this record cannot tell when
+        stepping's count reaches a hundred, and the column goes unknown now.  A column of bools
+        keeps its values, since it never holds more than two.
         """
         if key in self._partly_unknown:
             return  # Either unknown already, or a column of bools.
@@ -1622,7 +1622,7 @@ def _restepped_repeat(
     _unroll_tail(timeline)
     period = repeat.period
     may_join = not repeat.steps or unknown
-    # For each repetition, where its ranges start and end in *timeline*, and its last range.
+    # Where each repetition's ranges start and end in *timeline*.  The last range comes too.
     marks: list[tuple[int, int, Any]] = []
     quiet = 0
     for index in range(repeat.count):
