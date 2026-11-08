@@ -104,13 +104,13 @@ class ValueRange:
 
 @dataclass(frozen=True, slots=True)
 class Repeat:
-    """Ranges that repeat unchanged every *period* scans, *count* times, in one entry.
+    """Ranges that repeat every *period* scans, *count* times, in one entry.
 
     ``ranges`` are the first repetition's.  Repetition r is the same ranges moved r * period
-    scans later.  A list holding a repeat reads as the list with every repetition written out.
-    That is the list that appending each scan would have made.  A later kind of entry may
-    compute its values from a formula or by running a trace again.  It too must read as its
-    written-out ranges.
+    scans later.  Each range's values also move by r times its entry in ``steps``, which is
+    empty when nothing steps.  A step applies only to whole-number values.  A list holding a
+    repeat reads as the list with every repetition written out.  That is the list that
+    appending each scan would have made.
     """
 
     start_scan_id: int
@@ -118,6 +118,7 @@ class Repeat:
     period: int
     ranges: tuple[Any, ...]
     count: int
+    steps: tuple[int, ...] = ()
 
 
 class RungFiringTimelines(Generic[K]):
@@ -238,12 +239,14 @@ class RungFiringTimelines(Generic[K]):
     def plan_repeat(self, last_scan_id: int, period: int) -> RepeatPlan | None:
         """How to record more cycles of the last *period* scans, or None if it cannot.
 
-        The caller vouches that each later cycle appends what scans up to *last_scan_id*
-        appended in the last cycle, one period later.  Each column must also have taken the same
-        shape on the last three cycles, so that appending the later cycles scan by scan would
-        repeat that shape.  Then each later cycle reads back as appending it would have.
+        The caller vouches for what each later cycle appends.  It is what the cycle before it
+        appended, one period later, with each whole number moved as it moved between the last
+        two cycles.  Each column must also have taken the same shape on its last cycles, which
+        may start on any scan of the period.  Then appending the later cycles scan by scan would
+        repeat that shape, and each later cycle reads back as appending it would have.  Record
+        no more than the plan's ``limit``.
         """
-        actions: list[tuple[list[Any], Any]] = []
+        actions: list[tuple[Any, list[Any], Any]] = []
         tables: tuple[tuple[Mapping[Any, list[Any]], bool], ...] = (
             (self._fired_ranges, False),
             (self._value_timelines, True),
@@ -255,8 +258,8 @@ class RungFiringTimelines(Generic[K]):
                 if action is False:
                     return None
                 if action is not None:
-                    actions.append((ranges, action))
-        return RepeatPlan(actions, period)
+                    actions.append((key if values else None, ranges, action))
+        return RepeatPlan(self, actions, period)
 
     def _repeat_action(
         self, key: Any, ranges: list[Any], last: int, period: int, values: bool
@@ -273,42 +276,80 @@ class RungFiringTimelines(Generic[K]):
             return False  # written lately, but not in the last cycle
         tail = _last_written_out(ranges)
         if tail.start_scan_id <= last - 2 * period + 1 and end == last:
-            # One range runs through the last two cycles, so each later scan extends it.
-            if values and not all(
-                _same_value(_value_at(tail, scan_id), _value_at(tail, scan_id + period))
-                for scan_id in range(last - period + 1, last + 1)
+            # One range runs through the last two cycles, so each later scan extends it.  A
+            # count keeps its rate, and any other range must hold the same values a cycle on.
+            if (
+                values
+                and not isinstance(tail.payload, Arithmetic)
+                and not all(
+                    _same_value(_value_at(tail, scan_id), _value_at(tail, scan_id + period))
+                    for scan_id in range(last - period + 1, last + 1)
+                )
             ):
                 return False
             return _EXTEND
+        # A column's own cycle may start on any scan of the period, so the cycle runs from
+        # the end of one of its ranges.  A count that goes up mid-cycle needs that.
+        for range_ in reversed(list(_expanded(ranges, last - period + 1, last))):
+            action = self._cycle_action(key, ranges, range_.end_scan_id, last, period, values)
+            if action is not None:
+                return action
+        return False
+
+    def _cycle_action(
+        self, key: Any, ranges: list[Any], edge: int, last: int, period: int, values: bool
+    ) -> _Cycle | None:
+        """The column's last cycles ending at scan *edge*, if they repeat with steps."""
+        # Appending a scan looks back two scans at most.  So two cycles of two scans or more
+        # show what a later cycle does, and a cycle of one scan needs three.
         cycles = []
-        for back in (2, 1, 0):
-            first = last - (back + 1) * period + 1
+        for back in (2, 1, 0) if period == 1 else (1, 0):
+            first = edge - (back + 1) * period + 1
             cycle = list(_expanded(ranges, first, first + period - 1))
             if any(
                 range_.start_scan_id < first or range_.end_scan_id > first + period - 1
                 for range_ in cycle
             ):
-                return False
+                return None
             cycles.append(cycle)
-        if not (
-            cycles[2]
-            and _one_period_later(cycles[0], cycles[1], period)
-            and _one_period_later(cycles[1], cycles[2], period)
-        ):
-            return False
-        if values and key not in self._unknown_keys:
-            # Appending values a column holds already adds none to its count, unless no count
-            # is kept yet and a column of a hundred values would start one and go unknown.
-            distinct = self._distinct_values.get(key)
-            if distinct is None:
-                if len(_known_distinct_values(ranges)) >= _VALUE_VARIETY_THRESHOLD:
-                    return False
-            elif not all(
-                any(_equal(value, prior) for prior in distinct)
-                for value in _known_distinct_values(cycles[2])
-            ):
-                return False
-        return tuple(cycles[2])
+        if not cycles[-1]:
+            return None
+        steps = _cycle_steps(cycles[-2], cycles[-1], period)
+        if steps is None or (len(cycles) == 3 and steps != _cycle_steps(*cycles[:2], period)):
+            return None
+        cycle = tuple(cycles[-1])
+        step = 0
+        if not any(steps):
+            steps = ()
+        elif not _steps_keep_their_order(cycle, steps):
+            return None
+        else:
+            step = max(steps, key=abs)
+        # The scans after the edge start the next cycle.  They move with the rest.
+        trailing = tuple(_expanded(ranges, edge + 1, last))
+        if not values or key in self._unknown_keys:
+            return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
+        # A column that reaches a hundred values goes unknown, so the cycles stop short of it.
+        distinct = self._distinct_values.get(key)
+        held = _known_distinct_values(ranges) if distinct is None else list(distinct)
+        limit = 0
+        while limit < _VALUE_VARIETY_THRESHOLD:
+            more = [*_stepped_cycle(cycle, steps, limit + 1)]
+            more += [_moved(range_, 0, _step_of(range_, step) * (limit + 1)) for range_ in trailing]
+            new: list[Any] = []
+            for value in _known_distinct_values(more):
+                if not any(_equal(value, prior) for prior in (*held, *new)):
+                    new.append(value)
+            if len(held) + len(new) >= _VALUE_VARIETY_THRESHOLD:
+                break
+            held += _known_distinct_values(_stepped_cycle(cycle, steps, limit + 1))
+            limit += 1
+            if not steps:
+                limit = _NO_LIMIT  # a cycle without steps brings no new values
+                break
+        if limit == 0:
+            return None
+        return _Cycle(cycle, steps, step, trailing, limit)
 
     def tags_of(self, rung_index: K) -> Iterable[str]:
         """Every tag this rung has written."""
@@ -867,11 +908,28 @@ def _find_range(ranges: Sequence[Any], scan_id: int) -> Any:
         elif scan_id > range_.end_scan_id:
             lo = mid + 1
         elif type(range_) is Repeat:
-            offset = (scan_id - range_.start_scan_id) // range_.period * range_.period
-            inner = _find_range(range_.ranges, scan_id - offset)
-            return None if inner is None else _moved(inner, offset)
+            index = (scan_id - range_.start_scan_id) // range_.period
+            inner = _find_index(range_.ranges, scan_id - index * range_.period)
+            if inner is None:
+                return None
+            step = range_.steps[inner] * index if range_.steps else 0
+            return _moved(range_.ranges[inner], index * range_.period, step)
         else:
             return range_
+    return None
+
+
+def _find_index(ranges: Sequence[Any], scan_id: int) -> int | None:
+    lo, hi = 0, len(ranges)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        range_ = ranges[mid]
+        if scan_id < range_.start_scan_id:
+            hi = mid
+        elif scan_id > range_.end_scan_id:
+            lo = mid + 1
+        else:
+            return mid
     return None
 
 
@@ -1040,17 +1098,37 @@ def _trim_value_ranges(
 # --- Repeats ------------------------------------------------------------------------
 
 
-def _moved(range_: Any, offset: int) -> Any:
-    if not offset:
+def _moved(range_: Any, offset: int, step: int = 0) -> Any:
+    if not offset and not step:
         return range_
     if isinstance(range_, ScanRange):
         return ScanRange(range_.start_scan_id + offset, range_.end_scan_id + offset)
-    return ValueRange(range_.start_scan_id + offset, range_.end_scan_id + offset, range_.payload)
+    payload = range_.payload
+    if step:
+        if isinstance(payload, Constant):
+            payload = Constant(payload.value + step)
+        elif isinstance(payload, Alternating):
+            payload = Alternating(payload.value_on_even + step, payload.value_on_odd + step)
+        elif isinstance(payload, Arithmetic):
+            payload = Arithmetic(payload.base + step, payload.delta)
+    return ValueRange(range_.start_scan_id + offset, range_.end_scan_id + offset, payload)
 
 
 def _repetition(repeat: Repeat, index: int) -> list[Any]:
     offset = index * repeat.period
-    return [_moved(range_, offset) for range_ in repeat.ranges]
+    if not repeat.steps:
+        return [_moved(range_, offset) for range_ in repeat.ranges]
+    return [
+        _moved(range_, offset, step * index)
+        for range_, step in zip(repeat.ranges, repeat.steps, strict=True)
+    ]
+
+
+def _stepped_cycle(cycle: Sequence[Any], steps: tuple[int, ...], index: int) -> list[Any]:
+    """*cycle* with its values as its *index*-th later repetition holds them, at the same scans."""
+    if not steps:
+        return list(cycle)
+    return [_moved(range_, 0, step * index) for range_, step in zip(cycle, steps, strict=True)]
 
 
 def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
@@ -1061,7 +1139,16 @@ def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
         return _repetition(repeat, first)
     head = _repetition(repeat, first)
     end = repeat.ranges[-1].end_scan_id + last * repeat.period
-    return [Repeat(head[0].start_scan_id, end, repeat.period, tuple(head), last - first + 1)]
+    return [
+        Repeat(
+            head[0].start_scan_id,
+            end,
+            repeat.period,
+            tuple(head),
+            last - first + 1,
+            repeat.steps,
+        )
+    ]
 
 
 def _overlapping(repeat: Repeat, first: int | None, last: int | None) -> tuple[int, int]:
@@ -1109,12 +1196,16 @@ def _expanded_reversed(ranges: Sequence[Any], last: int | None) -> Iterator[Any]
 
 
 def _templates(ranges: Sequence[Any]) -> Iterator[Any]:
-    """Each plain range once, a repeat's ranges once for all its repetitions."""
+    """Ranges that hold every value of *ranges*.  A repeat without steps is given once."""
     for element in ranges:
-        if type(element) is Repeat:
+        if type(element) is not Repeat:
+            yield element
+        elif not element.steps:
             yield from element.ranges
         else:
-            yield element
+            # A plan stops a column with steps short of a hundred values.
+            for index in range(element.count):
+                yield from _repetition(element, index)
 
 
 def _written_out_length(ranges: Sequence[Any]) -> int:
@@ -1126,7 +1217,9 @@ def _written_out_length(ranges: Sequence[Any]) -> int:
 def _last_written_out(ranges: Sequence[Any]) -> Any:
     last = ranges[-1]
     if type(last) is Repeat:
-        return _moved(last.ranges[-1], (last.count - 1) * last.period)
+        index = last.count - 1
+        step = last.steps[-1] * index if last.steps else 0
+        return _moved(last.ranges[-1], index * last.period, step)
     return last
 
 
@@ -1183,52 +1276,161 @@ def _same_payload(left: Any, right: Any) -> bool:
     return True
 
 
-def _one_period_later(earlier: Sequence[Any], later: Sequence[Any], period: int) -> bool:
-    """Whether *later* is *earlier* moved one period on, range for range."""
-    return len(earlier) == len(later) and all(
-        b.start_scan_id == a.start_scan_id + period
-        and b.end_scan_id == a.end_scan_id + period
-        and (isinstance(a, ScanRange) or _same_payload(a.payload, b.payload))
-        for a, b in zip(earlier, later, strict=True)
+def _cycle_steps(
+    earlier: Sequence[Any], later: Sequence[Any], period: int
+) -> tuple[int, ...] | None:
+    """How far each range's values moved from *earlier* to *later*, or None.
+
+    None unless *later* is *earlier* moved one period on, range for range.  Each range must
+    hold the same values, or whole numbers that all moved by one amount.
+    """
+    if len(earlier) != len(later):
+        return None
+    steps = []
+    for a, b in zip(earlier, later, strict=True):
+        if b.start_scan_id != a.start_scan_id + period or b.end_scan_id != a.end_scan_id + period:
+            return None
+        if isinstance(a, ScanRange) or _same_payload(a.payload, b.payload):
+            steps.append(0)
+            continue
+        step = _payload_step(a.payload, b.payload)
+        if step is None:
+            return None
+        steps.append(step)
+    return tuple(steps)
+
+
+def _payload_step(earlier: Any, later: Any) -> int | None:
+    if type(earlier) is not type(later):
+        return None
+    if isinstance(earlier, Constant):
+        pairs = [(earlier.value, later.value)]
+    elif isinstance(earlier, Alternating):
+        pairs = [
+            (earlier.value_on_even, later.value_on_even),
+            (earlier.value_on_odd, later.value_on_odd),
+        ]
+    elif isinstance(earlier, Arithmetic):
+        if earlier.delta != later.delta:
+            return None
+        pairs = [(earlier.base, later.base)]
+    else:
+        return None
+    if not all(_is_arithmetic_value(a) and _is_arithmetic_value(b) for a, b in pairs):
+        return None
+    steps = {b - a for a, b in pairs}
+    return steps.pop() if len(steps) == 1 else None
+
+
+def _steps_keep_their_order(cycle: Sequence[Any], steps: tuple[int, ...]) -> bool:
+    """Whether every value of a column with steps moves by one amount.
+
+    Appending compares neighbouring values.  When all of them are whole numbers that move by
+    one amount, each comparison comes out the same on every cycle.  A value that stood still
+    beside one that moves could meet it on some later cycle and join it.
+    """
+    moved = {step for step, range_ in zip(steps, cycle, strict=True) if _has_numbers(range_)}
+    return len(moved) == 1 and all(
+        _has_numbers(range_) or isinstance(range_.payload, Unknown) or _is_missing(range_)
+        for range_ in cycle
     )
 
 
+def _has_numbers(range_: Any) -> bool:
+    payload = range_.payload
+    if isinstance(payload, Constant):
+        return _is_arithmetic_value(payload.value)
+    if isinstance(payload, Alternating):
+        return _is_arithmetic_value(payload.value_on_even) and _is_arithmetic_value(
+            payload.value_on_odd
+        )
+    return isinstance(payload, Arithmetic)
+
+
+def _is_missing(range_: Any) -> bool:
+    payload = range_.payload
+    return isinstance(payload, Constant) and payload.value is _MISSING_WRITE
+
+
 _EXTEND = "extend"
+_NO_LIMIT = 1 << 62
+
+
+@dataclass(frozen=True, slots=True)
+class _Cycle:
+    """How one column takes more cycles.  See ``plan_repeat``."""
+
+    cycle: tuple[Any, ...]
+    steps: tuple[int, ...]
+    step: int  # how far each of the column's whole numbers moves a cycle
+    trailing: tuple[Any, ...]  # the next cycle's first scans, recorded already
+    limit: int
+
+
+def _step_of(range_: Any, step: int) -> int:
+    return step if step and _has_numbers(range_) else 0
 
 
 class RepeatPlan:
     """How a timelines object takes more cycles of its last one.  See ``plan_repeat``."""
 
-    __slots__ = ("_actions", "_period")
+    __slots__ = ("_actions", "_period", "_timelines", "limit")
 
-    def __init__(self, actions: list[tuple[list[Any], Any]], period: int) -> None:
+    def __init__(
+        self,
+        timelines: RungFiringTimelines[Any],
+        actions: list[tuple[Any, list[Any], Any]],
+        period: int,
+    ) -> None:
+        self._timelines = timelines
         self._actions = actions
         self._period = period
+        # The most cycles it may record.  A column with steps gains values each cycle.
+        self.limit = min(
+            (action.limit for _key, _ranges, action in actions if action != _EXTEND),
+            default=_NO_LIMIT,
+        )
 
     def apply(self, cycles: int) -> None:
-        """Record *cycles* more cycles."""
+        """Record *cycles* more cycles, no more than ``limit``."""
+        assert 0 < cycles <= self.limit
         period = self._period
         added = cycles * period
-        for ranges, action in self._actions:
+        for key, ranges, action in self._actions:
             if action == _EXTEND:
                 tail = ranges[-1]
                 ranges[-1] = _moved_end(tail, tail.end_scan_id + added)
                 continue
-            cycle = action
+            cycle, steps, step, trailing = action.cycle, action.steps, action.step, action.trailing
             _unroll_tail(ranges)
-            del ranges[-len(cycle) :]
+            del ranges[-(len(cycle) + len(trailing)) :]
             before = ranges[-1] if ranges else None
             end = cycle[-1].end_scan_id + added
             if (
                 type(before) is Repeat
                 and before.period == period
-                and _one_period_later(_repetition(before, before.count - 1), cycle, period)
+                and before.steps == steps
+                and _cycle_steps(_repetition(before, before.count - 1), cycle, period)
+                == (steps or (0,) * len(cycle))
             ):
                 ranges[-1] = Repeat(
-                    before.start_scan_id, end, period, before.ranges, before.count + 1 + cycles
+                    before.start_scan_id,
+                    end,
+                    period,
+                    before.ranges,
+                    before.count + 1 + cycles,
+                    steps,
                 )
             else:
-                ranges.append(Repeat(cycle[0].start_scan_id, end, period, tuple(cycle), 1 + cycles))
+                ranges.append(Repeat(cycle[0].start_scan_id, end, period, cycle, 1 + cycles, steps))
+            moved = [_moved(range_, added, _step_of(range_, step) * cycles) for range_ in trailing]
+            ranges.extend(moved)
+            distinct = self._timelines._distinct_values.get(key) if key is not None else None
+            if distinct is not None:
+                seen = [_stepped_cycle(cycle, steps, index) for index in range(1, cycles + 1)]
+                for value in _known_distinct_values([*(r for c in seen for r in c), *moved]):
+                    if not any(_equal(value, prior) for prior in distinct):
+                        distinct.append(value)
 
 
 def _moved_end(range_: Any, end: int) -> Any:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -96,11 +97,18 @@ def _reads(timelines: RungFiringTimelines, last: int) -> dict[str, Any]:
 
 
 def _recorded_both_ways(
-    prefix: list[Scan], cycle: list[Scan], cycles: int, suffix: list[Scan]
+    prefix: list[Scan],
+    cycle: list[Scan] | Callable[[int], list[Scan]],
+    cycles: int,
+    suffix: list[Scan],
 ) -> tuple[RungFiringTimelines, RungFiringTimelines, bool, int]:
-    """The run scan by scan, and with all but three cycles as one repeat if it can be."""
-    period = len(cycle)
-    scans = [*prefix, *(cycle * cycles), *suffix]
+    """The run scan by scan, and with all but three cycles as one repeat if it can be.
+
+    *cycle* gives the scans of each cycle, or of cycle r when it is a function.
+    """
+    cycle_at = cycle if callable(cycle) else lambda _r: cycle
+    period = len(cycle_at(0))
+    scans = [*prefix, *(scan for r in range(cycles) for scan in cycle_at(r)), *suffix]
     stepped: RungFiringTimelines = RungFiringTimelines()
     for scan_id, scan in enumerate(scans, start=1):
         _record(stepped, scan_id, scan)
@@ -109,14 +117,13 @@ def _recorded_both_ways(
     for scan_id, scan in enumerate(scans[:warm], start=1):
         _record(repeated, scan_id, scan)
     plan = repeated.plan_repeat(warm, period)
+    first = warm + 1
     if plan is not None:
-        plan.apply(cycles - 3)
-        rest = suffix
-        first = len(prefix) + cycles * period + 1
-    else:
-        rest = scans[warm:]
-        first = warm + 1
-    for scan_id, scan in enumerate(rest, start=first):
+        added = min(plan.limit, cycles - 3)
+        if added > 0:
+            plan.apply(added)
+            first += added * period
+    for scan_id, scan in enumerate(scans[first - 1 :], start=first):
         _record(repeated, scan_id, scan)
     return stepped, repeated, plan is not None, len(scans)
 
@@ -204,3 +211,82 @@ def test_most_random_cycles_go_in_as_a_repeat() -> None:
         cycles = rng.randrange(3, 25)
         planned += _recorded_both_ways(prefix, cycle, cycles, suffix)[2]
     assert planned >= 30
+
+
+def _stepping(rng: random.Random) -> tuple[list[Scan], Callable[[int], list[Scan]]]:
+    """A random cycle whose whole numbers move by a fixed step each cycle, column by column."""
+    steps = {(r, t): rng.choice((0, 1, -1, 3)) for r in RUNGS for t in TAGS}
+    length = rng.randrange(1, 5)
+    shape = []
+    for _ in range(length):
+        scan = {}
+        for rung in RUNGS:
+            if rng.random() < 0.6:
+                writes = {}
+                for tag in TAGS:
+                    if rng.random() < 0.8:
+                        stepping = steps[(rung, tag)] != 0
+                        writes[tag] = rng.randrange(0, 6) if stepping else rng.choice(POOL)
+                scan[rung] = (writes, frozenset(t for t in writes if rng.random() < 0.2))
+        shape.append(scan)
+
+    def cycle_at(index: int) -> list[Scan]:
+        return [
+            {
+                rung: (
+                    {
+                        tag: value + steps[(rung, tag)] * index if steps[(rung, tag)] else value
+                        for tag, value in writes.items()
+                    },
+                    varied,
+                )
+                for rung, (writes, varied) in scan.items()
+            }
+            for scan in shape
+        ]
+
+    prefix = [_random_scan(rng) for _ in range(rng.randrange(0, 5))]
+    return prefix, cycle_at
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_random_stepping_cycles_read_back_as_scan_by_scan(seed: int) -> None:
+    rng = random.Random(1000 + seed)
+    prefix, cycle_at = _stepping(rng)
+    suffix = [_random_scan(rng) for _ in range(rng.randrange(0, 5))]
+    cycles = rng.randrange(3, 25)
+    stepped, repeated, _planned, last = _recorded_both_ways(prefix, cycle_at, cycles, suffix)
+    _assert_same(stepped, repeated, last)
+    cut = rng.randrange(1, last + 1)
+    _assert_same(stepped.snapshot(up_to=cut), repeated.snapshot(up_to=cut), last)
+    early, later = stepped.snapshot(), repeated.snapshot()
+    early.trim_before(cut)
+    later.trim_before(cut)
+    _assert_same(early, later, last)
+
+
+def test_most_random_stepping_cycles_go_in_with_steps() -> None:
+    with_steps = 0
+    for seed in range(60):
+        rng = random.Random(1000 + seed)
+        prefix, cycle_at = _stepping(rng)
+        _stepped, repeated, _planned, _last = _recorded_both_ways(prefix, cycle_at, 20, [])
+        with_steps += any(
+            type(element) is Repeat and element.steps
+            for ranges in repeated._value_timelines.values()
+            for element in ranges
+        )
+    assert with_steps >= 20
+
+
+def _counting_up(index: int) -> list[Scan]:
+    """Rung 0 writes a count that goes up one a cycle, rung 1 fires on the other scan."""
+    return [{0: ({"a": index, "b": True}, frozenset())}, {1: ({"a": 7}, frozenset())}]
+
+
+def test_a_count_steps_until_its_column_would_go_unknown() -> None:
+    stepped, repeated, planned, last = _recorded_both_ways([], _counting_up, 300, [])
+    assert planned
+    assert (0, "a") in stepped._unknown_keys
+    assert (0, "a") in repeated._unknown_keys
+    _assert_same(stepped, repeated, last)
