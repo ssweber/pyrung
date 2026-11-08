@@ -634,6 +634,7 @@ def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
 
     The twin must start from *plc*'s records at *start* (:func:`seed_records`).
     """
+    assert hasattr(twin, "_fold_seed"), "seed the twin with seed_records() first"
     end = plc._state.scan_id
     _compare_records_over(kind, _as_settled(plc, start + 1, end), twin, start + 1, end)
     STATS[f"records compared: {kind}"] += 1

@@ -47,7 +47,7 @@ from pyrung.core.rung_firings import (
     UnrecordedScansError,
 )
 from pyrung.core.tag import Dint
-from tests.fold_check import compare_records
+from tests.fold_check import compare_records, seed_records
 
 CASES = {}
 
@@ -283,6 +283,7 @@ class TestAgainstStepping:
     def test_leaves_the_records_stepping_leaves(self, strict, name: str) -> None:
         plc = _runner(CASES[name], 0.3)
         twin = plc.fork()
+        seed_records(twin, plc)
         whole = _runner(CASES[name], 0.3)  # the surveys read a runner's own epoch, not a fork's
         for _ in range(SCANS):
             twin.step()
@@ -683,6 +684,7 @@ def test_columns_kept_by_content_have_their_cap(monkeypatch: pytest.MonkeyPatch)
     assert all(len(held.interned) <= 2 for held in memo_of(plc).paths.values())
     # Past the cap two paths may no longer see they agree, and the answers are the same.
     twin = _runner(CASES["staircase_mirror"], 0.3)
+    seed_records(twin, twin)
     for _ in range(plc.state.scan_id - twin.state.scan_id):
         twin.step()
     compare_records("capped columns", plc, twin, 0)
@@ -862,6 +864,7 @@ class TestRecordsPastTheirCap:
 
     def _stepped(self, plc: PLC) -> PLC:
         stepped = _runner(_fires_every_other_scan, 0.01)
+        seed_records(stepped, stepped)
         while stepped.state.scan_id < plc.state.scan_id:
             stepped.step()
         return stepped
@@ -995,6 +998,7 @@ def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(
 ) -> None:
     plc = _runner(build, 0.01)
     stepped = _runner(build, 0.01)  # the surveys read a runner's own epoch
+    seed_records(stepped, plc)
     start = plc.current_state.scan_id
     coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset())
     while stepped.current_state.scan_id < plc.current_state.scan_id:
