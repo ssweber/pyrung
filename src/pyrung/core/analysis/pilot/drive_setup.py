@@ -349,7 +349,7 @@ def build_prover_context(
         graph, cached_edits, context = cached
         if graph is getattr(program, "_cached_graph", None) and cached_edits == edits:
             return _copy_prover_context(context)
-    context = _compute_prover_context(program, snapshot)
+    context = _compute_prover_context(program)
     if context is None:
         return ProverContext()
     graph = getattr(program, "_cached_graph", None)
@@ -371,26 +371,16 @@ def _copy_prover_context(context: ProverContext) -> ProverContext:
     )
 
 
-def _compute_prover_context(program: Any, snapshot: dict[str, Any]) -> ProverContext | None:
+def _compute_prover_context(program: Any) -> ProverContext | None:
     """The prover's facts for *program*, or ``None`` when building them raised."""
     try:
-        from dataclasses import replace as _replace
-
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
         from pyrung.core.analysis.pilot.evidence import build_transition_evidence
-        from pyrung.core.analysis.prove import _build_explore_context
-        from pyrung.core.analysis.prove.passes import _OptConfig
+        from pyrung.core.analysis.prove import _build_prior_facts
         from pyrung.core.analysis.prove.results import Intractable
 
-        opt = _replace(_OptConfig(), domains_only=True)
         compiled = _compile_kernel(program, blockless=True, proof_metadata=True)
-        ctx = _build_explore_context(
-            program,
-            _opt_config=opt,
-            compiled=compiled,
-            initial_state=snapshot,
-            allow_partial=True,
-        )
+        ctx = _build_prior_facts(program, compiled=compiled)
         if isinstance(ctx, Intractable):
             return ProverContext()
         nd = getattr(ctx, "nondeterministic_dims", None)

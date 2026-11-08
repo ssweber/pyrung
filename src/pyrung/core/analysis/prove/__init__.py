@@ -159,7 +159,9 @@ from .passes import (
     _PassContext,
     _passes_for_opt_config,
     _PipelineCache,
+    _PriorFacts,
     _run_pre_bfs_pipeline,
+    _run_prior_pipeline,
 )
 from .passes import _OptConfig as _OptConfig
 
@@ -300,10 +302,9 @@ def _build_explore_context(
                 for name in no_case_to_split
             ],
         )
-    if not _opt_config.domains_only:
-        refused = _functions_the_search_cannot_call(program)
-        if refused is not None:
-            return refused
+    refused = _functions_the_search_cannot_call(program)
+    if refused is not None:
+        return refused
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -321,7 +322,6 @@ def _build_explore_context(
         initial_state=initial_state,
         pipeline_cache=pipeline_cache,
         restrict_inputs_to_scope=restrict_inputs_to_scope,
-        domains_only=_opt_config.domains_only,
         opaque_reads=opaque_reads,
         opaque_reads_all=opaque_reads_all,
         observed_tags=observed_tags,
@@ -329,6 +329,28 @@ def _build_explore_context(
     return _run_pre_bfs_pipeline(
         ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
     )
+
+
+def _build_prior_facts(
+    program: Program,
+    *,
+    dt: float = 0.010,
+    compiled: CompiledKernel | None = None,
+) -> _PriorFacts | Intractable:
+    """Build how()'s domain prior: the value domains and state names it steers with.
+
+    It proves nothing and runs no search, so it skips the search's passes and freeze().
+    """
+    ctx = _PassContext(
+        program=program,
+        scope=None,
+        project=None,
+        extra_exprs=None,
+        dt=dt,
+        compiled=compiled,
+        domains_only=True,
+    )
+    return _run_prior_pipeline(ctx)
 
 
 def _compile_property_spec(

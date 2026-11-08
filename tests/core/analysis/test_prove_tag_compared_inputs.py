@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import itertools
 import warnings
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -49,6 +48,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     TraceStep,
     _build_explore_context,
+    _build_prior_facts,
     never,
 )
 from pyrung.core.analysis.prove.passes import _OptConfig
@@ -430,7 +430,7 @@ def test_real_input_compared_with_tag_is_refused() -> None:
 
 def test_domains_only_prior_keeps_the_partition() -> None:
     logic, _bad, _seq = _timer_equals_input()
-    ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
+    ctx = _build_prior_facts(logic)
     assert not isinstance(ctx, Intractable)
     assert len(ctx.nondeterministic_dims["KIn"]) < 20
 
@@ -472,7 +472,7 @@ def test_domains_only_prior_keeps_whole_number_real_partition(via_copy) -> None:
     # steered with before (5, 6 and their neighbours), so its picks stay put.
     logic = _real_window(5, 6, via_copy=via_copy)
     search = _build_explore_context(logic, _opt_config=_OptConfig())
-    prior = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
+    prior = _build_prior_facts(logic)
     assert not isinstance(search, Intractable)
     assert not isinstance(prior, Intractable)
     assert 5.5 in search.nondeterministic_dims["KLevel"]

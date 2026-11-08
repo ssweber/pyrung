@@ -35,21 +35,25 @@ from pyrung.core.analysis.prove import (
     Proven,
     _bfs_explore,
     _build_explore_context,
+    _build_prior_facts,
     always,
     never,
 )
+from pyrung.core.analysis.prove import passes as passes_module
 from pyrung.core.analysis.prove.elision import (
     _elide_scan_local_stateful_dims,
 )
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
+    _PRIOR_FIELDS,
     _BFSConfig,
-    _OptConfig,
     _pass_build_graph,
     _pass_classify_dimensions,
     _pass_diagnose_unwritten_tags,
     _PassContext,
+    _passes_answering,
+    _PreBFSPass,
     _run_pre_bfs_pipeline,
     _validate_pass_dag,
 )
@@ -244,6 +248,51 @@ class TestPassManifest:
         )
         with pytest.raises(ValueError, match="requires.*graph"):
             _validate_pass_dag(passes)
+
+
+class TestHowPrior:
+    """how() asks for the fields it reads, and the pipeline runs only what decides them."""
+
+    def test_prior_fields_are_what_how_reads(self) -> None:
+        assert _PRIOR_FIELDS == {
+            "nondeterministic_dims",
+            "stateful_dims",
+            "stateful_names",
+            "elided_tags",
+            "functional_dep_projections",
+            "stepping_tags",
+            "state_key_done_specs",
+            "threshold_vector_specs",
+        }
+
+    def test_prior_runs_only_the_passes_that_decide_its_fields(self) -> None:
+        assert [p.name for p in _passes_answering(_PRIOR_FIELDS)] == [
+            "build_graph",
+            "classify_dimensions",
+            "apply_split_at",
+            "elide_scan_local_state",
+            "detect_functional_dependencies",
+            "detect_init_constants",
+            "compile_kernel",
+            "build_prior_key_specs",
+        ]
+
+    def test_a_pass_added_for_the_search_costs_the_prior_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(_ctx: _PassContext) -> None:
+            raise AssertionError("a search-only pass ran for how()'s prior")
+
+        search_only = _PreBFSPass(
+            "search_only", "", fail, requires=frozenset({"graph", "classification"})
+        )
+        monkeypatch.setattr(
+            passes_module, "_DEFAULT_PRE_BFS_PASSES", (*_DEFAULT_PRE_BFS_PASSES, search_only)
+        )
+        monkeypatch.setattr(_PassContext, "freeze", fail)
+        prior = _build_prior_facts(_discovery_program())
+        assert not isinstance(prior, Intractable)
+        assert prior.stateful_names
 
 
 class TestDiagnoseUnwrittenTagsProgressInfo:
@@ -668,11 +717,7 @@ class TestDomainsOnlyFunctionalDepAdvice:
         assert "Scratch" not in context.functional_dep_projections
 
     def test_domains_only_records_advice_without_touching_dims(self) -> None:
-        context = _build_explore_context(
-            self._jump_pointer_program(),
-            _opt_config=replace(_OptConfig(), domains_only=True),
-            allow_partial=True,
-        )
+        context = _build_prior_facts(self._jump_pointer_program())
         assert not isinstance(context, Intractable)
         assert context.functional_dep_projections.get("Scratch") == ("Req", 1, 2)
         # Advice only: the scratch keeps its slice-elision classification
