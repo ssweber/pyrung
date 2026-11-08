@@ -801,6 +801,27 @@ class RungFiringTimelines(Generic[K]):
         held = _as_of(_trim_value_ranges(ranges, None, gone), ranges, gone)
         return _ENTRY_LIMIT - _written_out_length(held)
 
+    def carried_to(self, scan_id: int) -> RungFiringTimelines[K]:
+        """An empty record that counts each column on from this one's count at *scan_id*.
+
+        A replay steps from a checkpoint with a record of its own.  An append reads a column's
+        last two ranges at most, so with those and the count it turns Unknown where this did.
+        """
+        carried: RungFiringTimelines[K] = RungFiringTimelines()
+        for key, ranges in self._value_timelines.items():
+            held = _as_of(_trim_value_ranges(ranges, None, scan_id), ranges, scan_id)
+            if not held:
+                continue
+            gone = self._unknown_keys.get(key)
+            if gone is not None and gone <= scan_id:
+                carried._unknown_keys[key] = gone
+            else:
+                carried._entries[key] = self._trimmed_from(key, ranges) + _written_out_length(held)
+            _unroll_tail(held)
+            carried._value_timelines[key] = held[-2:]
+        carried._rebuild_indexes()
+        return carried
+
     def snapshot(self, *, up_to: int | None = None) -> RungFiringTimelines[K]:
         frozen: RungFiringTimelines[K] = RungFiringTimelines()
         frozen._fired_ranges = {rung: list(ranges) for rung, ranges in self._fired_ranges.items()}
