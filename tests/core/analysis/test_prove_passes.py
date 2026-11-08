@@ -292,7 +292,7 @@ class TestHowPrior:
         monkeypatch.setattr(_PassContext, "freeze", fail)
         prior = _build_prior_facts(_discovery_program())
         assert not isinstance(prior, Intractable)
-        assert prior.stateful_names
+        assert prior.nondeterministic_dims == {"Step": (0, 1, 2), "ThresholdIn": (0, 1)}
 
 
 class TestDiagnoseUnwrittenTagsProgressInfo:
