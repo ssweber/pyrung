@@ -1,7 +1,8 @@
 """A cycle prediction says how many cycles run as the next one does, and stepping agrees.
 
-The operations on forms are checked against the same operation on each cycle's value.  Each
-long run checks every prediction against the scans the loop then runs.
+The operations on forms are checked against the same operation on each cycle's value.  In
+shadow mode each long run checks every prediction against the scans the loop then runs.  Each
+run that jumps is checked against a stepped twin, on its state and its records.
 """
 
 from __future__ import annotations
