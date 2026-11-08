@@ -566,7 +566,7 @@ def iteration_of(shape: LoopShape) -> Iteration:
 
 @dataclass(frozen=True)
 class Step:
-    """One segment of a cycle: a path's iteration, its constants, and how many scans."""
+    """A path's iteration, its constants and its scans, for one segment of a cycle."""
 
     iteration: Iteration
     constants: tuple[tuple[tuple[Any, ...], Any], ...]

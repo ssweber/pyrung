@@ -127,7 +127,7 @@ MAX_WAIT_AFTER_SHORT = 64
 MAX_WAIT_AFTER_NONE = 256
 # A stretch this long paid for its entry into the kernel.
 PAYING_STRETCH = 16
-# What a stretch does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
+# What a loop run does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
 # how many cycles repeat exactly, and checks each scan the loop then runs against that.
 # "jump" predicts too, and moves the state over the cycles predicted without running them.
 CYCLE_PREDICTIONS = "jump"
@@ -137,7 +137,7 @@ STRICT_CYCLE_CHECK = False
 # Each scan of a cycle is run once on forms, and each clock or RTC value once per cycle.
 MAX_PREDICTED_CYCLES = 4096
 MAX_PREDICTED_PERIOD = 1024
-# Cycles a stretch waits before it tries again after a prediction it could not make.
+# The most cycles a loop run waits to predict again after a prediction it could not make.
 MAX_PREDICTION_WAIT = 64
 
 
@@ -862,11 +862,11 @@ def _set_cell(kernel: Any, key: tuple[Any, ...], value: Any) -> None:
 
 
 class CycleMismatch(scan_trace.SelfCheckMismatch):
-    """The scans a stretch ran disagree with a prediction of its cycle."""
+    """The scans the loop ran disagree with a prediction of their cycle."""
 
 
 class _CycleWatch:
-    """Follows a stretch's segments through the cycle they repeat, and its prediction."""
+    """Follows the loop's segments through the cycle they repeat, and its prediction."""
 
     def __init__(self) -> None:
         self.keys: list[tuple[_Path, int]] = []

@@ -1,7 +1,7 @@
 """A cycle prediction says how many cycles run as the next one does, and stepping agrees.
 
-The operations on forms are checked against the same operation on each cycle's value.  The
-coasts run with every prediction checked against the scans the loop then runs.
+The operations on forms are checked against the same operation on each cycle's value.  Each
+long run checks every prediction against the scans the loop then runs.
 """
 
 from __future__ import annotations
