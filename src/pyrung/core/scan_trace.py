@@ -73,6 +73,7 @@ import ast
 import logging
 import math
 import operator
+import threading
 import time
 import types
 from collections import Counter
@@ -1947,12 +1948,34 @@ def _coast_guards(
 # --- Driving the loop through a run --------------------------------------------
 
 
+# Parsed kernel sources by source text, least recently used first.  A parse depends on the
+# text alone, so kernels compiled from one source share it.  Its one later write keeps
+# snippets of that text.  Each parse is several megabytes on a large program.
+MAX_PARSED_SOURCES = 2
+_PARSED_BY_SOURCE: dict[str, KernelSource] = {}
+_PARSED_LOCK = threading.Lock()
+
+
 def _source_of(kernel: CompiledKernel) -> KernelSource:
     """The parsed source, kept on the kernel: a kernel serves many runs."""
     cached = kernel.__dict__.get("_scan_trace_source")
+    if cached is not None:
+        return cached
+    text = kernel.source
+    with _PARSED_LOCK:
+        cached = _PARSED_BY_SOURCE.pop(text, None)
+        if cached is not None:
+            _PARSED_BY_SOURCE[text] = cached
     if cached is None:
+        started = time.perf_counter()
         cached = KernelSource(kernel)
-        object.__setattr__(kernel, "_scan_trace_source", cached)
+        if jit_stats.ACTIVE:
+            jit_stats.add_cost("parse the kernel source", time.perf_counter() - started)
+        with _PARSED_LOCK:
+            _PARSED_BY_SOURCE[text] = cached
+            while len(_PARSED_BY_SOURCE) > MAX_PARSED_SOURCES:
+                _PARSED_BY_SOURCE.pop(next(iter(_PARSED_BY_SOURCE)))
+    object.__setattr__(kernel, "_scan_trace_source", cached)
     return cached
 
 
@@ -2154,8 +2177,10 @@ class ScanLoop:
 
     def _fire(self, trace: ScanTrace, limit: int) -> int:
         kernel = self._replay._kernel
+        called = 0.0
         if self.jit is not None:
             start_counting_exit(trace.loop)
+            called = time.perf_counter()
         used, timestamp = trace.loop(
             kernel.tags,
             kernel.blocks,
@@ -2165,6 +2190,8 @@ class ScanLoop:
             limit,
             self._rtc_fields,
         )
+        if self.jit is not None:
+            jit_stats.add_cost("loop", time.perf_counter() - called)
         if used:
             if self.jit is not None:
                 self._count_firing(trace, kernel.scan_id + 1, used, limit)

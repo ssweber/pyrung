@@ -846,8 +846,10 @@ def _try_stretch(
         if sizes:
             room = min(room, sizes[burst % len(sizes)])
             burst += 1
+        called = 0.0
         if run is not None:
             start_counting_exit(looped.function)
+            called = time.perf_counter()
         used, timestamp = looped.function(
             state_kernel.tags,
             state_kernel.blocks,
@@ -859,6 +861,8 @@ def _try_stretch(
             seen,
             stop,
         )
+        if run is not None:
+            jit_stats.add_cost("loop", time.perf_counter() - called)
         if used:
             if run is not None:
                 if left_by is not None and left_by[1]:

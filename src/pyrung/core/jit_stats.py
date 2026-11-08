@@ -7,9 +7,10 @@
     print(stats.report())
 
 They count where the scans ran and why a run stayed out of the guarded loop.  They also count
-which guard sent the run out of the loop, and what compiling and tracing cost.  A stretch is a
-run of scans in the loop with no other scan between them.  Nothing is counted until something
-asks, and then only per run, per stretch and per trace, never per scan.
+which guard sent the run out of the loop, and what compiling, tracing and the loop itself cost.
+A stretch is a run of scans in the loop with no other scan between them.  Nothing is counted
+until something asks, and then only per run, per stretch, per call of the loop and per trace,
+never per scan.
 
 Set ``PYRUNG_JIT_STATS`` to a file name to count over a whole process, such as a script or a
 pytest run.  The process appends the report to that file when it exits.  ``-`` writes it to
@@ -127,7 +128,7 @@ class JitStats:
         if self.costs:
             lines.append("  costs:")
             for name, (count, seconds) in sorted(self.costs.items()):
-                lines.append(f"    {name:<12} {int(count):>8} {seconds * 1000:>12.1f} ms")
+                lines.append(f"    {name:<24} {int(count):>8} {seconds * 1000:>12.1f} ms")
         lines += _counted("  other counts:", self.events)
         return "\n".join(lines)
 

@@ -3285,9 +3285,12 @@ class PLC:
         split_after = (
             len(syn.plant) + len(syn.holds) if (syn is not None and not syn.is_empty()) else None
         )
+        timings: dict[str, float] | None = {} if jit_stats.ACTIVE else None
         started = time.perf_counter()
         try:
-            kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
+            kernel = compile_kernel(
+                self._soft_exec_program(), split_after=split_after, timings=timings
+            )
         except Exception as exc:
             # A gap is expected.  Anything else is pyrung's own bug and is said, but the kernel
             # is only speed: what the scans would answer, an interpreted scan answers too.
@@ -3303,6 +3306,8 @@ class PLC:
         finally:
             if jit_stats.ACTIVE:
                 jit_stats.add_cost("compile", time.perf_counter() - started)
+                for step, seconds in (timings or {}).items():
+                    jit_stats.add_cost(f"compile: {step}", seconds)
         if kernel.has_io_gaps:
             self._compiled_replay_kernel = False
             return None

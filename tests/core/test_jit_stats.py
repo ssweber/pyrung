@@ -65,8 +65,18 @@ def test_a_run_past_its_prefix_runs_in_the_loop_to_its_end() -> None:
     assert stats.scans == {"interpreted": 1000, "compiled": 1, "loop": 1999}
     assert (stats.stretches, stats.stretched_scans, stats.could_have_run) == (1, 1999, 1999)
     assert stats.left_by == {"the run's end": 1}
-    assert {name: count for name, (count, _seconds) in stats.costs.items()} == {
+    costs = {name: count for name, (count, _seconds) in stats.costs.items()}
+    # A compile reuses the code and the parse of an earlier one with the same source, and
+    # then counts no Python compile and no parse.
+    reused = {"compile: python compile", "parse the kernel source"}
+    # The loop function returns at each checkpoint, so the run may call it more than once.
+    assert costs.pop("loop") >= 1
+    assert {name: count for name, count in costs.items() if name not in reused} == {
         "compile": COMPILES,
+        "compile: source": COMPILES,
+        "compile: exec": COMPILES,
+        "compile: build": COMPILES,
+        "compile: materialized tags": COMPILES,
         "trace": 1,
     }
     assert stats.events == {"traces": 1}
