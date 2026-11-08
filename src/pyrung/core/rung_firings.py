@@ -16,7 +16,6 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import islice
 from typing import Any, ClassVar, Generic, TypeVar
 
 from pyrsistent import PMap, pmap
@@ -59,7 +58,7 @@ class SearchQuestionRefused(BaseException):
         self.refusal = refusal
 
 
-# The changes a column holds before it keeps later values as Unknown, to bound its memory.
+# The changes a column holds before it keeps later values as Unknown.
 _ENTRY_LIMIT = 1_000
 _UNKNOWN_VALUE = object()
 _MISSING_WRITE = object()
@@ -127,11 +126,12 @@ class Repeat:
 class RungFiringTimelines(Generic[K]):
     """Append-only columnar firing index, generic over rung identity.
 
-    A column turns Unknown on the scan of its 1,000th change (``_ENTRY_LIMIT``), to bound its
-    memory.  A scan changes its column unless its value goes on from the two scans before it,
-    as the same value, a flip back or one more step of a count.  So a column keeps about two
-    ranges a change at most.  A scan's change depends only on the scan and the two before it.
-    So each way of recording scans counts the same, in any order.
+    A column turns Unknown on the scan of its 1,000th change (``_ENTRY_LIMIT``).  A scan
+    changes its column unless its value goes on from the two scans before it, as the same
+    value, a flip back or one more step of a count.  A scan's change depends only on the scan
+    and the two before it.  So each way of recording scans counts the same, in any order.
+    The limit does not bound a column's ranges.  A column that counts up and down (0, 1, 2,
+    1, 0, ...) keeps adding ranges with no change after its first two.
     """
 
     __slots__ = (
@@ -163,10 +163,10 @@ class RungFiringTimelines(Generic[K]):
         # The changes each column has had, trimmed scans too, until it turns Unknown.
         self._counts: dict[tuple[K, str], int] = {}
         # The first scan a trim from the front kept, and for each column it trimmed whether
-        # the column goes on past it (None when the record cannot tell) and its values on
-        # the two scans before it.  A scan just after the floor looks back at them.
+        # the rung began it before then and its values on the two scans before it.  A scan
+        # just after the floor looks back at them.
         self._floor = 0
-        self._before: dict[tuple[K, str], tuple[bool | None, Any, Any]] = {}
+        self._before: dict[tuple[K, str], tuple[bool, Any, Any]] = {}
         # Each column that turned Unknown, and the scan whose entry reached the limit.
         self._unknown_keys: dict[tuple[K, str], int] = {}
         # Columns with a range a stretch could not speak for.  Later scans still say.
@@ -261,11 +261,12 @@ class RungFiringTimelines(Generic[K]):
         if index and gaps[index - 1][1] >= scan_id:
             return _HIDDEN
         held, floor = self._before.get(key), self._floor
-        if held is None:
-            return _ABSENT
-        if floor - 2 <= scan_id < floor:
+        if held is not None and floor - 2 <= scan_id < floor:
             return held[scan_id - floor + 3]
-        return _HIDDEN if held[0] is None and floor <= scan_id < start else _ABSENT
+        # Before its first range the column may have begun in a gap.  Then the record lacks
+        # the firings with no write.
+        begun = held is not None and held[0]
+        return _HIDDEN if index and scan_id < start and not begun else _ABSENT
 
     def _change_groups(
         self,
@@ -578,11 +579,13 @@ class RungFiringTimelines(Generic[K]):
                 and not touched
                 and not (begun and next(_expanded(fired, first, last), None))
             ):
-                # Nothing to add.  The two scans after the window look back into it.
-                if next(_expanded(mine, last + 1, last + 2), None) is not None:
+                # Nothing to add.  The two scans after the window look back into it, and a
+                # column after it may have begun in it.
+                after = next(_expanded(mine, last + 1, last + 2), None) is not None
+                if after or mine and mine[0].start_scan_id > last:
                     self._recount(key, mine, mine, first, gaps)
                 continue
-            if not (prefix or middle or later):
+            if not (prefix or middle or later or begun):
                 self._value_timelines.pop(key, None)
                 for table in (self._unknown_keys, self._counts):
                     table.pop(key, None)
@@ -954,7 +957,7 @@ class RungFiringTimelines(Generic[K]):
             self._keep_before(min_scan_id)
         for key, ranges in list(self._value_timelines.items()):
             if min_scan_id is not None:
-                if min_scan_id <= ranges[0].start_scan_id:
+                if not ranges or min_scan_id <= ranges[0].start_scan_id:
                     continue
                 # Both engines fold the kept scans again from the floor.  A range cut short
                 # would read as more scans than appending them makes.
@@ -970,52 +973,46 @@ class RungFiringTimelines(Generic[K]):
                     held -= _total(self._change_groups(key, ranges, max_scan_id + 1, gone))
                     self._unknown_keys.pop(key, None)
                     self._hold(key, held)
-            if kept:
+            # A column the rung began before the floor goes on while the rung fires, so a
+            # trim keeps it.  Whether it goes on must not depend on scans a gap hides.
+            if kept or self._before.get(key, (False,))[0]:
                 self._value_timelines[key] = kept
-                continue
-            self._value_timelines.pop(key)
-            self._partly_unknown.discard(key)
-            held = self._before.get(key)
-            if held is not None and held[0]:
-                self._before[key] = (False, *held[1:])  # It no longer goes on past the floor.
+            else:
+                self._value_timelines.pop(key)
+            if not kept:
+                self._partly_unknown.discard(key)
         for key, ranges in list(self._varied_ranges.items()):
             kept = _trim_scan_ranges(ranges, min_scan_id, max_scan_id)
             if kept:
                 self._varied_ranges[key] = kept
             else:
                 self._varied_ranges.pop(key)
-        # A scan just after the floor looks back two scans, so a gap there stays in view.
-        low = -_NO_LIMIT if min_scan_id is None else min_scan_id - 2
         high = _NO_LIMIT if max_scan_id is None else max_scan_id
-        self._gaps = [
-            (max(first, low), min(last, high))
-            for first, last in self._gaps
-            if first <= high and last >= low
-        ]
+        gaps = [(first, min(last, high)) for first, last in self._gaps if first <= high]
+        if min_scan_id is not None:
+            # A scan just after the floor looks back two scans, so a gap there stays.  The
+            # gaps before it become one, which says only that a column may have begun in it.
+            older = [gap for gap in gaps if gap[1] < min_scan_id - 2]
+            gaps = gaps[len(older) - 1 :] if older else gaps
+            if older:
+                gaps[0] = (older[0][0], older[-1][1])
+        self._gaps = gaps
         self._rebuild_indexes()
         self._done()
 
     def _keep_before(self, floor: int) -> None:
         """Keep what the scans just after *floor* look back at, which a trim to it takes."""
-        before: dict[tuple[K, str], tuple[bool | None, Any, Any]] = {}
-        hidden = bool(self._gaps) and self._gaps[-1][1] >= floor
+        before: dict[tuple[K, str], tuple[bool, Any, Any]] = {}
         for key in self._value_timelines.keys() | self._before.keys():
             ranges = self._value_timelines.get(key, [])
             start = ranges[0].start_scan_id if ranges else _NO_LIMIT
-            old = self._before.get(key, (False,))[0]
-            began: bool | None = False
-            if ranges and ranges[-1].end_scan_id >= floor:
-                began = True if start < floor else old
-            elif ranges and hidden or not ranges and old is None:
-                # The rung may keep the column going on scans the record cannot see.  Those
-                # scans count no change, so the count stays low.
-                began = None
+            began = start < floor or self._before.get(key, (False,))[0]
             values = [
                 self._unseen(key, scan, start) if range_ is None else _value_at(range_, scan)
                 for scan in (floor - 2, floor - 1)
                 for range_ in (_find_range(ranges, scan),)
             ]
-            if began is not False or any(value is not _ABSENT for value in values):
+            if began or any(value is not _ABSENT for value in values):
                 before[key] = (began, *values)
         self._floor, self._before = floor, before
 

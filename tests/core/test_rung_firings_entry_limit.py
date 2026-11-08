@@ -649,7 +649,6 @@ def _sequencer() -> Program:
     return program
 
 
-@pytest.mark.xfail(strict=True, reason="a column counts its whole life, so a short window caps it")
 def test_a_window_of_a_few_hundred_scans_never_caps_a_column() -> None:
     plc = PLC(_sequencer(), dt=0.01, history=300)
     for _ in range(5001):
@@ -686,7 +685,11 @@ def test_a_run_notes_its_unrecorded_scans_before_it_trims_history() -> None:
     assert oldest > 1
     assert plc._unrecorded_scans and plc._unrecorded_scans[0][0] >= oldest
     # The record keeps the two scans before the floor, which the floor's scan looks back at.
-    gaps = [(max(first, oldest), last) for first, last in plc._rung_firing_timelines._gaps]
+    gaps = [
+        (max(first, oldest), last)
+        for first, last in plc._rung_firing_timelines._gaps
+        if last >= oldest
+    ]
     assert gaps == plc._unrecorded_scans
 
 

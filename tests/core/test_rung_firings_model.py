@@ -87,14 +87,11 @@ class Model:
         self.tip = 0
         self.floor = 1
         self.gaps: list[tuple[int, int]] = []
-        # (tip, floor) of each trim from the front.  A trim that leaves a column no scan
-        # empties it, and a firing with no write adds nothing until the rung writes it again.
-        self.trims: list[tuple[int, int]] = []
         self.loop: dict[str, set[int]] = {tag: set() for tag in TAGS}
         # A trim took scans of a gap that never settled, so the count stays low.
         self.lower = False
-        # Columns a trim left only scans of an open gap, or whose gap scans it took.  The
-        # record cannot know the column goes on, so it may lack the firings with no write.
+        # Columns whose gap scans a trim took.  The rung may have begun the column there, so
+        # the record may lack the firings with no write.
         self.unsure: set[str] = set()
 
     def add(self, writes: dict[str, Any] | None) -> int:
@@ -106,41 +103,21 @@ class Model:
         return any(first <= scan <= last for first, last in self.gaps)
 
     def column(self, tag: str) -> dict[int, Any]:
-        """Each scan stepping's column holds, to its value or no write."""
+        """Each scan stepping's column ever held, to its value or no write.
+
+        A column begins on the rung's first write and holds each firing after it.  A trim
+        does not end it.
+        """
         out: dict[int, Any] = {}
-        trims = iter(self.trims)
-        trim = next(trims, None)
         for scan in range(1, self.tip + 1):
             writes = self.writes[scan]
             if writes is not None and (tag in writes or out):
                 out[scan] = writes.get(tag, M)
-            while trim is not None and trim[0] == scan:
-                out = {held: value for held, value in out.items() if held >= trim[1]}
-                trim = next(trims, None)
-        return out
-
-    def lifetime(self, tag: str) -> dict[int, Any]:
-        """Every scan the column ever held, the trimmed ones too."""
-        out: dict[int, Any] = {}
-        started = False
-        trims = iter(self.trims)
-        trim = next(trims, None)
-        kept: set[int] = set()
-        for scan in range(1, self.tip + 1):
-            writes = self.writes[scan]
-            if writes is not None and (tag in writes or started):
-                out[scan] = writes.get(tag, M)
-                kept.add(scan)
-                started = True
-            while trim is not None and trim[0] == scan:
-                kept = {held for held in kept if held >= trim[1]}
-                started = bool(kept)
-                trim = next(trims, None)
         return out
 
     def crossing(self, tag: str) -> tuple[int | None, int]:
         """The scan the column turns Unknown on, and its count up to then."""
-        column = self.lifetime(tag)
+        column = self.column(tag)
         count = 0
         for scan in sorted(column):
             count += _changes(column, scan)
@@ -312,20 +289,10 @@ class Records(RuleBasedStateMachine):
         model = self.model
         floor = data.draw(st.integers(model.floor + 1, model.tip))
         self.ours.trim_before(floor)
-        columns = {tag: model.column(tag) for tag in TAGS}
-        model.trims.append((model.tip, floor))
         model.floor = floor
-        hidden = any(last >= floor for _first, last in model.gaps)
-        for tag, column in columns.items():
-            if not column:
-                continue
-            if hidden and all(model.in_gap(scan) for scan in column if scan >= floor):
-                # The record cannot know whether the rung kept the column going.  It counts
-                # no change on those scans, so the count may stay low too.
+        for tag in TAGS:
+            if any(model.in_gap(scan) for scan in model.column(tag) if scan < floor):
                 model.unsure.add(tag)
-                model.lower = True
-            elif any(model.in_gap(scan) for scan in column if scan < floor):
-                model.unsure.add(tag)  # The rung may have begun the column in the gap.
         if any(first < floor for first, _last in model.gaps):
             model.lower = True
         model.gaps = [(max(first, floor), last) for first, last in model.gaps if last >= floor]
@@ -335,7 +302,6 @@ class Records(RuleBasedStateMachine):
         for scan in range(cut + 1, model.tip + 1):
             del model.writes[scan]
         model.tip = cut
-        model.trims = [(min(tip, cut), floor) for tip, floor in model.trims]
         model.gaps = [(first, min(last, cut)) for first, last in model.gaps if first <= cut]
         for scans in model.loop.values():
             scans.difference_update(range(cut + 1, cut + 10_000))

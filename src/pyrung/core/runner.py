@@ -54,6 +54,7 @@ from pyrung.core.input_overrides import (
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import (
+    _ENTRY_LIMIT,
     _UNKNOWN_VALUE,
     SETTLE_SCAN_LIMIT,
     RungFiringTimelines,
@@ -1700,20 +1701,24 @@ class PLC:
         self._current_rung_traces: dict[int, RungTrace] = {}
         self._current_rung_traces_scan_id: int | None = None
         # Independent compressed columns for rung firing, final attempted
-        # values, and sparse within-scope variation.
-        self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines()
+        # values, and sparse within-scope variation.  A window this short holds fewer
+        # changes than a column's limit, so its records stay small with no limit.
+        capped = history_scans is None or history_scans > _ENTRY_LIMIT
+        self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines(capped=capped)
         # Authoritative committed tag boundaries. Unlike rung write payloads,
         # these are captured after the complete scan, so same-scan overwrites
         # are already resolved. The range encoder compresses arithmetic churn
         # while sparse tags contribute only when their committed value changes.
-        self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines()
+        self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines(capped=capped)
         self._causal_initial_tags = snapshot_dict(self._state.tags)
         self._causal_rung_firing_timelines = _CausalRungFiringTimelines(self)
         # Node-level firing log, keyed by ``RungId`` (subroutine, rung_index).
         # Holds subroutine-rung firings the main-rung log can't represent;
         # consumed by ``query.cold_rungs`` / ``hot_rungs`` so subroutine rungs
         # are visible to coverage.
-        self._node_firing_timelines: RungFiringTimelines[RungId] = RungFiringTimelines()
+        self._node_firing_timelines: RungFiringTimelines[RungId] = RungFiringTimelines(
+            capped=capped
+        )
         self._inflight_scan_id: int | None = None
         self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
