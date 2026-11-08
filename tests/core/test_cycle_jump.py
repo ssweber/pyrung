@@ -9,6 +9,7 @@ from __future__ import annotations
 import random
 import time
 import tracemalloc
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -17,6 +18,7 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Counter,
     Dint,
     Int,
     Program,
@@ -25,6 +27,7 @@ from pyrung.core import (
     Timer,
     coast_run,
     copy,
+    count_up,
     cycle_jump,
     latch,
     math,
@@ -179,6 +182,32 @@ def _real_flip() -> None:
         math(Ramp + 0.5, Ramp)
 
 
+Small = Int("CycSmall")
+Counted = Bool("CycCounted")
+Clear = Bool("CycClear")
+C = Counter.clone("CycC")
+
+
+def _clamp_flip() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        math(Count + 1, Count)
+    with Rung():
+        copy(Count * 10, Small)
+
+
+def _counter_flip() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        math(Count + 1, Count)
+    with Rung(Toggle):
+        count_up(C, preset=3000).reset(Clear)
+    with Rung(C.Done):
+        latch(Counted)
+
+
 def _runner(build: Any, dt: float) -> PLC:
     with Program(strict=False) as program:
         build()
@@ -200,26 +229,44 @@ def jump(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", False)
 
 
-def _coast_and_step(build: Any, dt: float, stop_at: int | None, budget: int) -> PLC:
-    """Coast *build* until Count reaches *stop_at*, and check a stepped twin lands alike."""
+def _coast_and_step(
+    build: Any,
+    dt: float,
+    stop_at: int | None,
+    budget: int,
+    reached: Callable[[Any], bool] | None = None,
+) -> PLC:
+    """Coast *build* until Count reaches *stop_at*, and check a stepped twin lands alike.
+
+    *reached*, if given, is the stop predicate instead, and reads Count alone.
+    """
     plc = _runner(build, dt)
     twin = plc.fork()
     start = plc.current_state.scan_id
 
-    def reached(state: Any) -> bool:
-        return stop_at is not None and state.tags[Count.name] >= stop_at
+    if reached is None:
 
-    reads = frozenset((Count.name,)) if stop_at is not None else frozenset()
+        def reached(state: Any) -> bool:
+            return stop_at is not None and state.tags[Count.name] >= stop_at
+
+        reads = frozenset((Count.name,)) if stop_at is not None else frozenset()
+    else:
+        reads = frozenset((Count.name,))
     coast_until(plc, reached, budget=budget, predicate_reads=reads)
     while twin.current_state.scan_id < plc.current_state.scan_id and not reached(
         twin.current_state
     ):
         twin.step()
+    _assert_lands_alike(plc, twin)
+    compare_records("cycles", plc, twin, start)
+    return plc
+
+
+def _assert_lands_alike(plc: PLC, twin: PLC) -> None:
     assert twin.current_state.scan_id == plc.current_state.scan_id
     assert twin.current_state.timestamp == plc.current_state.timestamp
     assert dict(twin.current_state.tags) == dict(plc.current_state.tags)
-    compare_records("cycles", plc, twin, start)
-    return plc
+    assert dict(twin.current_state.memory) == dict(plc.current_state.memory)
 
 
 @pytest.mark.usefixtures("shadow")
@@ -264,6 +311,44 @@ class TestJump:
         counts = memo_of(plc).counts
         assert counts["cycle prediction mismatches"] >= 1
         assert counts["cycle jumps"] == 0
+
+    def test_a_clamp_inside_the_predicted_cycles_lands_as_stepping(self) -> None:
+        plc = _coast_and_step(_clamp_flip, 0.01, stop_at=None, budget=20_000)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        # Count * 10 passes the most an Int holds at Count 3277.
+        assert plc.current_state.tags[Small.name] == 32767
+
+    def test_a_counter_reaches_its_preset_as_stepping_does(self) -> None:
+        plc = _coast_and_step(_counter_flip, 0.01, stop_at=None, budget=20_000)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        tags = plc.current_state.tags
+        assert tags[C.Acc.name] == tags[Count.name] > 3000
+        assert tags[Counted.name] is True
+
+    def test_a_stop_predicate_true_on_one_value_alone_stops_there(self) -> None:
+        def reached(state: Any) -> bool:
+            count = state.tags[Count.name]
+            return count >= 3000 and count % 1000 == 777
+
+        plc = _coast_and_step(_timer_flip, 0.01, stop_at=None, budget=20_000, reached=reached)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        assert plc.current_state.tags[Count.name] == 3777
+
+    def test_seek_and_fork_after_a_jump_read_as_stepping(self) -> None:
+        plc = _coast_and_step(_timer_flip, 0.01, stop_at=None, budget=20_000)
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        twin = _runner(_timer_flip, 0.01)
+        while twin.current_state.scan_id < plc.current_state.scan_id:
+            twin.step()
+        for scan_id in (4_321, 12_345, 19_999):
+            ours, theirs = plc.seek(scan_id), twin.seek(scan_id)
+            assert dict(ours.tags) == dict(theirs.tags)
+            assert dict(ours.memory) == dict(theirs.memory)
+            ours_fork, theirs_fork = plc.fork(scan_id), twin.fork(scan_id)
+            for _ in range(50):
+                ours_fork.step()
+                theirs_fork.step()
+            _assert_lands_alike(ours_fork, theirs_fork)
 
     def test_a_path_keeps_few_compiled_iterations(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cycle_jump, "MAX_VARIANTS", 1)
