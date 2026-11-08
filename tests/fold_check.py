@@ -563,29 +563,33 @@ def _column_at(ranges: Any, scan: int) -> Any:
     return rung_firings._MISSING_WRITE
 
 
-def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool) -> int | None:
-    """Scan where two value columns differ.  Ours says ``Unknown`` wherever stepping does.
+def _column_differs(
+    ours: Any, truth: Any, first: int, last: int, unknown_ok: Any, capped: Any = ()
+) -> int | None:
+    """Scan where ours holds a known value other than the one written, or an Unknown it may not.
 
-    If *partly*, the loop wrote ``Unknown`` for a range it could not speak for.  Then ours may
-    say ``Unknown`` where stepping knows the value.
+    *truth* is the column with every value kept.  Ours may say ``Unknown`` where
+    ``unknown_ok(scan)`` holds.  *capped* is stepping's own column, whose boundaries count too.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a run of scans with no boundary settle the whole of it.
     """
-    ours, theirs = _touching(ours, first, last), _touching(theirs, first, last)
+    ours, truth = _touching(ours, first, last), _touching(truth, first, last)
+    edges = (*ours, *truth, *_touching(capped, first, last))
     cuts = sorted(
         {first, last + 1}
-        | {r.start_scan_id for r in (*ours, *theirs) if first < r.start_scan_id <= last}
-        | {r.end_scan_id + 1 for r in (*ours, *theirs) if first < r.end_scan_id + 1 <= last}
+        | {r.start_scan_id for r in edges if first < r.start_scan_id <= last}
+        | {r.end_scan_id + 1 for r in edges if first < r.end_scan_id + 1 <= last}
     )
     for low, stop in zip(cuts, cuts[1:], strict=False):
         high = stop - 1
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
             mine = _column_at(ours, scan)
-            stepped = _column_at(theirs, scan)
-            if mine is rung_firings._UNKNOWN_VALUE and stepped is not mine and partly:
+            if mine is rung_firings._UNKNOWN_VALUE:
+                if not unknown_ok(scan):
+                    return scan
                 continue
-            if _exact(mine) != _exact(stepped):
+            if _exact(mine) != _exact(_column_at(truth, scan)):
                 return scan
     return None
 
@@ -628,29 +632,66 @@ def _as_settled(plc: Any, first: int, end: int) -> Any:
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
     """What scans after *start* left in the firing indexes, against what stepping left.
 
-    The twin must start from *plc*'s records at *start* (:func:`seed_records`).  A column
-    counts its values from its first scan, and goes unknown at the hundredth.
+    The twin must start from *plc*'s records at *start* (:func:`seed_records`).
     """
     end = plc._state.scan_id
     _compare_records_over(kind, _as_settled(plc, start + 1, end), twin, start + 1, end)
     STATS[f"records compared: {kind}"] += 1
 
 
+class _Uncapped(rung_firings.RungFiringTimelines):
+    """Records that keep every value.  Stepping stops at a hundred to save memory."""
+
+    __slots__ = ()
+
+    def _note_new_value(self, key: Any, timeline: Any, value: Any) -> None:
+        return None
+
+
+_RECORDS = ("_rung_firing_timelines", "_node_firing_timelines", "_committed_tag_timelines")
+
+
 def seed_records(twin: Any, plc: Any) -> None:
-    """Give *twin* a copy of *plc*'s records, as a twin made now of *plc* should start."""
-    for name in ("_rung_firing_timelines", "_node_firing_timelines", "_committed_tag_timelines"):
+    """Give *twin* a copy of *plc*'s records, as a twin made now of *plc* should start.
+
+    The twin keeps every value from now on, so a check can hold ours to what was written.
+    It keeps the count each column starts with, to work out where stepping stops.
+    """
+    twin._fold_seed = {}
+    for name in _RECORDS:
         theirs = getattr(twin, name)
         copy = getattr(plc, name).snapshot()
         for slot in rung_firings.RungFiringTimelines.__slots__:
             setattr(theirs, slot, getattr(copy, slot))
+        twin._fold_seed[name] = (
+            plc._state.scan_id,
+            {key: list(values) for key, values in theirs._distinct_values.items()},
+            set(theirs._unknown_keys),
+        )
+        theirs._unknown_keys = set()
+        theirs._distinct_values = {}
+        theirs.__class__ = _Uncapped
+
+
+def _capped(twin: Any, name: str, key: Any) -> tuple[list[Any], bool]:
+    """The column as stepping keeps it, and whether it went unknown, from the twin's values."""
+    start, counts, unknown = twin._fold_seed[name]
+    column = getattr(twin, name)._value_timelines.get(key, [])
+    prefix = rung_firings._trim_value_ranges(column, None, start)
+    timeline = list(rung_firings._as_of(prefix, column, start))
+    count = counts.get(key)
+    _count, gone = rung_firings._restepped(
+        timeline,
+        rung_firings._trim_value_ranges(column, start + 1, None),
+        None if count is None else list(count),
+        key in unknown,
+    )
+    return timeline, gone
 
 
 def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
-    for name, ours, theirs in (
-        ("rung", plc._rung_firing_timelines, twin._rung_firing_timelines),
-        ("node", plc._node_firing_timelines, twin._node_firing_timelines),
-        ("committed", plc._committed_tag_timelines, twin._committed_tag_timelines),
-    ):
+    for name, attribute in zip(("rung", "node", "committed"), _RECORDS, strict=True):
+        ours, theirs = getattr(plc, attribute), getattr(twin, attribute)
         for key in ours._fired_ranges.keys() | theirs._fired_ranges.keys():
             a = _spans(ours._fired_ranges.get(key, ()), first, end)
             b = _spans(theirs._fired_ranges.get(key, ()), first, end)
@@ -661,19 +702,25 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
         for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
             a = ours._value_timelines.get(key, ())
             b = theirs._value_timelines.get(key, ())
+            # Ours may keep values past the hundredth, where stepping stops keeping them.  A
+            # known value must be the one written.  An Unknown needs stepping's Unknown, or a
+            # range the loop could not speak for.
             partly = key in ours._partly_unknown
-            # A column goes unknown at its hundredth value, so ours goes when stepping's does.
-            # A range the loop wrote as Unknown holds values ours did not count.
-            if (key in ours._unknown_keys) != (key in theirs._unknown_keys) and not partly:
-                raise _mismatch(
-                    f"fold-check ({kind}): {name} {key!r} unknown "
-                    f"{key in ours._unknown_keys}, stepped {key in theirs._unknown_keys}"
-                )
-            scan = _column_differs(a, b, first, end, partly)
+            capped: list[Any] = []
+            gone = False
+            if not partly and (key in ours._unknown_keys or _unknown_scans(a, first, end)):
+                capped, gone = _capped(twin, attribute, key)
+            if key in ours._unknown_keys and not partly and not gone:
+                raise _mismatch(f"fold-check ({kind}): {name} {key!r} unknown, stepped not")
+
+            def unknown_ok(scan: int, partly: bool = partly, capped: Any = capped) -> bool:
+                return partly or _column_at(capped, scan) is rung_firings._UNKNOWN_VALUE
+
+            scan = _column_differs(a, b, first, end, unknown_ok, capped)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
-                    f"{_column_at(a, scan)!r}, stepped {_column_at(b, scan)!r}"
+                    f"{_column_at(a, scan)!r}, written {_column_at(b, scan)!r}"
                 )
             STATS["record cells Unknown"] += sum(
                 high - low + 1 for low, high in _unknown_scans(a, first, end)
