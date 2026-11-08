@@ -362,6 +362,19 @@ def test_build_program_graph_caches_on_program() -> None:
     assert prog._cached_graph is graph_a
 
 
+def test_a_later_change_to_a_pointers_bounds_rebuilds_the_cached_graph() -> None:
+    values = Block("GcValues", TagType.INT, 1, 10)
+    pointers = Block("GcPointers", TagType.INT, 1, 10)
+    with Program(strict=False) as prog:
+        with Rung(Bool("GcGo")):
+            copy(values[pointers[1]], pointers[2])
+    assert "GcValues3" not in prog.dataview().upstream("GcPointers2").tags
+
+    pointers.slot(1, min=3, max=4)
+
+    assert {"GcValues3", "GcValues4"} <= prog.dataview().upstream("GcPointers2").tags
+
+
 def test_collect_program_tags_matches_graph_extraction() -> None:
     values = Block("Value", TagType.INT, 1, 20)
     enable = Bool("Enable")
