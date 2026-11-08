@@ -127,10 +127,18 @@ MAX_WAIT_AFTER_SHORT = 64
 MAX_WAIT_AFTER_NONE = 256
 # A stretch this long paid for its entry into the kernel.
 PAYING_STRETCH = 16
-# how()'s ledger prices a coast's scans by their place in it, never by which engine ran them,
-# so a change to the loop cannot change what a search may spend.  The first scans and
-# the landing are a unit each, as the scans a search looks at.  The scans between them are
-# waiting, at the loop's price.  A program with a call no loop may make pays a unit a scan.
+# how()'s ledger prices a wait's scans by where they fall in it, never by which engine ran
+# them, so a change to the loop cannot change what a search may spend.  The first two scans
+# and the landing cost a unit each.  The search reads its answers from them.  The scans
+# between cost a hundredth each.  A wait no loop may ever run costs a unit a scan, because
+# every scan of it is interpreted.  Such a wait has one of these:
+# - a program with no kernel (it writes a read-only system tag, it has a Modbus send or
+#   receive, a run_function() in it or in the overlay keeps state, or it does not compile)
+# - a runner the loop refuses (not fixed-step, a breakpoint, a watched tag moving without a
+#   write)
+# - a stop predicate whose reads the loop cannot watch
+# The price is settled after the first scans, before the loop's first try.  The first try
+# comes after ENTRY_WAIT scans, so ENTRY_WAIT must not be less.
 UNIT_SCANS_AT_START = 2
 # What a loop run does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
 # how many cycles repeat exactly, and checks each scan the loop then runs against that.
@@ -146,8 +154,8 @@ MAX_PREDICTED_PERIOD = 1024
 MAX_PREDICTION_WAIT = 64
 # The most stop predicate answers a prediction keeps, so its memory stays small.
 MAX_KEPT_ANSWERS = 1024
-# A coast compiles a kernel or traces a new path only with this many loop scans of room left.
-# A shorter stretch saves less time than a compile or a trace costs.
+# A coast traces a new path only with this many loop scans of room left.  A shorter stretch
+# saves less time than a trace costs.
 TRACE_ROOM = PAYING_STRETCH
 
 
@@ -232,8 +240,9 @@ class _KernelPaths:
 class CoastMemo:
     """What coasts keep for the coasts after them.  One a search, inherited by its forks."""
 
-    # Keeps the program and the overlay rungs alive, so an id cannot be reused under it.
-    kernels: dict[tuple[Any, ...], tuple[CompiledKernel, Any]] = field(default_factory=dict)
+    # Keeps the program and the overlay rungs alive, so an id cannot be reused under it.  None
+    # is a program with no kernel, so that each fork does not try to compile it again.
+    kernels: dict[tuple[Any, ...], tuple[CompiledKernel | None, Any]] = field(default_factory=dict)
     paths: dict[int, _KernelPaths] = field(default_factory=dict)
     compiles: int = 0
     traces: int = 0
@@ -242,8 +251,6 @@ class CoastMemo:
     check_limits: Callable[[], None] | None = None
     # What the search's ledger has left, in units (see UNIT_SCANS_AT_START).
     work_left: Callable[[], int] | None = None
-    # The program last asked about, and whether it calls a function no loop may call.
-    impure: tuple[Any, bool] | None = None
 
 
 def memo_of(plc: PLC) -> CoastMemo:
@@ -253,11 +260,8 @@ def memo_of(plc: PLC) -> CoastMemo:
     return memo
 
 
-def _kernel_for(plc: PLC, memo: CoastMemo, *, may_compile: bool = True) -> CompiledKernel | None:
-    """The kernel of this runner's program and overlay.  A fork need not compile it again.
-
-    With *may_compile* false, it returns only a kernel compiled before, or None.
-    """
+def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
+    """The kernel of this runner's program and overlay.  A fork need not compile it again."""
     cached = plc._compiled_replay_kernel
     if cached is False:
         return None
@@ -270,14 +274,10 @@ def _kernel_for(plc: PLC, memo: CoastMemo, *, may_compile: bool = True) -> Compi
     entry = memo.kernels.pop(key, None)
     if entry is not None:
         memo.kernels[key] = entry
-        plc._compiled_replay_kernel = entry[0]
+        plc._compiled_replay_kernel = False if entry[0] is None else entry[0]
         return entry[0]
-    if not may_compile:
-        return None
     kernel = plc._compiled_replay_supported_kernel()
     memo.compiles += 1
-    if kernel is None:
-        return None
     memo.kernels[key] = (kernel, (plc._program, plant, holds))
     if len(memo.kernels) > MAX_KERNELS:
         memo.kernels.pop(next(iter(memo.kernels)))
@@ -1620,19 +1620,39 @@ def _coast_until(
 
     # The interpreted scans priced as loop scans, for the ledger to read off the runner.
     waiting: list[int] = []
+    # Whether this wait costs a unit a scan, settled once by settle() (see UNIT_SCANS_AT_START).
+    by_scan: bool | None = None
 
     def note(scan: int) -> None:
         nonlocal kernel_scans, last_noted
         last_noted = scan
         kernel_scans += 1
-        if waits_cheaply and scan - start_scan > UNIT_SCANS_AT_START:
+        if by_scan is False and scan - start_scan > UNIT_SCANS_AT_START:
             waiting.append(scan)
         if on_kernel_scan is not None:
             on_kernel_scan(scan)
 
     def unit_scans() -> int:
         logical = plc.state.scan_id - start_scan
-        return min(logical, UNIT_SCANS_AT_START) if waits_cheaply else logical
+        return min(logical, UNIT_SCANS_AT_START) if by_scan is False else logical
+
+    def settle() -> None:
+        nonlocal by_scan, can_loop, kernel
+        if by_scan is not None:
+            return
+        if can_loop:
+            kernel = _kernel_for(plc, memo)
+            if kernel is None:
+                reason = "no kernel"
+            elif predicate_reads is None and not _loop_can_watch(predicate, plc):
+                reason = "the stop predicate reads what a loop cannot watch"
+            else:
+                by_scan = False
+                return
+            can_loop = False
+            if run is not None:
+                jit_stats.add_decline(f"interpreted: {reason}")
+        by_scan = True
 
     def finish(reached: bool) -> bool:
         # A stretch may be what landed, and a caller reads its answer there.
@@ -1654,7 +1674,7 @@ def _coast_until(
         return reached
 
     memo = memo_of(plc)
-    # Compiled at the first attempt at a stretch, so a call that ends before one compiles
+    # Compiled when the price is settled, so a call that ends within its first scans compiles
     # nothing.  Which kernel a runner gets does not depend on its state.
     kernel: CompiledKernel | None = None
     can_loop = (
@@ -1675,7 +1695,6 @@ def _coast_until(
             jit_stats.add_decline("interpreted: a watched tag moves without a write")
     elif not can_loop and run is not None:
         jit_stats.add_decline(f"interpreted: {_why_interpreted(plc)}")
-    waits_cheaply = can_loop and not _calls_what_no_loop_may(plc, memo)
     wait = ENTRY_WAIT
     since = 0
     fails = 0
@@ -1692,6 +1711,8 @@ def _coast_until(
             if stats is not None:
                 stats["out_of_work"] = 1
             break
+        if plc.state.scan_id - start_scan >= UNIT_SCANS_AT_START:
+            settle()
         if memo.check_limits is not None:
             memo.check_limits()
         plc._consume_pause_request()
@@ -1721,18 +1742,13 @@ def _coast_until(
         limit = (budget - charged()) * loop_scans_per_unit - waited % loop_scans_per_unit
         if not can_loop or since < wait or limit < 2:
             continue
+        # The first try comes after UNIT_SCANS_AT_START scans, and no loop runs a wait that
+        # costs a unit a scan.
+        settle()
+        if not can_loop:
+            continue
+        assert kernel is not None
         since = 0
-        if kernel is None:
-            kernel = _kernel_for(plc, memo, may_compile=limit >= TRACE_ROOM)
-            if kernel is None and limit < TRACE_ROOM and plc._compiled_replay_kernel is None:
-                if run is not None:
-                    jit_stats.add_decline("attempt: too little room left to pay for a compile")
-                continue
-            if kernel is None:
-                can_loop = False
-                if run is not None:
-                    jit_stats.add_decline("interpreted: no kernel")
-                continue
         reads = predicate_reads
         watched = monitored
         if reads is None:
@@ -1743,11 +1759,7 @@ def _coast_until(
                 if run is not None:
                     jit_stats.add_decline("interpreted: tracing the stop predicate's reads raised")
                 continue
-            if (
-                _READ_ALL in traced
-                or any(str(name).startswith(_FIELD_READ) for name in traced)
-                or _moves_without_a_write(traced)
-            ):
+            if not _watchable(traced):
                 wait = min(wait * 2, MAX_WAIT_AFTER_NONE)
                 if run is not None:
                     jit_stats.add_decline(
@@ -1789,14 +1801,20 @@ def work_charged(logical_scans: int, unit_scans: int, loop_scans_per_unit: int) 
     return unit_scans + (logical_scans - unit_scans) // loop_scans_per_unit
 
 
-def _calls_what_no_loop_may(plc: PLC, memo: CoastMemo) -> bool:
-    """Whether the program calls a function no loop may call, so that it runs every scan itself."""
-    from pyrung.core.runner import calls_that_depend_on_more_than_their_inputs
+def _loop_can_watch(predicate: Callable[[Any], bool], plc: PLC) -> bool:
+    try:
+        _hit, traced = _traced_call(predicate, plc)
+    except Exception:
+        return False
+    return _watchable(traced)
 
-    program = plc._program
-    if memo.impure is None or memo.impure[0] is not program:
-        memo.impure = (program, bool(calls_that_depend_on_more_than_their_inputs(program)))
-    return memo.impure[1]
+
+def _watchable(traced: frozenset[str]) -> bool:
+    return not (
+        _READ_ALL in traced
+        or any(str(name).startswith(_FIELD_READ) for name in traced)
+        or _moves_without_a_write(traced)
+    )
 
 
 def _moves_without_a_write(names: Any) -> bool:

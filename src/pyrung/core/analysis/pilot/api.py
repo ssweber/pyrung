@@ -292,11 +292,12 @@ def pilot_how(
 
     ``max_scans`` bounds invocation search work, including discarded attempts,
     probe scans, and bounded research requests; restoring a checkpoint never
-    refunds it. A scan the search steps is a unit of work, and so are the first
-    two scans and the last scan of each wait. The other scans of a wait are a
-    hundredth of a unit each, whether the guarded loop ran them or not. They are
-    charged when the wait ends, so a wait is not stopped partway and may reach a
-    long timer on a small budget. Research tools also keep their local caps.
+    refunds it. Each scan the search steps counts one, and so do the first two
+    scans and the last scan of each wait. The other scans of a wait count a
+    hundredth each, whether the guarded loop ran them or not, so a long timer fits
+    a small budget. A wait no loop may run counts one for every scan
+    (``coast_run.UNIT_SCANS_AT_START`` lists what makes one). Research tools also
+    keep their local caps.
 
     ``wall_clock_s`` is a backstop on real time, since most of a search's time
     is work the ledger does not charge. A how() that runs out of it stops and

@@ -6,12 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-# The ledger, in units.  A scan the search steps is a unit, and so are a coast's first scans and
-# its landing.  The scans a coast waits through are a hundredth of a unit each, whether the loop
-# ran them or not, so a change to the loop cannot change what a search may spend
-# (``coast_run.UNIT_SCANS_AT_START``).  A trace and a kernel compile are not charged.  A search
-# has few of them, and a small max_scans cannot pay for even one.  Nothing measured them against
-# an answer.  The wall clock is what bounds that time.
+# The ledger, in units.  A scan the search steps is a unit.  So are the first two scans and the
+# last scan of each wait.  The other scans of a wait are a hundredth of a unit each, whether the
+# loop ran them or not.  So a change to the loop cannot change what a search may spend.  A wait
+# no loop may run is a unit a scan (``coast_run.UNIT_SCANS_AT_START``).  A trace and a kernel
+# compile are not charged.  A search has few of them, and a small max_scans cannot pay for even
+# one.  Nothing measured them against an answer.  The wall clock is what bounds that time.
 STRETCH_SCANS_PER_UNIT = 100
 
 # how()'s backstop on a real clock, in seconds.  The ledger is the bound on scans; most of a
@@ -122,7 +122,7 @@ class SearchBudget:
     def charge_execution(self, receipt: Any, *, dwell_scans: int = 0) -> None:
         """Charge each epoch-owned scan once across nested consumers.
 
-        An interpreted scan is a unit unless its coast priced it as a loop scan.  The scans
+        An interpreted scan is a unit unless its wait priced it as a loop scan.  The scans
         between two interpreted scans ran in the loop.
         """
         scans = {

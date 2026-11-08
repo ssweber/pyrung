@@ -20,8 +20,7 @@ The guarded scan loop runs in a finer mode here: it fires a few scans at a time
 (``scan_trace.BURST_SIZES``), and each state it leaves between firings is compared
 with the twin too, so an intermediate scan cannot diverge unseen.  A self check
 mismatch raises, and every short run traces (``scan_trace.MIN_RUN_SCANS``).  Every coast
-compiles and traces with any room left (``coast_run.TRACE_ROOM``), so short coasts are
-checked too.  The summary counts the scans the loop ran and why it declined; a session that checks
+traces with any room left (``coast_run.TRACE_ROOM``), so short coasts are checked too.  The summary counts the scans the loop ran and why it declined; a session that checks
 compiled runs while the loop never fires fails (:func:`vacuous`), since it would
 have proved nothing about the loop.
 
@@ -74,7 +73,8 @@ import pyrung.core.compiled_run as compiled_run
 import pyrung.core.rung_firings as rung_firings
 import pyrung.core.scan_trace as scan_trace
 from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime
-from pyrung.core.coast_run import work_charged
+from pyrung.core.coast_run import UNIT_SCANS_AT_START, work_charged
+from pyrung.core.kernel import CompiledKernel
 from pyrung.core.rung_firings import SearchQuestionRefused
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
@@ -1442,6 +1442,25 @@ def _judge_a_ledger_stop_at_its_landing(kind: str, plc: Any, twin: Any, ask: Any
         )
 
 
+def _priced_by_the_rule(kind: str, plc: Any, n: int, loop_scans: int, said: int | None) -> int:
+    """The scans a coast of *n* scans charged a unit each, held to how it ran.
+
+    A wait the loop may run charges its first scans and its landing a unit each.  A wait no
+    loop may run charges every scan (``coast_run.UNIT_SCANS_AT_START``).  A loop that ran
+    says which, and so does a program with no kernel.  A raised coast says nothing.
+    """
+    if said is None:
+        return 0
+    cheap = min(n, UNIT_SCANS_AT_START) + (n > UNIT_SCANS_AT_START)
+    if said not in (cheap, n):
+        raise _mismatch(f"fold-check ({kind}): charged {said} of {n} scans a unit each")
+    if said != cheap and loop_scans:
+        raise _mismatch(f"fold-check ({kind}): ran {loop_scans} loop scans and paid by the scan")
+    if said != n and not isinstance(plc._compiled_replay_kernel, CompiledKernel):
+        raise _mismatch(f"fold-check ({kind}): paid the loop's price with no kernel")
+    return said
+
+
 def _hold_to_the_ledger(kind: str, left: int | None, said: dict[str, int]) -> None:
     """A coast's stop for its ledger against what the ledger had left as the coast began.
 
@@ -1474,13 +1493,14 @@ def _checked(
     budget: int | None = None,
     out_of_work: Callable[[], bool] | None = None,
     loop_scans_per_unit: int = 1,
-    unit_scans: Callable[[], int] | None = None,
+    unit_scans: Callable[[], int | None] | None = None,
     executed_scans: Collection[int] | None = None,
 ) -> Any:
     """Run *call* and check it against a stepped twin; *budget* is the scans asked of it.
 
     *loop_scans_per_unit* is what a unit of *budget* buys of the scans a coast waits through,
-    and *unit_scans* says, after *call*, how many of its scans were a unit each.
+    and *unit_scans* says, after *call*, how many of its scans the coast charged a unit each.
+    That is held to how the coast ran (:func:`_priced_by_the_rule`).
 
     *executed_scans* are the scans a coast ran interpreted, filled by *call*: an opaque
     ``avoid=`` is held to its answer on those, and without them on every scan.
@@ -1502,15 +1522,13 @@ def _checked(
             block.landed = plc._state.scan_id
         end = plc._state.scan_id
         n = end - start
-        units = n - (scan_trace.TOTALS["loop scans"] - loop_scans_before)
-        budget = _budget_in_scans(
-            kind,
-            start,
-            end,
-            budget,
-            units if unit_scans is None else unit_scans(),
-            loop_scans_per_unit,
+        loop_scans = scan_trace.TOTALS["loop scans"] - loop_scans_before
+        units = (
+            n - loop_scans
+            if unit_scans is None
+            else _priced_by_the_rule(kind, plc, n, loop_scans, unit_scans())
         )
+        budget = _budget_in_scans(kind, start, end, budget, units, loop_scans_per_unit)
         _hold_to_the_scans_asked(
             kind,
             start,
@@ -1558,7 +1576,11 @@ def _checked(
     end = plc._state.scan_id
     n = end - start
     ledger_stop = out_of_work is not None and out_of_work()
-    units = n - loop_scans if unit_scans is None else unit_scans()
+    units = (
+        n - loop_scans
+        if unit_scans is None
+        else _priced_by_the_rule(kind, plc, n, loop_scans, unit_scans())
+    )
     budget = _budget_in_scans(kind, start, end, budget, units, loop_scans_per_unit)
     if ledger_stop:
         budget = n
@@ -1782,7 +1804,7 @@ def install() -> None:
             budget=budget,
             out_of_work=lambda: "out_of_work" in said,
             loop_scans_per_unit=kwargs.get("loop_scans_per_unit", 1),
-            unit_scans=lambda: said.get("unit_scans", 0),
+            unit_scans=lambda: said.get("unit_scans"),
             executed_scans=executed,
         )
         _hold_to_the_ledger("coast", left, said)

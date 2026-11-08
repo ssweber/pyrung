@@ -1848,8 +1848,8 @@ class TestACoastStoppedByTheLedger:
         plc = _timed()
         memo = coast_run.memo_of(plc)
         memo.work_left = lambda: 5
-        # A program no loop may run pays a unit a scan, so the ledger stops it.
-        monkeypatch.setattr(coast_run, "_calls_what_no_loop_may", lambda *_a: True)
+        # A program with no kernel pays a unit a scan, so the ledger stops it.
+        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a: None)
         stats: dict[str, int] = {}
         coast_run.coast_until(plc, lambda _s: False, budget=100, stats=stats)
         assert stats["out_of_work"] == 1
@@ -1899,6 +1899,23 @@ class TestACoastStoppedByTheLedger:
 
     def test_a_raised_coast_says_nothing_about_it(self) -> None:
         fold_check._hold_to_the_ledger("coast", 5, {})
+        assert fold_check._priced_by_the_rule("coast", _timed(), 50, 0, None) == 0
+
+    def test_its_price_is_held_to_how_it_ran(self) -> None:
+        priced = fold_check._priced_by_the_rule
+        no_kernel = _timed()
+        no_kernel._compiled_replay_kernel = False
+        assert priced("coast", no_kernel, 50, 0, 50) == 50
+        assert priced("coast", no_kernel, 2, 0, 2) == 2
+        with_kernel = _timed()
+        assert with_kernel._compiled_replay_supported_kernel() is not None
+        assert priced("coast", with_kernel, 50, 40, 3) == 3
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="charged 4 of 50"):
+            priced("coast", with_kernel, 50, 0, 4)
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="paid by the scan"):
+            priced("coast", with_kernel, 50, 40, 50)
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="with no kernel"):
+            priced("coast", no_kernel, 50, 0, 3)
 
 
 def test_inside_an_own_twin_block_it_may_land_short() -> None:

@@ -631,12 +631,13 @@ def test_a_coast_that_ends_before_its_first_attempt_compiles_nothing() -> None:
     assert plc._compiled_replay_kernel is None
 
 
-def test_a_coast_too_short_to_pay_neither_compiles_nor_traces(monkeypatch) -> None:
+def test_a_coast_too_short_to_pay_traces_nothing(monkeypatch) -> None:
     monkeypatch.setattr(coast_run, "TRACE_ROOM", 16)
     plc = _runner(_ramp, 0.01)
     coast_until(plc, lambda _s: False, budget=15, predicate_reads=frozenset())
     memo = memo_of(plc)
-    assert (memo.compiles, memo.traces) == (0, 0)
+    # Its price needs to know whether the program has a kernel, so it compiles one.
+    assert (memo.compiles, memo.traces) == (1, 0)
     # A kernel at hand still runs the paths it knows, and learns no new one.
     coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
     learned = (memo.compiles, memo.traces)
@@ -646,9 +647,15 @@ def test_a_coast_too_short_to_pay_neither_compiles_nor_traces(monkeypatch) -> No
     assert stats["stretched_scans"] > 0
 
 
+def test_the_price_is_settled_before_the_loop_first_tries() -> None:
+    # A stretch run before its wait's price is known could not be priced.
+    assert coast_run.ENTRY_WAIT >= coast_run.UNIT_SCANS_AT_START
+
+
 def test_a_reboot_forgets_the_scans_priced_at_the_loops_price(monkeypatch) -> None:
-    # A reboot numbers scans from 0 again, so an old priced id would price a new scan.
-    monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
+    # A reboot numbers scans from 0 again, so an old priced id would price a new scan.  With no
+    # trace the loop never runs, so the scans past the first are interpreted and priced.
+    monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
     plc = _runner(_ramp, 0.01)
     coast_until(plc, lambda _s: False, budget=50, predicate_reads=frozenset())
     assert plc._loop_priced_scans

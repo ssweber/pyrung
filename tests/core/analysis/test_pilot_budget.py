@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Physical, Program, Rung, Timer, on_delay, out, run_function
+from pyrung import (
+    PLC,
+    Block,
+    Bool,
+    Int,
+    ModbusTcpTarget,
+    Physical,
+    Program,
+    Rung,
+    TagType,
+    Timer,
+    latch,
+    on_delay,
+    out,
+    receive,
+    run_function,
+    system,
+)
+from pyrung.circuitpy import codegen
 from pyrung.core import coast_run, runner
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget
@@ -17,11 +37,18 @@ from pyrung.core.analysis.pilot.budget import SearchBudget
 from pyrung.core.analysis.pilot.causal import _shared_cause, action_caused_change
 from pyrung.core.analysis.pilot.working_theory import TheoryTermination
 from pyrung.core.rung_firings import SearchQuestionRefused, UnrecordedScansError
+from pyrung.core.synthesis import Synthesis
 
 Slow = Timer.clone("Slow")
 Lamp = Bool("Lamp")
 y_Done = Bool("y_Done")
 Seen = Int("Seen")
+Never = Bool("Never")
+Busy = Bool("Busy")
+Got = Bool("Got")
+Err = Bool("Err")
+Code = Int("Code")
+DS = Block("DS", TagType.INT, 1, 20)
 
 
 def _receipt(*scans: int, epoch: str = "e", waited: tuple[int, ...] = ()) -> SimpleNamespace:
@@ -84,7 +111,8 @@ class TestTheLedger:
 
 class TestTheLoopDoesNotMoveTheLedger:
     # A wait's scans are priced by where they fall, so a search spends the same whichever
-    # scans the loop runs.  Without it every scan is interpreted.
+    # scans the loop runs.  With no trace allowed the loop never runs, and every scan is
+    # interpreted.
 
     @pytest.mark.parametrize(
         ("preset", "max_scans", "status"),
@@ -95,7 +123,7 @@ class TestTheLoopDoesNotMoveTheLedger:
         self, monkeypatch: pytest.MonkeyPatch, preset: int, max_scans: int, status: PlanStatus
     ) -> None:
         looped = _slow_lamp(preset).how(Lamp, max_scans=max_scans)
-        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
+        monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
         stepped = _slow_lamp(preset).how(Lamp, max_scans=max_scans)
         assert looped.status is status
         assert (stepped.status, stepped.reason, stepped.total_scans) == (
@@ -169,6 +197,92 @@ class TestASearchWithNoLoop:
         assert plan.status is PlanStatus.REACHED
         assert plan.fork.state.scan_id == 1000
         assert function.calls < most_calls
+
+
+def _unreachable(rung: Callable[[], None] = lambda: None) -> PLC:
+    with Program() as logic:
+        with Rung():
+            on_delay(Slow, preset=50_000_000)
+        with Rung(Slow.Done):
+            out(Lamp)
+        rung()
+    return PLC(logic, dt=0.001)
+
+
+def _receives() -> None:
+    with Rung(Never):
+        receive(
+            target=ModbusTcpTarget(name="peer", ip="127.0.0.1", port=1),
+            remote_start="DS1",
+            dest=DS.select(11, 12),
+            receiving=Busy,
+            success=Got,
+            error=Err,
+            exception_response=Code,
+        )
+
+
+def _writes_a_read_only_system_tag() -> None:
+    with Rung(Never):
+        latch(system.sys.always_on)
+
+
+class TestAWaitNoLoopMayRun:
+    # Each scan of it costs a unit, so the ledger stops a target it cannot reach.  At a
+    # hundredth a scan, how() would run on until its clock.
+
+    @pytest.mark.parametrize(
+        "rung",
+        [_receives, _writes_a_read_only_system_tag],
+        ids=["a Modbus receive", "a write to a read-only system tag"],
+    )
+    def test_a_program_with_no_kernel_stops_at_the_ledger(self, rung: Any) -> None:
+        assert _unreachable(rung)._compiled_replay_supported_kernel() is None
+        plan = _unreachable(rung).how(Lamp, max_scans=300, wall_clock_s=60)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("budget exhausted")
+
+    @pytest.mark.parametrize(
+        "error", [NotImplementedError("a gap"), RuntimeError("a bug")], ids=["gap", "raise"]
+    )
+    def test_a_program_that_does_not_compile_stops_at_the_ledger(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception
+    ) -> None:
+        def refuse(*_a: Any, **_k: Any) -> Any:
+            raise error
+
+        monkeypatch.setattr(codegen, "compile_kernel", refuse)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            plan = _unreachable().how(Lamp, max_scans=300, wall_clock_s=60)
+        assert plan.status is PlanStatus.STOPPED
+        assert plan.reason.startswith("budget exhausted")
+
+    def _out_of_work(self, plc: PLC, predicate: Any = None) -> dict[str, int]:
+        coast_run.memo_of(plc).work_left = lambda: 5
+        stats: dict[str, int] = {}
+        coast_run.coast_until(
+            plc,
+            predicate or (lambda _s: False),
+            budget=10**6,
+            predicate_reads=None if predicate else frozenset(),
+            stats=stats,
+            loop_scans_per_unit=100,
+        )
+        return stats
+
+    def test_a_call_in_the_overlay_that_keeps_state_pays_by_the_scan(self) -> None:
+        with Program() as overlay:
+            with Rung():
+                run_function(_Stateful(), outs={"seen": Seen})
+        plc = _unreachable()
+        plc._synthesis = Synthesis(plant=list(overlay.rungs))
+        stats = self._out_of_work(plc)
+        assert (stats.get("out_of_work"), stats["logical_scans"]) == (1, 5)
+
+    def test_a_stop_predicate_the_loop_cannot_watch_pays_by_the_scan(self) -> None:
+        stats = self._out_of_work(_unreachable(), lambda state: state.scan_id < 0)
+        assert (stats.get("out_of_work"), stats["logical_scans"]) == (1, 5)
 
 
 def _linked_motor() -> PLC:

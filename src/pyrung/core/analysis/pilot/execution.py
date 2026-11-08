@@ -189,8 +189,8 @@ class ExecutionSpan:
 
     owner: EpochQuery = field(repr=False)
     kernel_scan_ids: tuple[int, ...]
-    # Those of them the ledger prices as loop scans.  They are the scans of a coast between its
-    # first ones and its landing that ran interpreted.
+    # The scans the ledger prices as loop scans.  Each ran interpreted inside a wait, after its
+    # first two scans and before its last.
     loop_priced: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:

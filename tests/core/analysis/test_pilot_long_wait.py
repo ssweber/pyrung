@@ -290,7 +290,7 @@ def test_a_budget_in_work_lands_where_stepping_does(
 ) -> None:
     """Fifty units of budget at a hundred loop scans each, and the state stepping leaves there."""
     if not loop:
-        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
+        monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
     plc = PLC(_timer_program(), dt=0.01)
     plc.step()
     stats: dict[str, int] = {}
