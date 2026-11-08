@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import random
+import tracemalloc
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 
-from pyrung.core.rung_firings import Repeat, RungFiringTimelines
+from pyrung.core.rung_firings import _UNKNOWN_VALUE, Repeat, RungFiringTimelines
 
 RUNGS = (0, 1, 2)
 TAGS = ("a", "b")
@@ -188,13 +189,21 @@ def test_scans_after_a_repeat_and_a_trim_read_back_as_scan_by_scan() -> None:
 
 
 def test_a_range_taken_from_another_record_reads_back_as_scan_by_scan() -> None:
-    prefix, cycle = _flip_flop()
-    stepped, repeated, _planned, last = _recorded_both_ways(prefix, cycle, 40, [])
+    _prefix, cycle = _flip_flop()
+    # A tag keeps one type.  A column that mixes 0 and False reads either one back.
+    prefix = [{0: ({"a": False}, frozenset())}]
+    _stepped, repeated, _planned, last = _recorded_both_ways(prefix, cycle, 40, [])
+    window: Scan = {0: ({"a": True, "b": 1}, frozenset())}
     settled: RungFiringTimelines = RungFiringTimelines()
     for scan_id in range(20, 31):
-        _record(settled, scan_id, {0: ({"a": True, "b": 1}, frozenset())})
-    stepped.replace_range(settled, 20, 30)
+        _record(settled, scan_id, window)
     repeated.replace_range(settled, 20, 30)
+    # The settled scans replace every column's, so rung 1's columns hold nothing there.
+    scans = [*prefix, *cycle * 40]
+    scans[19:30] = [window] * 11
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    for scan_id, scan in enumerate(scans, start=1):
+        _record(stepped, scan_id, scan)
     _assert_same(stepped, repeated, last)
 
 
@@ -441,3 +450,55 @@ def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
         timelines.append(0, scan_id, {"a": 5})
     timelines._unknown_keys.add((0, "a"))
     assert timelines.plan_repeat(30, 2) is None
+
+
+def _cycled(first_scan: int, cycles: int) -> tuple[RungFiringTimelines, int]:
+    """Three cycles of period 3 appended, and *cycles* more as one repeat.  Returns the next scan."""
+    record: RungFiringTimelines = RungFiringTimelines()
+    for scan_id in range(first_scan, first_scan + 9):
+        writes = ({"a": "p"}, {"a": "q"}, {})[(scan_id - first_scan) % 3]
+        record.append(0, scan_id, writes)
+    plan = record.plan_repeat(first_scan + 8, 3)
+    assert plan is not None
+    plan.apply(cycles)
+    return record, first_scan + 9 + 3 * cycles
+
+
+def _settle_small(record: RungFiringTimelines, first: int, last: int) -> None:
+    """Settle *first*..*last*, and check it held no more than a few megabytes."""
+    settled: RungFiringTimelines = RungFiringTimelines()
+    for scan_id in range(first, last + 1):
+        settled.append(0, scan_id, {"a": scan_id * 7})
+    tracemalloc.start()
+    try:
+        record.replace_range(settled, first, last)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 4_000_000
+
+
+def test_a_settle_before_a_long_repeat_keeps_it_one_entry() -> None:
+    record, _end = _cycled(14, 300_000)
+    _settle_small(record, 1, 10)
+    assert record.run_count() < 40
+
+
+def test_a_settle_after_a_long_repeat_keeps_it_one_entry() -> None:
+    record, end = _cycled(1, 300_000)
+    _settle_small(record, end, end + 9)
+    assert record.run_count() < 40
+    assert record.value_at(0, "a", end + 9) == (end + 9) * 7
+
+
+def test_a_column_the_loop_could_not_speak_for_goes_unknown() -> None:
+    # The loop wrote Unknown at scan 3.  Stepping counted what it held there, so a known
+    # value after it might be one stepping no longer keeps.
+    record: RungFiringTimelines = RungFiringTimelines()
+    record.append(0, 1, {"n": 5, "flag": True})
+    record.append(0, 2, {"n": 9, "flag": False})
+    record.append(0, 3, {"n": _UNKNOWN_VALUE, "flag": _UNKNOWN_VALUE})
+    record.append(0, 4, {"n": 12, "flag": True})
+    assert record.value_at(0, "n", 4) is _UNKNOWN_VALUE
+    # A column of bools never holds a hundred values, so it keeps them.
+    assert record.value_at(0, "flag", 4) is True

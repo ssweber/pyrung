@@ -484,7 +484,7 @@ def test_a_predicate_on_a_tag_that_moves_costs_about_what_stepping_costs(
     assert peak <= 4 * off_peak + 8_000_000, (peak, off_peak)
 
 
-def test_a_predicate_on_a_tag_that_moves_on_most_scans_declines_once_per_cycle(
+def test_a_predicate_on_a_tag_that_moves_on_most_scans_declines_once_per_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _off_peak, _ = _counting_run("off", monkeypatch)

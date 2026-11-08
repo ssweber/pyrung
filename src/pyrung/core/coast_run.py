@@ -1103,8 +1103,8 @@ def _try_stretch(
 
     asked_on: dict[Any, bool] = {}
     # The cycles, by their paths and scans, whose predictions show the predicate a moving value
-    # on most scans.
-    asks_too_often: set[tuple[tuple[int, int], ...]] = set()
+    # on most scans.  It holds the paths themselves, so a forgotten path's id is not reused.
+    asks_too_often: set[tuple[tuple[_Path, int], ...]] = set()
     # The tags a prediction shows the predicate.  One copy serves every ask, as ``seen`` does.
     # Each ask sets the same cells, so the tags it does not set stay as ``seen`` holds them.
     shown = _Seen({}, declared)
@@ -1156,7 +1156,7 @@ def _try_stretch(
             why = "the cycle is too long"
         if why is None and horizon < 2:
             why = "the run ends within two cycles"
-        shape = tuple((id(path), count) for path, count in watch.cycle)
+        shape = tuple(watch.cycle)
         if why is None and shape in asks_too_often:
             why = cycle_jump.ASKS_TOO_OFTEN
         found: cycle_jump.Prediction | str = why or ""
@@ -1184,8 +1184,8 @@ def _try_stretch(
                     jit_stats.add_cost("cycle prediction", time.perf_counter() - called)
         if isinstance(found, str):
             if found == cycle_jump.ASKS_TOO_OFTEN:
-                # The same paths show the predicate the same cells each time, so this cycle
-                # declines again.  Each try costs a run of it on forms.
+                # Later tries of the same paths skip the prediction.  Each try runs the cycle
+                # once symbolically, and the same paths almost always decline the same way.
                 asks_too_often.add(shape)
             memo.counts[f"cycle prediction declined: {found}"] += 1
             if run is not None:
