@@ -195,10 +195,7 @@ def prepare_drive(
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
     diag_snapshot = dict(work.state.tags)
-    prover = build_prover_context(
-        program,
-        diag_snapshot,
-    )
+    prover = build_prover_context(program)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     return DriveSetup(
         work=work,
@@ -328,33 +325,56 @@ def _build_static_transition_graphs(
 # ---------------------------------------------------------------------------
 
 
-def build_prover_context(
-    program: Any,
-    snapshot: dict[str, Any],
-) -> ProverContext:
+def build_prover_context(program: Any) -> ProverContext:
     """Build prover context for value domains and state key projection.
 
     Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
     pivot-tag state keys, and local static evidence.
-    """
-    try:
-        from dataclasses import replace as _replace
 
+    The answer comes from the program and its tags' settings.
+    A Program keeps the answer until its graph cache is dropped or a tag's settings change,
+    so each how() on an unchanged program skips the prover's passes.
+    """
+    from pyrung.core.tag import metadata_edits
+
+    edits = metadata_edits()
+    cached = getattr(program, "_cached_prover_context", None)
+    if cached is not None:
+        graph, cached_edits, context = cached
+        if graph is getattr(program, "_cached_graph", None) and cached_edits == edits:
+            return _copy_prover_context(context)
+    context = _compute_prover_context(program)
+    if context is None:
+        return ProverContext()
+    graph = getattr(program, "_cached_graph", None)
+    if graph is not None and metadata_edits() == edits:
+        program._cached_prover_context = (graph, edits, context)
+    return _copy_prover_context(context)
+
+
+def _copy_prover_context(context: ProverContext) -> ProverContext:
+    """A copy whose dicts a caller may change without changing the cached one."""
+    from dataclasses import replace
+
+    return replace(
+        context,
+        nd_domains=None if context.nd_domains is None else dict(context.nd_domains),
+        stateful_domains=(
+            None if context.stateful_domains is None else dict(context.stateful_domains)
+        ),
+    )
+
+
+def _compute_prover_context(program: Any) -> ProverContext | None:
+    """The prover's facts for *program*, or ``None`` when building them raised."""
+    try:
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
         from pyrung.core.analysis.pilot.evidence import build_transition_evidence
-        from pyrung.core.analysis.prove import _build_explore_context
-        from pyrung.core.analysis.prove.passes import _OptConfig
+        from pyrung.core.analysis.prove import _build_prior_facts
         from pyrung.core.analysis.prove.results import Intractable
 
-        opt = _replace(_OptConfig(), domains_only=True)
         compiled = _compile_kernel(program, blockless=True, proof_metadata=True)
-        ctx = _build_explore_context(
-            program,
-            _opt_config=opt,
-            compiled=compiled,
-            initial_state=snapshot,
-            allow_partial=True,
-        )
+        ctx = _build_prior_facts(program, compiled=compiled)
         if isinstance(ctx, Intractable):
             return ProverContext()
         nd = getattr(ctx, "nondeterministic_dims", None)
@@ -417,4 +437,4 @@ def build_prover_context(
         )
     except Exception:  # noqa: BLE001
         logger.debug("pilot: context build failed", exc_info=True)
-        return ProverContext()
+        return None

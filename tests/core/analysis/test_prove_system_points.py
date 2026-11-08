@@ -7,8 +7,6 @@ against the concrete PLC.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from pyrung.core import (
     PLC,
     Bool,
@@ -35,7 +33,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     TraceStep,
-    _build_explore_context,
+    _build_prior_facts,
     always,
     never,
     reachable_states,
@@ -44,7 +42,6 @@ from pyrung.core.analysis.prove.classify import (
     _collect_all_exprs,
     _collect_structural_domain_info,
 )
-from pyrung.core.analysis.prove.passes import _OptConfig
 from pyrung.core.expression import sqrt
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
@@ -231,7 +228,7 @@ class TestFreeSystemPoints:
         with Program(strict=False) as logic:
             with Rung(S.clock_1s, S.scan_counter == 3, enable):
                 out(hit)
-        ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
+        ctx = _build_prior_facts(logic)
         assert not set(ctx.nondeterministic_dims) & set(SYSTEM_TAGS_BY_NAME)
 
 
@@ -598,11 +595,11 @@ class TestHowPriorUnchanged:
                 math(100 / divisor, quotient)
             with Rung(F.division_error):
                 latch(alarm)
-        ctx = _build_explore_context(logic, _opt_config=replace(_OptConfig(), domains_only=True))
+        ctx = _build_prior_facts(logic)
         assert "fault.division_error" not in ctx.stateful_dims
         assert "fault.division_error" not in ctx.nondeterministic_dims
         plc = PLC(logic, dt=0.010)
         plc.step()
-        prior = build_prover_context(logic, dict(plc.current_state.tags))
+        prior = build_prover_context(logic)
         key = prior.key_config.stateful_names if prior.key_config is not None else ()
         assert "fault.division_error" not in key

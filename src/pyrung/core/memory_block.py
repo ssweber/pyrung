@@ -22,6 +22,7 @@ from pyrung.core.tag import (
     Tag,
     TagType,
     _normalize_choices,
+    note_metadata_edit,
     refuse_system_point_in_block,
 )
 
@@ -220,6 +221,7 @@ class SlotView:
         self._block._assert_not_materialized(self._addr, action="reset slot")
         self._block._slot_config.pop(self._addr, None)
         self._block._slot_names_changed += 1
+        note_metadata_edit()
 
     def __repr__(self) -> str:
         return (
@@ -250,6 +252,7 @@ class RangeSlotView:
         for addr in addresses:
             self._block._slot_config.pop(addr, None)
         self._block._slot_names_changed += 1
+        note_metadata_edit()
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -717,6 +720,7 @@ class Block:
                 f"already set to {existing!r}, cannot change to {new_value!r}."
             )
         setattr(entry, field_name, new_value)
+        note_metadata_edit()
         if addr in self._tag_cache:
             object.__setattr__(self._tag_cache[addr], field_name, new_value)
 
@@ -726,6 +730,8 @@ class Block:
 
     def reset(self) -> None:
         """Clear all slot overrides, cached tags, and mapped-tag registrations."""
+        if self._slot_config or self._mapped_tags or self._hw_alias:
+            note_metadata_edit()
         self._tag_cache.clear()
         self._slot_config.clear()
         self._mapped_tags.clear()
@@ -1072,6 +1078,7 @@ class Block:
                     continue
                 hw_block._mapped_tags[hw_addr] = slot_tag
                 hw_block._slot_names_changed += 1
+                note_metadata_edit()
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)
                 # The slot, for a text compare's window (`text_window_condition`)

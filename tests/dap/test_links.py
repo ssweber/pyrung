@@ -6,6 +6,8 @@ import io
 from pathlib import Path
 from typing import Any
 
+from pyrung.core.physical import PHYSICAL_KEYS
+from pyrung.dap import links
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.capture import _replay_commands
 from pyrung.dap.protocol import read_message
@@ -406,6 +408,22 @@ class TestRequests:
         assert response["success"] is False
         assert response["message"] == "Spare has no bench change"
         assert adapter._bench_links_on is True
+
+    def test_every_physical_key_field_reaches_the_link(self, tmp_path: Path, monkeypatch):
+        seen: dict[str, Any] = {}
+
+        def record(_adapter: Any, _feedback: str, _enable: str, keys: dict[str, Any]) -> Any:
+            seen.update(keys)
+            raise RuntimeError("stop")
+
+        monkeypatch.setattr(links, "build_coupling_locked", record)
+        adapter, out = _launch(tmp_path)
+        for name, key in PHYSICAL_KEYS.items():
+            seen.clear()
+            value: Any = True if key.is_flag else "1"
+            args = {"feedback": "Spare", "enable": "Motor", key.dap_field: value}
+            _request(adapter, out, "pyrungLink", args)
+            assert seen == {name: value}, name
 
     def test_trigger_argument(self, tmp_path: Path):
         adapter, out = _launch(tmp_path)

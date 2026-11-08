@@ -407,7 +407,7 @@ def test_stepper_is_an_earned_work_component() -> None:
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.key_config is not None
     earned_work = build_earned_work(
         pdg,

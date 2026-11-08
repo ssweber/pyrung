@@ -470,14 +470,14 @@ _EXACT_FLIPS = {
 def _simplified(condition: Any) -> Any:
     """*condition* without terms that cannot change it, or *condition* as it was.
 
-    Combining rules leaves terms a ladder programmer would cut.  Two examples are a contact
-    already required beside an Or that contains it, and a branch that needs a contact the rest
-    of the rung has open.  Only exact rules are used, so the rung does the same:
+    Combining rules can leave terms a ladder programmer would cut. One is a contact already
+    required beside an Or that contains it. Another is a branch that needs a contact the rest
+    of the rung has open. Only exact rules are used, so the rung does the same:
 
     - the rules of ``simplified.simplify``
     - inside an And, each part may assume the contacts beside it are closed
     - inside an Or, each part may assume the contacts beside it are open
-    - inside an And, ``X == X`` goes beside an ordered compare on ``X``, which is False at NaN
+    - inside an And, ``X == X`` goes beside an ordered compare on ``X``, which is also False at NaN
 
     These leave the condition as it was:
 
@@ -591,8 +591,8 @@ def _simplified(condition: Any) -> Any:
 def _without_spare_nan_checks(condition: Any) -> Any:
     """*condition* without an ``X == X`` that an ordered compare on ``X`` beside it implies.
 
-    ``X == X`` is False only at NaN, and so is ``X < 5``.  Each complement of a NaN check
-    leaves one behind.
+    ``X == X`` is False at NaN, and so is ``X < 5``. Combining the complements of a NaN
+    check leaves a spare ``X == X`` behind.
     """
     from pyrung.core.condition import (
         AllCondition,

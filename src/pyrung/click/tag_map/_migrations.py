@@ -2,7 +2,7 @@
 
 The comment parser reads only the current form and refuses an old one. Each migration here
 rewrites one old form into the next, so old knowledge lives in this file alone. clicknick's
-"Upgrade project" runs them over every comment through ``upgrade_comment``::
+"Upgrade Project" runs them over every comment through ``upgrade_comment``::
 
     upgrade_comment("[link=Run, profile=pulse:on_dwell=8ms|off_dwell=8ms] Encoder")
     # -> "[link=Run, flasher_on=8ms, flasher_off=8ms] Encoder"

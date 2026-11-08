@@ -63,7 +63,7 @@ def install_harness(plc: PLC, unlink: list[str] | None = None) -> frozenset[str]
     harness = Harness(plc)
     if previous is not None and previous.overrides:
         harness.set_overrides(previous.overrides)
-    harness._install(settle=False)
+    harness._install()
     fb_names: set[str] = set()
     has_couplings = False
     for coupling in harness.couplings():

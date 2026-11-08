@@ -35,7 +35,7 @@ def _earned_work_for(logic, plc, target_tag, channel_tags=frozenset()):
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.key_config is not None
     return build_earned_work(
         pdg,

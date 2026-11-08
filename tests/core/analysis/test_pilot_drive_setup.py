@@ -3,8 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from pyrung.core import Block, Bool, Program, Rung, TagType, latch, out, reset
 from pyrung.core.analysis.pilot import drive_setup
 from pyrung.core.analysis.pilot.compass import Compass, CompassKnowledge, NavigationCatalog
+from pyrung.core.tag import metadata_edits
 
 
 def _setup() -> drive_setup.DriveSetup:
@@ -188,3 +192,103 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
         assert args[4] is setup.program
         assert args[5] is setup.steerable
         assert args[6] is setup.opaque_loop
+
+
+# ---------------------------------------------------------------------------
+# build_prover_context keeps its answer on the Program
+# ---------------------------------------------------------------------------
+
+
+def _slot_program() -> tuple[Program, Block]:
+    cmd = Block("PCtxCmd", TagType.INT, 1, 2)
+    running = Bool("PCtxRunning")
+    with Program(strict=False) as logic:
+        with Rung(cmd[1] == 5):
+            latch(running)
+        with Rung(cmd[2] == 1):
+            reset(running)
+        with Rung(running, cmd[1] == 0):
+            out(Bool("PCtxLamp"))
+    return logic, cmd
+
+
+@pytest.fixture
+def computed(monkeypatch: Any) -> list[Any]:
+    """Each program build_prover_context runs the prover's passes for."""
+    calls: list[Any] = []
+    real = drive_setup._compute_prover_context
+
+    def compute(program: Any) -> Any:
+        calls.append(program)
+        return real(program)
+
+    monkeypatch.setattr(drive_setup, "_compute_prover_context", compute)
+    return calls
+
+
+def test_second_call_on_the_same_program_reuses_the_answer(computed: list[Any]) -> None:
+    logic, _cmd = _slot_program()
+    first = drive_setup.build_prover_context(logic)
+    second = drive_setup.build_prover_context(logic)
+    assert computed == [logic]
+    assert first.key_config is not None
+    assert second == first
+    # Each caller gets its own dicts, so a change to one never reaches the next.
+    assert first.nd_domains is not None
+    first.nd_domains.clear()
+    third = drive_setup.build_prover_context(logic)
+    assert third == second
+    assert third.nd_domains
+
+
+def test_a_program_edit_drops_the_answer(computed: list[Any]) -> None:
+    logic, _cmd = _slot_program()
+    drive_setup.build_prover_context(logic)
+    stop = Bool("PCtxStop", external=True)
+    with logic:
+        with Rung(stop):
+            out(Bool("PCtxStopped"))
+    assert logic._cached_prover_context is None
+    after = drive_setup.build_prover_context(logic)
+    assert computed == [logic, logic]
+    assert after.nd_domains is not None and "PCtxStop" in after.nd_domains
+
+
+def test_dropping_the_graph_cache_drops_the_answer(computed: list[Any]) -> None:
+    logic, _cmd = _slot_program()
+    drive_setup.build_prover_context(logic)
+    logic._cached_graph = None
+    drive_setup.build_prover_context(logic)
+    assert computed == [logic, logic]
+
+
+def test_a_slot_setting_made_later_drops_the_answer(computed: list[Any]) -> None:
+    logic, cmd = _slot_program()
+    before = drive_setup.build_prover_context(logic)
+    assert before.nd_domains is not None and 9 not in before.nd_domains["PCtxCmd1"]
+    cmd.slot(1, choices={0: "off", 5: "on", 9: "fast"})
+    after = drive_setup.build_prover_context(logic)
+    assert computed == [logic, logic]
+    assert after.nd_domains is not None and 9 in after.nd_domains["PCtxCmd1"]
+
+
+def test_each_later_change_to_a_tags_settings_is_counted() -> None:
+    from pyrung.click import TagMap
+
+    bank = Block("PCtxBank", TagType.INT, 1, 4)
+    hardware = Block("PCtxHardware", TagType.INT, 1, 3)
+    named = Block("PCtxNamed", TagType.INT, 1, 2)
+    bank.slot(4, choices={0: "a"})
+    changes = [
+        lambda: bank.slot(1, max=10),
+        lambda: bank.slot(2, 3, retentive=True),
+        lambda: bank.slot(4).reset(),
+        lambda: bank.reset(),
+        lambda: Bool("PCtxMapped").map_to(hardware[3]),
+        lambda: named.map_to(hardware.select(1, 2)),
+        lambda: TagMap([]),
+    ]
+    for change in changes:
+        before = metadata_edits()
+        change()
+        assert metadata_edits() > before

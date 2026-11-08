@@ -185,10 +185,17 @@
   - `TagMeta` has a field per key in place of `profile`. `parse_profile_spec()` and `profile_to_token()` are removed
   - `harness status` shows each flasher, timed, toggle, ramp or approach link with its kind and keys (it showed `profile=`)
 
-  Run "Upgrade project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
+  Run "Upgrade Project" in clicknick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
 
 ### Features
 
+- `pyrung.core` exports the table of physical kinds, the keys each `Physical(...)` kind takes. The names are `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
+- A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`:
+  - it is a `ValueError`, so existing `except ValueError` clauses still catch it
+  - its `code` is `"OLD_COMMENT_FORM"`
+  - a nickname-file load keeps the class and names the row in the message
+
+  Match on the class or the code to offer "Upgrade Project".
 - Harness feedback has two new kinds, which run as the CLICK coils of the same names:
   - `Physical(name, timed="200ms")` turns the feedback on for that time at each rise of its enable. With `maintained=True` it also stays on while the enable stays on
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
@@ -477,6 +484,12 @@
 - A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses. The feedback never flipped, because its millisecond timer stopped at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`. They showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
+
+### Performance
+
+- `how()` starts faster.
+  - A second `how()` on an unchanged program skips several seconds of setup.
+  - The first `how()` takes about half as long to set up.
 
 ## v0.15.2 (2026-10-11)
 

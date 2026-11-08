@@ -253,8 +253,10 @@ def test_the_input_that_keeps_a_reset_off_is_held_without_the_last_resort(shape:
 
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.last_resort is None
-    # The Set of Door would come 10 ms after Start's, under the 1 s floor, so its hold stays.
-    assert any(form in str(plan) for form in ("out(Door)", "latch(Door)", "Set Door=True"))
+    # The Set of Door would come 10 ms after Start's, under the 1 s floor,
+    # so the plan keeps Door held.
+    assert "with rung(~Done):" in str(plan)
+    assert "out(Door)" in str(plan)
     replayed = plan.replay().state.tags
     assert replayed["Done"] is True
     assert replayed["Alarm"] is False

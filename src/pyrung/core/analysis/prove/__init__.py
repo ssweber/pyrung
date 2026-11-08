@@ -159,7 +159,9 @@ from .passes import (
     _PassContext,
     _passes_for_opt_config,
     _PipelineCache,
+    _PriorFacts,
     _run_pre_bfs_pipeline,
+    _run_prior_pipeline,
 )
 from .passes import _OptConfig as _OptConfig
 
@@ -280,7 +282,6 @@ def _build_explore_context(
     initial_state: dict[str, Any] | None = None,
     pipeline_cache: _PipelineCache | None = None,
     restrict_inputs_to_scope: bool = False,
-    allow_partial: bool = False,
     opaque_reads: tuple[str, ...] = (),
     opaque_reads_all: bool = False,
     observed_tags: tuple[Tag, ...] = (),
@@ -300,10 +301,9 @@ def _build_explore_context(
                 for name in no_case_to_split
             ],
         )
-    if not _opt_config.domains_only:
-        refused = _functions_the_search_cannot_call(program)
-        if refused is not None:
-            return refused
+    refused = _functions_the_search_cannot_call(program)
+    if refused is not None:
+        return refused
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -321,14 +321,33 @@ def _build_explore_context(
         initial_state=initial_state,
         pipeline_cache=pipeline_cache,
         restrict_inputs_to_scope=restrict_inputs_to_scope,
-        domains_only=_opt_config.domains_only,
         opaque_reads=opaque_reads,
         opaque_reads_all=opaque_reads_all,
         observed_tags=observed_tags,
     )
-    return _run_pre_bfs_pipeline(
-        ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
+    return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
+
+
+def _build_prior_facts(
+    program: Program,
+    *,
+    dt: float = 0.010,
+    compiled: CompiledKernel | None = None,
+) -> _PriorFacts | Intractable:
+    """Build the value domains and state names how() steers with.
+
+    It proves nothing and runs no search, so it skips the search's passes and freeze().
+    """
+    ctx = _PassContext(
+        program=program,
+        scope=None,
+        project=None,
+        extra_exprs=None,
+        dt=dt,
+        compiled=compiled,
+        domains_only=True,
     )
+    return _run_prior_pipeline(ctx)
 
 
 def _compile_property_spec(

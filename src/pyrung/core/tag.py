@@ -117,6 +117,25 @@ def refuse_system_point_in_block(name: str, block_name: str, addr: int) -> None:
         )
 
 
+_metadata_edits = 0
+
+
+def note_metadata_edit() -> None:
+    """Count one change to a tag's settings made after the tag exists.
+
+    Analysis cached on a Program reads its tags' settings when it runs.  A slot
+    configured later, a tag mapped onto a bank, or a TagMap marking tags external
+    can change what such a cache holds, so it compares this count first.
+    """
+    global _metadata_edits
+    _metadata_edits += 1
+
+
+def metadata_edits() -> int:
+    """How many times `note_metadata_edit` has been called in this process."""
+    return _metadata_edits
+
+
 @dataclass(frozen=True)
 class MappingEntry:
     """Logical-to-hardware mapping declaration used by TagMap."""
@@ -412,6 +431,7 @@ class Tag:
                 )
             block._mapped_tags[addr] = self
             block._slot_names_changed += 1
+            note_metadata_edit()
             block._tag_cache.pop(addr, None)
             # The slot, for a text compare's window (`text_window_condition`) and a
             # store of several elements (`_store_block`); weak, so the mapping alone

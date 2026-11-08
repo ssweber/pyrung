@@ -1139,7 +1139,7 @@ class TestTimeEventDrum:
 
         logic = self._program(False)
         plc = PLC(logic, dt=0.01)
-        prover = build_prover_context(logic, dict(plc.state.tags))
+        prover = build_prover_context(logic)
         assert prover.nd_domains
         assert prover.key_config is not None
         assert "Step" in prover.key_config.stateful_names

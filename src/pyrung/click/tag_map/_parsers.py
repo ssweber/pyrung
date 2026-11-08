@@ -15,6 +15,7 @@ from pyrung.core import Block, InputBlock, OutputBlock, TagType
 from pyrung.core.physical import PHYSICAL_KEYS, PhysicalKind, kind_of_keys
 from pyrung.core.tag import ChoiceMap
 
+from ._errors import OldCommentFormError
 from ._types import _BlockImportSpec
 
 _DATA_TYPE_TO_TAG_TYPE: dict[DataType, TagType] = {
@@ -489,14 +490,6 @@ _VALUE_TOKENS = frozenset(
 _OLD_FORM_TOKENS = ("profile=",)
 
 
-def _old_form_error(token: str) -> ValueError:
-    return ValueError(
-        f"{token!r} is an old annotation form, and this pyrung no longer reads it. "
-        'Run "Upgrade project" in clicknick to rewrite it, '
-        "or pass the comment to pyrung.click.tag_map.upgrade_comment()."
-    )
-
-
 def _check_physical(values: dict[str, str | bool], system: str | None) -> None:
     kind_of_keys(values)
     if system is not None and not values:
@@ -542,7 +535,7 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             response[token] = True
             continue
         if token.startswith(_OLD_FORM_TOKENS):
-            raise _old_form_error(token)
+            raise OldCommentFormError(token)
         if token.startswith("choices="):
             if choices is not None:
                 raise ValueError("TagMeta choices may only be specified once.")

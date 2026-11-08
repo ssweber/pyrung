@@ -243,14 +243,14 @@ class Harness:
 
     def install(self) -> None:
         """Put the plant on the runner, a feedback whose enable is on as long since settled."""
-        self._install(settle=False)
+        self._install()
         self._settle()
 
-    def _install(self, *, settle: bool) -> None:
-        """Without *settle* a feedback stays as the state has it, its timers counting from there.
+    def _install(self) -> None:
+        """Install without settling, so a feedback stays as the state has it.
 
-        An install that puts overrides in after this settles once they are in, with
-        :meth:`_settle`.
+        The feedback's timers keep counting from there. A caller that puts overrides in afterwards
+        settles once they are in, with :meth:`_settle`.
         """
         if self._installed:
             return
@@ -262,8 +262,6 @@ class Harness:
         self._refresh_synthesis()
         self._seed_plant_defaults()
         self._carry_counts_to_current_units()
-        if settle:
-            self._settle()
         self._install_monitors()
         self._plc._harness = self
 

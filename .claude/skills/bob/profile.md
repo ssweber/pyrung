@@ -96,6 +96,11 @@ the orchestrator or builder runs it and the reviewer reads the output.)
   `<home>/jobs/train<N>/how-compare-expected.txt`, passed with `--expected`. No field list covers
   every field except a REACHED -> error/declined change, which needs a line naming `status`.
   The reasons go to the user at landing.
+- Run `devtools/how_compare.py` from the merged tree's worktree, so it uses that tree's
+  `devtools/how_compare_programs.py`. A branch that renames public API breaks the base's copy
+  (train10: `ImportError: Pulse`).
+- `tests/test_fold_check_stop.py` also runs in plain `make test`. If a Python version needs a fix
+  to the fold-check tool, include that fix in every train that runs the `test` stage.
 - Add a program when a review finds a `how()` regression the set missed (same case name never
   reused; mark it `fast=False` unless it is cheap), and say so in the ledger.
 

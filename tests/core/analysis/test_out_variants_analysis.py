@@ -227,7 +227,6 @@ class TestProver:
         from pyrung.core.analysis.pilot.drive_setup import build_prover_context
 
         logic = _program(verb)
-        plc = PLC(logic, dt=0.010)
-        prover = build_prover_context(logic, dict(plc.state.tags))
+        prover = build_prover_context(logic)
         assert prover.nd_domains
         assert prover.key_config is not None

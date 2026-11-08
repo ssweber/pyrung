@@ -5,7 +5,7 @@ its counters count concretely, so every accumulator it tracks is plain state.
 What lives here is structural (Done/Acc pairs, write targets, the data-read
 exclusivity check ``_has_forbidden_data_read``, which classify and the
 black-box model share) plus the absorptions PILOT's ``how()`` prior is built
-from (``_OptConfig.domains_only``): its world key projects a timer's Done and
+from (``_build_prior_facts``): its world key projects a timer's Done and
 Acc onto ``False``/``PENDING``/``True`` (``_done_acc_state``) and a progress
 accumulator onto threshold-crossing bits (``_ThresholdVectorSpec``), and its
 earned-work ordinal sources come from the same vectors.  PILOT replays every

@@ -66,7 +66,7 @@ Program
   → Proven | Counterexample | Intractable
 ```
 
-See `passes.py` for the full pass sequence with data flow. When `domains_only=True` (the `how()` path), the search's passes (bounds validation, timer model, edge expressions, memory keys) are skipped; classification absorbs and `build_prior_key_specs` builds PILOT's world-key Done specs.
+See `passes.py` for the full pass sequence with data flow. The `how()` path is `_build_prior_facts`. It asks for the `_PriorFacts` fields by name. `_passes_answering` runs each pass whose `answers` names one of those fields, and each pass that provides what those passes require. `_build_prior_facts` never runs `freeze()`, so a pass or freeze step added for the search costs `how()` nothing. `_build_prior_facts` sets `_PassContext.domains_only=True`, which keeps each pass's how()-only behaviour. With it on, classification absorbs and `build_prior_key_specs` builds PILOT's world-key Done specs.
 
 `_OptConfig.all_off()` is a sound baseline: every remaining toggle is a reduction (`_REDUCTION_OPTIMIZATIONS`) the soundness fuzzer checks against plain BFS. `sound_baseline()` is `all_off()` with the declared-bounds check kept; `_skip_optimizations=True` selects it.
 

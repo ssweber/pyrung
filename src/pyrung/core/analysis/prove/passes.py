@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from dataclasses import replace as _dc_replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -65,6 +66,8 @@ from .system_points import (
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+
+    from .absorb import _StateKeyDoneSpec, _ThresholdVectorSpec
 
 _BUILTIN_STATUS_FIELDS = frozenset({"EN", "TT", "CU", "CD"})
 
@@ -184,6 +187,28 @@ class _JournalBuilder:
 
 
 @dataclass(frozen=True)
+class _PriorFacts:
+    """What how()'s domain prior reads, and all the pipeline builds for it.
+
+    how() asks for these fields by name, so it runs only the passes that decide
+    them and none of freeze()'s work for the search.  A pass added later for the
+    search costs how() nothing until a field here needs it.
+    """
+
+    nondeterministic_dims: dict[str, tuple[Any, ...]]
+    stateful_dims: dict[str, tuple[Any, ...]]
+    stateful_names: tuple[str, ...]
+    elided_tags: dict[str, str]
+    functional_dep_projections: dict[str, tuple[str, int, int | float]]
+    stepping_tags: frozenset[str]
+    state_key_done_specs: tuple[_StateKeyDoneSpec, ...]
+    threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
+
+
+_PRIOR_FIELDS = frozenset(_PriorFacts.__dataclass_fields__)
+
+
+@dataclass(frozen=True)
 class _PipelineCache:
     """Reusable classification/absorption results from a prior pipeline run.
 
@@ -234,7 +259,7 @@ class _PassContext:
     # Unsound for always()/never() (would skip reachable states); safe for how()
     # where each path is replay-verified.
     restrict_inputs_to_scope: bool = False
-    # how()-only (mirrors _OptConfig.domains_only): passes may record
+    # how()-only (set by _build_prior_facts): passes may record
     # advice-grade results the BFS could not soundly act on — e.g.
     # functional-dep projections for slice-elided or ordering-violating
     # scratch, which PILOT's index chase validates by interpretation.
@@ -365,6 +390,25 @@ class _PassContext:
                         following.append(source)
         return read
 
+    def prior_facts(self) -> _PriorFacts:
+        assert self.stateful_dims is not None
+        assert self.nondeterministic_dims is not None
+        assert self.stateful_names is not None
+        return _PriorFacts(
+            nondeterministic_dims=self.nondeterministic_dims,
+            stateful_dims=self.stateful_dims,
+            stateful_names=self.stateful_names,
+            elided_tags=dict(self._elided_tags or {}),
+            functional_dep_projections=dict(self._functional_dep_projections or {}),
+            stepping_tags=self._stepping_tags or frozenset(),
+            state_key_done_specs=self.state_key_done_specs or (),
+            threshold_vector_specs=(
+                self.threshold_absorptions.vector_specs
+                if self.threshold_absorptions is not None
+                else ()
+            ),
+        )
+
     def freeze(self) -> _ExploreContext:
         assert self.compiled is not None
         assert self.graph is not None
@@ -373,10 +417,7 @@ class _PassContext:
         assert self.nondeterministic_dims is not None
         assert self.stateful_names is not None
         assert self.edge_tag_names is not None
-        # The how() prior builds no memory keys: no search runs on it.
-        domains_only = self.memory_key_names is None
-        if not domains_only:
-            assert self.timer_model is not None
+        assert self.timer_model is not None
         exclusive_input_groups = _detect_exclusive_input_groups(
             self.program,
             self.graph,
@@ -523,7 +564,7 @@ class _PassContext:
         #   - system tags (fault.*, rtc.*, ...) the kernel runtime sets each
         #     scan, also outside writers_of
         mutable_tag_names: frozenset[str] | None = None
-        if self.scope_snapshot and not domains_only:
+        if self.scope_snapshot:
             mutable: set[str] = set(self.graph.writers_of)
             mutable.update(SYSTEM_TAGS_BY_NAME)
             mutable.update(self.nondeterministic_dims)
@@ -605,10 +646,8 @@ class _PassContext:
             stepping_tags=self._stepping_tags or frozenset(),
             system_points=self.system_points,
             outside_tag_defaults=outside_defaults,
-            free_system_inputs=frozenset()
-            if self.domains_only
-            else free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
-            timer_model=None if domains_only else self.timer_model,
+            free_system_inputs=free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
+            timer_model=self.timer_model,
             count_clamps=self.count_clamps,
         )
 
@@ -621,6 +660,8 @@ class _PreBFSPass:
     enabled: bool = True
     requires: frozenset[str] = frozenset()
     provides: frozenset[str] = frozenset()
+    # The _PriorFacts fields this pass decides or changes (see _passes_answering).
+    answers: frozenset[str] = frozenset()
 
 
 def _validate_pass_dag(passes: tuple[_PreBFSPass, ...]) -> None:
@@ -696,7 +737,6 @@ class _OptConfig:
     ``depth_budget`` and each one left is a reduction the soundness fuzzer
     checks against plain BFS.  ``_OptConfig.sound_baseline()`` is ``all_off()``
     with the declared-bounds check kept (a check, not a reduction).
-    ``domains_only`` selects the ``how()`` domain prior, not an optimization.
 
     Each field is one independently-toggleable optimization. This lets the
     soundness fuzzer test arbitrary *subsets* against the baseline —
@@ -709,7 +749,6 @@ class _OptConfig:
     functional_dependency_projection: bool = True
     init_constant_projection: bool = True
     validate_declared_bounds: bool = True
-    domains_only: bool = False
     # BFS-interleaved (mirror _BFSConfig)
     live_input_pruning: bool = True
     exclusive_input_grouping: bool = True
@@ -747,7 +786,7 @@ class _OptConfig:
         return tuple(f for f in _OPT_TOGGLE_FIELDS if getattr(self, f))
 
 
-_OPT_TOGGLE_FIELDS = tuple(f for f in _OptConfig.__dataclass_fields__ if f != "domains_only")
+_OPT_TOGGLE_FIELDS = tuple(_OptConfig.__dataclass_fields__)
 _DEFAULT_OPT_CONFIG = _OptConfig()
 
 
@@ -2045,12 +2084,11 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
     """Select the pre-BFS pass tuple for *opt*, stubbing disabled optimizations.
 
     Each disabled pre-BFS optimization swaps its pass for a stub. With all
-    pre-BFS flags enabled (and not ``domains_only``) this returns
+    pre-BFS flags enabled this returns
     ``_DEFAULT_PRE_BFS_PASSES`` unchanged.  The BFS-interleaved flags are not
     handled here — see ``_OptConfig.bfs_config``.
     """
     overrides: dict[str, Callable[[_PassContext], None]] = {}
-    enable_overrides: dict[str, bool] = {}
     if not opt.traced_elision:
         overrides["elide_scan_local_state"] = _pass_skip_elision
     if not opt.functional_dependency_projection:
@@ -2059,29 +2097,24 @@ def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
         overrides["detect_init_constants"] = _pass_skip_init_constants
     if not opt.validate_declared_bounds:
         overrides["validate_declared_bounds"] = _pass_skip_declared_bounds
-    if opt.domains_only:
-        # How()'s domain prior: no search runs on it, so it builds no timer
-        # model, edge expressions or memory keys (freeze() reads the missing
-        # memory keys as domains_only), and builds the PILOT world-key specs.
-        enable_overrides["validate_declared_bounds"] = False
-        enable_overrides["diagnose_unwritten_tags"] = False
-        enable_overrides["build_timer_model"] = False
-        enable_overrides["collect_edge_exprs"] = False
-        enable_overrides["discover_memory_keys"] = False
-        enable_overrides["build_prior_key_specs"] = True
-    if not overrides and not enable_overrides:
+    if not overrides:
         return _DEFAULT_PRE_BFS_PASSES
-    return tuple(
-        _PreBFSPass(
-            p.name,
-            p.description,
-            overrides.get(p.name, p.run),
-            enabled=enable_overrides.get(p.name, p.enabled),
-            requires=p.requires,
-            provides=p.provides,
-        )
-        for p in _DEFAULT_PRE_BFS_PASSES
-    )
+    return tuple(_dc_replace(p, run=overrides.get(p.name, p.run)) for p in _DEFAULT_PRE_BFS_PASSES)
+
+
+def _passes_answering(fields: frozenset[str]) -> tuple[_PreBFSPass, ...]:
+    """The passes that decide *fields*, with the passes they need, in pipeline order.
+
+    A pass joins only by naming a field in ``answers`` or by providing what a joined
+    pass requires, so a pass added for the search alone never runs for how().
+    """
+    needed: set[str] = set()
+    chosen: list[_PreBFSPass] = []
+    for p in reversed(_DEFAULT_PRE_BFS_PASSES):
+        if p.answers & fields or p.provides & needed:
+            chosen.append(_dc_replace(p, enabled=True))
+            needed |= p.requires
+    return tuple(reversed(chosen))
 
 
 _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
@@ -2097,6 +2130,9 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         _pass_classify_dimensions,
         requires=frozenset({"graph", "all_exprs"}),
         provides=frozenset({"classification"}),
+        answers=frozenset(
+            {"nondeterministic_dims", "stateful_dims", "stepping_tags", "threshold_vector_specs"}
+        ),
     ),
     _PreBFSPass(
         "validate_declared_bounds",
@@ -2109,6 +2145,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "Promote split_at tags from stateful to nondeterministic (user directive)",
         _pass_apply_split_at,
         requires=frozenset({"classification"}),
+        answers=frozenset({"nondeterministic_dims", "stateful_dims"}),
     ),
     _PreBFSPass(
         "diagnose_unwritten_tags",
@@ -2121,6 +2158,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "Elide scan-local state that is provably irrelevant across scans",
         _pass_elide_scan_local_state,
         requires=frozenset({"graph", "all_exprs", "classification"}),
+        answers=frozenset({"stateful_dims", "elided_tags"}),
     ),
     _PreBFSPass(
         "detect_functional_dependencies",
@@ -2128,6 +2166,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         _pass_detect_functional_dependencies,
         requires=frozenset({"graph", "all_exprs", "classification"}),
         provides=frozenset({"functional_deps"}),
+        answers=frozenset({"stateful_dims", "elided_tags", "functional_dep_projections"}),
     ),
     _PreBFSPass(
         "detect_init_constants",
@@ -2135,6 +2174,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         _pass_detect_init_constants,
         requires=frozenset({"graph", "all_exprs", "classification"}),
         provides=frozenset({"init_constants"}),
+        answers=frozenset({"stateful_dims", "elided_tags"}),
     ),
     _PreBFSPass(
         "compile_kernel",
@@ -2142,6 +2182,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         _pass_compile_kernel,
         requires=frozenset({"classification"}),
         provides=frozenset({"compiled_names"}),
+        answers=frozenset({"stateful_names"}),
     ),
     _PreBFSPass(
         "build_timer_model",
@@ -2156,6 +2197,7 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         _pass_build_prior_key_specs,
         enabled=False,
         requires=frozenset({"compiled_names", "classification"}),
+        answers=frozenset({"state_key_done_specs"}),
     ),
     _PreBFSPass(
         "collect_edge_exprs",
@@ -2275,12 +2317,7 @@ def _for_iterations_intractable(
     )
 
 
-def _run_pre_bfs_pipeline(
-    ctx: _PassContext,
-    passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
-    *,
-    allow_partial: bool = False,
-) -> _ExploreContext | Intractable:
+def _run_passes(ctx: _PassContext, passes: tuple[_PreBFSPass, ...]) -> Intractable | None:
     _validate_pass_dag(passes)
     for p in passes:
         if not p.enabled:
@@ -2295,12 +2332,26 @@ def _run_pre_bfs_pipeline(
         logger.info("pass %s completed in %.2fs", p.name, time.monotonic() - t0)
         if ctx.intractable is not None:
             return _attach_partial_journal(ctx)
-    if ctx._pending_infeasible_tags and not allow_partial:
+    return None
+
+
+def _run_prior_pipeline(ctx: _PassContext) -> _PriorFacts | Intractable:
+    """Run the passes that decide how()'s prior fields, then read those fields."""
+    stopped = _run_passes(ctx, _passes_answering(_PRIOR_FIELDS))
+    return ctx.prior_facts() if stopped is None else stopped
+
+
+def _run_pre_bfs_pipeline(
+    ctx: _PassContext,
+    passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
+) -> _ExploreContext | Intractable:
+    stopped = _run_passes(ctx, passes)
+    if stopped is not None:
+        return stopped
+    if ctx._pending_infeasible_tags:
         return _build_merged_intractable(ctx)
     result = ctx.freeze()
     cache = ctx.extract_cache()
     if cache is not None:
-        from dataclasses import replace as _dc_replace
-
         result = _dc_replace(result, pipeline_cache=cache)
     return result

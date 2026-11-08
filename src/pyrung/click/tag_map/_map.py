@@ -17,7 +17,7 @@ from pyclickplc.validation import validate_nickname
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, Tag
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-from pyrung.core.tag import MappingEntry
+from pyrung.core.tag import MappingEntry, note_metadata_edit
 
 from ._nickname_io import (
     _PLAIN_DATA_BANKS,
@@ -236,6 +236,7 @@ class TagMap:
 
         self._stamp_input_externals()
         self._stamp_output_locks()
+        note_metadata_edit()
         self._populate_programmatic_structures()
         self._freeze_entries()
         self._refresh_nickname_validation()

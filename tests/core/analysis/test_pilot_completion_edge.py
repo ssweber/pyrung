@@ -36,7 +36,7 @@ def _compass_graphs(logic, plc):
     ref = compute_reference_constants(pdg, logic, plc._known_tags_by_name)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic) - harness_fb - ref
     opaque_loop = detect_opaque_loop(pdg, logic)
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     roles = infer_opaque_pipeline_roles(
         pdg,
         logic,

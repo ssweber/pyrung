@@ -255,7 +255,7 @@ def _current_ctx(logic, plc):
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     opaque_loop = detect_opaque_loop(pdg, logic)
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     return pdg, steerable, opaque_loop, prover.evidence
 
 
@@ -463,7 +463,7 @@ def test_table_detour_arms_opaque_table_surface() -> None:
 
     # (2) State stays copy-coupled *stepping* (plain copy source), so the compass
     #     value-graph is built for it rather than the loop dead-ending immediately.
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.evidence is not None
     assert prover.evidence.is_stepping(state_name)
 

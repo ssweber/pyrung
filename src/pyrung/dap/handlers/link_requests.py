@@ -9,7 +9,7 @@ capture as its console command, so a replay rebuilds the same wiring.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, make_dataclass
 from typing import Any
 
 from pyrung.core.physical import PHYSICAL_KEYS
@@ -20,24 +20,22 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
 @dataclass(frozen=True)
-class _LinkRequestArgs:
+class _LinkFixedArgs:
     feedback: Any = None
     enable: Any = None
     trigger: Any = None
-    onDelay: Any = None
-    offDelay: Any = None
-    flasherOn: Any = None
-    flasherOff: Any = None
-    timed: Any = None
-    maintained: Any = None
-    toggle: Any = None
-    rampOn: Any = None
-    rampOff: Any = None
-    approachTo: Any = None
-    approachRate: Any = None
     profile: Any = None
     physical: Any = None
     system: Any = None
+
+
+# The kind fields come from PHYSICAL_KEYS, so a new key needs no edit here.
+_LinkRequestArgs = make_dataclass(
+    "_LinkRequestArgs",
+    [(key.dap_field, Any, field(default=None)) for key in PHYSICAL_KEYS.values()],
+    bases=(_LinkFixedArgs,),
+    frozen=True,
+)
 
 
 @dataclass(frozen=True)
@@ -81,17 +79,17 @@ def on_pyrung_link(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         )
     keys: dict[str, str | bool] = {}
     for key in PHYSICAL_KEYS.values():
-        field = key.dap_field
-        value = getattr(parsed, field)
+        name = key.dap_field
+        value = getattr(parsed, name)
         if key.is_flag:
             if value is not None and not isinstance(value, bool):
-                raise adapter.DAPAdapterError(f"pyrungLink.{field} must be a boolean")
+                raise adapter.DAPAdapterError(f"pyrungLink.{name} must be a boolean")
             if value:
                 keys[key.name] = True
             continue
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             value = str(value)
-        text = _optional_text(adapter, value, f"pyrungLink.{field}")
+        text = _optional_text(adapter, value, f"pyrungLink.{name}")
         if text is not None:
             keys[key.name] = text
     for key in ("physical", "system"):

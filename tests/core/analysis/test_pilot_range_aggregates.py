@@ -32,7 +32,7 @@ def test_prover_context_survives_aggregates() -> None:
     logic, _hit = _program("median")
     plc = PLC(logic, dt=0.010)
     plc.step()
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.key_config is not None
     assert prover.nd_domains is not None
     assert {"PilotAgg_ExtA", "PilotAgg_ExtB"} <= set(prover.nd_domains)
