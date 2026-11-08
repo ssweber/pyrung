@@ -656,7 +656,7 @@ def seed_records(twin: Any, plc: Any) -> None:
     """Give *twin* a copy of *plc*'s records, as a twin made now of *plc* should start.
 
     The twin keeps every value from now on, so a check can hold ours to what was written.
-    It keeps the count each column starts with, to work out where stepping stops.
+    A second copy keeps each column's count, to work out where stepping stops.
     """
     twin._fold_seed = {}
     for name in _RECORDS:
@@ -664,11 +664,7 @@ def seed_records(twin: Any, plc: Any) -> None:
         copy = getattr(plc, name).snapshot()
         for slot in rung_firings.RungFiringTimelines.__slots__:
             setattr(theirs, slot, getattr(copy, slot))
-        twin._fold_seed[name] = (
-            plc._state.scan_id,
-            {key: list(values) for key, values in theirs._distinct_values.items()},
-            set(theirs._unknown_keys),
-        )
+        twin._fold_seed[name] = (plc._state.scan_id, getattr(plc, name).snapshot())
         theirs._unknown_keys = set()
         theirs._distinct_values = {}
         theirs.__class__ = _Uncapped
@@ -676,18 +672,50 @@ def seed_records(twin: Any, plc: Any) -> None:
 
 def _capped(twin: Any, name: str, key: Any) -> tuple[list[Any], bool]:
     """The column as stepping keeps it, and whether it went unknown, from the twin's values."""
-    start, counts, unknown = twin._fold_seed[name]
+    start, seed = twin._fold_seed[name]
+    records = rung_firings.RungFiringTimelines()
+    if key in seed._unknown_keys:
+        records._unknown_keys.add(key)
+    if key in seed._distinct_values:
+        records._distinct_values[key] = list(seed._distinct_values[key])
+    timeline = list(seed._value_timelines.get(key, ()))
     column = getattr(twin, name)._value_timelines.get(key, [])
-    prefix = rung_firings._trim_value_ranges(column, None, start)
-    timeline = list(rung_firings._as_of(prefix, column, start))
-    count = counts.get(key)
-    _count, gone = rung_firings._restepped(
-        timeline,
-        rung_firings._trim_value_ranges(column, start + 1, None),
-        None if count is None else list(count),
-        key in unknown,
-    )
-    return timeline, gone
+    for range_ in rung_firings._trim_value_ranges(column, start + 1, None):
+        _append_as_stepping(records, key, timeline, range_)
+    return timeline, key in records._unknown_keys
+
+
+def _append_as_stepping(records: Any, key: Any, timeline: list[Any], range_: Any) -> None:
+    """Append *range_* scan by scan, as stepping does.
+
+    A tail of the same kind that agrees on the range's last two scans carries the rest.
+    """
+    low, high = range_.start_scan_id, range_.end_scan_id
+    for scan in range(low, high + 1):
+        value = rung_firings._value_at(range_, scan)
+        if value is rung_firings._MISSING_WRITE:
+            rung_firings._append_value(timeline, scan, value)
+        else:
+            records._append_written(key, timeline, scan, value)
+        if scan == high or scan - low < 1:
+            continue
+        tail = timeline[-1]
+        if key in records._unknown_keys and not rung_firings._unknown_or_missing(range_):
+            ahead = rung_firings.ValueRange(scan + 1, high, rung_firings.Unknown())
+        else:
+            ahead = range_
+        if (
+            isinstance(tail, rung_firings.ValueRange)
+            and type(tail.payload) is type(ahead.payload)
+            and all(
+                rung_firings._equal(
+                    rung_firings._value_at(tail, at), rung_firings._value_at(ahead, at)
+                )
+                for at in (high - 1, high)
+            )
+        ):
+            timeline[-1] = rung_firings.ValueRange(tail.start_scan_id, high, tail.payload)
+            return
 
 
 def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:

@@ -489,16 +489,14 @@ def _record_segments(
         end = lead + cycles * length
         at = lead + WARM_CYCLES * length
         misses = 0
-        # A plan may stop short, when a column with steps would reach a hundred values.  One
-        # cycle more goes in scan by scan before the next plan.
+        # A column may not repeat yet.  One cycle more goes in scan by scan before the next
+        # plan.
         while at + length <= end and misses < WARM_CYCLES:
             _record_scan_by_scan(plc, segments[cursor:at], kernel_paths)
             cursor = at
             last = segments[at - 1].first + segments[at - 1].count - 1
             plans = [timelines.plan_repeat(last, period) for timelines in timelines_held]
-            more = (end - at) // length
-            for plan in plans:
-                more = 0 if plan is None else min(more, plan.limit)
+            more = 0 if None in plans else (end - at) // length
             if more > 0:
                 for plan in plans:
                     assert plan is not None
@@ -1333,10 +1331,7 @@ def _try_stretch(
                     watch.wait_until = scan_id + watch.wait * period
                     watch.wait = min(watch.wait * 2, MAX_PREDICTION_WAIT)
                     return
-                cycles = min(cycles, plan.limit)
                 plans.append(plan)
-            if cycles < 1:
-                return
         scans = cycles * period
         if recorded:
             for plan in plans:

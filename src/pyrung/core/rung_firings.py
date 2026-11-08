@@ -248,8 +248,7 @@ class RungFiringTimelines(Generic[K]):
         one period on.  Each whole number also moves as it moved between the last two cycles.
         Each column must have taken the same shape on its last cycles.  A column's cycle may
         start on any scan of the period.  Then appending the later cycles scan by scan would
-        repeat that shape.  So each later cycle reads back as appending it would have.  Record
-        no more than the plan's ``limit``.
+        repeat that shape.  So each later cycle reads back as appending it would have.
         """
         actions: list[tuple[Any, list[Any], Any]] = []
         tables: tuple[tuple[Mapping[Any, list[Any]], bool], ...] = (
@@ -264,7 +263,7 @@ class RungFiringTimelines(Generic[K]):
                     return None
                 if action is not None:
                     actions.append((key if values else None, ranges, action))
-        return RepeatPlan(self, actions, period)
+        return RepeatPlan(actions, period)
 
     def _repeat_action(
         self, key: Any, ranges: list[Any], last: int, period: int, values: bool
@@ -344,18 +343,9 @@ class RungFiringTimelines(Generic[K]):
             # value comes from before that, so it cannot repeat.
             if not all(_unknown_or_missing(range_) for range_ in cycle):
                 return None
-            return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
-        if not values:
-            return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
-        # A column that reaches a hundred values goes unknown, so the cycles stop short of it.
-        # The plan works the count out on a copy and leaves the column's own count alone.  A
-        # plan the caller drops must leave the column as stepping would.
-        counts, limit = _counts_as_stepping(
-            ranges, self._distinct_values.get(key), cycle, steps, edge, last, period
-        )
-        if limit == 0:
-            return None
-        return _Cycle(cycle, steps, step, trailing, limit, counts)
+        # The plan leaves the column's count alone.  A repeat stays one entry however many
+        # values its steps reach.
+        return _Cycle(cycle, steps, step, trailing)
 
     def tags_of(self, rung_index: K) -> Iterable[str]:
         """Every tag this rung has written."""
@@ -463,9 +453,8 @@ class RungFiringTimelines(Generic[K]):
         """Take scans *first*..*last* from *settled*, an index of them made later."""
         _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
         _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
-        # *settled* counts each column's values from its own first scan.  Stepping counts them
-        # from the column's first scan, and goes unknown at the hundredth.  So each column the
-        # settle touches is appended again from *first* on, with stepping's count.
+        # Each column keeps its own count.  The values the settle adds go uncounted, so the
+        # column may keep values past its hundredth, and each one is the value written.
         for key in settled._value_timelines.keys() | self._value_timelines.keys():
             middle = _trim_value_ranges(settled._value_timelines.get(key, []), first, last)
             mine = self._value_timelines.get(key, [])
@@ -484,41 +473,26 @@ class RungFiringTimelines(Generic[K]):
                 self._unknown_keys.discard(key)
                 self._distinct_values.pop(key, None)
                 continue
-            if not later and not touched:
-                # Ours holds nothing from *first* on, so its count is the count at *first*.
-                count = self._distinct_values.get(key)
-                count = None if count is None else list(count)
-                unknown = key in self._unknown_keys
-            else:
-                prefix = _as_of(prefix, mine, first - 1)
-                count, unknown = _restepped([], prefix, None, False)
             column_from = (prefix or middle or later)[0].start_scan_id
-            again = [
-                *_missing_writes(
-                    fired,
-                    max(first, column_from + 1),
-                    middle[0].start_scan_id - 1 if middle else last,
-                ),
-                *middle,
-                *_missing_writes(
-                    fired,
-                    max(last + 1, column_from + 1),
-                    later[0].start_scan_id - 1 if later else None,
-                ),
-                *later,
-            ]
-            timeline = list(prefix)
-            count, unknown = _restepped(timeline, again, count, unknown)
-            self._value_timelines[key] = timeline
-            if unknown:
-                self._unknown_keys.add(key)
-                self._distinct_values.pop(key, None)
-            else:
-                self._unknown_keys.discard(key)
-                if count is None:
-                    self._distinct_values.pop(key, None)
-                else:
-                    self._distinct_values[key] = count
+            # The scans after the window keep what ours recorded, because each is a value
+            # written or an Unknown.
+            self._value_timelines[key] = _coalesced(
+                [
+                    *prefix,
+                    *_missing_writes(
+                        fired,
+                        max(first, column_from + 1),
+                        middle[0].start_scan_id - 1 if middle else last,
+                    ),
+                    *middle,
+                    *_missing_writes(
+                        fired,
+                        max(last + 1, column_from + 1),
+                        later[0].start_scan_id - 1 if later else None,
+                    ),
+                    *later,
+                ]
+            )
         self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
 
@@ -1180,13 +1154,6 @@ def _repetition(repeat: Repeat, index: int) -> list[Any]:
     ]
 
 
-def _stepped_cycle(cycle: Sequence[Any], steps: tuple[int, ...], index: int) -> list[Any]:
-    """*cycle* with its values as its *index*-th later repetition holds them, at the same scans."""
-    if not steps:
-        return list(cycle)
-    return [_moved(range_, 0, step * index) for range_, step in zip(cycle, steps, strict=True)]
-
-
 def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
     """Repetitions *first*..*last* of *repeat*, as one entry.  A single repetition is written out."""
     if first > last:
@@ -1424,7 +1391,6 @@ def _is_missing(range_: Any) -> bool:
 
 
 _EXTEND = "extend"
-_NO_LIMIT = 1 << 62
 
 
 @dataclass(frozen=True, slots=True)
@@ -1435,244 +1401,6 @@ class _Cycle:
     steps: tuple[int, ...]
     step: int  # how far each of the column's whole numbers moves a cycle
     trailing: tuple[Any, ...]  # the next cycle's first scans, recorded already
-    limit: int
-    # The column's count of values after each later cycle, as stepping keeps it.  None
-    # before stepping starts one.  The last count holds for every cycle after it.
-    counts: tuple[list[Any] | None, ...] = ()
-
-
-# The most cycles a plan without steps appends to a copy of a column.  It plans no further
-# than that.
-_COUNTED_CYCLES = 16
-
-
-def _counts_as_stepping(
-    ranges: list[Any],
-    distinct: list[Any] | None,
-    cycle: tuple[Any, ...],
-    steps: tuple[int, ...],
-    edge: int,
-    last: int,
-    period: int,
-) -> tuple[tuple[list[Any] | None, ...], int]:
-    """The column's count of values after each later cycle, and how many cycles keep it known.
-
-    Stepping counts a column's values only from its eighth range on.  It counts a value when
-    it first appends it, and a value that later joins a range of whole numbers stepping by one
-    amount stays counted.  So each later cycle is appended to a copy of the column scan by
-    scan, as stepping appends it.
-    """
-    scratch = list(ranges)
-    count = None if distinct is None else list(distinct)
-    counts: list[list[Any] | None] = []
-    quiet = 0
-    most = _VALUE_VARIETY_THRESHOLD if steps else _COUNTED_CYCLES
-    while len(counts) < most:
-        index = len(counts) + 1
-        first = last + (index - 1) * period + 1
-        end = last + index * period
-        length = len(scratch)
-        changed = blocked = False
-        for repetition in range((first - edge - 1) // period + 1, (end - edge - 1) // period + 2):
-            for range_ in _stepped_cycle(cycle, steps, repetition):
-                low = max(range_.start_scan_id + repetition * period, first)
-                high = min(range_.end_scan_id + repetition * period, end)
-                placed = _moved(range_, repetition * period)
-                scan_id = low
-                while scan_id <= high:
-                    value = _value_at(placed, scan_id)
-                    new = _append_value(scratch, scan_id, value)
-                    if new and value is not _MISSING_WRITE and value is not _UNKNOWN_VALUE:
-                        if len(scratch) < _TRACK_DISTINCT_AFTER and (
-                            _written_out_length(scratch) < _TRACK_DISTINCT_AFTER
-                        ):
-                            blocked = True
-                        elif count is None:
-                            count = _known_distinct_values(scratch)
-                            changed = True
-                        elif not any(_equal(value, prior) for prior in count):
-                            count.append(value)
-                            changed = True
-                        if count is not None and len(count) >= _VALUE_VARIETY_THRESHOLD:
-                            return tuple(counts), len(counts)
-                    scan_id += 1
-                    tail = scratch[-1]
-                    # A tail of the same kind that agrees on the last two scans carries the
-                    # rest, so stepping would only lengthen it.
-                    if (
-                        scan_id <= high
-                        and scan_id - low >= 2
-                        and type(tail.payload) is type(placed.payload)
-                        and _equal(_value_at(tail, high), _value_at(placed, high))
-                        and _equal(_value_at(tail, high - 1), _value_at(placed, high - 1))
-                    ):
-                        scratch[-1] = ValueRange(tail.start_scan_id, high, tail.payload)
-                        break
-        counts.append(None if count is None else list(count))
-        # A cycle without steps that leaves the count alone does so on every later cycle.  That
-        # holds if it counted each new value it appended, or if it left the column no longer.
-        if not steps and not changed and (not blocked or len(scratch) <= length):
-            quiet += 1
-            if quiet == 2:
-                return tuple(counts), _NO_LIMIT
-        else:
-            quiet = 0
-    return tuple(counts), len(counts)
-
-
-def _restepped(
-    timeline: list[Any], ranges: Sequence[Any], count: list[Any] | None, unknown: bool
-) -> tuple[list[Any] | None, bool]:
-    """Append *ranges* to *timeline* as stepping appends them, scan by scan.
-
-    *count* and *unknown* are the column's count of values and whether it went unknown.
-    Returns *count* and *unknown* as stepping leaves them after the last scan.  A column that
-    goes unknown takes ``Unknown`` for each value written after that.
-    """
-    for element in ranges:
-        if type(element) is Repeat:
-            count, unknown = _restepped_repeat(timeline, element, count, unknown)
-        else:
-            count, unknown, _changed, _blocked = _restepped_range(timeline, element, count, unknown)
-    return count, unknown
-
-
-def _restepped_range(
-    timeline: list[Any], range_: Any, count: list[Any] | None, unknown: bool
-) -> tuple[list[Any] | None, bool, bool, bool]:
-    """:func:`_restepped` for one written-out range.
-
-    Also says whether the count grew or went unknown, and whether a new value went uncounted
-    because the column was still too short to count.
-    """
-    changed = blocked = False
-    low, high = range_.start_scan_id, range_.end_scan_id
-    placed = _as_unknown(range_) if unknown else range_
-    scan_id = low
-    while scan_id <= high:
-        value = _value_at(placed, scan_id)
-        if unknown and value is not _MISSING_WRITE:
-            value = _UNKNOWN_VALUE
-        new = _append_value(timeline, scan_id, value)
-        if new and value is not _MISSING_WRITE and value is not _UNKNOWN_VALUE:
-            if len(timeline) < _TRACK_DISTINCT_AFTER and (
-                _written_out_length(timeline) < _TRACK_DISTINCT_AFTER
-            ):
-                blocked = True
-            else:
-                if count is None:
-                    count = _known_distinct_values(timeline)
-                    changed = True
-                elif not any(_equal(value, prior) for prior in count):
-                    count.append(value)
-                    changed = True
-                if len(count) >= _VALUE_VARIETY_THRESHOLD:
-                    count, unknown = None, True
-                    if scan_id < high:
-                        placed = _as_unknown(_trim_value_ranges([range_], scan_id + 1, high)[0])
-        scan_id += 1
-        tail = timeline[-1]
-        # A tail of the same kind that agrees on the last two scans carries the rest, so
-        # stepping would only lengthen it.
-        if (
-            scan_id <= high
-            and scan_id - low >= 2
-            and type(tail.payload) is type(placed.payload)
-            and _equal(_value_at(tail, high), _value_at(placed, high))
-            and _equal(_value_at(tail, high - 1), _value_at(placed, high - 1))
-        ):
-            timeline[-1] = ValueRange(tail.start_scan_id, high, tail.payload)
-            break
-    return count, unknown, changed, blocked
-
-
-def _restepped_repeat(
-    timeline: list[Any], repeat: Repeat, count: list[Any] | None, unknown: bool
-) -> tuple[list[Any] | None, bool]:
-    """:func:`_restepped` for a repeat, which stays one entry once its repetitions settle.
-
-    Appending a scan reads at most the last two ranges.  So once three repetitions in a row
-    append the same ranges a period apart, and the last two leave the count alone, every later
-    repetition does the same.  The rest then go in as one repeat.  Values that step change
-    from one repetition to the next, so a known column with steps is appended in full.  The
-    plan that made it stops short of a hundred values.
-    """
-    _unroll_tail(timeline)
-    period = repeat.period
-    may_join = not repeat.steps or unknown
-    # Where each repetition's ranges start and end in *timeline*.  The last range comes too.
-    marks: list[tuple[int, int, Any]] = []
-    quiet = 0
-    for index in range(repeat.count):
-        start = len(timeline)
-        changed = blocked = False
-        for range_ in _repetition(repeat, index):
-            count, unknown, grew, held = _restepped_range(timeline, range_, count, unknown)
-            changed |= grew
-            blocked |= held
-        quiet = 0 if changed or blocked else quiet + 1
-        marks.append((start, len(timeline), timeline[-1] if timeline else None))
-        may_join = may_join or unknown
-        rest = repeat.count - 1 - index
-        if rest and quiet >= 2 and may_join and _repeats_alike(timeline, marks[-3:], period):
-            _join_rest(timeline, marks[-1], period, rest)
-            break
-    return count, unknown
-
-
-def _repeats_alike(timeline: list[Any], marks: list[tuple[int, int, Any]], period: int) -> bool:
-    """Whether three repetitions in a row appended the same ranges a period apart."""
-    if len(marks) < 3:
-        return False
-    sizes = {end - start for start, end, _last in marks}
-    if len(sizes) != 1:
-        return False
-    size = sizes.pop()
-    if size < 0:
-        return False
-    for (start, end, last), (after, _end, _last) in zip(marks, marks[1:], strict=False):
-        if size == 0:
-            continue
-        # The next repetition must leave this one's ranges as it found them.
-        if end != after or timeline[end - 1] is not last:
-            return False
-        if not all(
-            _same_range(timeline[after + offset], _moved(timeline[start + offset], period))
-            for offset in range(size)
-        ):
-            return False
-    # A repetition that appends no range only lengthens the tail, the same way each time.
-    return marks[-1][2] is not None
-
-
-def _same_range(left: Any, right: Any) -> bool:
-    return (
-        left.start_scan_id == right.start_scan_id
-        and left.end_scan_id == right.end_scan_id
-        and _same_payload(left.payload, right.payload)
-    )
-
-
-def _join_rest(timeline: list[Any], mark: tuple[int, int, Any], period: int, rest: int) -> None:
-    """Append *rest* more repetitions like the last one, as one repeat with it."""
-    start, end, _last = mark
-    if start == end:
-        tail = timeline[-1]
-        timeline[-1] = ValueRange(
-            tail.start_scan_id, tail.end_scan_id + rest * period, tail.payload
-        )
-        return
-    cycle = tuple(timeline[start:end])
-    timeline[start:] = [
-        Repeat(
-            cycle[0].start_scan_id,
-            cycle[-1].end_scan_id + rest * period,
-            period,
-            cycle,
-            rest + 1,
-            (),
-        )
-    ]
 
 
 def _missing_writes(fired: list[Any], first: int, last: int | None) -> list[Any]:
@@ -1699,52 +1427,6 @@ def _as_missing(element: Any) -> Any:
     return ValueRange(element.start_scan_id, element.end_scan_id, Constant(_MISSING_WRITE))
 
 
-def _as_of(prefix: list[Any], ranges: list[Any], scan_id: int) -> list[Any]:
-    """*prefix*, the ranges up to *scan_id*, as appending them had left them by then.
-
-    Appending makes an alternating or arithmetic range only on its third scan.  So a range
-    cut short of three scans was single scans then.
-    """
-    if not prefix or type(prefix[-1]) is Repeat:
-        return prefix
-    cut = prefix[-1]
-    whole = next(_expanded(ranges, scan_id, scan_id), None)
-    if (
-        whole is None
-        or whole.end_scan_id == cut.end_scan_id
-        or not isinstance(cut.payload, (Alternating, Arithmetic))
-        or cut.end_scan_id - cut.start_scan_id >= 2
-    ):
-        return prefix
-    singles = [
-        ValueRange(scan, scan, Constant(_value_at(cut, scan)))
-        for scan in range(cut.start_scan_id, cut.end_scan_id + 1)
-    ]
-    return [*prefix[:-1], *singles]
-
-
-def _as_unknown(range_: ValueRange) -> ValueRange:
-    """*range_* as a column that went unknown records it.  A scan with no write stays so."""
-    payload = range_.payload
-    if isinstance(payload, Constant) and payload.value is _MISSING_WRITE:
-        return range_
-    if isinstance(payload, Alternating) and _MISSING_WRITE in (
-        payload.value_on_even,
-        payload.value_on_odd,
-    ):
-        return ValueRange(
-            range_.start_scan_id,
-            range_.end_scan_id,
-            Alternating(
-                payload.value_on_even
-                if payload.value_on_even is _MISSING_WRITE
-                else _UNKNOWN_VALUE,
-                payload.value_on_odd if payload.value_on_odd is _MISSING_WRITE else _UNKNOWN_VALUE,
-            ),
-        )
-    return ValueRange(range_.start_scan_id, range_.end_scan_id, Unknown())
-
-
 def _unknown_or_missing(range_: Any) -> bool:
     """Whether *range_* is all ``Unknown`` or all scans with no write."""
     payload = range_.payload
@@ -1760,29 +1442,18 @@ def _step_of(range_: Any, step: int) -> int:
 class RepeatPlan:
     """How a timelines object takes more cycles of its last one.  See ``plan_repeat``."""
 
-    __slots__ = ("_actions", "_period", "_timelines", "limit")
+    __slots__ = ("_actions", "_period")
 
-    def __init__(
-        self,
-        timelines: RungFiringTimelines[Any],
-        actions: list[tuple[Any, list[Any], Any]],
-        period: int,
-    ) -> None:
-        self._timelines = timelines
+    def __init__(self, actions: list[tuple[Any, list[Any], Any]], period: int) -> None:
         self._actions = actions
         self._period = period
-        # The most cycles it may record.  A column with steps gains values each cycle.
-        self.limit = min(
-            (action.limit for _key, _ranges, action in actions if action != _EXTEND),
-            default=_NO_LIMIT,
-        )
 
     def apply(self, cycles: int) -> None:
-        """Record *cycles* more cycles, no more than ``limit``."""
-        assert 0 < cycles <= self.limit
+        """Record *cycles* more cycles."""
+        assert cycles > 0
         period = self._period
         added = cycles * period
-        for key, ranges, action in self._actions:
+        for _key, ranges, action in self._actions:
             if action == _EXTEND:
                 _unroll_tail(ranges)
                 tail = ranges[-1]
@@ -1812,10 +1483,6 @@ class RepeatPlan:
                 ranges.append(Repeat(cycle[0].start_scan_id, end, period, cycle, 1 + cycles, steps))
             moved = [_moved(range_, added, _step_of(range_, step) * cycles) for range_ in trailing]
             ranges.extend(moved)
-            if key is not None and action.counts:
-                count = action.counts[min(cycles, len(action.counts)) - 1]
-                if count is not None:
-                    self._timelines._distinct_values[key] = list(count)
 
 
 def _moved_end(range_: Any, end: int) -> Any:

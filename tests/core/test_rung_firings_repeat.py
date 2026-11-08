@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import random
 import tracemalloc
 from collections.abc import Callable
@@ -38,7 +39,9 @@ def _shown(value: Any) -> str:
     return f"{type(value).__name__}:{value!r}" if type(value) is not object else "sentinel"
 
 
-def _reads(timelines: RungFiringTimelines, last: int) -> dict[str, Any]:
+def _reads(
+    timelines: RungFiringTimelines, last: int, shown: Callable[[Any], Any] = _shown
+) -> dict[str, Any]:
     """What every reader of the timelines answers, over every scan."""
     scans = tuple(range(0, last + 2))
     every = frozenset(RUNGS)
@@ -50,7 +53,7 @@ def _reads(timelines: RungFiringTimelines, last: int) -> dict[str, Any]:
     }
     for scan_id in scans:
         out[f"at {scan_id}"] = {
-            rung: sorted((tag, _shown(value)) for tag, value in writes.items())
+            rung: sorted((tag, shown(value)) for tag, value in writes.items())
             for rung, writes in timelines.at(scan_id).items()
         }
         out[f"fired_on {scan_id}"] = sorted(timelines.fired_on(scan_id))
@@ -66,11 +69,11 @@ def _reads(timelines: RungFiringTimelines, last: int) -> dict[str, Any]:
             for rung in RUNGS:
                 one = frozenset((rung,))
                 key = f"{rung} {tag} {scan_id}"
-                out[f"value {key}"] = _shown(timelines.value_at(rung, tag, scan_id))
+                out[f"value {key}"] = shown(timelines.value_at(rung, tag, scan_id))
                 out[f"varied {key}"] = timelines.varied_on(rung, tag, scan_id)
                 last_write = timelines.last_tag_write_before(one, tag, scan_id)
                 out[f"last write {key}"] = (
-                    None if last_write is None else (last_write[0], _shown(last_write[1]))
+                    None if last_write is None else (last_write[0], shown(last_write[1]))
                 )
                 out[f"candidates {key}"] = timelines.tag_transition_candidate_scans_before(
                     one, tag, scan_id
@@ -123,7 +126,7 @@ def _recorded_both_ways(
     plan = repeated.plan_repeat(warm, period)
     first = warm + 1
     if plan is not None:
-        added = min(plan.limit, cycles - 3)
+        added = cycles - 3
         if added > 0:
             plan.apply(added)
             first += added * period
@@ -136,13 +139,73 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
     ours, theirs = _reads(repeated, last), _reads(stepped, last)
     for key in theirs:
         assert ours[key] == theirs[key], key
-    # A column goes unknown at its hundredth value, so later scans need the same count.
     assert repeated._unknown_keys == stepped._unknown_keys
-    assert _counts(repeated) == _counts(stepped)
 
 
-def _counts(timelines: RungFiringTimelines) -> dict[Any, list[str]]:
-    return {key: sorted(map(_shown, values)) for key, values in timelines._distinct_values.items()}
+class _Uncapped(RungFiringTimelines):
+    """Stepping that keeps every value, where stepping stops at a hundred to save memory."""
+
+    __slots__ = ()
+
+    def _note_new_value(self, key: Any, timeline: Any, value: Any) -> None:
+        return None
+
+
+def _loose(value: Any) -> Any:
+    """A value as ``==`` compares it.  A tag of 0 and False may read back either."""
+    return "sentinel" if type(value) is object else value
+
+
+def _assert_true_to(
+    stepped: RungFiringTimelines, truth: RungFiringTimelines, ours: RungFiringTimelines, last: int
+) -> None:
+    """Each value ours knows is the value written, and ours says Unknown only where stepping does.
+
+    *truth* is stepping that keeps every value.  A column that holds no Unknown answers every
+    other read as one of the two answers it.  A range may start on a different scan, so the
+    candidate scans may differ.
+    """
+    holes: set[str] = set()
+    for rung in RUNGS:
+        for tag in TAGS:
+            for scan_id in range(last + 2):
+                mine = ours.value_at(rung, tag, scan_id)
+                where = (rung, tag, scan_id)
+                if mine is _UNKNOWN_VALUE:
+                    assert stepped.value_at(rung, tag, scan_id) is _UNKNOWN_VALUE, where
+                    holes.add(f" {rung} {tag} ")
+                else:
+                    assert _loose(mine) == _loose(truth.value_at(rung, tag, scan_id)), where
+    capped, kept = _flat(_reads(stepped, last, _loose)), _flat(_reads(truth, last, _loose))
+    for key, read in _flat(_reads(ours, last, _loose)).items():
+        if key.startswith("candidates ") or any(hole in f"{key} " for hole in holes):
+            continue
+        if read in (kept.get(key), capped.get(key)):
+            continue
+        assert key.startswith("transition "), key
+        # Stepping may name a later scan of the same run of the value.
+        _word, rung, tag, _scan, shown, _missing = key.split(" ")
+        value = ast.literal_eval(shown)
+        low, high = sorted((read, kept[key]))
+        assert all(
+            _loose(truth.value_at(int(rung), tag, scan_id)) == value
+            for scan_id in range(low, high + 1)
+        ), key
+
+
+def _flat(reads: dict[str, Any]) -> dict[str, Any]:
+    """*reads* with one entry for each column of the reads that cover them all."""
+    out: dict[str, Any] = {}
+    for key, read in reads.items():
+        if key == "known":
+            out.update({f"known {rung} {tag}": known for (rung, tag), known in read.items()})
+        elif key.startswith("at "):
+            for rung, writes in read.items():
+                out[f"{key} {rung}"] = [tag for tag, _value in writes]
+                out.update({f"{key} {rung} {tag}": value for tag, value in writes})
+        else:
+            out[key] = read
+    return out
 
 
 def _holds_a_repeat(timelines: RungFiringTimelines) -> bool:
@@ -189,9 +252,7 @@ def test_scans_after_a_repeat_and_a_trim_read_back_as_scan_by_scan() -> None:
 
 
 def test_a_range_taken_from_another_record_reads_back_as_scan_by_scan() -> None:
-    _prefix, cycle = _flip_flop()
-    # A tag keeps one type.  A column that mixes 0 and False reads either one back.
-    prefix = [{0: ({"a": False}, frozenset())}]
+    prefix, cycle = _flip_flop()
     _stepped, repeated, _planned, last = _recorded_both_ways(prefix, cycle, 40, [])
     window: Scan = {0: ({"a": True, "b": 1}, frozenset())}
     settled: RungFiringTimelines = RungFiringTimelines()
@@ -204,7 +265,8 @@ def test_a_range_taken_from_another_record_reads_back_as_scan_by_scan() -> None:
     stepped: RungFiringTimelines = RungFiringTimelines()
     for scan_id, scan in enumerate(scans, start=1):
         _record(stepped, scan_id, scan)
-    _assert_same(stepped, repeated, last)
+    # A column that mixes 0 and False may read back either one.
+    _assert_true_to(stepped, stepped, repeated, last)
 
 
 @pytest.mark.parametrize("seed", range(60))
@@ -303,12 +365,22 @@ def _counting_up(index: int) -> list[Scan]:
     return [{0: ({"a": index, "b": True}, frozenset())}, {1: ({"a": 7}, frozenset())}]
 
 
-def test_a_count_steps_until_its_column_would_go_unknown() -> None:
+def _kept(cycle: Callable[[int], list[Scan]], cycles: int) -> RungFiringTimelines:
+    """The cycles stepped, with every value kept."""
+    truth: RungFiringTimelines = _Uncapped()
+    scans = [scan for index in range(cycles) for scan in cycle(index)]
+    for scan_id, scan in enumerate(scans, start=1):
+        _record(truth, scan_id, scan)
+    return truth
+
+
+def test_a_count_with_steps_goes_in_as_one_repeat_past_its_hundredth_value() -> None:
     stepped, repeated, planned, last = _recorded_both_ways([], _counting_up, 300, [])
     assert planned
     assert (0, "a") in stepped._unknown_keys
-    assert (0, "a") in repeated._unknown_keys
-    _assert_same(stepped, repeated, last)
+    assert (0, "a") not in repeated._unknown_keys
+    assert repeated.run_count() < 20
+    _assert_true_to(stepped, _kept(_counting_up, 300), repeated, last)
 
 
 def test_appends_after_a_cut_inside_a_repeat_read_back_as_scan_by_scan() -> None:
@@ -367,12 +439,11 @@ def _ramp_then_rest(index: int) -> list[Scan]:
     ]
 
 
-def test_a_count_the_column_folds_away_is_counted_as_stepping_counts_it() -> None:
-    # Stepping counts the first two values of each ramp, and the third joins their range.
+def test_a_count_the_column_folds_away_keeps_the_values_written() -> None:
     stepped, repeated, planned, last = _recorded_both_ways([], _ramp_then_rest, 120, [])
     assert planned
     assert (0, "a") in stepped._unknown_keys
-    _assert_same(stepped, repeated, last)
+    _assert_true_to(stepped, _kept(_ramp_then_rest, 120), repeated, last)
 
 
 def test_a_settle_keeps_counting_as_stepping_counts() -> None:
@@ -431,16 +502,18 @@ def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
     # The replay steps from a checkpoint at or before *first*, with records of its own.
     anchor = rng.randrange(1, first + 1)
     stepped: RungFiringTimelines = RungFiringTimelines()
+    truth: RungFiringTimelines = _Uncapped()
     ours: RungFiringTimelines = RungFiringTimelines()
     settled: RungFiringTimelines = RungFiringTimelines()
     for scan_id, scan in enumerate(scans, start=1):
         _record(stepped, scan_id, scan)
+        _record(truth, scan_id, scan)
         if not first <= scan_id <= last:
             _record(ours, scan_id, scan)
         if anchor <= scan_id <= last:
             _record(settled, scan_id, scan)
     ours.replace_range(settled, first, last)
-    _assert_same(stepped, ours, count)
+    _assert_true_to(stepped, truth, ours, count)
 
 
 def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
@@ -489,6 +562,48 @@ def test_a_settle_after_a_long_repeat_keeps_it_one_entry() -> None:
     _settle_small(record, end, end + 9)
     assert record.run_count() < 40
     assert record.value_at(0, "a", end + 9) == (end + 9) * 7
+
+
+_SIX = ({"a": 1}, {}, {"a": 2}, {"a": 3}, {"a": 4}, {"a": 5})
+
+
+def _many_then_six(scan_id: int) -> dict[str, Any]:
+    """97 values, then a cycle of six scans."""
+    if scan_id < 98:
+        return {"a": (scan_id * scan_id) % 1009 + 1000}
+    return _SIX[(scan_id - 98) % 6]
+
+
+def test_a_settle_that_brings_a_column_to_its_hundredth_value_keeps_a_later_repeat() -> None:
+    # Ours missed scans 40..60, so it counted fewer values and a plan took the cycles.
+    # Stepping went unknown in the first cycle.  The settle leaves the repeat as it was.
+    ours: RungFiringTimelines = RungFiringTimelines()
+    scan_id = 1
+    while scan_id < 98 + 6 * 4:
+        if not 40 <= scan_id <= 60:
+            ours.append(0, scan_id, _many_then_six(scan_id))
+        scan_id += 1
+    plan = ours.plan_repeat(scan_id - 1, 6)
+    assert plan is not None
+    plan.apply(100_000)
+    scan_id += 6 * 100_000
+    for _ in range(3):
+        ours.append(0, scan_id, _many_then_six(scan_id))
+        scan_id += 1
+    before = ours.run_count()
+    settled: RungFiringTimelines = RungFiringTimelines()
+    for settled_scan in range(1, 61):
+        settled.append(0, settled_scan, _many_then_six(settled_scan))
+    tracemalloc.start()
+    try:
+        ours.replace_range(settled, 40, 60)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 4_000_000
+    assert ours.run_count() <= before + 25
+    assert ours.value_at(0, "a", scan_id - 1) == _many_then_six(scan_id - 1)["a"]
+    assert ours.value_at(0, "a", 50) == _many_then_six(50)["a"]
 
 
 def test_a_column_the_loop_could_not_speak_for_keeps_its_later_values() -> None:
