@@ -336,7 +336,43 @@ def build_prover_context(
 
     Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
     pivot-tag state keys, and local static evidence.
+
+    The answer comes from the program and its tags' settings, never from *snapshot*.
+    A Program keeps it until its graph cache is dropped or a tag's settings change,
+    so each how() on an unchanged program skips the prover's passes.
     """
+    from pyrung.core.tag import metadata_edits
+
+    edits = metadata_edits()
+    cached = getattr(program, "_cached_prover_context", None)
+    if cached is not None:
+        graph, cached_edits, context = cached
+        if graph is getattr(program, "_cached_graph", None) and cached_edits == edits:
+            return _copy_prover_context(context)
+    context = _compute_prover_context(program, snapshot)
+    if context is None:
+        return ProverContext()
+    graph = getattr(program, "_cached_graph", None)
+    if graph is not None and metadata_edits() == edits:
+        program._cached_prover_context = (graph, edits, context)
+    return _copy_prover_context(context)
+
+
+def _copy_prover_context(context: ProverContext) -> ProverContext:
+    """A copy whose dicts a caller may change without changing the cached one."""
+    from dataclasses import replace
+
+    return replace(
+        context,
+        nd_domains=None if context.nd_domains is None else dict(context.nd_domains),
+        stateful_domains=(
+            None if context.stateful_domains is None else dict(context.stateful_domains)
+        ),
+    )
+
+
+def _compute_prover_context(program: Any, snapshot: dict[str, Any]) -> ProverContext | None:
+    """The prover's facts for *program*, or ``None`` when building them raised."""
     try:
         from dataclasses import replace as _replace
 
@@ -417,4 +453,4 @@ def build_prover_context(
         )
     except Exception:  # noqa: BLE001
         logger.debug("pilot: context build failed", exc_info=True)
-        return ProverContext()
+        return None

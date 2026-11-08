@@ -49,6 +49,8 @@ class Program:
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
         self._cached_graph: ProgramGraph | None = None
+        # how()'s prover facts, with the graph and the tag-settings count they were built from.
+        self._cached_prover_context: Any = None
         self._site_table: SiteTable | None = None
 
     def __enter__(self) -> Program:
@@ -74,6 +76,7 @@ class Program:
 
     def _invalidate_graph_cache(self) -> None:
         self._cached_graph = None
+        self._cached_prover_context = None
 
     def _assign_state_keys(self) -> None:
         """Bind every memory-keeping site (see :mod:`pyrung.core.site_memory`)."""

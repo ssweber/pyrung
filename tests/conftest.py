@@ -98,6 +98,7 @@ def _clean_block_state() -> Iterator[None]:
     """
     from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
     from pyrung.core.memory_block import Block
+    from pyrung.core.tag import note_metadata_edit
 
     def _restore_all() -> None:
         for block in Block._all_instances:
@@ -111,6 +112,13 @@ def _clean_block_state() -> Iterator[None]:
                 )
             else:
                 slot_config, mapped_tags = baseline
+                if block._slot_config != slot_config or (
+                    {addr: id(tag) for addr, tag in block._mapped_tags.items()}
+                    != {addr: id(tag) for addr, tag in mapped_tags.items()}
+                ):
+                    # This undoes a test's slot settings behind the block's back, and a
+                    # shared program's cached prover facts may have been built with them.
+                    note_metadata_edit()
                 block._slot_config = {addr: copy.copy(e) for addr, e in slot_config.items()}
                 block._mapped_tags = dict(mapped_tags)
             block._tag_cache.clear()
