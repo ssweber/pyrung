@@ -563,12 +563,15 @@ def _column_at(ranges: Any, scan: int) -> Any:
     return rung_firings._MISSING_WRITE
 
 
-def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool) -> int | None:
+def _column_differs(
+    ours: Any, theirs: Any, first: int, last: int, partly: bool, full: int | None = None
+) -> int | None:
     """Scan where ours holds another value than stepping's, or None.
 
     A column the loop wrote Unknown into holds other ranges than stepping's.  So ours may
     turn Unknown first, and only their known values must agree.  A scan with a write must
-    still be one in both.
+    still be one in both.  The loop counts each run it wrote Unknown as one range, so such a
+    column may stay known after stepping's reached its limit on scan *full*.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a run of scans with no boundary settle the whole of it.
@@ -586,6 +589,9 @@ def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool)
             mine, stepped = _column_at(ours, scan), _column_at(theirs, scan)
             if partly and mine is unknown:
                 if stepped is missing:
+                    return scan
+            elif partly and full is not None and scan >= full and stepped is unknown:
+                if mine is missing:
                     return scan
             elif _exact(mine) != _exact(stepped):
                 return scan
@@ -680,7 +686,8 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
                             f"fold-check ({kind}): {name} {key!r} {counts} {held!r}, "
                             f"stepped {stepped!r}"
                         )
-            scan = _column_differs(a, b, first, end, partly)
+            full = theirs._unknown_keys.get(key)
+            scan = _column_differs(a, b, first, end, partly, full)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
