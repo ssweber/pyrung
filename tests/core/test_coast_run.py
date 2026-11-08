@@ -41,6 +41,7 @@ from pyrung.core import (
 from pyrung.core.coast_run import _record_columns, _Recording, coast_until, memo_of
 from pyrung.core.rung_firings import (
     _UNKNOWN_VALUE,
+    Repeat,
     RungFiringTimelines,
     SearchQuestionRefused,
     UnrecordedScansError,
@@ -970,3 +971,40 @@ def test_a_loop_that_stores_a_constant_in_a_read_tag_compiles_without_a_warning(
         twin.step()
     assert hit
     assert plc.current_state.scan_id == twin.current_state.scan_id
+
+
+FlipY = Int("AdvFlipY")
+
+
+def _flips_between_two_values() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        copy(5, FlipY)
+    with Rung(~Toggle):
+        copy(7, FlipY)
+
+
+def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(strict) -> None:
+    plc = _runner(_flips_between_two_values, 0.01)
+    stepped = _runner(_flips_between_two_values, 0.01)  # the surveys read a runner's own epoch
+    start = plc.current_state.scan_id
+    coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset())
+    while stepped.current_state.scan_id < plc.current_state.scan_id:
+        stepped.step()
+    timelines = plc._rung_firing_timelines
+    assert any(type(e) is Repeat for ranges in timelines._fired_ranges.values() for e in ranges)
+    assert timelines.run_count() < 50 < stepped._rung_firing_timelines.run_count()
+    compare_records("repeat", plc, stepped, start)
+    assert plc.query.cold_rungs() == stepped.query.cold_rungs()
+    assert plc.query.hot_rungs() == stepped.query.hot_rungs()
+    tip = plc.current_state.scan_id
+    middle = start + SCANS * 5 // 2
+    for scan in (start + 1, start + 2, middle, middle + 1, tip - 1, tip):
+        assert plc.rung_firings(scan) == stepped.rung_firings(scan), scan
+        assert dict(plc.history.at(scan).tags) == dict(stepped.history.at(scan).tags), scan
+        for tag in (Toggle, FlipY):
+            assert str(plc.cause(tag, scan)) == str(stepped.cause(tag, scan)), (tag, scan)
+            assert str(plc.effect(tag, scan, max_scans=50)) == str(
+                stepped.effect(tag, scan, max_scans=50)
+            ), (tag, scan)

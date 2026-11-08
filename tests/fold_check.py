@@ -539,7 +539,8 @@ def compare_runners(
 
 
 def _touching(ranges: Any, first: int, last: int) -> list[Any]:
-    return [r for r in ranges if r.start_scan_id <= last and r.end_scan_id >= first]
+    """The written-out ranges with a scan in *first*..*last*, a repeat read as its copies."""
+    return list(rung_firings._expanded(ranges, first, last))
 
 
 def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
@@ -556,9 +557,8 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
 
 def _column_at(ranges: Any, scan: int) -> Any:
     """A column's value at *scan*; a scan no range covers is a scan with no write."""
-    for r in ranges:
-        if r.start_scan_id <= scan <= r.end_scan_id:
-            return rung_firings._value_at(r, scan)
+    for r in _touching(ranges, scan, scan):
+        return rung_firings._value_at(r, scan)
     return rung_firings._MISSING_WRITE
 
 
@@ -589,7 +589,8 @@ def _column_differs(ours: Any, theirs: Any, first: int, last: int) -> int | None
 
 
 def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
-    return _spans([r for r in ranges if isinstance(r.payload, rung_firings.Unknown)], first, last)
+    touching = _touching(ranges, first, last)
+    return _spans([r for r in touching if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
 def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int]]:

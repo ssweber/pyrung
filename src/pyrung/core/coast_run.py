@@ -109,6 +109,9 @@ MAX_SUCCESSORS = 4
 MAX_CYCLE_SEGMENTS = 8
 # The cycles that go in scan by scan first, which the timelines check for the same shape.
 WARM_CYCLES = 3
+# The fewest scans a repeat must save.  Each repeat splits the scan by scan record around it,
+# and a split costs about as much as recording seventy scans.
+MIN_REPEAT_SCANS = 256
 # Interpreted scans between attempts at a stretch: at entry and after a good stretch,
 # and how far apart they may get when stretches do not come or do not last.
 ENTRY_WAIT = 2
@@ -440,43 +443,69 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
     if sum(timelines.run_count() for timelines in timelines_held) >= MAX_RECORD_RUNS:
         plc._note_unrecorded_scans(start, start + total - 1)
         return
-    cycle = _cycle_of(segments)
-    if cycle is None:
-        _record_scan_by_scan(plc, segments, kernel_paths)
-        return
-    lead, length, cycles = cycle
-    warm = lead + WARM_CYCLES * length
-    _record_scan_by_scan(plc, segments[:warm], kernel_paths)
-    period = sum(segment.count for segment in segments[lead : lead + length])
-    last = segments[warm - 1].first + segments[warm - 1].count - 1
-    plans = [timelines.plan_repeat(last, period) for timelines in timelines_held]
-    if all(plan is not None for plan in plans):
-        for plan in plans:
-            assert plan is not None
-            plan.apply(cycles - WARM_CYCLES)
-        _record_scan_by_scan(plc, segments[lead + cycles * length :], kernel_paths)
-    else:
-        _record_scan_by_scan(plc, segments[warm:], kernel_paths)
+    cursor = 0
+    for lead, length, cycles in _cycles_in(segments):
+        warm = lead + WARM_CYCLES * length
+        _record_scan_by_scan(plc, segments[cursor:warm], kernel_paths)
+        cursor = warm
+        period = _scans(segments, lead, length)
+        last = segments[warm - 1].first + segments[warm - 1].count - 1
+        plans = [timelines.plan_repeat(last, period) for timelines in timelines_held]
+        if all(plan is not None for plan in plans):
+            for plan in plans:
+                assert plan is not None
+                plan.apply(cycles - WARM_CYCLES)
+            cursor = lead + cycles * length
+    _record_scan_by_scan(plc, segments[cursor:], kernel_paths)
 
 
-def _cycle_of(segments: list[_Segment]) -> tuple[int, int, int] | None:
-    """The longest run of segments that repeats a cycle, as (first, segments a cycle, cycles).
+def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
+    """Runs of segments that repeat a cycle, as (first, segments a cycle, cycles), in order.
 
     A segment's records follow from its path, its count and where it left the tags it moves.
-    So segments that agree on those record the same scans, a cycle later.
+    So segments that agree on those record the same scans, a cycle later.  A run must save
+    ``MIN_REPEAT_SCANS``, since each one splits the scan by scan record that batches the rest.
     """
-    best: tuple[int, int, int] | None = None
-    covered = 0
+    found: list[tuple[int, int, int]] = []
     count = len(segments)
-    for length in range(1, MAX_CYCLE_SEGMENTS + 1):
-        first = count - length
-        while first > 0 and _same_segment(segments[first - 1], segments[first - 1 + length]):
-            first -= 1
-        cycles = (count - first) // length
-        if cycles >= WARM_CYCLES + 2 and cycles * length > covered:
-            best = (first, length, cycles)
-            covered = cycles * length
-    return best
+    first = 0
+    while first < count:
+        # Paths and counts first, which is cheap.  The ends only for a run long enough to use.
+        cycles, length = 0, 1
+        for candidate in range(1, MAX_CYCLE_SEGMENTS + 1):
+            end = first + candidate
+            while (
+                end < count
+                and segments[end].path is segments[end - candidate].path
+                and segments[end].count == segments[end - candidate].count
+            ):
+                end += 1
+            if (end - first) // candidate * candidate > cycles * length:
+                cycles, length = (end - first) // candidate, candidate
+        end = first + length
+        if _worth_a_repeat(segments, first, length, cycles):
+            stop = first + cycles * length
+            while end < stop and _same_segment(segments[end - length], segments[end]):
+                end += 1
+            cycles = (end - first) // length
+            if _worth_a_repeat(segments, first, length, cycles):
+                found.append((first, length, cycles))
+                first += cycles * length
+                continue
+        else:
+            end = first + cycles * length
+        first = max(first + 1, end - MAX_CYCLE_SEGMENTS)
+    return found
+
+
+def _worth_a_repeat(segments: list[_Segment], first: int, length: int, cycles: int) -> bool:
+    if cycles < WARM_CYCLES + 2:
+        return False
+    return _scans(segments, first, length) * (cycles - WARM_CYCLES) >= MIN_REPEAT_SCANS
+
+
+def _scans(segments: list[_Segment], first: int, length: int) -> int:
+    return sum(segment.count for segment in segments[first : first + length])
 
 
 def _same_segment(one: _Segment, other: _Segment) -> bool:
