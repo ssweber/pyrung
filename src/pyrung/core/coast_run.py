@@ -127,6 +127,11 @@ MAX_WAIT_AFTER_SHORT = 64
 MAX_WAIT_AFTER_NONE = 256
 # A stretch this long paid for its entry into the kernel.
 PAYING_STRETCH = 16
+# how()'s ledger prices a coast's scans by their place in it, never by which engine ran them,
+# so a change to the loop cannot change what a search may spend.  The first scans and
+# the landing are a unit each, as the scans a search looks at.  The scans between them are
+# waiting, at the loop's price.  A program with a call no loop may make pays a unit a scan.
+UNIT_SCANS_AT_START = 2
 # What a loop run does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
 # how many cycles repeat exactly, and checks each scan the loop then runs against that.
 # "jump" predicts too, and moves the state over the cycles predicted without running them.
@@ -232,8 +237,10 @@ class CoastMemo:
     counts: Counter[str] = field(default_factory=Counter)
     # Raises when the search has to stop.  Asked between scans and between fires.
     check_limits: Callable[[], None] | None = None
-    # What the search's ledger has left, in interpreted scans.
+    # What the search's ledger has left, in units (see UNIT_SCANS_AT_START).
     work_left: Callable[[], int] | None = None
+    # The program last asked about, and whether it calls a function no loop may call.
+    impure: tuple[Any, bool] | None = None
 
 
 def memo_of(plc: PLC) -> CoastMemo:
@@ -1564,14 +1571,15 @@ def coast_until(
 
     Stops as stepping would: on the first scan where it holds, or at the budget, or
     after a scan that asks to pause, or after the program stops itself.  Returns whether it
-    holds there.  *loop_scans_per_unit* is how many loop scans one unit of *budget* pays
-    for.  An interpreted scan is always a unit.  *predicate_reads* is the exact set of tags
-    *predicate* reads through ``state.tags``.  Without it the reads are traced.  The predicate
-    must answer from those tags alone, with no counter, clock or global of its own.  A loop
-    scan that changes none of them does not ask it again.  *stats* gets
-    ``logical_scans``, ``kernel_scans``, ``stretches`` and ``stretched_scans`` (the logical
-    scans ``kernel_scans`` leaves).  *on_kernel_scan* and ``kernel_scans`` have each
-    interpreted scan and the landing, which a stretch may have run.
+    holds there.  *loop_scans_per_unit* is how many scans one unit of *budget* pays for,
+    past the scans that are a unit each (``UNIT_SCANS_AT_START``).  *predicate_reads* is the
+    exact set of tags *predicate* reads through ``state.tags``.  Without it the reads are
+    traced.  The predicate must answer from those tags alone, with no counter, clock or
+    global of its own.  A loop scan that changes none of them does not ask it again.  *stats*
+    gets ``logical_scans``, ``kernel_scans``, ``stretches``, ``stretched_scans`` (the logical
+    scans ``kernel_scans`` leaves) and ``unit_scans`` (the scans charged a unit each).
+    *on_kernel_scan* and ``kernel_scans`` have each interpreted scan and the landing, which a
+    stretch may have run.
     """
     options = (predicate_reads, stats, on_kernel_scan, loop_scans_per_unit)
     if not jit_stats.ACTIVE:
@@ -1601,17 +1609,30 @@ def _coast_until(
     stretches = 0
     last_noted = start_scan
 
+    # The interpreted scans priced as loop scans, for the ledger to read off the runner.
+    waiting: list[int] = []
+
     def note(scan: int) -> None:
         nonlocal kernel_scans, last_noted
         last_noted = scan
         kernel_scans += 1
+        if waits_cheaply and scan - start_scan > UNIT_SCANS_AT_START:
+            waiting.append(scan)
         if on_kernel_scan is not None:
             on_kernel_scan(scan)
+
+    def unit_scans() -> int:
+        logical = plc.state.scan_id - start_scan
+        return min(logical, UNIT_SCANS_AT_START) if waits_cheaply else logical
 
     def finish(reached: bool) -> bool:
         # A stretch may be what landed, and a caller reads its answer there.
         if plc.state.scan_id != last_noted:
             note(plc.state.scan_id)
+        landed_late = bool(waiting) and waiting[-1] == plc.state.scan_id
+        if landed_late:
+            waiting.pop()
+        plc._loop_priced_scans.update(waiting)
         if stats is not None:
             logical = plc.state.scan_id - start_scan
             stats.update(
@@ -1619,6 +1640,7 @@ def _coast_until(
                 kernel_scans=kernel_scans,
                 stretches=stretches,
                 stretched_scans=logical - kernel_scans,
+                unit_scans=unit_scans() + landed_late,
             )
         return reached
 
@@ -1644,19 +1666,20 @@ def _coast_until(
             jit_stats.add_decline("interpreted: a watched tag moves without a write")
     elif not can_loop and run is not None:
         jit_stats.add_decline(f"interpreted: {_why_interpreted(plc)}")
+    waits_cheaply = can_loop and not _calls_what_no_loop_may(plc, memo)
     wait = ENTRY_WAIT
     since = 0
     fails = 0
     learned: _Path | None = None
-    # The ledger charges a seek when it returns, so one that cannot loop could spend it many
-    # times over first.  A loop scan is a hundredth of one of these, and stays out of it.
+    # The ledger charges a seek when it returns, so one that pays a unit a scan could spend it
+    # many times over first.  The scans priced as loop scans stay out of this.
     work = None if memo.work_left is None else max(1, memo.work_left())
 
     def charged() -> int:
-        return work_charged(plc.state.scan_id - start_scan, kernel_scans, loop_scans_per_unit)
+        return work_charged(plc.state.scan_id - start_scan, unit_scans(), loop_scans_per_unit)
 
     while charged() < budget:
-        if work is not None and kernel_scans >= work:
+        if work is not None and unit_scans() >= work:
             if stats is not None:
                 stats["out_of_work"] = 1
             break
@@ -1684,7 +1707,9 @@ def _coast_until(
         hit = bool(predicate(plc.state))
         if hit or paused:
             return finish(hit)
-        limit = (budget - charged()) * loop_scans_per_unit
+        # What the budget left pays for, less the part of a unit the scans so far have used.
+        waited = plc.state.scan_id - start_scan - unit_scans()
+        limit = (budget - charged()) * loop_scans_per_unit - waited % loop_scans_per_unit
         if not can_loop or since < wait or limit < 2:
             continue
         since = 0
@@ -1746,9 +1771,19 @@ def _why_interpreted(plc: PLC) -> str:
     return "a breakpoint"
 
 
-def work_charged(logical_scans: int, kernel_scans: int, loop_scans_per_unit: int) -> int:
-    """What *logical_scans* cost, *kernel_scans* of them interpreted and the rest in the loop."""
-    return kernel_scans + (logical_scans - kernel_scans) // loop_scans_per_unit
+def work_charged(logical_scans: int, unit_scans: int, loop_scans_per_unit: int) -> int:
+    """What *logical_scans* cost, *unit_scans* of them a unit each and the rest at loop price."""
+    return unit_scans + (logical_scans - unit_scans) // loop_scans_per_unit
+
+
+def _calls_what_no_loop_may(plc: PLC, memo: CoastMemo) -> bool:
+    """Whether the program calls a function no loop may call, so that it runs every scan itself."""
+    from pyrung.core.runner import calls_that_depend_on_more_than_their_inputs
+
+    program = plc._program
+    if memo.impure is None or memo.impure[0] is not program:
+        memo.impure = (program, bool(calls_that_depend_on_more_than_their_inputs(program)))
+    return memo.impure[1]
 
 
 def _moves_without_a_write(names: Any) -> bool:

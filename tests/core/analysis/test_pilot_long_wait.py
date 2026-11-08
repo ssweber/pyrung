@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, latch, on_delay, out, time_drum
-from pyrung.core import PLC
+from pyrung.core import PLC, coast_run
 from pyrung.core.analysis.pilot import api, pilot_events
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
@@ -284,8 +284,13 @@ def _timer_program() -> Program:
     return prog
 
 
-def test_a_budget_in_work_lands_where_stepping_does() -> None:
+@pytest.mark.parametrize("loop", [True, False], ids=["in the loop", "with no loop"])
+def test_a_budget_in_work_lands_where_stepping_does(
+    monkeypatch: pytest.MonkeyPatch, loop: bool
+) -> None:
     """Fifty units of budget at a hundred loop scans each, and the state stepping leaves there."""
+    if not loop:
+        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
     plc = PLC(_timer_program(), dt=0.01)
     plc.step()
     stats: dict[str, int] = {}
@@ -298,10 +303,10 @@ def test_a_budget_in_work_lands_where_stepping_does() -> None:
         loop_scans_per_unit=STRETCH_SCANS_PER_UNIT,
     )
     logical = stats["logical_scans"]
-    assert logical > 50
-    assert stats["stretched_scans"] > 0
-    # The stats' kernel scans have the landing too, which the loop may have run.
-    assert work_charged(logical, stats["kernel_scans"], STRETCH_SCANS_PER_UNIT) in (50, 51)
+    assert (stats["stretched_scans"] > 0) is loop
+    # The first two scans and the landing are a unit each, whichever engine ran them.
+    assert logical == 2 + 48 * STRETCH_SCANS_PER_UNIT
+    assert work_charged(logical, stats["unit_scans"], STRETCH_SCANS_PER_UNIT) == 50
     stepped = PLC(_timer_program(), dt=0.01)
     for _ in range(1 + logical):
         stepped.step()

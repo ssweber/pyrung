@@ -24,9 +24,13 @@ y_Done = Bool("y_Done")
 Seen = Int("Seen")
 
 
-def _receipt(*scans: int, epoch: str = "e") -> SimpleNamespace:
+def _receipt(*scans: int, epoch: str = "e", waited: tuple[int, ...] = ()) -> SimpleNamespace:
     return SimpleNamespace(
-        spans=(SimpleNamespace(epoch=SimpleNamespace(reference=epoch), kernel_scan_ids=scans),)
+        spans=(
+            SimpleNamespace(
+                epoch=SimpleNamespace(reference=epoch), kernel_scan_ids=scans, loop_priced=waited
+            ),
+        )
     )
 
 
@@ -65,12 +69,40 @@ class TestTheLedger:
         ledger.charge_execution(_receipt(52, 103))
         assert ledger.spent == 3 + 1
 
+    def test_an_interpreted_scan_a_coast_waited_through_is_priced_as_a_loop_scan(self) -> None:
+        ledger = SearchBudget()
+        ledger.charge_execution(_receipt(*range(1, 104), waited=tuple(range(3, 103))))
+        assert ledger.spent == 3 + 1
+
     def test_a_how_cannot_run_free_in_the_loop(self) -> None:
         # Its 2,000,000 loop scans would be 20,000 units.  The seek's own budget is logical,
         # so what ends it is a search that has spent its work.
         plan = _slow_lamp(2_000_000).how(Lamp, max_scans=200)
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
+
+
+class TestTheLoopDoesNotMoveTheLedger:
+    # A wait's scans are priced by where they fall, so a search spends the same whichever
+    # scans the loop runs.  Without it every scan is interpreted.
+
+    @pytest.mark.parametrize(
+        ("preset", "max_scans", "status"),
+        [(300, 3, PlanStatus.STOPPED), (3000, 20, PlanStatus.REACHED)],
+        ids=["out of work", "a wait of 3000 scans on 20 units"],
+    )
+    def test_a_search_spends_the_same_without_the_loop(
+        self, monkeypatch: pytest.MonkeyPatch, preset: int, max_scans: int, status: PlanStatus
+    ) -> None:
+        looped = _slow_lamp(preset).how(Lamp, max_scans=max_scans)
+        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
+        stepped = _slow_lamp(preset).how(Lamp, max_scans=max_scans)
+        assert looped.status is status
+        assert (stepped.status, stepped.reason, stepped.total_scans) == (
+            looped.status,
+            looped.reason,
+            looped.total_scans,
+        )
 
 
 class _Stateful:

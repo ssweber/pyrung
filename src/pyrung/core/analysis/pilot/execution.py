@@ -189,6 +189,9 @@ class ExecutionSpan:
 
     owner: EpochQuery = field(repr=False)
     kernel_scan_ids: tuple[int, ...]
+    # Those of them the ledger prices as loop scans.  They are the scans of a coast between its
+    # first ones and its landing that ran interpreted.
+    loop_priced: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
         scans = tuple(self.kernel_scan_ids)
@@ -227,6 +230,7 @@ def capture_execution_spans(
         raise ValueError("execution scan stream must be strictly increasing")
 
     lineage = fork._causal_lineage
+    priced = getattr(fork, "_loop_priced_scans", frozenset())
     spans: list[ExecutionSpan] = []
     for epoch, first_scan, last_scan in lineage.epochs_covering(scans[0], scans[-1]):
         owned = tuple(scan for scan in scans if first_scan <= scan <= last_scan)
@@ -235,6 +239,7 @@ def capture_execution_spans(
                 ExecutionSpan(
                     owner=lineage._detached_query_for(epoch),
                     kernel_scan_ids=owned,
+                    loop_priced=frozenset(scan for scan in owned if scan in priced),
                 )
             )
     if tuple(scan for span in spans for scan in span.kernel_scan_ids) != scans:

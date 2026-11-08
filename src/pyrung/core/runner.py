@@ -1743,6 +1743,8 @@ class PLC:
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # What coasts keep for later coasts: a search's, shared with its forks.
         self._coast_memo: CoastMemo | None = None
+        # The interpreted scans of a coast that how()'s ledger prices as loop scans.
+        self._loop_priced_scans: set[int] = set()
         self._search_refuses_restart = False
         self._last_replay_slab_stats: dict[str, int] = {}
         # The synthesis-bracketed compilation unit for soft-exec replay (holds +
@@ -2624,9 +2626,12 @@ class PLC:
                 condition avoided independently).  Express a composite prohibition
                 explicitly — ``avoid=And(A, B)`` avoids only the combined state,
                 not A or B alone.
-            max_scans: Work budget for the search, in interpreted scans.  A scan run in
-                the guarded loop costs a hundredth of one, charged when its seek returns:
-                a seek in the loop is not stopped partway, however long.
+            max_scans: Work budget for the search, in units.  Each scan the search steps
+                is a unit, and so are the first two scans and the last scan of each wait.
+                The other scans of a wait are a hundredth of a unit each, so a long timer
+                fits a small budget.  They are charged when the wait ends, so the budget
+                does not stop a wait partway.  A program with a ``run_function()`` that
+                may not be called again pays a unit for every scan.
             wall_clock_s: Seconds of real time before the search stops and says so, or
                 ``None`` for no limit.  A search this ends may have reached on a faster
                 machine.

@@ -397,6 +397,7 @@ class CoastSession:
                 baseline.setdefault(t, plc.state.tags.get(t))
 
         kernel_scans = 0
+        unit_scans = 0
         stretches = 0
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
@@ -409,7 +410,7 @@ class CoastSession:
         judge_before_run = False
         per_unit = self.loop_scans_per_unit()
         while True:
-            elapsed = work_charged(plc.state.scan_id - start_scan, kernel_scans, per_unit)
+            elapsed = work_charged(plc.state.scan_id - start_scan, unit_scans, per_unit)
             remaining = budget - elapsed
             if remaining <= 0:
                 break
@@ -456,13 +457,14 @@ class CoastSession:
                     loop_scans_per_unit=per_unit,
                 )
                 kernel_scans += stats.get("kernel_scans", 0)
+                unit_scans += stats.get("unit_scans", 0)
                 stretches += stats.get("stretches", 0)
                 self._last_coast_stats = stats
 
                 state = plc.state
                 now_fired = [trigger for trigger in armed if trigger.predicate(state)]
                 if not now_fired:
-                    elapsed = work_charged(state.scan_id - start_scan, kernel_scans, per_unit)
+                    elapsed = work_charged(state.scan_id - start_scan, unit_scans, per_unit)
                     if stats.get("stopped"):
                         stop_reason = "stopped"
                     elif stats.get("out_of_work"):
@@ -517,6 +519,7 @@ class CoastSession:
             # then judge that scan directly on the next pass.
             self.step_kernel()
             kernel_scans += 1
+            unit_scans += 1
             judge_before_run = True
 
         # A timeout can break out after a step the loop never judged, and an

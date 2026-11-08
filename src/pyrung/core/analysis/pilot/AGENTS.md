@@ -245,12 +245,17 @@ physical occurrences.
 
 Invocation search work and productive simulated dwell are separate quantities.
 `SearchBudget` is shared by disposable experiments and lives outside `_World`:
-discarding an attempt or restoring a checkpoint never refunds work. Receipted
-interpreted scans are charged once by epoch ownership, a work unit each, and loop
-scans one unit per `STRETCH_SCANS_PER_UNIT`. Loop scans are charged when their seek
-returns and never stop it (charging them by the scan would turn right answers into
-declines); a seek's interpreted scans stop at what the ledger has left. A seek's own budget
-counts scans, except a live wait under the plan's holds with a ledger that can pay for it
+discarding an attempt or restoring a checkpoint never refunds work. Receipted scans are
+charged once by epoch ownership. A scan's price depends on its place in the search and never
+on which engine ran it (`coast_run.UNIT_SCANS_AT_START`), so a change to the loop cannot move
+an answer through the ledger. A stepped scan is a unit. So are a coast's first two scans
+and its landing. Its other scans are one unit per `STRETCH_SCANS_PER_UNIT`, interpreted or
+not, and the interpreted ones are named on the runner (`_loop_priced_scans`) for
+`ExecutionSpan.loop_priced`. A coast over a program with a call no loop may make
+(`calls_that_depend_on_more_than_their_inputs`) pays a unit a scan. The scans at the loop's
+price are charged when their seek returns and never stop it (charging them by the scan
+would turn right answers into declines). A seek's unit scans stop at what the ledger has
+left. A seek's own budget counts scans, except a live wait under the plan's holds with a ledger that can pay for it
 (`CoastSession.loop_scans_per_unit`), which counts them as the ledger does: its timers' length
 is not what should end it, and the wall clock and the memory cap bound it. Research requests consume at least one
 work unit and retain their local caps. The allowance is not a wall-clock deadline;

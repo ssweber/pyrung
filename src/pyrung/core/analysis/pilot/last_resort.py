@@ -180,7 +180,7 @@ def try_moves(
     # how() has its answer here, so a check that raises on a scan of a try costs that try.
     try:
         fork = start()
-        # A wait in the guarded loop is charged a hundredth of a scan, as the search's own are.
+        # A wait's scans are charged a hundredth of a unit each, as the search's own are.
         wait = min(_WAIT_SCANS, max_scans * 100)
         bits = {name: value for name, value in idle_tags.items() if isinstance(value, bool)}
         # Asked where a bit first moves, or a count that runs on would have it wait out the whole

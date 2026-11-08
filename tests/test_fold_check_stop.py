@@ -1848,7 +1848,8 @@ class TestACoastStoppedByTheLedger:
         plc = _timed()
         memo = coast_run.memo_of(plc)
         memo.work_left = lambda: 5
-        monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a: None)  # no loop, so it counts
+        # A program no loop may run pays a unit a scan, so the ledger stops it.
+        monkeypatch.setattr(coast_run, "_calls_what_no_loop_may", lambda *_a: True)
         stats: dict[str, int] = {}
         coast_run.coast_until(plc, lambda _s: False, budget=100, stats=stats)
         assert stats["out_of_work"] == 1
@@ -1884,17 +1885,17 @@ class TestACoastStoppedByTheLedger:
             self._stops_too_long_to_step(monkeypatch, lambda state: state.scan_id == 9)
 
     def test_a_stop_is_held_to_the_ledger(self) -> None:
-        fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 5, "out_of_work": 1})
+        fold_check._hold_to_the_ledger("coast", 5, {"unit_scans": 5, "out_of_work": 1})
         with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stopped for its ledger"):
-            fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 4, "out_of_work": 1})
+            fold_check._hold_to_the_ledger("coast", 5, {"unit_scans": 4, "out_of_work": 1})
         with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stopped for its ledger"):
-            fold_check._hold_to_the_ledger("coast", None, {"kernel_scans": 4, "out_of_work": 1})
+            fold_check._hold_to_the_ledger("coast", None, {"unit_scans": 4, "out_of_work": 1})
 
     def test_a_coast_past_its_ledger_is_caught(self) -> None:
-        fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 6})  # a stretch's landing
-        fold_check._hold_to_the_ledger("coast", None, {"kernel_scans": 700})  # no search
+        fold_check._hold_to_the_ledger("coast", 5, {"unit_scans": 6})  # its landing
+        fold_check._hold_to_the_ledger("coast", None, {"unit_scans": 700})  # no search
         with fold_check.deliberate(), pytest.raises(FoldMismatch, match="with 5 left"):
-            fold_check._hold_to_the_ledger("coast", 5, {"kernel_scans": 7})
+            fold_check._hold_to_the_ledger("coast", 5, {"unit_scans": 7})
 
     def test_a_raised_coast_says_nothing_about_it(self) -> None:
         fold_check._hold_to_the_ledger("coast", 5, {})

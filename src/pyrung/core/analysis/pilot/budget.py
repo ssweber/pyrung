@@ -6,10 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-# The ledger, in interpreted scans.  A loop scan costs about a hundredth of one, so what a search
-# can spend does not depend on how much of it ran in the loop.  A trace and a kernel compile are
-# not charged: a search has few of them, a small max_scans cannot pay for even one, and nothing
-# measured them against an answer.  The wall clock is what bounds that time.
+# The ledger, in units.  A scan the search steps is a unit, and so are a coast's first scans and
+# its landing.  The scans a coast waits through are a hundredth of a unit each, whether the loop
+# ran them or not, so a change to the loop cannot change what a search may spend
+# (``coast_run.UNIT_SCANS_AT_START``).  A trace and a kernel compile are not charged.  A search
+# has few of them, and a small max_scans cannot pay for even one.  Nothing measured them against
+# an answer.  The wall clock is what bounds that time.
 STRETCH_SCANS_PER_UNIT = 100
 
 # how()'s backstop on a real clock, in seconds.  The ledger is the bound on scans; most of a
@@ -120,20 +122,25 @@ class SearchBudget:
     def charge_execution(self, receipt: Any, *, dwell_scans: int = 0) -> None:
         """Charge each epoch-owned scan once across nested consumers.
 
-        An interpreted scan is a unit, and the scans between two of them ran in the loop.
+        An interpreted scan is a unit unless its coast priced it as a loop scan.  The scans
+        between two interpreted scans ran in the loop.
         """
         scans = {
             (span.epoch.reference, scan) for span in receipt.spans for scan in span.kernel_scan_ids
         }
+        waited = {
+            (span.epoch.reference, scan) for span in receipt.spans for scan in span.loop_priced
+        }
         fresh = scans - self._charged_scans
-        units = self._stretch_charge(receipt)
+        units = self._stretch_charge(receipt, len(fresh & waited))
         if fresh:
             self._charged_scans.update(fresh)
-            self.charge(len(fresh) + units, dwell_scans=dwell_scans)
+            self.charge(len(fresh - waited) + units, dwell_scans=dwell_scans)
         else:
             self.spent += units
 
-    def _stretch_charge(self, receipt: Any) -> int:
+    def _stretch_charge(self, receipt: Any, waited: int) -> int:
+        self._stretch_scans += waited
         for span in receipt.spans:
             ids = span.kernel_scan_ids
             for before, after in zip(ids, ids[1:], strict=False):

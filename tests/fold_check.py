@@ -1394,19 +1394,19 @@ def _hold_to_the_scans_asked(
 
 
 def _budget_in_scans(
-    kind: str, start: int, end: int, budget: int | None, loop_scans: int, per_unit: int
+    kind: str, start: int, end: int, budget: int | None, unit_scans: int, per_unit: int
 ) -> int | None:
-    """*budget* as scans, for a run paying a unit per *per_unit* of its loop scans.
+    """*budget* as scans, for a run paying a unit per *per_unit* of the scans it waits through.
 
-    What it charged has to fit *budget*, by the coast's own ``work_charged`` on the loop scans
-    counted as they ran, and all of it spent is a run that stopped on its budget.  Whatever
-    is left would have paid for that many more loop scans, so stopping there is a short
-    landing, judged as any other.
+    What it charged has to fit *budget*, by the coast's own ``work_charged`` on the scans it
+    said were a unit each, and all of it spent is a run that stopped on its budget.  Whatever
+    is left would have paid for that many more scans, so stopping there is a short landing,
+    judged as any other.
     """
     if budget is None or per_unit == 1:
         return budget
     n = end - start
-    charged = work_charged(n, n - loop_scans, per_unit)
+    charged = work_charged(n, unit_scans, per_unit)
     if charged > budget:
         raise _mismatch(
             f"fold-check ({kind}): asked for {budget} units at {per_unit} loop scans a unit "
@@ -1444,24 +1444,22 @@ def _judge_a_ledger_stop_at_its_landing(kind: str, plc: Any, twin: Any, ask: Any
 def _hold_to_the_ledger(kind: str, left: int | None, said: dict[str, int]) -> None:
     """A coast's stop for its ledger against what the ledger had left as the coast began.
 
-    The ledger is the search's own, so this can't say *left* is right, and a loop scan is
-    charged after its seek, so it says nothing about those.  Interpreted scans it can count.
-    A raised coast says none of this.
+    The ledger is the search's own, so this can't say *left* is right, and a scan priced as a
+    loop scan is charged after its seek, so it says nothing about those.  The scans that are a
+    unit each it can count.  A raised coast says none of this.
     """
-    if "kernel_scans" not in said:
+    if "unit_scans" not in said:
         return
-    interpreted = said["kernel_scans"]
+    units = said["unit_scans"]
     if "out_of_work" in said:
-        if left is None or interpreted < left:
+        if left is None or units < left:
             raise _mismatch(
-                f"fold-check ({kind}): stopped for its ledger after {interpreted} interpreted "
-                f"scans with {left} left"
+                f"fold-check ({kind}): stopped for its ledger after {units} unit scans "
+                f"with {left} left"
             )
-    # A landing a stretch ran is noted too, past the last scan the ledger could stop.
-    elif left is not None and interpreted > left + 1:
-        raise _mismatch(
-            f"fold-check ({kind}): ran {interpreted} interpreted scans with {left} left"
-        )
+    # The landing is a unit too, past the last scan the ledger could stop.
+    elif left is not None and units > left + 1:
+        raise _mismatch(f"fold-check ({kind}): ran {units} unit scans with {left} left")
 
 
 def _checked(
@@ -1475,11 +1473,13 @@ def _checked(
     budget: int | None = None,
     out_of_work: Callable[[], bool] | None = None,
     loop_scans_per_unit: int = 1,
+    unit_scans: Callable[[], int] | None = None,
     executed_scans: Collection[int] | None = None,
 ) -> Any:
     """Run *call* and check it against a stepped twin; *budget* is the scans asked of it.
 
-    *loop_scans_per_unit* is what a unit of *budget* buys of them in the loop.
+    *loop_scans_per_unit* is what a unit of *budget* buys of the scans a coast waits through,
+    and *unit_scans* says, after *call*, how many of its scans were a unit each.
 
     *executed_scans* are the scans a coast ran interpreted, filled by *call*: an opaque
     ``avoid=`` is held to its answer on those, and without them on every scan.
@@ -1501,12 +1501,13 @@ def _checked(
             block.landed = plc._state.scan_id
         end = plc._state.scan_id
         n = end - start
+        units = n - (scan_trace.TOTALS["loop scans"] - loop_scans_before)
         budget = _budget_in_scans(
             kind,
             start,
             end,
             budget,
-            scan_trace.TOTALS["loop scans"] - loop_scans_before,
+            units if unit_scans is None else unit_scans(),
             loop_scans_per_unit,
         )
         _hold_to_the_scans_asked(
@@ -1556,7 +1557,8 @@ def _checked(
     end = plc._state.scan_id
     n = end - start
     ledger_stop = out_of_work is not None and out_of_work()
-    budget = _budget_in_scans(kind, start, end, budget, loop_scans, loop_scans_per_unit)
+    units = n - loop_scans if unit_scans is None else unit_scans()
+    budget = _budget_in_scans(kind, start, end, budget, units, loop_scans_per_unit)
     if ledger_stop:
         budget = n
     # A raise is a run stopped early, by whatever raised: that is judged below.
@@ -1756,7 +1758,7 @@ def install() -> None:
     ) -> Any:
         said = {} if stats is None else stats
         said.pop("out_of_work", None)
-        said.pop("kernel_scans", None)
+        said.pop("unit_scans", None)
         memo = plc._coast_memo
         left = None if memo is None or memo.work_left is None else max(1, memo.work_left())
         executed: set[int] = set()
@@ -1777,6 +1779,7 @@ def install() -> None:
             budget=budget,
             out_of_work=lambda: "out_of_work" in said,
             loop_scans_per_unit=kwargs.get("loop_scans_per_unit", 1),
+            unit_scans=lambda: said.get("unit_scans", 0),
             executed_scans=executed,
         )
         _hold_to_the_ledger("coast", left, said)
