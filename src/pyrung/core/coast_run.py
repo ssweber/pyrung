@@ -528,6 +528,10 @@ def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
     # only for a run long enough to use.
     keys = [(id(segment.path), segment.count) for segment in segments]
     least = WARM_CYCLES + 2
+    # Where the keys stop repeating every so many segments, found from some earlier first.
+    # Keys that repeat from that first repeat from any later one too, up to the same end.
+    # Without this, a long periodic stretch is walked again from each first.
+    known: dict[int, tuple[int, int]] = {}
     first = 0
     while first + least <= count:
         cover, length = 0, 0
@@ -539,7 +543,11 @@ def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
             except ValueError:
                 break
             candidate = at - first
-            reach = (_periodic_end(keys, first, candidate) - first) // candidate * candidate
+            since, periodic = known.get(candidate, (count, 0))
+            if not since <= first < periodic - candidate:
+                periodic = _periodic_end(keys, first, candidate)
+                known[candidate] = (first, periodic)
+            reach = (periodic - first) // candidate * candidate
             if reach > cover:
                 cover, length = reach, candidate
         if not length:

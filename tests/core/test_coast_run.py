@@ -1018,3 +1018,76 @@ def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(
             assert str(plc.effect(tag, scan, max_scans=50)) == str(
                 stepped.effect(tag, scan, max_scans=50)
             ), (tag, scan)
+
+
+def _cycles_in_walked_from_each_first(segments: list[Any]) -> list[tuple[int, int, int]]:
+    """``_cycles_in`` as it was, walking the keys again from each first segment."""
+    found: list[tuple[int, int, int]] = []
+    count = len(segments)
+    keys = [(id(segment.path), segment.count) for segment in segments]
+    least = coast_run.WARM_CYCLES + 2
+    first = 0
+    while first + least <= count:
+        cover, length = 0, 0
+        top = first + min(coast_run.MAX_CYCLE_SEGMENTS, (count - first) // least)
+        for at in range(first + 1, top + 1):
+            if keys[at] != keys[first]:
+                continue
+            candidate = at - first
+            end = coast_run._periodic_end(keys, first, candidate)
+            reach = (end - first) // candidate * candidate
+            if reach > cover:
+                cover, length = reach, candidate
+        if not length:
+            first += 1
+            continue
+        if coast_run._worth_a_repeat(segments, first, length, cover // length):
+            end = coast_run._stepping_end(segments, first, length, first + cover)
+            cycles = (end - first) // length
+            if coast_run._worth_a_repeat(segments, first, length, cycles):
+                found.append((first, length, cycles))
+                first += cycles * length
+                continue
+            cover = end - first
+        first = max(first + 1, first + cover - length)
+    return found
+
+
+def _random_segments(rng: random.Random, count: int) -> list[Any]:
+    paths = [object() for _ in range(3)]
+    pattern = [rng.choice(paths) for _ in range(rng.randint(1, 4))]
+    every = rng.choice([9, 40, 1000])  # segments between changes of a text value
+    segments = []
+    for position in range(count):
+        if rng.random() < 0.01:
+            pattern = [rng.choice(paths) for _ in range(rng.randint(1, 4))]
+        path = pattern[position % len(pattern)]
+        ends = {"step": position // len(pattern), "text": f"t{position // every}"}
+        segments.append(coast_run._Segment(path, position * 60, 60, ends))
+    return segments
+
+
+def test_the_cycles_found_do_not_depend_on_walking_the_keys_again() -> None:
+    for seed in range(30):
+        segments = _random_segments(random.Random(seed), 600)
+        assert coast_run._cycles_in(segments) == _cycles_in_walked_from_each_first(segments), seed
+
+
+def test_a_long_repeating_stretch_is_walked_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    paths = (object(), object())
+    # The paths take turns, and a text value that changes every seven cycles ends each run.
+    segments = [
+        coast_run._Segment(paths[position % 2], position * 40, 40, {"x": f"v{position // 14}"})
+        for position in range(4000)
+    ]
+    walks: list[int] = []
+    periodic_end = coast_run._periodic_end
+
+    def counted(keys: Any, first: int, length: int) -> int:
+        walks.append(first)
+        return periodic_end(keys, first, length)
+
+    monkeypatch.setattr(coast_run, "_periodic_end", counted)
+    runs = coast_run._cycles_in(segments)
+    assert len(runs) == 285
+    assert len(walks) <= coast_run.MAX_CYCLE_SEGMENTS
