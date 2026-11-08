@@ -646,6 +646,16 @@ def test_a_coast_too_short_to_pay_neither_compiles_nor_traces(monkeypatch) -> No
     assert stats["stretched_scans"] > 0
 
 
+def test_a_reboot_forgets_the_scans_priced_at_the_loops_price(monkeypatch) -> None:
+    # A reboot numbers scans from 0 again, so an old priced id would price a new scan.
+    monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a, **_k: None)
+    plc = _runner(_ramp, 0.01)
+    coast_until(plc, lambda _s: False, budget=50, predicate_reads=frozenset())
+    assert plc._loop_priced_scans
+    plc.reboot()
+    assert not plc._loop_priced_scans
+
+
 def test_a_monitor_fires_on_the_scan_stepping_fires_it() -> None:
     plc = _runner(_ramp, 0.01)
     twin = plc.fork()

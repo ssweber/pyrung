@@ -4395,6 +4395,8 @@ class PLC:
         self._initial_scan_id = self._state.scan_id
         self._initial_state = self._state
         self._causal_lineage = CausalLineage(self)
+        # Scan ids start again, so an old priced id would price a new scan.
+        self._loop_priced_scans.clear()
         self._history._reset_labels()
         self._playhead = self._state.scan_id
 
