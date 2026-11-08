@@ -11,8 +11,9 @@ from typing import Any
 
 import pytest
 
+from pyrung.core import rung_firings
 from pyrung.core.analysis.pilot.requirement_repair import _program_guard_transition_candidates
-from pyrung.core.rung_firings import _UNKNOWN_VALUE, Repeat, RungFiringTimelines
+from pyrung.core.rung_firings import _UNKNOWN_VALUE, Repeat, RungFiringTimelines, _append_value
 from pyrung.core.runner import RungId
 
 RUNGS = (0, 1, 2)
@@ -143,15 +144,23 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
     for key in theirs:
         assert ours[key] == theirs[key], key
     assert repeated._unknown_keys == stepped._unknown_keys
+    assert repeated._entries == stepped._entries
+
+
+@pytest.fixture
+def small_limit(monkeypatch: pytest.MonkeyPatch) -> int:
+    """A column turns Unknown after a hundred entries, so a short run reaches the limit."""
+    monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
+    return 100
 
 
 class _Uncapped(RungFiringTimelines):
-    """Stepping that keeps every value, where stepping stops at a hundred to save memory."""
+    """Stepping that keeps every value, where stepping stops at the limit to save memory."""
 
     __slots__ = ()
 
-    def _note_new_value(self, key: Any, timeline: Any, value: Any) -> None:
-        return None
+    def _push(self, key: Any, timeline: list[Any], scan_id: int, value: Any) -> None:
+        _append_value(timeline, scan_id, value)
 
 
 def _loose(value: Any) -> Any:
@@ -366,7 +375,7 @@ def _kept(cycle: Callable[[int], list[Scan]], cycles: int) -> RungFiringTimeline
     return truth
 
 
-def test_a_count_with_steps_goes_unknown_on_the_scan_stepping_does() -> None:
+def test_a_count_with_steps_goes_unknown_on_the_scan_stepping_does(small_limit: int) -> None:
     stepped, repeated, planned, last = _recorded_both_ways([], _counting_up, 300, [])
     assert planned
     assert (0, "a") in stepped._unknown_keys
@@ -481,7 +490,7 @@ def _stepped(
     ],
 )
 def test_the_loop_leaves_a_count_as_stepping_does(
-    cycle: Callable[[int], list[Scan]], prefix: list[Scan]
+    cycle: Callable[[int], list[Scan]], prefix: list[Scan], small_limit: int
 ) -> None:
     ours, stepped_cycles, stopped = _looped(cycle, 400, prefix)
     stepped, last = _stepped(cycle, 400, prefix)
@@ -491,7 +500,7 @@ def test_the_loop_leaves_a_count_as_stepping_does(
     _assert_same(stepped, ours, last)
 
 
-def test_a_long_count_leaves_how_a_hundred_candidates_or_so() -> None:
+def test_a_long_count_leaves_how_a_hundred_candidates_or_so(small_limit: int) -> None:
     started = time.perf_counter()
     ours, stepped_cycles, stopped = _looped(_held_count, 1_000_000, [])
     elapsed = time.perf_counter() - started
@@ -520,7 +529,7 @@ def test_appends_after_a_cut_inside_a_repeat_read_back_as_scan_by_scan() -> None
     _assert_same(early, later, 33)
 
 
-def test_a_plan_left_unapplied_leaves_the_count_as_stepping_does() -> None:
+def test_a_plan_left_unapplied_leaves_the_count_as_stepping_does(small_limit: int) -> None:
     stepped: RungFiringTimelines = RungFiringTimelines()
     planned: RungFiringTimelines = RungFiringTimelines()
     scan_id = 1
@@ -564,14 +573,14 @@ def _ramp_then_rest(index: int) -> list[Scan]:
     ]
 
 
-def test_a_count_the_column_folds_away_keeps_the_values_written() -> None:
+def test_a_count_the_column_folds_away_goes_unknown_as_stepping_does(small_limit: int) -> None:
     stepped, repeated, planned, last = _recorded_both_ways([], _ramp_then_rest, 120, [])
     assert planned
     assert (0, "a") in stepped._unknown_keys
-    _assert_true_to(stepped, _kept(_ramp_then_rest, 120), repeated, last)
+    _assert_same(stepped, repeated, last)
 
 
-def test_a_settle_keeps_counting_as_stepping_counts() -> None:
+def test_a_settle_keeps_counting_as_stepping_counts(small_limit: int) -> None:
     # The count folds into a range of whole numbers, and stepping still counts its first values.
     scans = [w for index in range(120) for w in _ramp_rows(index)]
     stepped: RungFiringTimelines = RungFiringTimelines()
@@ -617,7 +626,7 @@ def _typed_scan(rng: random.Random, scan_id: int, kind: str) -> Scan:
 
 
 @pytest.mark.parametrize("seed", range(200))
-def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
+def test_a_settle_leaves_the_records_stepping_leaves(seed: int, small_limit: int) -> None:
     rng = random.Random(seed)
     kind = rng.choice(("pool", "many", "ramp"))
     count = rng.randrange(10, 500)
@@ -639,6 +648,7 @@ def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
             _record(settled, scan_id, scan)
     ours.replace_range(settled, first, last)
     _assert_true_to(stepped, truth, ours, count)
+    _assert_same(stepped, ours, count)
 
 
 @pytest.mark.parametrize(
@@ -653,7 +663,7 @@ def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
 )
 @pytest.mark.parametrize("writes", [lambda i: i, lambda i: (i * 7) % 130, lambda i: i // 2])
 def test_a_settle_counts_on_from_the_count_before_the_gap(
-    gap: tuple[int, int], cycles: int, writes: Callable[[int], int]
+    gap: tuple[int, int], cycles: int, writes: Callable[[int], int], small_limit: int
 ) -> None:
     # Each value holds three scans.  The replay starts ten cycles before the gap with
     # records of its own, so it counts from zero.
@@ -675,19 +685,14 @@ def test_a_settle_counts_on_from_the_count_before_the_gap(
     ours.replace_range(replay, first, last)
     for scan_id in range(first, last + 1):
         assert _loose(ours.value_at(0, "a", scan_id)) == _loose(stepped.value_at(0, "a", scan_id))
-    # The scans after the gap keep the values written.  A column stepping sends unknown
-    # sooner is partly unknown.
     _assert_true_to(stepped, truth, ours, 3 * cycles)
     assert ours._unknown_keys == stepped._unknown_keys
-    sooner = any(
-        stepped.value_at(0, "a", scan_id) is _UNKNOWN_VALUE
-        and ours.value_at(0, "a", scan_id) is not _UNKNOWN_VALUE
-        for scan_id in range(last + 1, 3 * cycles + 1)
-    )
-    assert ((0, "a") in ours._partly_unknown) == sooner
-    if not stepped._unknown_keys:
-        # The count is a set kept as a list.
-        assert sorted(ours._distinct_values[0, "a"]) == sorted(stepped._distinct_values[0, "a"])
+    assert ours._entries == stepped._entries
+    assert not ours._partly_unknown
+    for scan_id in range(3 * cycles + 2):
+        assert ours.value_at(0, "a", scan_id) is stepped.value_at(0, "a", scan_id) or _loose(
+            ours.value_at(0, "a", scan_id)
+        ) == _loose(stepped.value_at(0, "a", scan_id))
 
 
 def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
@@ -695,20 +700,39 @@ def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
     timelines: RungFiringTimelines = RungFiringTimelines()
     for scan_id in range(1, 31):
         timelines.append(0, scan_id, {"a": 5})
-    timelines._unknown_keys.add((0, "a"))
+    timelines._unknown_keys[0, "a"] = 30
     assert timelines.plan_repeat(30, 2) is None
 
 
 def _cycled(first_scan: int, cycles: int) -> tuple[RungFiringTimelines, int]:
-    """Three cycles of period 3 appended, and *cycles* more as one repeat.  Returns the next scan."""
+    """Three cycles of period 3 appended, and *cycles* more as the loop records them.
+
+    Returns the next scan.  Each cycle adds three entries, so the column turns Unknown after
+    about 330 cycles, and the cycles after that go in as one repeat.
+    """
     record: RungFiringTimelines = RungFiringTimelines()
-    for scan_id in range(first_scan, first_scan + 9):
-        writes = ({"a": "p"}, {"a": "q"}, {})[(scan_id - first_scan) % 3]
-        record.append(0, scan_id, writes)
-    plan = record.plan_repeat(first_scan + 8, 3)
-    assert plan is not None
-    plan.apply(cycles)
-    return record, first_scan + 9 + 3 * cycles
+    scan_id = first_scan
+
+    def step() -> None:
+        nonlocal scan_id
+        for _ in range(3):
+            record.append(0, scan_id, ({"a": "p"}, {"a": "q"}, {})[(scan_id - first_scan) % 3])
+            scan_id += 1
+
+    for _ in range(3):
+        step()
+    done = 0
+    while done < cycles:
+        plan = record.plan_repeat(scan_id - 1, 3)
+        more = 0 if plan is None else min(plan.limit, cycles - done)
+        if more:
+            plan.apply(more)
+            scan_id += 3 * more
+            done += more
+        else:
+            step()
+            done += 1
+    return record, scan_id
 
 
 def _settle_small(record: RungFiringTimelines, first: int, last: int) -> None:
@@ -728,56 +752,67 @@ def _settle_small(record: RungFiringTimelines, first: int, last: int) -> None:
 def test_a_settle_before_a_long_repeat_keeps_it_one_entry() -> None:
     record, _end = _cycled(14, 300_000)
     _settle_small(record, 1, 10)
-    assert record.run_count() < 40
+    assert _holds_a_repeat(record)
+    assert record.run_count() < 50
 
 
 def test_a_settle_after_a_long_repeat_keeps_it_one_entry() -> None:
     record, end = _cycled(1, 300_000)
     _settle_small(record, end, end + 9)
     assert record.run_count() < 40
-    assert record.value_at(0, "a", end + 9) == (end + 9) * 7
+    # Stepping turned the column Unknown long before, so the settle keeps it Unknown.
+    assert record.value_at(0, "a", end + 9) is _UNKNOWN_VALUE
 
 
 _SIX = ({"a": 1}, {}, {"a": 2}, {"a": 3}, {"a": 4}, {"a": 5})
 
 
 def _many_then_six(scan_id: int) -> dict[str, Any]:
-    """97 values, then a cycle of six scans."""
-    if scan_id < 98:
-        return {"a": (scan_id * scan_id) % 1009 + 1000}
-    return _SIX[(scan_id - 98) % 6]
+    """1100 values no range takes, then a cycle of six scans."""
+    if scan_id <= 1100:
+        return {"a": -scan_id * scan_id}
+    return _SIX[(scan_id - 1101) % 6]
 
 
-def test_a_settle_that_brings_a_column_to_its_hundredth_value_keeps_a_later_repeat() -> None:
-    # Ours missed scans 40..60, so it counted fewer values and a plan took the cycles.
-    # Stepping went unknown in the first cycle.  The settle leaves the repeat as it was.
+def test_a_settle_that_sends_a_column_unknown_keeps_a_later_repeat() -> None:
+    # Ours missed scans 11..1100, so it held few entries and a plan took the cycles.  Stepping
+    # went unknown on scan 1000.  The settle turns the repeat Unknown and keeps it one entry.
     ours: RungFiringTimelines = RungFiringTimelines()
-    scan_id = 1
-    while scan_id < 98 + 6 * 4:
-        if not 40 <= scan_id <= 60:
-            ours.append(0, scan_id, _many_then_six(scan_id))
-        scan_id += 1
+    for scan_id in [*range(1, 11), *range(1101, 1101 + 6 * 4)]:
+        ours.append(0, scan_id, _many_then_six(scan_id))
+    scan_id = 1101 + 6 * 4
     plan = ours.plan_repeat(scan_id - 1, 6)
     assert plan is not None
-    plan.apply(100_000)
-    scan_id += 6 * 100_000
+    assert plan.limit > 300
+    plan.apply(plan.limit)
+    scan_id += 6 * plan.limit
     for _ in range(3):
         ours.append(0, scan_id, _many_then_six(scan_id))
         scan_id += 1
     before = ours.run_count()
     settled: RungFiringTimelines = RungFiringTimelines()
-    for settled_scan in range(1, 61):
+    for settled_scan in range(1, 1101):
         settled.append(0, settled_scan, _many_then_six(settled_scan))
     tracemalloc.start()
     try:
-        ours.replace_range(settled, 40, 60)
+        ours.replace_range(settled, 11, 1100)
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
     assert peak < 4_000_000
-    assert ours.run_count() <= before + 25
-    assert ours.value_at(0, "a", scan_id - 1) == _many_then_six(scan_id - 1)["a"]
-    assert ours.value_at(0, "a", 50) == _many_then_six(50)["a"]
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    for stepped_scan in range(1, scan_id):
+        stepped.append(0, stepped_scan, _many_then_six(stepped_scan))
+    # The settle brings in the thousand entries stepping holds, and the repeat stays one.
+    assert ours.run_count() <= before + 1010 < stepped.run_count()
+    assert ours._unknown_keys == stepped._unknown_keys == {(0, "a"): 1000}
+    for read in range(1, scan_id + 1):
+        assert _loose(ours.value_at(0, "a", read)) == _loose(stepped.value_at(0, "a", read)), read
+    one = frozenset((0,))
+    for before_scan in (999, 1001, 1102, scan_id - 4, scan_id + 1):
+        assert ours.tag_transition_candidate_scans_before(
+            one, "a", before_scan
+        ) == stepped.tag_transition_candidate_scans_before(one, "a", before_scan)
 
 
 def test_a_column_the_loop_could_not_speak_for_keeps_its_later_values() -> None:
@@ -798,7 +833,7 @@ def _squares(record: RungFiringTimelines, first: int, last: int) -> None:
         record.append(0, scan_id, {"a": (scan_id * scan_id) % 1009})
 
 
-def test_scans_after_a_gap_not_yet_settled_keep_the_value_written() -> None:
+def test_scans_after_a_gap_not_yet_settled_keep_the_value_written(small_limit: int) -> None:
     # Scans after a gap not yet settled count values from the gap's end.  So they may keep
     # values past the scan where stepping stops keeping them, and each is the value written.
     stepped: RungFiringTimelines = RungFiringTimelines()
@@ -820,7 +855,7 @@ def _squares_then_a_ramp(record: RungFiringTimelines, scans: Any) -> None:
         record.append(0, scan_id, {"a": _square_or_ramp(scan_id)})
 
 
-def test_a_gap_settled_back_half_first_knows_only_values_written() -> None:
+def test_a_gap_settled_back_half_first_knows_only_values_written(small_limit: int) -> None:
     # Settling the back half first counts values from the gap's end, so the column may go
     # unknown early.  Whatever it still knows is the value written.
     live: RungFiringTimelines = RungFiringTimelines()
