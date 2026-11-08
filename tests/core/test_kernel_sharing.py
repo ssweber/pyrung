@@ -8,12 +8,14 @@ from typing import Any
 import pytest
 
 from pyrung import PLC, Block, Bool, Int, Program, Rung, TagType, Timer, blockcopy, copy, on_delay
-from pyrung.circuitpy.codegen import render_kernel
+from pyrung.circuitpy.codegen import compile_kernel, render_kernel
 from pyrung.circuitpy.codegen.context import describe_static_range
 from pyrung.core import jit_stats, scan_trace
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.coast_run import coast_until
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.memory_block import BlockRange
+from pyrung.core.state import SystemState
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
 
@@ -94,7 +96,7 @@ def test_the_code_kept_is_bounded() -> None:
 
 
 def _names_item_by_item(program: Program) -> frozenset[str]:
-    """The materialized-tag walk as it was, queueing every item it meets."""
+    """The materialized-tag walk as it was, queueing every item it meets up to a program."""
     found: set[str] = set()
     visited: set[int] = set()
     queue: list[Any] = [*program.rungs]
@@ -108,7 +110,7 @@ def _names_item_by_item(program: Program) -> frozenset[str]:
             if current.name not in SYSTEM_TAGS_BY_NAME:
                 found.add(current.name)
             continue
-        if isinstance(current, (str, bytes, bytearray, int, float, bool, Block)):
+        if isinstance(current, (str, bytes, bytearray, int, float, bool, Block, Program)):
             continue
         if type(current) is BlockRange:
             continue
@@ -134,16 +136,70 @@ def _names_item_by_item(program: Program) -> frozenset[str]:
     return frozenset(found)
 
 
-def test_the_materialized_tags_are_those_a_walk_of_every_item_finds() -> None:
+def _copy_program() -> Program:
+    """A block copy, and a rung reading one cell of the bank it fills."""
     with Program(strict=False) as program:
         with Rung(Go):
             blockcopy(Bank.select(1, 20), Bank.select(21, 40))
         with Rung(Bank[3] > 2):
             copy(5, N)
+    return program
+
+
+def test_the_materialized_tags_are_those_a_walk_of_every_item_finds() -> None:
+    program = _copy_program()
     PLC(program, dt=0.01)
     before = render_kernel._collect_materialized_tag_names(program)
     assert before == _names_item_by_item(program)
-    # A rung reaches the program's analysis caches, which hold sets of plain values.
+    # A rung reaches its program, whose analysis caches hold the bank's tags.  The walk
+    # stops at the program, so they change nothing.
     build_program_graph(program)
-    after = render_kernel._collect_materialized_tag_names(program)
-    assert after == _names_item_by_item(program)
+    assert render_kernel._collect_materialized_tag_names(program) == before
+    assert before == _names_item_by_item(program)
+
+
+def _stepped_both_ways(program: Program, start: SystemState | None) -> tuple[PLC, CompiledPLC]:
+    plc = PLC(program, initial_state=start, dt=0.01)
+    replay = CompiledPLC(
+        program,
+        initial_state=plc.state if start is not None else None,
+        dt=0.01,
+        compiled=compile_kernel(program),
+        exact_anchor=start is not None,
+    )
+    for scan in range(6):
+        go = scan % 3 != 2
+        plc.patch({Go.name: go})
+        replay.patch({Go.name: go})
+        plc.step()
+        replay.step_replay()
+    return plc, replay
+
+
+@pytest.mark.parametrize("graph_first", [False, True], ids=["no_graph", "graph_first"])
+def test_a_compiled_replay_seeds_no_tag_stepping_lacks(graph_first: bool) -> None:
+    program = _copy_program()
+    if graph_first:
+        build_program_graph(program)
+    plc, replay = _stepped_both_ways(program, None)
+    stepped = dict(plc.state.tags)
+    replayed = dict(replay._materialize_replay_state().tags)
+    # The graph asks the bank for each cell, and a runner knows every cell anything asked
+    # for.  The compiled replay seeds only the cells the program names.
+    assert replayed.keys() <= stepped.keys()
+    assert all(stepped[name] == value for name, value in replayed.items())
+    if not graph_first:
+        assert replayed == stepped
+
+
+@pytest.mark.parametrize("graph_first", [False, True], ids=["no_graph", "graph_first"])
+def test_a_compiled_replay_from_a_runner_state_steps_as_the_runner(graph_first: bool) -> None:
+    program = _copy_program()
+    if graph_first:
+        build_program_graph(program)
+    start = PLC(program, dt=0.01).state
+    plc, replay = _stepped_both_ways(program, start)
+    state = replay._materialize_replay_state()
+    assert state.scan_id == plc.state.scan_id
+    assert dict(state.tags) == dict(plc.state.tags)
+    assert dict(state.memory) == dict(plc.state.memory)

@@ -72,7 +72,7 @@ def _kind_of(current: Any) -> int:
         return _SKIP
     if isinstance(current, Tag):
         return _TAG
-    if isinstance(current, (str, bytes, bytearray, int, float, bool, Block)):
+    if isinstance(current, (str, bytes, bytearray, int, float, bool, Block, Program)):
         return _SKIP
     if type(current) is BlockRange:
         return _SKIP
@@ -98,11 +98,12 @@ def _collect_materialized_tag_names(
     whether compilation has already expanded static ranges.  For state seeding,
     only concrete ``Tag`` objects that appear in the program graph should count.
 
-    A rung points back to the program that bound it (``_site_owner``), so the walk also
-    goes through that program's analysis caches.  On a large program they hold tens of
-    thousands of objects and millions of numbers and strings.  So the walk asks what each
-    type is once, and skips a container of plain values without queueing them.  It finds
-    the same names as a walk that queues every item.
+    A rung points back to the program that bound it (``_site_owner``).  The walk stops
+    there, so the names do not depend on which analyses of the program have run.  The
+    rungs and subroutines it starts from are the program's own.
+
+    The walk asks what each type is once, and skips a container of plain values without
+    queueing them.  It finds the same names as a walk that queues every item.
     """
 
     found: set[str] = set()
