@@ -51,7 +51,7 @@ def _assert_same(ours: RungFiringTimelines, stepped: RungFiringTimelines, last: 
         mine, theirs = ours.value_at(0, "a", scan_id), stepped.value_at(0, "a", scan_id)
         assert mine is theirs or (_UNKNOWN_VALUE not in (mine, theirs) and mine == theirs), scan_id
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     for before in (last // 2, CROSSING, CROSSING + 1, CROSSING + 7, last + 1):
         assert ours.tag_transition_candidate_scans_before(
             ONE, "a", before
@@ -116,7 +116,7 @@ def test_a_settle_turns_the_column_unknown_on_steppings_scan(writes, period) -> 
                 ours: RungFiringTimelines = RungFiringTimelines()
                 for scan_id in range(1, first):
                     ours.append(0, scan_id, {"a": writes(scan_id)})
-                replay = ours.carried_to(anchor)
+                replay = RungFiringTimelines(capped=False)
                 for scan_id in range(anchor + 1, last + 1):
                     replay.append(0, scan_id, {"a": writes(scan_id)})
                 ours.replace_range(replay, first, last)
@@ -145,7 +145,7 @@ def test_a_settle_after_a_jump_past_the_crossing_turns_it_unknown_there(writes, 
                 scan_id += cycles * period
         scan_id += 1
     assert KEY not in ours._unknown_keys or ours._unknown_keys[KEY] > CROSSING
-    replay = ours.carried_to(gap[0] - 6)
+    replay = RungFiringTimelines(capped=False)
     for replayed in range(gap[0] - 5, gap[1] + 1):
         replay.append(0, replayed, {"a": writes(replayed)})
     ours.replace_range(replay, *gap)
@@ -246,7 +246,7 @@ def test_the_shapes_the_last_review_found_settle_as_stepping_does(
     ours: RungFiringTimelines = RungFiringTimelines()
     for scan_id in range(1, anchor + 1):
         put(ours, scan_id)
-    replay = ours.carried_to(anchor)
+    replay = RungFiringTimelines(capped=False)
     count = len(writes)
     for scan_id in range(1, count + 1):
         put(stepped, scan_id)
@@ -260,7 +260,7 @@ def test_the_shapes_the_last_review_found_settle_as_stepping_does(
         mine, theirs = ours.value_at(0, "a", scan_id), stepped.value_at(0, "a", scan_id)
         assert mine is theirs or mine == theirs, scan_id
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     for before in range(1, count + 2, 7):
         assert ours.tag_transition_candidate_scans_before(
             ONE, "a", before
@@ -278,7 +278,7 @@ def test_a_trim_from_the_front_keeps_the_count() -> None:
     stepped = _stepped(_held)
     assert trimmed._unknown_keys == stepped._unknown_keys == {KEY: CROSSING}
     cut = stepped.snapshot(up_to=CROSSING - 5)
-    assert cut._unknown_keys == {} and cut._entries == {KEY: _ENTRY_LIMIT - 2}
+    assert cut._unknown_keys == {} and cut._counts == {KEY: _ENTRY_LIMIT - 2}
     later = trimmed.snapshot()
     later.trim_before(LAST - 10)
     assert later._unknown_keys == {KEY: CROSSING}
@@ -334,7 +334,7 @@ def _gap_fuzz(seed: int) -> tuple[RungFiringTimelines, RungFiringTimelines, int]
     rng.shuffle(gaps)
     for first, last in gaps:
         anchor = rng.randrange(0, first)
-        replay = ours.carried_to(anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
             for rung, writes in scans[scan_id - 1].items():
                 replay.append(rung, scan_id, writes)
@@ -361,7 +361,7 @@ def _assert_alike(seed: int) -> None:
                     one, tag, before
                 ) == stepped.tag_transition_candidate_scans_before(one, tag, before)
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
 
 
 @pytest.mark.parametrize("seed", [seed for seed in range(400) if seed not in _EDGE_JOINS])
@@ -516,7 +516,7 @@ def _review_trial(seed: int, mode: str, jumps: str, trims: str) -> tuple[Any, ..
     rng.shuffle(order)
     for first, last in order:
         anchor = rng.randrange(floor, first)
-        replay = ours.carried_to(anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
             _review_put(replay, scan_id, events[scan_id - 1])
         ours.replace_range(replay, first, last)
@@ -544,7 +544,7 @@ def test_a_trimmed_column_settles_as_stepping_left_it(
         mine, theirs = ours.value_at(0, "a", scan_id), stepped.value_at(0, "a", scan_id)
         assert mine is theirs or (_UNKNOWN_VALUE not in (mine, theirs) and mine == theirs), scan_id
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     for before in sorted({count + 1, count // 2, count // 3, count - 5}):
         if before > floor + 1:
             assert ours.tag_transition_candidate_scans_before(
@@ -564,7 +564,7 @@ def test_settles_in_a_row_keep_the_scan_a_column_turned_unknown_on() -> None:
     crossing = ours._unknown_keys[KEY]
     for first, last in gaps:
         anchor = (first - 1) // 100 * 100
-        replay = ours.carried_to(anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
             replay.append(0, scan_id, {"a": scan_id % 2 == 0})
         ours.replace_range(replay, first, last)

@@ -59,10 +59,12 @@ class SearchQuestionRefused(BaseException):
         self.refusal = refusal
 
 
-# The ranges a column holds before it keeps later values as Unknown, to bound its memory.
+# The changes a column holds before it keeps later values as Unknown, to bound its memory.
 _ENTRY_LIMIT = 1_000
 _UNKNOWN_VALUE = object()
 _MISSING_WRITE = object()
+_ABSENT = object()  # the column holds nothing on the scan
+_HIDDEN = object()  # the scan ran with no records, so the record cannot see its value
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,9 +127,11 @@ class Repeat:
 class RungFiringTimelines(Generic[K]):
     """Append-only columnar firing index, generic over rung identity.
 
-    A column stores at most 1,000 entries (``_ENTRY_LIMIT``), to bound its memory.  On the scan
-    that would store one more, the column turns Unknown.  A repeat counts as every range it
-    stands for.  A gap that has not settled can turn it Unknown early.
+    A column turns Unknown on the scan of its 1,000th change (``_ENTRY_LIMIT``), to bound its
+    memory.  A scan changes its column unless its value goes on from the two scans before it,
+    as the same value, a flip back or one more step of a count.  So a column keeps about two
+    ranges a change at most.  A scan's change depends only on the scan and the two before it.
+    So each way of recording scans counts the same, in any order.
     """
 
     __slots__ = (
@@ -136,7 +140,8 @@ class RungFiringTimelines(Generic[K]):
         "_varied_ranges",
         "_tags_by_rung",
         "_writers_by_tag",
-        "_entries",
+        "_limit",
+        "_counts",
         "_dropped",
         "_floors",
         "_unknown_keys",
@@ -147,15 +152,16 @@ class RungFiringTimelines(Generic[K]):
     # calls it last.
     _check: ClassVar[Callable[[RungFiringTimelines[Any]], None] | None] = None
 
-    def __init__(self) -> None:
+    def __init__(self, *, capped: bool = True) -> None:
         self._fired_ranges: dict[K, list[ScanRange]] = {}
         self._value_timelines: dict[tuple[K, str], list[ValueRange]] = {}
         self._varied_ranges: dict[tuple[K, str], list[ScanRange]] = {}
         self._tags_by_rung: dict[K, set[str]] = {}
         self._writers_by_tag: dict[str, set[K]] = {}
-        # The ranges each column holds, with a repeat written out, until it turns Unknown.
-        self._entries: dict[tuple[K, str], int] = {}
-        # The entries trims from the front took out of each column.  Stepping counts them still.
+        self._limit: int | None = _ENTRY_LIMIT if capped else None
+        # The changes each column has had, trimmed scans too, until it turns Unknown.
+        self._counts: dict[tuple[K, str], int] = {}
+        # The entries trims from the front took out of each column.
         self._dropped: dict[tuple[K, str], int] = {}
         # The first scan each trimmed column holds, and the last two ranges the trim took off.
         # A settle of a gap at that scan appends to those two ranges, as stepping did.
@@ -197,19 +203,103 @@ class RungFiringTimelines(Generic[K]):
             RungFiringTimelines._check(self)
 
     def _push(self, key: tuple[K, str], timeline: list[Any], scan_id: int, value: Any) -> None:
-        """Append one scan's value to a column, which turns Unknown at its last entry."""
+        """Append one scan's value to a column, which turns Unknown on its last change."""
         unknown = self._unknown_keys
         if key in unknown:
             _append_value(timeline, scan_id, value if value is _MISSING_WRITE else _UNKNOWN_VALUE)
             return
-        grown = _append_value(timeline, scan_id, value)
-        if grown:
-            entries = self._entries.get(key, 0) + grown
-            if entries >= _ENTRY_LIMIT:
-                unknown[key] = scan_id
-                self._entries.pop(key, None)
-            else:
-                self._entries[key] = entries
+        # A scan that goes on from the two before it only lengthens a range.  So only a new
+        # range can hold a change.
+        if _append_value(timeline, scan_id, value) != 1 or self._limit is None:
+            return
+        before = timeline[-3:-1]
+        one, two = (self._seen(key, before, scan) for scan in (scan_id - 1, scan_id - 2))
+        if _continues(value, one, two):
+            return
+        count = self._counts.get(key, 0) + 1
+        if count >= self._limit:
+            unknown[key] = scan_id
+            self._counts.pop(key, None)
+        else:
+            self._counts[key] = count
+
+    def _hold(self, key: tuple[K, str], count: int) -> None:
+        if count:
+            self._counts[key] = count
+        else:
+            self._counts.pop(key, None)
+
+    def _seen(self, key: tuple[K, str], ranges: Sequence[Any], scan_id: int) -> Any:
+        """The column's value on *scan_id*, from *ranges* or else what the record knows of it."""
+        for range_ in ranges:
+            if range_.start_scan_id <= scan_id <= range_.end_scan_id:
+                return _value_at(range_, scan_id)
+        return self._unseen(key, scan_id)
+
+    def _unseen(self, key: tuple[K, str], scan_id: int) -> Any:
+        """What the record knows of a scan its column's ranges do not hold."""
+        return _ABSENT
+
+    def _change_groups(
+        self, key: tuple[K, str], ranges: Sequence[Any], first: int, last: int | None
+    ) -> Iterator[tuple[tuple[int, ...], int, int]]:
+        """The scans in *first*..*last* that change the column, in order.
+
+        Each group ``(scans, period, times)`` is a change on each of *scans* moved on 0 to
+        *times* - 1 periods.  From the third repetition of a repeat on, each one looks back
+        only at repetitions like it, so one group stands for the rest.
+        """
+        tail: list[tuple[int, Any]] = []  # the last two scans fed, with their values
+        found: list[int] = []
+
+        def look(scan_id: int) -> Any:
+            for held, value in tail:
+                if held == scan_id:
+                    return value
+            range_ = _find_range(ranges, scan_id)
+            return self._unseen(key, scan_id) if range_ is None else _value_at(range_, scan_id)
+
+        def feed(range_: Any, counted: bool = True) -> None:
+            # Only a range's first two scans can change the column.
+            start, end = range_.start_scan_id, range_.end_scan_id
+            for scan_id in range(start, min(start + 2, end + 1)):
+                value = _value_at(range_, scan_id)
+                if (
+                    counted
+                    and first <= scan_id
+                    and (last is None or scan_id <= last)
+                    and not _continues(value, look(scan_id - 1), look(scan_id - 2))
+                ):
+                    found.append(scan_id)
+                tail.append((scan_id, value))
+            for scan_id in range(max(start + 2, end - 1), end + 1):
+                tail.append((scan_id, _value_at(range_, scan_id)))
+            del tail[:-2]
+
+        for position in range(bisect_left(ranges, first, key=_end_of), len(ranges)):
+            element = ranges[position]
+            if last is not None and element.start_scan_id > last:
+                break
+            if type(element) is not Repeat:
+                feed(element)
+                continue
+            lo, hi = _overlapping(element, first, last)
+            index, mark = lo, 0
+            while index <= hi:
+                if index == lo + 2:
+                    mark = len(found)
+                elif index == lo + 3 and hi > index:
+                    period = element.period
+                    yield tuple(found), 0, 1
+                    yield tuple(scan + period for scan in found[mark:]), period, hi - index
+                    found.clear()
+                    for range_ in _repetition(element, hi - 1):
+                        feed(range_, counted=False)
+                    index = hi
+                for range_ in _repetition(element, index):
+                    feed(range_)
+                index += 1
+        yield tuple(found), 0, 1
 
     def append_repeated(
         self,
@@ -348,15 +438,19 @@ class RungFiringTimelines(Generic[K]):
             if not all(_unknown_or_missing(range_) for range_ in cycle):
                 return None
             return _Cycle(cycle, steps, step, trailing)
-        if not values or key is None:  # A join counts nothing.
+        if not values or key is None or self._limit is None:  # A join counts nothing.
             return _Cycle(cycle, steps, step, trailing)
-        # Each cycle adds the cycle's ranges to the column.  A range that flips or counts holds
-        # one entry more on its second scan than after its third.  So the plan stops two short
-        # of the limit, and the cycle that reaches it goes in scan by scan.
-        limit = (_ENTRY_LIMIT - 2 - self._entries[key]) // len(cycle)
+        # Each later cycle changes the column as the next one does, which looks back at this.
+        # The plan stops short of the limit, and the cycle that reaches it goes in scan by scan.
+        later = _repetition(Repeat(0, 0, period, cycle, 2, steps), 1)
+        probe = [*_trim_value_ranges(ranges, edge - 2 * period + 1, edge), *later]
+        changes = _total(self._change_groups(key, probe, edge + 1, edge + period))
+        if not changes:
+            return _Cycle(cycle, steps, step, trailing)
+        limit = (self._limit - 1 - self._counts.get(key, 0)) // changes
         if limit < 1:
             return None
-        return _Cycle(cycle, steps, step, trailing, limit)
+        return _Cycle(cycle, steps, step, trailing, limit, changes)
 
     def tags_of(self, rung_index: K) -> Iterable[str]:
         """Every tag this rung has written."""
@@ -446,7 +540,7 @@ class RungFiringTimelines(Generic[K]):
                 continue  # Nothing to add, and the column stays as it was.
             if not (prefix or middle or later):
                 self._value_timelines.pop(key, None)
-                for table in (self._unknown_keys, self._entries, self._dropped, self._floors):
+                for table in (self._unknown_keys, self._counts, self._dropped, self._floors):
                     table.pop(key, None)
                 continue
             column_from = first - 1 if begun else (middle or later)[0].start_scan_id
@@ -468,7 +562,7 @@ class RungFiringTimelines(Generic[K]):
                 later[0].start_scan_id - 1 if later else None,
             )
             self._rejoined(timeline, [*missing, *later], len(missing))
-            self._recount(key, timeline, first, dropped, settled._unknown_keys.get(key))
+            self._recount(key, mine, timeline, first)
             if floor is not None:
                 timeline = self._cut(key, timeline, dropped, floor)
             self._value_timelines[key] = timeline
@@ -477,31 +571,27 @@ class RungFiringTimelines(Generic[K]):
         self._rebuild_indexes()
         self._done()
 
-    def _recount(
-        self,
-        key: tuple[K, str],
-        timeline: list[Any],
-        first: int,
-        trimmed: int,
-        replayed: int | None,
-    ) -> None:
-        """Count a column filled in from *first*, and turn it Unknown where stepping would.
+    def _recount(self, key: tuple[K, str], old: list[Any], timeline: list[Any], first: int) -> None:
+        """Count the changes a settle from *first* on added, and turn Unknown where stepping did.
 
-        The scans after the window kept values this record counted without the window's
-        ranges.  So the column may reach the limit sooner than this record said, never later.
-        The replay may have turned the column Unknown inside the window.  It stays Unknown.
+        *old* is the column before the settle.  The count is the same up to *first*.
         """
-        gone = self._unknown_keys.get(key)
-        if gone is None or gone >= first:
-            for found in (_limit_scan(timeline, trimmed), replayed):
-                if found is not None and (gone is None or found < gone):
-                    gone = found
-        if gone is None:
-            self._entries[key] = trimmed + _written_out_length(timeline)
+        if self._limit is None:
             return
-        self._unknown_keys[key] = gone
-        self._entries.pop(key, None)
-        start = max(gone + 1, first)
+        gone = self._unknown_keys.get(key)
+        start = first  # A column Unknown before the window reads Unknown in it too.
+        if gone is None or gone >= first:
+            held = self._limit if gone is not None else self._counts.get(key, 0)
+            before = held - _total(self._change_groups(key, old, first, gone))
+            groups = list(self._change_groups(key, timeline, first, None))
+            found = _nth(groups, self._limit - before)
+            if found is None:
+                self._unknown_keys.pop(key, None)
+                self._hold(key, before + _total(groups))
+                return
+            self._unknown_keys[key] = found
+            self._counts.pop(key, None)
+            start = found + 1
         rest = [_as_unknown(element) for element in _trim_value_ranges(timeline, start, None)]
         timeline[:] = _as_of(_trim_value_ranges(timeline, None, start - 1), timeline, start - 1)
         # Two ranges that held different values can both read Unknown now, so each goes in.
@@ -544,7 +634,7 @@ class RungFiringTimelines(Generic[K]):
                 return
             action = self._repeat_action(None, timeline, timeline[-1].end_scan_id, period, True)
             if action:
-                RepeatPlan(self, [(None, timeline, action)], period).apply(rest)
+                RepeatPlan(self, [(None, timeline, action)], period)._record(rest)
                 return
             if index + 1 >= _REJOIN_REPETITIONS:
                 timeline[:] = _coalesced(
@@ -787,7 +877,7 @@ class RungFiringTimelines(Generic[K]):
         self._varied_ranges.clear()
         self._tags_by_rung.clear()
         self._writers_by_tag.clear()
-        self._entries.clear()
+        self._counts.clear()
         self._dropped.clear()
         self._floors.clear()
         self._unknown_keys.clear()
@@ -825,13 +915,12 @@ class RungFiringTimelines(Generic[K]):
                 if floor is not None:
                     kept = _trim_value_ranges(kept, floor, None)
                 gone = self._unknown_keys.get(key)
-                if gone is None or gone > max_scan_id:
-                    self._unknown_keys.pop(key, None)  # It reached the limit after the cut.
-                    held = self._dropped.get(key, 0) + _written_out_length(kept)
-                    if held:
-                        self._entries[key] = held
-                    else:
-                        self._entries.pop(key, None)
+                if self._limit is not None and (gone is None or gone > max_scan_id):
+                    # Take off the changes after the cut.  It reached the limit after it, if at all.
+                    held = self._limit if gone is not None else self._counts.get(key, 0)
+                    held -= _total(self._change_groups(key, ranges, max_scan_id + 1, gone))
+                    self._unknown_keys.pop(key, None)
+                    self._hold(key, held)
             if kept:
                 self._value_timelines[key] = kept
             else:
@@ -886,41 +975,13 @@ class RungFiringTimelines(Generic[K]):
             self._floors.pop(key, None)
         return kept
 
-    def carried_to(self, scan_id: int) -> RungFiringTimelines[K]:
-        """An empty record that counts each column on from this one's count at *scan_id*.
-
-        A replay steps from a checkpoint with a record of its own.  An append reads a column's
-        last two ranges at most, so with those and the count it turns Unknown where this did.
-        """
-        carried: RungFiringTimelines[K] = RungFiringTimelines()
-        for key, ranges in self._value_timelines.items():
-            # The last three elements that start by *scan_id* hold its last two ranges.
-            end = bisect_right(ranges, scan_id, key=_start_of)
-            low = max(0, end - 3)
-            if low:
-                tail, dropped = ranges[low:end], self._dropped.get(key, 0)
-                dropped += _written_out_length(ranges[:low])
-            else:
-                tail, dropped, _floor = self._whole(key, ranges[:end])
-            held = _as_of(_trim_value_ranges(tail, None, scan_id), tail, scan_id)
-            if not held:
-                continue
-            gone = self._unknown_keys.get(key)
-            if gone is not None and gone <= scan_id:
-                carried._unknown_keys[key] = gone
-            else:
-                carried._entries[key] = dropped + _written_out_length(held)
-            _unroll_tail(held)
-            carried._value_timelines[key] = held[-2:]
-        carried._rebuild_indexes()
-        return carried
-
     def snapshot(self, *, up_to: int | None = None) -> RungFiringTimelines[K]:
         frozen: RungFiringTimelines[K] = RungFiringTimelines()
         frozen._fired_ranges = {rung: list(ranges) for rung, ranges in self._fired_ranges.items()}
         frozen._value_timelines = {k: list(ranges) for k, ranges in self._value_timelines.items()}
         frozen._varied_ranges = {k: list(ranges) for k, ranges in self._varied_ranges.items()}
-        frozen._entries = dict(self._entries)
+        frozen._limit = self._limit
+        frozen._counts = dict(self._counts)
         frozen._dropped = dict(self._dropped)
         frozen._floors = dict(self._floors)
         frozen._unknown_keys = dict(self._unknown_keys)
@@ -1521,6 +1582,7 @@ class _Cycle:
     step: int  # how far each of the column's whole numbers moves a cycle
     trailing: tuple[Any, ...]  # the next cycle's first scans, recorded already
     limit: int = _NO_LIMIT  # the most cycles the plan may record
+    changes: int = 0  # the changes each cycle adds to the column
 
 
 def _same_range(left: Any, right: Any) -> bool:
@@ -1559,38 +1621,43 @@ def _carries(tail: Any, range_: ValueRange) -> bool:
     )
 
 
-def _limit_scan(ranges: Sequence[Any], held: int) -> int | None:
-    """The first scan on which stepping's column reached ``_ENTRY_LIMIT`` entries, or None.
+def _continues(value: Any, one: Any, two: Any) -> bool:
+    """Whether *value* goes on from *one* and *two*, the values on the two scans before it.
 
-    Appending makes an alternating or arithmetic range on its third scan out of two single
-    scans.  So the column holds one entry more on such a range's second scan.
+    A scan the record cannot see counts as going on.  So a gap left open keeps the count low.
     """
-    for element in ranges:
-        pieces: Sequence[Any] = (element,)
-        if type(element) is Repeat:
-            size = len(element.ranges)
-            peak = max(i + 1 + _two_singles(r) for i, r in enumerate(element.ranges))
-            # The first repetition that reaches the limit, or every one if none does.
-            index = max(0, -((held + peak - _ENTRY_LIMIT) // size))
-            if index >= element.count:
-                held += element.count * size
-                continue
-            held += index * size
-            pieces = _repetition(element, index)
-        for range_ in pieces:
-            if held + 1 >= _ENTRY_LIMIT:
-                return range_.start_scan_id
-            if _two_singles(range_) and held + 2 >= _ENTRY_LIMIT:
-                return range_.start_scan_id + 1
-            held += 1
-    return None
-
-
-def _two_singles(range_: Any) -> bool:
+    if one is _HIDDEN:
+        return True
+    if one is _ABSENT:
+        return False
+    if _equal(value, one):
+        return True
+    if two is _HIDDEN:
+        return True
+    if two is _ABSENT:
+        return False
+    if _equal(value, two) and not _equal(one, two):
+        return True
     return (
-        isinstance(range_.payload, (Alternating, Arithmetic))
-        and range_.end_scan_id > range_.start_scan_id
+        _is_arithmetic_value(value)
+        and _is_arithmetic_value(one)
+        and _is_arithmetic_value(two)
+        and value - one == one - two != 0
     )
+
+
+def _total(groups: Iterable[tuple[tuple[int, ...], int, int]]) -> int:
+    return sum(len(scans) * times for scans, _period, times in groups)
+
+
+def _nth(groups: Iterable[tuple[tuple[int, ...], int, int]], count: int) -> int | None:
+    """The scan of change number *count*, from 1, or None if the groups hold fewer."""
+    for scans, period, times in groups:
+        if count <= len(scans) * times:
+            moves, index = divmod(count - 1, len(scans))
+            return scans[index] + moves * period
+        count -= len(scans) * times
+    return None
 
 
 def _as_unknown(element: Any) -> Any:
@@ -1701,6 +1768,10 @@ class RepeatPlan:
 
     def apply(self, cycles: int) -> None:
         """Record *cycles* more cycles, no more than ``limit``."""
+        self._record(cycles)
+        self._timelines._done()
+
+    def _record(self, cycles: int) -> None:
         assert 0 < cycles <= self.limit
         period = self._period
         added = cycles * period
@@ -1734,9 +1805,9 @@ class RepeatPlan:
                 ranges.append(Repeat(cycle[0].start_scan_id, end, period, cycle, 1 + cycles, steps))
             moved = [_moved(range_, added, _step_of(range_, step) * cycles) for range_ in trailing]
             ranges.extend(moved)
-            if key in self._timelines._entries:
-                self._timelines._entries[key] += cycles * len(cycle)
-        self._timelines._done()
+            if action.changes:
+                counts = self._timelines._counts
+                counts[key] = counts.get(key, 0) + cycles * action.changes
 
 
 def _moved_end(range_: Any, end: int) -> Any:

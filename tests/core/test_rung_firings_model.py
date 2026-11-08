@@ -194,11 +194,7 @@ def _written_from(ranges: list[Any]) -> list[Any]:
 
 def _replay_record(ours: RungFiringTimelines, anchor: int) -> RungFiringTimelines:
     """The record a replay from the checkpoint on scan *anchor* starts with."""
-    if hasattr(ours, "carried_to"):
-        return ours.carried_to(anchor)
-    replay: RungFiringTimelines = RungFiringTimelines()
-    replay._limit = None
-    return replay
+    return RungFiringTimelines(capped=False)
 
 
 class Records(RuleBasedStateMachine):
@@ -438,6 +434,13 @@ def _totals_hold(timelines: RungFiringTimelines) -> None:
         for r in _expanded(timelines._value_timelines.get(key, ()), crossing + 1, None):
             for scan in range(max(r.start_scan_id, crossing + 1), r.end_scan_id + 1):
                 assert rung_firings._value_at(r, scan) in (U, M), (key, scan)
+    if timelines._limit is None or timelines._dropped:
+        return  # A trim from the front takes scans the count still holds.
+    for key, ranges in timelines._value_timelines.items():
+        crossing = timelines._unknown_keys.get(key)
+        changes = rung_firings._total(timelines._change_groups(key, ranges, 0, crossing))
+        held = timelines._limit if crossing is not None else timelines._counts.get(key, 0)
+        assert changes == held, (key, changes, held)
 
 
 @pytest.fixture

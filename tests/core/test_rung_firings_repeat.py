@@ -144,7 +144,7 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
     for key in theirs:
         assert ours[key] == theirs[key], key
     assert repeated._unknown_keys == stepped._unknown_keys
-    assert repeated._entries == stepped._entries
+    assert repeated._counts == stepped._counts
 
 
 @pytest.fixture
@@ -687,7 +687,7 @@ def test_a_settle_counts_on_from_the_count_before_the_gap(
         assert _loose(ours.value_at(0, "a", scan_id)) == _loose(stepped.value_at(0, "a", scan_id))
     _assert_true_to(stepped, truth, ours, 3 * cycles)
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     assert not ours._partly_unknown
     for scan_id in range(3 * cycles + 2):
         assert ours.value_at(0, "a", scan_id) is stepped.value_at(0, "a", scan_id) or _loose(
@@ -783,14 +783,14 @@ def test_a_settle_that_sends_a_column_unknown_keeps_a_later_repeat() -> None:
     scan_id = 1101 + 6 * 4
     plan = ours.plan_repeat(scan_id - 1, 6)
     assert plan is not None
-    assert plan.limit > 300
+    assert plan.limit > 200
     plan.apply(plan.limit)
     scan_id += 6 * plan.limit
     for _ in range(3):
         ours.append(0, scan_id, _many_then_six(scan_id))
         scan_id += 1
     before = ours.run_count()
-    settled: RungFiringTimelines = RungFiringTimelines()
+    settled: RungFiringTimelines = RungFiringTimelines(capped=False)
     for settled_scan in range(1, 1101):
         settled.append(0, settled_scan, _many_then_six(settled_scan))
     tracemalloc.start()

@@ -2520,13 +2520,13 @@ class PLC:
         """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
-        # The replay counts each column on from here, so it keeps the values this record would.
+        # The window takes the replay's values, and this record counts their changes itself.
         for name in (
             "_rung_firing_timelines",
             "_committed_tag_timelines",
             "_node_firing_timelines",
         ):
-            setattr(replay, name, getattr(self, name).carried_to(anchor_scan_id))
+            setattr(replay, name, RungFiringTimelines(capped=False))
         for scan_id in range(anchor_scan_id + 1, last + 1):
             if check_limits is not None:
                 check_limits()

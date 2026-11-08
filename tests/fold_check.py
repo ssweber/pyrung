@@ -679,7 +679,7 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
             # other column holds stepping's ranges, so it turns Unknown on stepping's scan.
             partly = key in ours._partly_unknown
             if not partly:
-                for counts in ("_entries", "_unknown_keys"):
+                for counts in ("_counts", "_unknown_keys"):
                     held, stepped = getattr(ours, counts).get(key), getattr(theirs, counts).get(key)
                     if held != stepped:
                         raise _mismatch(
