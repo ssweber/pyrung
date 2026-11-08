@@ -14,10 +14,10 @@ replay only the selected kernel scans when they need that evidence.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import islice
-from typing import Any, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from pyrsistent import PMap, pmap
 
@@ -143,6 +143,10 @@ class RungFiringTimelines(Generic[K]):
         "_partly_unknown",
     )
 
+    # A test sets this to check a record after each change.  Each method that changes one
+    # calls it last.
+    _check: ClassVar[Callable[[RungFiringTimelines[Any]], None] | None] = None
+
     def __init__(self) -> None:
         self._fired_ranges: dict[K, list[ScanRange]] = {}
         self._value_timelines: dict[tuple[K, str], list[ValueRange]] = {}
@@ -185,6 +189,12 @@ class RungFiringTimelines(Generic[K]):
             self._push(key, self._value_timelines.setdefault(key, []), scan_id, value)
             if tag_name in varied:
                 _append_scan_range(self._varied_ranges.setdefault(key, []), scan_id)
+        if RungFiringTimelines._check is not None:
+            RungFiringTimelines._check(self)
+
+    def _done(self) -> None:
+        if RungFiringTimelines._check is not None:
+            RungFiringTimelines._check(self)
 
     def _push(self, key: tuple[K, str], timeline: list[Any], scan_id: int, value: Any) -> None:
         """Append one scan's value to a column, which turns Unknown at its last entry."""
@@ -227,6 +237,7 @@ class RungFiringTimelines(Generic[K]):
             else:
                 delta = (deltas or {}).get(tag)
             self.append_tag_run(rung_index, tag, first_scan_id, last, value, delta, tag in varied)
+        self._done()
 
     def run_count(self) -> int:
         """The ranges held, which is what these timelines cost."""
@@ -360,6 +371,7 @@ class RungFiringTimelines(Generic[K]):
             _extend_scan_range(ranges, last_scan_id)
         else:
             ranges.append(ScanRange(first_scan_id, last_scan_id))
+        self._done()
 
     def append_tag_run(
         self,
@@ -396,6 +408,7 @@ class RungFiringTimelines(Generic[K]):
             payload = Arithmetic(value, delta) if delta else Constant(value)
         timeline = self._value_timelines.setdefault(key, [])
         self._append_run(key, timeline, ValueRange(first_scan_id, last_scan_id, payload))
+        self._done()
 
     def _append_run(self, key: tuple[K, str], timeline: list[Any], range_: ValueRange) -> None:
         """Append each scan of *range_* as :meth:`append` would, until the tail carries the rest."""
@@ -462,6 +475,7 @@ class RungFiringTimelines(Generic[K]):
         # A replay marks each column it wrote Unknown into.  The window keeps that Unknown.
         self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
+        self._done()
 
     def _recount(
         self,
@@ -778,6 +792,7 @@ class RungFiringTimelines(Generic[K]):
         self._floors.clear()
         self._unknown_keys.clear()
         self._partly_unknown.clear()
+        self._done()
 
     def trim_before(self, min_scan_id: int) -> None:
         if min_scan_id <= 0:
@@ -830,6 +845,7 @@ class RungFiringTimelines(Generic[K]):
             else:
                 self._varied_ranges.pop(key)
         self._rebuild_indexes()
+        self._done()
 
     def _whole(self, key: tuple[K, str], ranges: list[Any]) -> tuple[list[Any], int, int | None]:
         """*ranges* with the last two ranges a trim took off put back, as stepping held them.
@@ -913,6 +929,7 @@ class RungFiringTimelines(Generic[K]):
             frozen._rebuild_indexes()
         else:
             frozen._trim(max_scan_id=up_to)
+        frozen._done()
         return frozen
 
     def _rebuild_indexes(self) -> None:
@@ -1719,6 +1736,7 @@ class RepeatPlan:
             ranges.extend(moved)
             if key in self._timelines._entries:
                 self._timelines._entries[key] += cycles * len(cycle)
+        self._timelines._done()
 
 
 def _moved_end(range_: Any, end: int) -> Any:

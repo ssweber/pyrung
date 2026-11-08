@@ -656,3 +656,67 @@ def test_runs_with_gaps_settle_to_the_records_stepping_keeps() -> None:
                 assert mine is theirs or (
                     _UNKNOWN_VALUE not in (mine, theirs) and mine == theirs
                 ), where
+
+
+def _sequencer() -> Program:
+    with Program(strict=False) as program:
+        with Rung():
+            math((Phase + 1) % 4, Phase)
+    return program
+
+
+@pytest.mark.xfail(strict=True, reason="a column counts its whole life, so a short window caps it")
+def test_a_window_of_a_few_hundred_scans_never_caps_a_column() -> None:
+    plc = PLC(_sequencer(), dt=0.01, history=300)
+    for _ in range(5001):
+        plc.step()
+    assert not plc._rung_firing_timelines._unknown_keys
+    oldest = plc.history.oldest_scan_id
+    assert dict(plc.rung_firings(oldest)[0]) == {Phase.name: oldest % 4}
+
+
+@pytest.mark.xfail(strict=True, reason="a trim leaves no checkpoint before the oldest kept scan")
+def test_the_oldest_kept_scan_answers_once_its_column_turned_unknown() -> None:
+    # A replay of the oldest kept scan starts on a checkpoint before it.
+    plc = PLC(_sequencer(), dt=0.01, history=2000)
+    for _ in range(8001):
+        plc.step()
+    assert plc._rung_firing_timelines._unknown_keys
+    oldest = plc.history.oldest_scan_id
+    for scan_id in (oldest, oldest + 1):
+        assert {rung: dict(tags) for rung, tags in plc.rung_firings(scan_id).items()} == {
+            0: {Phase.name: scan_id % 4}
+        }
+
+
+def _toggle() -> Program:
+    with Program(strict=False) as program:
+        with Rung():
+            math((Phase + 1) % 2, Phase)
+    return program
+
+
+@pytest.mark.xfail(strict=True, reason="a run trims history before it notes its unrecorded scans")
+def test_a_trim_during_a_run_leaves_the_oldest_kept_scan_answering() -> None:
+    plc = PLC(_toggle(), dt=0.01, history=2000)
+    plc.run_for(50)
+    twin = PLC(_toggle(), dt=0.01, history=2000)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    oldest = plc.history.oldest_scan_id
+    assert oldest == twin.history.oldest_scan_id
+    assert plc._unrecorded_scans and plc._unrecorded_scans[0][0] >= oldest
+    for scan_id in (oldest, oldest + 1, oldest + 2):
+        assert plc.rung_firings(scan_id) == twin.rung_firings(scan_id), scan_id
+
+
+@pytest.mark.xfail(strict=True, reason="a long run keeps other checkpoints, so it trims elsewhere")
+@pytest.mark.parametrize(("history", "scans"), [(300, 4000), (2000, 12345)])
+def test_a_long_run_trims_history_to_steppings_floor(history: int, scans: int) -> None:
+    plc = PLC(_sequencer(), dt=0.01, history=history)
+    plc.step()
+    coast_until(plc, lambda _s: False, budget=scans, predicate_reads=frozenset())
+    twin = PLC(_sequencer(), dt=0.01, history=history)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
