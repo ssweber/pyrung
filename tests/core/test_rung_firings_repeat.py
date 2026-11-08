@@ -641,6 +641,55 @@ def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
     _assert_true_to(stepped, truth, ours, count)
 
 
+@pytest.mark.parametrize(
+    ("gap", "cycles"),
+    [
+        ((120, 160), 200),  # stepping went unknown before the gap
+        ((60, 160), 200),  # in the gap, and ours went unknown after it
+        ((60, 90), 200),  # after the gap, before ours did
+        ((60, 90), 120),  # ours never went unknown
+        ((2, 50), 60),  # ours counted only after the gap
+    ],
+)
+@pytest.mark.parametrize("writes", [lambda i: i, lambda i: (i * 7) % 130, lambda i: i // 2])
+def test_a_settle_counts_on_from_the_count_before_the_gap(
+    gap: tuple[int, int], cycles: int, writes: Callable[[int], int]
+) -> None:
+    # Each value holds three scans.  The replay starts ten cycles before the gap with
+    # records of its own, so it counts from zero.
+    def record(timelines: RungFiringTimelines, indexes: range) -> None:
+        for index in indexes:
+            for scan_id in range(3 * index + 1, 3 * index + 4):
+                timelines.append(0, scan_id, {"a": writes(index)})
+
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    truth: RungFiringTimelines = _Uncapped()
+    record(stepped, range(cycles))
+    record(truth, range(cycles))
+    ours: RungFiringTimelines = RungFiringTimelines()
+    record(ours, range(gap[0]))
+    record(ours, range(gap[1], cycles))
+    replay: RungFiringTimelines = RungFiringTimelines()
+    record(replay, range(max(0, gap[0] - 10), gap[1]))
+    first, last = 3 * gap[0] + 1, 3 * gap[1]
+    ours.replace_range(replay, first, last)
+    for scan_id in range(first, last + 1):
+        assert _loose(ours.value_at(0, "a", scan_id)) == _loose(stepped.value_at(0, "a", scan_id))
+    # The scans after the gap keep the values written.  A column stepping sends unknown
+    # sooner is partly unknown.
+    _assert_true_to(stepped, truth, ours, 3 * cycles)
+    assert ours._unknown_keys == stepped._unknown_keys
+    sooner = any(
+        stepped.value_at(0, "a", scan_id) is _UNKNOWN_VALUE
+        and ours.value_at(0, "a", scan_id) is not _UNKNOWN_VALUE
+        for scan_id in range(last + 1, 3 * cycles + 1)
+    )
+    assert ((0, "a") in ours._partly_unknown) == sooner
+    if not stepped._unknown_keys:
+        # The count is a set kept as a list.
+        assert sorted(ours._distinct_values[0, "a"]) == sorted(stepped._distinct_values[0, "a"])
+
+
 def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
     # Stepping writes Unknown into the column from now on, so a plan may not lengthen 5.
     timelines: RungFiringTimelines = RungFiringTimelines()

@@ -64,6 +64,8 @@ _TRACK_DISTINCT_AFTER = 8
 # Counting starts within a few cycles.  After that, each cycle with steps brings a new value.
 # So a plan looks no further ahead than this for a column's hundredth value.
 _COUNTED_CYCLES = _VALUE_VARIETY_THRESHOLD + _TRACK_DISTINCT_AFTER
+# The longest column a replay of a gap counts again range by range.
+_RECOUNT_LIMIT = 20_000
 _UNKNOWN_VALUE = object()
 _MISSING_WRITE = object()
 
@@ -557,8 +559,6 @@ class RungFiringTimelines(Generic[K]):
         """Take scans *first*..*last* from *settled*, an index of them made later."""
         _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
         _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
-        # Each column keeps its own count.  Values copied in from the replay are not counted,
-        # so a column may hold more than 100 distinct values.  Each one is the value written.
         for key in settled._value_timelines.keys() | self._value_timelines.keys():
             middle = _trim_value_ranges(settled._value_timelines.get(key, []), first, last)
             mine = self._value_timelines.get(key, [])
@@ -581,36 +581,92 @@ class RungFiringTimelines(Generic[K]):
             # Readers that rank candidate scans see where each range starts.  So the ranges
             # at each join go in again as stepping appends them.
             timeline = _as_of(prefix, mine, first - 1)
-            _rejoined(
-                timeline,
-                [
-                    *_missing_writes(
-                        fired,
-                        max(first, column_from + 1),
-                        middle[0].start_scan_id - 1 if middle else last,
-                    ),
-                    *middle,
-                ],
-            )
+            window = [
+                *_missing_writes(
+                    fired,
+                    max(first, column_from + 1),
+                    middle[0].start_scan_id - 1 if middle else last,
+                ),
+                *middle,
+            ]
             # The scans after the window keep the values this record holds.  Each is a value
             # written or an Unknown.
-            _rejoined(
-                timeline,
-                [
-                    *_missing_writes(
-                        fired,
-                        max(last + 1, column_from + 1),
-                        later[0].start_scan_id - 1 if later else None,
-                    ),
-                    *later,
-                ],
-            )
+            after = [
+                *_missing_writes(
+                    fired,
+                    max(last + 1, column_from + 1),
+                    later[0].start_scan_id - 1 if later else None,
+                ),
+                *later,
+            ]
+            self._counted_on(key, timeline, window, after)
             self._value_timelines[key] = timeline
-        # A column the replay sent unknown by its count is partly unknown here too.
-        self._partly_unknown |= settled._partly_unknown | (
-            settled._unknown_keys & self._value_timelines.keys()
-        )
+        self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
+
+    def _counted_on(
+        self, key: tuple[K, str], timeline: list[Any], window: list[Any], after: list[Any]
+    ) -> None:
+        """Append *window* and then *after* to *timeline*, counting the window as stepping does.
+
+        The replay counted from zero, and stepping counts on from the count before the window.
+        The scans after the window keep the values this record holds.  So a column stepping
+        sends unknown there is partly unknown.
+        """
+        scratch, exact = self._count_before(key, timeline, window)
+        for range_ in _expanded(window, None, None):
+            scratch._append_scans(key, timeline, range_, range_.start_scan_id, range_.end_scan_id)
+        _rejoined(timeline, after)
+        counted = scratch._distinct_values.get(key)
+        if counted is not None:
+            later = self._distinct_values.get(key)
+            later = _held_values(after) if later is None else later
+            counted += [v for v in later if not any(_equal(v, c) for c in counted)]
+        if key in scratch._unknown_keys or len(counted or ()) >= _VALUE_VARIETY_THRESHOLD:
+            self._unknown_keys.add(key)
+            self._distinct_values.pop(key, None)
+            if not exact or not all(map(_unknown_or_missing, _templates(after))):
+                self._partly_unknown.add(key)
+        elif counted is not None:
+            self._distinct_values[key] = counted
+
+    def _count_before(
+        self, key: tuple[K, str], timeline: list[Any], window: list[Any]
+    ) -> tuple[RungFiringTimelines[K], bool]:
+        """Records that hold the column's count after *timeline*, and whether it is exact."""
+        scratch: RungFiringTimelines[K] = RungFiringTimelines()
+        known = self._distinct_values.get(key)
+        gone = key in self._unknown_keys
+        written = (r for r in _expanded_reversed(timeline, None) if not _is_missing(r))
+        if gone and isinstance(getattr(next(written, None), "payload", None), Unknown):
+            scratch._unknown_keys.add(key)  # It went unknown before the window.
+            return scratch, True
+        if not (gone or known is not None) or (
+            len(timeline) < _TRACK_DISTINCT_AFTER
+            and _written_out_length(timeline) < _TRACK_DISTINCT_AFTER
+        ):
+            return scratch, True  # Counting has not started.
+        if known is not None and (
+            len(known) + 2 * _written_out_length(window) < _VALUE_VARIETY_THRESHOLD
+        ):
+            # Each range adds two values at most, so the window cannot reach a hundred.  The
+            # values this count holds from after the window change nothing then.
+            scratch._distinct_values[key] = list(known)
+            return scratch, True
+        # A count skips an arithmetic range after its first two values, unless it holds them
+        # already.  So only counting the column again says which it holds.
+        arithmetic = any(isinstance(r.payload, Arithmetic) for r in _templates(timeline))
+        if arithmetic and _written_out_length(timeline) <= _RECOUNT_LIMIT:
+            again: list[Any] = []
+            for range_ in _expanded(timeline, None, None):
+                scratch._append_scans(key, again, range_, range_.start_scan_id, range_.end_scan_id)
+            return scratch, True
+        # A value the column did not hold before the window came into the count after it.
+        held = _held_values(timeline)
+        scratch._distinct_values[key] = (
+            held if known is None else [v for v in known if any(_equal(v, h) for h in held)]
+        )
+        return scratch, not arithmetic
 
     def fired_throughout(self, first_scan_id: int, last_scan_id: int) -> set[K]:
         """The rungs that fired on every scan of the range."""
@@ -1187,6 +1243,22 @@ def _known_distinct_values(timeline: Sequence[ValueRange]) -> list[Any]:
                 if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
                     return distinct  # enough to go unknown
     return distinct
+
+
+def _held_values(timeline: Sequence[Any]) -> list[Any]:
+    """Each value a count may have taken from *timeline*.
+
+    An arithmetic range's first two scans were single values when they were appended.
+    """
+    held: list[Any] = []
+    for range_ in _templates(timeline):
+        if isinstance(range_.payload, Unknown):
+            continue
+        for scan_id in (range_.start_scan_id, range_.start_scan_id + 1):
+            value = _value_at(range_, scan_id)
+            if value is not _MISSING_WRITE and not any(_equal(value, h) for h in held):
+                held.append(value)
+    return held
 
 
 def _replace_ranges(mine: Any, theirs: Any, trim: Any, first: int, last: int) -> None:

@@ -614,21 +614,19 @@ def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return _spans([r for r in touching if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
-def _as_settled(plc: Any, first: int, end: int) -> tuple[Any, set[tuple[str, Any]]]:
+def _as_settled(plc: Any, first: int, end: int) -> Any:
     """*plc*'s records of *first*..*end*, with the scans it left out settled as a settle would.
 
     The settle happens on copies, since a settle changes the runner under test.  A question
-    that comes later still has to find those scans as the run left them.  Also the columns
-    the settle copied values into.
+    that comes later still has to find those scans as the run left them.
     """
-    copied: set[tuple[str, Any]] = set()
     gaps = []
     for low, high in sorted(plc._unrecorded_scans):
         low, high = max(low, first), min(high, end)
         if low <= high:
             gaps.append((low, high))
     if not gaps:
-        return plc, copied
+        return plc
     copies = types.SimpleNamespace(
         _rung_firing_timelines=plc._rung_firing_timelines.snapshot(),
         _node_firing_timelines=plc._node_firing_timelines.snapshot(),
@@ -642,9 +640,8 @@ def _as_settled(plc: Any, first: int, end: int) -> tuple[Any, set[tuple[str, Any
             "_committed_tag_timelines",
         ):
             getattr(copies, name).replace_range(getattr(replay, name), low, high)
-            copied |= {(name, key) for key in getattr(replay, name)._value_timelines}
         STATS["scans out of the records, settled to compare"] += high - low + 1
-    return copies, copied
+    return copies
 
 
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
@@ -654,8 +651,8 @@ def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
     """
     assert hasattr(twin, "_fold_seed"), "seed the twin with seed_records() first"
     end = plc._state.scan_id
-    records, copied = _as_settled(plc, start + 1, end)
-    _compare_records_over(kind, records, twin, start + 1, end, copied)
+    records = _as_settled(plc, start + 1, end)
+    _compare_records_over(kind, records, twin, start + 1, end)
     STATS[f"records compared: {kind}"] += 1
 
 
@@ -754,13 +751,12 @@ def _may_go_unknown(twin: Any, name: str, key: Any, column: Any, first: int, end
     seed = twin._fold_seed[name][1]
     if key in seed._unknown_keys:
         return True
-    held = len(seed._distinct_values.get(key, ()))
+    timeline = seed._value_timelines.get(key, ())
+    held = len(seed._distinct_values.get(key) or rung_firings._known_distinct_values(timeline))
     return held + 2 * len(_touching(column, first, end)) >= rung_firings._VALUE_VARIETY_THRESHOLD
 
 
-def _compare_records_over(
-    kind: str, plc: Any, twin: Any, first: int, end: int, copied: Any = frozenset()
-) -> None:
+def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
     for name, attribute in zip(("rung", "node", "committed"), _RECORDS, strict=True):
         ours, theirs = getattr(plc, attribute), getattr(twin, attribute)
         for key in ours._fired_ranges.keys() | theirs._fired_ranges.keys():
@@ -800,13 +796,9 @@ def _compare_records_over(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
                     f"{_column_at(a, scan)!r}, written {_column_at(b, scan)!r}"
                 )
-            # A column goes unknown on the same scan as stepping.  Values copied in from a
-            # replay are not counted, and a column the loop could not speak for counts fewer.
-            if (
-                (attribute, key) not in copied
-                and not partly
-                and _may_go_unknown(twin, attribute, key, b, first, end)
-            ):
+            # A column goes unknown on the same scan as stepping.  A column the loop could not
+            # speak for counts fewer.
+            if not partly and _may_go_unknown(twin, attribute, key, b, first, end):
                 if not capped:
                     capped, _gone = _capped(twin, attribute, key)
                 scan = _known_where_unknown(a, capped, first, end)
