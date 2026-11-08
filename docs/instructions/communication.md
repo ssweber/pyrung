@@ -71,6 +71,10 @@ This also covers a hardware timing case. On a real CLICK, if the TCP connection 
 
 `receive()` destination tags are automatically treated as nondeterministic by `always()` and `reachable_states()`. The verifier knows the values come from outside the program, so it enumerates them without requiring `external=True`. Adding `external=True` is still good practice for documentation but doesn't change verifier behavior.
 
+### how()
+
+`how()` sends no request. It sets a `receive()` destination, and the success and error bits of a `send()` or `receive()`, as if the device had answered. The other status bits keep their values, and the plan ends with a line saying so.
+
 ### Remote addressing
 
 `remote_start` can be a CLICK address string (e.g. `"DS1"`) for CLICK-to-CLICK communication, or a `ModbusAddress` for raw Modbus devices.
