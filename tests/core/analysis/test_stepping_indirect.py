@@ -166,7 +166,7 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     assert state_name in opaque_loop, sorted(opaque_loop)
 
     # The pilot-facing consumer agrees (is_stepping is what engages the compass).
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.evidence is not None
     assert prover.evidence.is_stepping(state_name)
 

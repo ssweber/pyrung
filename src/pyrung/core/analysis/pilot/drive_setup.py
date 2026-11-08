@@ -195,10 +195,7 @@ def prepare_drive(
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
     diag_snapshot = dict(work.state.tags)
-    prover = build_prover_context(
-        program,
-        diag_snapshot,
-    )
+    prover = build_prover_context(program)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     return DriveSetup(
         work=work,
@@ -328,17 +325,14 @@ def _build_static_transition_graphs(
 # ---------------------------------------------------------------------------
 
 
-def build_prover_context(
-    program: Any,
-    snapshot: dict[str, Any],
-) -> ProverContext:
+def build_prover_context(program: Any) -> ProverContext:
     """Build prover context for value domains and state key projection.
 
     Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
     pivot-tag state keys, and local static evidence.
 
-    The answer comes from the program and its tags' settings, never from *snapshot*.
-    A Program keeps it until its graph cache is dropped or a tag's settings change,
+    The answer comes from the program and its tags' settings.
+    A Program keeps the answer until its graph cache is dropped or a tag's settings change,
     so each how() on an unchanged program skips the prover's passes.
     """
     from pyrung.core.tag import metadata_edits

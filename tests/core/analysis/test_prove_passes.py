@@ -712,7 +712,7 @@ class TestDomainsOnlyFunctionalDepAdvice:
         return logic
 
     def test_default_context_has_no_advice_projection(self) -> None:
-        context = _build_explore_context(self._jump_pointer_program(), allow_partial=True)
+        context = _build_explore_context(self._jump_pointer_program())
         assert not isinstance(context, Intractable)
         assert "Scratch" not in context.functional_dep_projections
 

@@ -251,8 +251,7 @@ def test_how_keeps_its_prover_context_with_body_rungs():
             reset(Y)
         with Rung(Y):
             out(Bool("Lamp"))
-    plc = PLC(logic)
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.nd_domains
     assert prover.key_config is not None
 

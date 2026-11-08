@@ -481,6 +481,10 @@
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`. They showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
 
+### Performance
+
+- A second `how()` on an unchanged program skips the prover's setup, and the first `how()` does less of it.
+
 ## v0.15.2 (2026-10-11)
 
 ### Fixes

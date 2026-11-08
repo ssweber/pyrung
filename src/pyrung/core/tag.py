@@ -125,7 +125,7 @@ def note_metadata_edit() -> None:
 
     Analysis cached on a Program reads its tags' settings when it runs.  A slot
     configured later, a tag mapped onto a bank, or a TagMap marking tags external
-    can change that answer, so such a cache compares this count first.
+    can change what such a cache holds, so it compares this count first.
     """
     global _metadata_edits
     _metadata_edits += 1

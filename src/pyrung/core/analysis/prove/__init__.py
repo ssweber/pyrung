@@ -282,7 +282,6 @@ def _build_explore_context(
     initial_state: dict[str, Any] | None = None,
     pipeline_cache: _PipelineCache | None = None,
     restrict_inputs_to_scope: bool = False,
-    allow_partial: bool = False,
     opaque_reads: tuple[str, ...] = (),
     opaque_reads_all: bool = False,
     observed_tags: tuple[Tag, ...] = (),
@@ -326,9 +325,7 @@ def _build_explore_context(
         opaque_reads_all=opaque_reads_all,
         observed_tags=observed_tags,
     )
-    return _run_pre_bfs_pipeline(
-        ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
-    )
+    return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
 
 
 def _build_prior_facts(

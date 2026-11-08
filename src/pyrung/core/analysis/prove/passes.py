@@ -191,8 +191,8 @@ class _PriorFacts:
     """What how()'s domain prior reads, and all the pipeline builds for it.
 
     how() asks for these fields by name, so it runs only the passes that decide
-    them and none of freeze()'s work for the search.  Work a later search fix adds
-    costs how() nothing until a field here needs it.
+    them and none of freeze()'s work for the search.  A pass added later for the
+    search costs how() nothing until a field here needs it.
     """
 
     nondeterministic_dims: dict[str, tuple[Any, ...]]
@@ -2344,13 +2344,11 @@ def _run_prior_pipeline(ctx: _PassContext) -> _PriorFacts | Intractable:
 def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
-    *,
-    allow_partial: bool = False,
 ) -> _ExploreContext | Intractable:
     stopped = _run_passes(ctx, passes)
     if stopped is not None:
         return stopped
-    if ctx._pending_infeasible_tags and not allow_partial:
+    if ctx._pending_infeasible_tags:
         return _build_merged_intractable(ctx)
     result = ctx.freeze()
     cache = ctx.extract_cache()

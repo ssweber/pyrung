@@ -600,6 +600,6 @@ class TestHowPriorUnchanged:
         assert "fault.division_error" not in ctx.nondeterministic_dims
         plc = PLC(logic, dt=0.010)
         plc.step()
-        prior = build_prover_context(logic, dict(plc.current_state.tags))
+        prior = build_prover_context(logic)
         key = prior.key_config.stateful_names if prior.key_config is not None else ()
         assert "fault.division_error" not in key

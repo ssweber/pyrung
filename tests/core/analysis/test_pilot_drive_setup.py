@@ -228,46 +228,46 @@ def computed(monkeypatch: Any) -> list[Any]:
 
 def test_second_call_on_the_same_program_reuses_the_answer(computed: list[Any]) -> None:
     logic, _cmd = _slot_program()
-    first = drive_setup.build_prover_context(logic, {})
-    second = drive_setup.build_prover_context(logic, {"PCtxCmd1": 5})
+    first = drive_setup.build_prover_context(logic)
+    second = drive_setup.build_prover_context(logic)
     assert computed == [logic]
     assert first.key_config is not None
     assert second == first
     # Each caller gets its own dicts, so a change to one never reaches the next.
     assert first.nd_domains is not None
     first.nd_domains.clear()
-    third = drive_setup.build_prover_context(logic, {})
+    third = drive_setup.build_prover_context(logic)
     assert third == second
     assert third.nd_domains
 
 
 def test_a_program_edit_drops_the_answer(computed: list[Any]) -> None:
     logic, _cmd = _slot_program()
-    drive_setup.build_prover_context(logic, {})
+    drive_setup.build_prover_context(logic)
     stop = Bool("PCtxStop", external=True)
     with logic:
         with Rung(stop):
             out(Bool("PCtxStopped"))
     assert logic._cached_prover_context is None
-    after = drive_setup.build_prover_context(logic, {})
+    after = drive_setup.build_prover_context(logic)
     assert computed == [logic, logic]
     assert after.nd_domains is not None and "PCtxStop" in after.nd_domains
 
 
 def test_dropping_the_graph_cache_drops_the_answer(computed: list[Any]) -> None:
     logic, _cmd = _slot_program()
-    drive_setup.build_prover_context(logic, {})
+    drive_setup.build_prover_context(logic)
     logic._cached_graph = None
-    drive_setup.build_prover_context(logic, {})
+    drive_setup.build_prover_context(logic)
     assert computed == [logic, logic]
 
 
 def test_a_slot_setting_made_later_drops_the_answer(computed: list[Any]) -> None:
     logic, cmd = _slot_program()
-    before = drive_setup.build_prover_context(logic, {})
+    before = drive_setup.build_prover_context(logic)
     assert before.nd_domains is not None and 9 not in before.nd_domains["PCtxCmd1"]
     cmd.slot(1, choices={0: "off", 5: "on", 9: "fast"})
-    after = drive_setup.build_prover_context(logic, {})
+    after = drive_setup.build_prover_context(logic)
     assert computed == [logic, logic]
     assert after.nd_domains is not None and 9 in after.nd_domains["PCtxCmd1"]
 
