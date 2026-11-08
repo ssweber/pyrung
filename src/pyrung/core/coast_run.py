@@ -495,11 +495,13 @@ def _record_segments(
             unknown = sum(len(timelines._unknown_keys) for timelines in timelines_held)
             _record_scan_by_scan(plc, segments[cursor:at], kernel_paths)
             cursor = at
-            # A column that just went unknown still shows a cycle with values.  Its next
-            # cycle repeats, so a plan declined for it is not a miss.
+            # A column that just went unknown takes a cycle or two to repeat.  So the misses
+            # start again from none, and this cycle's decline is not one.
             went_unknown = unknown < sum(
                 len(timelines._unknown_keys) for timelines in timelines_held
             )
+            if went_unknown:
+                misses = 0
             last = segments[at - 1].first + segments[at - 1].count - 1
             plans = [timelines.plan_repeat(last, period) for timelines in timelines_held]
             more = (end - at) // length

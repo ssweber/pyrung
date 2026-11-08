@@ -556,6 +556,21 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return spans
 
 
+def _last_known(ranges: Any, end: int) -> int:
+    """The last scan up to *end* that holds a known value, or 0."""
+    for range_ in rung_firings._expanded_reversed(ranges, end):
+        for scan in range(min(range_.end_scan_id, end), range_.start_scan_id - 1, -1):
+            value = rung_firings._value_at(range_, scan)
+            if (
+                value is not rung_firings._UNKNOWN_VALUE
+                and value is not rung_firings._MISSING_WRITE
+            ):
+                return scan
+            if scan < min(range_.end_scan_id, end) - 1:
+                break  # Two scans settle a range's kind.
+    return 0
+
+
 def _column_at(ranges: Any, scan: int) -> Any:
     """A column's value at *scan*; a scan no range covers is a scan with no write."""
     for r in _touching(ranges, scan, scan):
@@ -599,19 +614,21 @@ def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return _spans([r for r in touching if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
-def _as_settled(plc: Any, first: int, end: int) -> Any:
+def _as_settled(plc: Any, first: int, end: int) -> tuple[Any, set[tuple[str, Any]]]:
     """*plc*'s records of *first*..*end*, with the scans it left out settled as a settle would.
 
     The settle happens on copies, since a settle changes the runner under test.  A question
-    that comes later still has to find those scans as the run left them.
+    that comes later still has to find those scans as the run left them.  Also the columns
+    the settle copied values into.
     """
+    copied: set[tuple[str, Any]] = set()
     gaps = []
     for low, high in sorted(plc._unrecorded_scans):
         low, high = max(low, first), min(high, end)
         if low <= high:
             gaps.append((low, high))
     if not gaps:
-        return plc
+        return plc, copied
     copies = types.SimpleNamespace(
         _rung_firing_timelines=plc._rung_firing_timelines.snapshot(),
         _node_firing_timelines=plc._node_firing_timelines.snapshot(),
@@ -625,8 +642,9 @@ def _as_settled(plc: Any, first: int, end: int) -> Any:
             "_committed_tag_timelines",
         ):
             getattr(copies, name).replace_range(getattr(replay, name), low, high)
+            copied |= {(name, key) for key in getattr(replay, name)._value_timelines}
         STATS["scans out of the records, settled to compare"] += high - low + 1
-    return copies
+    return copies, copied
 
 
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
@@ -636,7 +654,8 @@ def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
     """
     assert hasattr(twin, "_fold_seed"), "seed the twin with seed_records() first"
     end = plc._state.scan_id
-    _compare_records_over(kind, _as_settled(plc, start + 1, end), twin, start + 1, end)
+    records, copied = _as_settled(plc, start + 1, end)
+    _compare_records_over(kind, records, twin, start + 1, end, copied)
     STATS[f"records compared: {kind}"] += 1
 
 
@@ -718,7 +737,30 @@ def _append_as_stepping(records: Any, key: Any, timeline: list[Any], range_: Any
             return
 
 
-def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
+def _known_where_unknown(ours: Any, capped: Any, first: int, last: int) -> int | None:
+    """The first scan where stepping says Unknown and ours holds a value, or None."""
+    for low, high in _unknown_scans(capped, first, last):
+        for r in _touching(ours, low, high):
+            if not isinstance(r.payload, rung_firings.Unknown):
+                return max(r.start_scan_id, low)
+    return None
+
+
+def _may_go_unknown(twin: Any, name: str, key: Any, column: Any, first: int, end: int) -> bool:
+    """Whether stepping could reach the column's hundredth value by *end*.
+
+    Each range adds at most two values to stepping's count.
+    """
+    seed = twin._fold_seed[name][1]
+    if key in seed._unknown_keys:
+        return True
+    held = len(seed._distinct_values.get(key, ()))
+    return held + 2 * len(_touching(column, first, end)) >= rung_firings._VALUE_VARIETY_THRESHOLD
+
+
+def _compare_records_over(
+    kind: str, plc: Any, twin: Any, first: int, end: int, copied: Any = frozenset()
+) -> None:
     for name, attribute in zip(("rung", "node", "committed"), _RECORDS, strict=True):
         ours, theirs = getattr(plc, attribute), getattr(twin, attribute)
         for key in ours._fired_ranges.keys() | theirs._fired_ranges.keys():
@@ -737,13 +779,20 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
             partly = key in ours._partly_unknown
             capped: list[Any] = []
             gone = False
-            if not partly and (key in ours._unknown_keys or _unknown_scans(a, first, end)):
+            if key in ours._unknown_keys or _unknown_scans(a, first, end):
                 capped, gone = _capped(twin, attribute, key)
             if key in ours._unknown_keys and not partly and not gone:
                 raise _mismatch(f"fold-check ({kind}): {name} {key!r} unknown, stepped not")
+            # The loop's Unknown covers scans up to the column's last known value.  After that
+            # a column ours sent unknown by its count needs stepping's Unknown too.
+            loop_until = end if key not in ours._unknown_keys else _last_known(a, end)
 
-            def unknown_ok(scan: int, partly: bool = partly, capped: Any = capped) -> bool:
-                return partly or _column_at(capped, scan) is rung_firings._UNKNOWN_VALUE
+            def unknown_ok(
+                scan: int, partly: bool = partly, capped: Any = capped, until: int = loop_until
+            ) -> bool:
+                return (partly and scan <= until) or _column_at(
+                    capped, scan
+                ) is rung_firings._UNKNOWN_VALUE
 
             scan = _column_differs(a, b, first, end, unknown_ok, capped)
             if scan is not None:
@@ -751,6 +800,21 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
                     f"{_column_at(a, scan)!r}, written {_column_at(b, scan)!r}"
                 )
+            # A column goes unknown on the same scan as stepping.  Values copied in from a
+            # replay are not counted, and a column the loop could not speak for counts fewer.
+            if (
+                (attribute, key) not in copied
+                and not partly
+                and _may_go_unknown(twin, attribute, key, b, first, end)
+            ):
+                if not capped:
+                    capped, _gone = _capped(twin, attribute, key)
+                scan = _known_where_unknown(a, capped, first, end)
+                if scan is not None:
+                    raise _mismatch(
+                        f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
+                        f"{_column_at(a, scan)!r}, stepped Unknown"
+                    )
             STATS["record cells Unknown"] += sum(
                 high - low + 1 for low, high in _unknown_scans(a, first, end)
             )

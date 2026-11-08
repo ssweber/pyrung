@@ -389,8 +389,28 @@ def _held_with_a_flag(index: int) -> list[Scan]:
 
 
 def _two_counts(index: int) -> list[Scan]:
-    """Rung 0 holds two counts, and b has counted a few values more."""
+    """Rung 0 holds two counts."""
     return [{0: ({"a": index, "b": index}, frozenset())}] * 3
+
+
+def _three_counts(index: int) -> list[Scan]:
+    """Each rung holds a count."""
+    return [{rung: ({"a": index}, frozenset()) for rung in RUNGS}] * 3
+
+
+def _irregular(writes: Callable[[int], Scan], count: int) -> list[Scan]:
+    """*count* scans of values no count or flip-flop takes, so they go in one by one."""
+    return [writes(-1 - value * value) for value in range(count)]
+
+
+def _staggered(gap: int) -> list[Scan]:
+    """Values that bring each rung's count *gap* values nearer its hundredth than the last's."""
+    ahead = [
+        {rung: ({"a": 50_000 + 1000 * rung + value * value}, frozenset())}
+        for rung in RUNGS
+        for value in range(gap * rung)
+    ]
+    return [*ahead, *_irregular(lambda v: {r: ({"a": v}, frozenset()) for r in RUNGS}, 10)]
 
 
 def _looped(
@@ -401,8 +421,8 @@ def _looped(
     Also the cycles it stepped, and the plans that stopped before the last cycle.
 
     The loop plans as far as each plan lets it, steps one cycle, and plans again.  It stops
-    planning after three declines in a row.  A decline after a column went unknown does not
-    count.
+    planning after three declines in a row.  A column going unknown starts the count of
+    declines again, and the decline on that cycle does not count.
     """
     period = len(cycle(0))
     record: RungFiringTimelines = RungFiringTimelines()
@@ -421,6 +441,9 @@ def _looped(
             step(index)
             stepped += 1
         cursor = at
+        went_unknown = unknown < len(record._unknown_keys)
+        if went_unknown:
+            misses = 0
         plan = record.plan_repeat(len(prefix) + at * period, period)
         more = 0 if plan is None else min(cycles - at, plan.limit)
         if more > 0:
@@ -428,7 +451,7 @@ def _looped(
             stopped += more < cycles - at
             cursor = at = at + more
             misses = 0
-        elif len(record._unknown_keys) == unknown:
+        elif not went_unknown:
             misses += 1
         at += 1
     for index in range(cursor, cycles):
@@ -451,11 +474,10 @@ def _stepped(
     ("cycle", "prefix"),
     [
         (_held_count, []),
+        (_held_count, _irregular(lambda v: {0: ({"a": v}, frozenset())}, 10)),
         (_held_with_a_flag, []),
-        *(
-            (_two_counts, [{0: ({"b": 5000 + v}, frozenset())} for v in range(k)])
-            for k in (1, 2, 5)
-        ),
+        *((_two_counts, _irregular(lambda v: {0: ({"b": v}, frozenset())}, k)) for k in (1, 2, 10)),
+        *((_three_counts, _staggered(gap)) for gap in (1, 2, 3)),
     ],
 )
 def test_the_loop_leaves_a_count_as_stepping_does(
@@ -465,7 +487,7 @@ def test_the_loop_leaves_a_count_as_stepping_does(
     stepped, last = _stepped(cycle, 400, prefix)
     assert stepped._unknown_keys
     assert stopped
-    assert stepped_cycles <= 10
+    assert stepped_cycles <= 20
     _assert_same(stepped, ours, last)
 
 

@@ -354,7 +354,7 @@ class RungFiringTimelines(Generic[K]):
         # Each cycle with steps brings new values, and how() tries a candidate scan for each.
         # So the plan stops before the cycle that brings the column's hundredth value.  That
         # cycle goes in scan by scan, so the column goes unknown on the same scan as stepping.
-        counts, sizes = self._counted_ahead(key, ranges, cycle, steps, period, last)
+        counts, sizes = self._counted_ahead(key, ranges, cycle, steps, step, period, last)
         if not sizes:
             return None
         return _Cycle(cycle, steps, step, trailing, len(sizes), counts, sizes)
@@ -365,6 +365,7 @@ class RungFiringTimelines(Generic[K]):
         ranges: list[Any],
         cycle: tuple[Any, ...],
         steps: tuple[int, ...],
+        step: int,
         period: int,
         last: int,
     ) -> tuple[tuple[Any, ...], tuple[int, ...]]:
@@ -374,7 +375,7 @@ class RungFiringTimelines(Generic[K]):
         stepping's rule exactly.  The sizes give how many of the counted values each cycle
         leaves, or -1 while counting has not started.
         """
-        scratch: RungFiringTimelines[K] = RungFiringTimelines()
+        scratch: _Noting[K] = _Noting()
         known = self._distinct_values.get(key)
         if known is None:
             # Counting starts from every value the column holds, so the copy needs them all.
@@ -383,13 +384,18 @@ class RungFiringTimelines(Generic[K]):
                 return (), ()
             timeline = list(_expanded(ranges, None, None))
         else:
-            timeline = list(islice(_expanded_reversed(ranges, None), 2))[::-1]
+            # A column counts no new value while it holds under eight ranges.  A copy of ten
+            # passes eight exactly when the column does.
+            tail = islice(_expanded_reversed(ranges, None), _TRACK_DISTINCT_AFTER + 2)
+            timeline = list(tail)[::-1]
             scratch._distinct_values[key] = list(known)
         scratch._value_timelines[key] = timeline
         counted: list[Any] = []
         sizes: list[int] = []
         while len(sizes) < _COUNTED_CYCLES:
             index = len(sizes) + 1
+            steady = key in scratch._distinct_values and len(timeline) >= _TRACK_DISTINCT_AFTER + 2
+            scratch.noted = []
             first, end = last + (index - 1) * period + 1, last + index * period
             # The first scans of the cycle after fall in this period too.
             for later in (index, index + 1):
@@ -408,6 +414,19 @@ class RungFiringTimelines(Generic[K]):
             if count is not None:
                 counted = count
             sizes.append(-1 if count is None else len(count))
+            if steady:
+                # Each later cycle counts the same values moved one step on.  A set finds the
+                # new ones much faster than appending each cycle.
+                seen, noted = set(counted), set(scratch.noted)
+                while len(sizes) < _COUNTED_CYCLES:
+                    noted = {value + step for value in noted}
+                    new = noted - seen
+                    if len(counted) + len(new) >= _VALUE_VARIETY_THRESHOLD:
+                        break
+                    seen |= new
+                    counted.extend(new)
+                    sizes.append(len(counted))
+                break
         return tuple(counted), tuple(sizes)
 
     def _append_scans(
@@ -1492,6 +1511,17 @@ def _has_numbers(range_: Any) -> bool:
 def _is_missing(range_: Any) -> bool:
     payload = range_.payload
     return isinstance(payload, Constant) and payload.value is _MISSING_WRITE
+
+
+class _Noting(RungFiringTimelines[K]):
+    """Records that also list each value they check against the count."""
+
+    __slots__ = ("noted",)
+    noted: list[Any]
+
+    def _note_new_value(self, key: tuple[K, str], timeline: list[ValueRange], value: Any) -> None:
+        self.noted.append(value)
+        super()._note_new_value(key, timeline, value)
 
 
 _EXTEND = "extend"

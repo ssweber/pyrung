@@ -853,6 +853,69 @@ def _fires_every_other_scan() -> None:
         on_delay(T, 30000)
 
 
+def test_a_count_with_values_before_the_loop_goes_unknown_on_the_scan_stepping_does(
+    strict,
+) -> None:
+    # Forty scans first give the count more than eight values, so the loop counts from them.
+    plc = _runner(_fires_every_other_scan, 0.01)
+    for _ in range(40):
+        plc.step()
+    twin = plc.fork()
+    seed_records(twin, plc)
+    start = plc.current_state.scan_id
+    coast_until(plc, lambda _s: False, budget=SCANS, predicate_reads=frozenset())
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert any(tag == X.name for _rung, tag in plc._rung_firing_timelines._unknown_keys)
+    compare_records("count", plc, twin, start)
+
+
+Counts = [Int(f"AdvCount{rung}") for rung in range(3)]
+
+
+def _three_counts() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    for count in Counts:
+        with Rung(Toggle):
+            math(count + 1, count)
+
+
+def test_counts_that_go_unknown_cycles_apart_keep_the_loop_planning(
+    strict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plc = _runner(_three_counts, 0.01)
+    # Each count first takes squares, three more than the count before.  So the counts reach
+    # their hundredth values three cycles apart.
+    for value in range(19):
+        plc.patch(
+            {
+                c: 50_000 + 1000 * j + value * value
+                for j, c in enumerate(Counts)
+                if value < 10 + 3 * j
+            }
+        )
+        plc.step()
+        plc.step()
+    twin = plc.fork()
+    seed_records(twin, plc)
+    start = plc.current_state.scan_id
+    stepped: list[int] = []
+    record = coast_run._record_scan_by_scan
+
+    def counted(plc: PLC, segments: list[Any], kernel_paths: Any) -> None:
+        stepped.append(sum(segment.count for segment in segments))
+        record(plc, segments, kernel_paths)
+
+    monkeypatch.setattr(coast_run, "_record_scan_by_scan", counted)
+    coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset())
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert len(plc._rung_firing_timelines._unknown_keys) >= 3
+    assert sum(stepped) < SCANS // 2
+    compare_records("counts", plc, twin, start)
+
+
 class TestRecordsPastTheirCap:
     SCANS = 12_000
 
