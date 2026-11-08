@@ -474,9 +474,20 @@ def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[int, list
 def test_a_predicate_on_a_tag_that_moves_costs_about_what_stepping_costs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Each prediction is made, so the cap on its asks is what bounds it.
+    monkeypatch.setattr(cycle_jump, "MOVING_ASKS_SHARE", 0)
     off_peak, _ = _counting_run("off", monkeypatch)
     peak, asks = _counting_run("jump", monkeypatch)
     assert asks
     # Each prediction asks about the moving tag up to the cap, and once per scan of cycle 0.
     assert max(asks) <= cycle_jump.MAX_ASKS + 2 * coast_run.MAX_PREDICTED_PERIOD
     assert peak <= 4 * off_peak + 8_000_000, (peak, off_peak)
+
+
+def test_a_predicate_on_a_tag_that_moves_on_most_scans_declines_once_per_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _off_peak, _ = _counting_run("off", monkeypatch)
+    _peak, asks = _counting_run("jump", monkeypatch)
+    # The cycle declines once, and the run then steps it without asking again.
+    assert len(asks) == 1

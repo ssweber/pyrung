@@ -79,6 +79,12 @@ from pyrung.core.system_points import clock_high
 
 # The most times one prediction asks the stop predicate about values that move.
 MAX_ASKS = 65536
+# A prediction declines if it would ask the stop predicate about a moving value more than once
+# in this many scans of the cycle.  A handover between paths counts as SEGMENT_SCANS scans,
+# which is about what the loop pays for one.
+MOVING_ASKS_SHARE = 4
+SEGMENT_SCANS = 8
+ASKS_TOO_OFTEN = "the stop predicate reads a value that moves on most scans"
 # The compiled iterations kept for each path, one for each set of locals that hold forms.
 MAX_VARIANTS = 8
 
@@ -775,6 +781,11 @@ def predict(
     # Each cut keeps the cycles before some cycle, so the cuts can come in any order.  These
     # two cost a call for each cycle, so they come last, after the cheap cuts.
     last = bound.last
+    period = sum(step.count for step in steps)
+    if len(asked.moving) * MOVING_ASKS_SHARE > period + SEGMENT_SCANS * len(steps):
+        # Stepping such a cycle asks the predicate about as often as a jump would.  It costs
+        # little more than those asks, unless the loop hands over between paths often.
+        return ASKS_TOO_OFTEN
     if asked.moving:
         # The predicate is asked once a cycle for each value it is shown that moves.  The cap
         # keeps one prediction's asks short, and the run polls its limits between predictions.
@@ -786,7 +797,6 @@ def predict(
     last = asked.last_running(times.confirm(last))
     if last < 0:
         return "the stop predicate ends the next cycle"
-    period = sum(step.count for step in steps)
     return Prediction(last + 1, period, start, moving, ends)
 
 
