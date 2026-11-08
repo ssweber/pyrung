@@ -489,7 +489,7 @@ def _record_segments(
         end = lead + cycles * length
         at = lead + WARM_CYCLES * length
         misses = 0
-        # A column may not repeat yet, or a plan may stop before a column's hundredth value.
+        # A column may not repeat yet, or a plan may stop short of a column's last entry.
         # One cycle more goes in scan by scan before the next plan.
         while at + length <= end and misses < WARM_CYCLES:
             unknown = sum(len(timelines._unknown_keys) for timelines in timelines_held)
