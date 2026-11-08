@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,15 @@ BURNER_WALL_BUDGET_S = 240.0
 # drive takes ~9s; raise the deadline if slow hardware ever needs it).
 INTERNAL_ROUTE_MAX_SCANS = 40_000
 INTERNAL_ROUTE_WALL_BUDGET_S = 240.0
+# A runner starts its clock at the wall-clock time.  The program copies the clock into tags
+# every scan, so a fixed start makes each run spend the same scans.
+RTC_AT_START = datetime(2026, 1, 2, 3, 4, 5)
+
+
+def _tumbler_plc(logic, **kwargs) -> PLC:
+    plc = PLC(logic, **kwargs)
+    plc.set_rtc(RTC_AT_START)
+    return plc
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +80,7 @@ def _drive_state_target(logic, value: int, max_scans: int):
     mode changes and door corrections are exactly what the pilot is expected
     to DISCOVER, and that discovery is part of the locked record.
     """
-    plc = PLC(logic)
+    plc = _tumbler_plc(logic)
     plc.step()
     target = plc._known_tags_by_name["Sts_StateCurrent"]
     events = []
@@ -83,7 +93,7 @@ def _drive_state_target(logic, value: int, max_scans: int):
 
 def _drive_bool_target(logic, tag_name: str, max_scans: int, wall_budget_s: float):
     """Cold-boot Pilot drive toward one Boolean output."""
-    plc = PLC(logic, dt=0.010)
+    plc = _tumbler_plc(logic, dt=0.010)
     plc.step()
     target = plc._known_tags_by_name[tag_name]
     deadline = time.monotonic() + wall_budget(wall_budget_s)
@@ -333,6 +343,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
 def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
     """A possible future Complete producer cannot invent an inapplicable Start."""
     bench = Bench(tumbler_logic)
+    bench.plc.set_rtc(RTC_AT_START)
     bench.force_physical()
     bench.step()
     enter_production(bench.plc)
@@ -381,7 +392,7 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
 def test_completed_first_door_incident_opens_working_theory(tumbler_logic) -> None:
     """A route-less Rotate coast records both door causes as one theory repair."""
 
-    plc = PLC(tumbler_logic)
+    plc = _tumbler_plc(tumbler_logic)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
@@ -429,7 +440,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     ``Sts_State_Completed``. The Boolean target is deliberate: reaching state 17
     one scan before its status output is not completion.
     """
-    plc = PLC(tumbler_logic)
+    plc = _tumbler_plc(tumbler_logic)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
