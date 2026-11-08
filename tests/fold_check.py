@@ -566,9 +566,9 @@ def _column_at(ranges: Any, scan: int) -> Any:
 def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool) -> int | None:
     """Scan where ours holds another value than stepping's, or None.
 
-    A column the loop wrote Unknown into holds fewer ranges than stepping's.  So either one
-    may turn Unknown first, and only their known values must agree.  A scan with a write
-    must still be one in both.
+    A column the loop wrote Unknown into holds other ranges than stepping's.  So ours may
+    turn Unknown first, and only their known values must agree.  A scan with a write must
+    still be one in both.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a run of scans with no boundary settle the whole of it.
@@ -584,8 +584,8 @@ def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool)
         high = stop - 1
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
             mine, stepped = _column_at(ours, scan), _column_at(theirs, scan)
-            if partly and unknown in (mine, stepped):
-                if (mine is missing) != (stepped is missing):
+            if partly and mine is unknown:
+                if stepped is missing:
                     return scan
             elif _exact(mine) != _exact(stepped):
                 return scan
@@ -615,13 +615,17 @@ def _as_settled(plc: Any, first: int, end: int) -> Any:
         _node_firing_timelines=plc._node_firing_timelines.snapshot(),
         _committed_tag_timelines=plc._committed_tag_timelines.snapshot(),
     )
+    held = {name: getattr(plc, name) for name in _RECORDS}
     for low, high in gaps:
-        replay = plc._stepped_again(low, high, None)
-        for name in (
-            "_rung_firing_timelines",
-            "_node_firing_timelines",
-            "_committed_tag_timelines",
-        ):
+        # Each replay starts from the records the settles before it left, as the runner's do.
+        try:
+            for name in _RECORDS:
+                setattr(plc, name, getattr(copies, name))
+            replay = plc._stepped_again(low, high, None)
+        finally:
+            for name, records in held.items():
+                setattr(plc, name, records)
+        for name in _RECORDS:
             getattr(copies, name).replace_range(getattr(replay, name), low, high)
         STATS["scans out of the records, settled to compare"] += high - low + 1
     return copies

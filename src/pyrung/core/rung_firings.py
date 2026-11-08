@@ -16,6 +16,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any, Generic, TypeVar
 
 from pyrsistent import PMap, pmap
@@ -124,10 +125,9 @@ class Repeat:
 class RungFiringTimelines(Generic[K]):
     """Append-only columnar firing index, generic over rung identity.
 
-    A column keeps its values until it holds ``_ENTRY_LIMIT`` ranges, to bound its memory.
-    After that scan each value written to it is kept as Unknown.  A repeat counts as every
-    range it stands for.  So a column turns Unknown on the same scan whichever way its scans
-    went in.
+    A column stores at most 1,000 entries (``_ENTRY_LIMIT``), to bound its memory.  On the scan
+    that would store one more, the column turns Unknown.  A repeat counts as every range it
+    stands for.  A gap that has not settled can turn it Unknown early.
     """
 
     __slots__ = (
@@ -137,6 +137,8 @@ class RungFiringTimelines(Generic[K]):
         "_tags_by_rung",
         "_writers_by_tag",
         "_entries",
+        "_dropped",
+        "_floors",
         "_unknown_keys",
         "_partly_unknown",
     )
@@ -149,6 +151,11 @@ class RungFiringTimelines(Generic[K]):
         self._writers_by_tag: dict[str, set[K]] = {}
         # The ranges each column holds, with a repeat written out, until it turns Unknown.
         self._entries: dict[tuple[K, str], int] = {}
+        # The entries trims from the front took out of each column.  Stepping counts them still.
+        self._dropped: dict[tuple[K, str], int] = {}
+        # The first scan each trimmed column holds, and the last two ranges the trim took off.
+        # Stepping appended the scans after a gap at that scan to those ranges as they were.
+        self._floors: dict[tuple[K, str], tuple[int, list[ValueRange]]] = {}
         # Each column that turned Unknown, and the scan whose entry reached the limit.
         self._unknown_keys: dict[tuple[K, str], int] = {}
         # Columns with a range a stretch could not speak for.  Later scans still say.
@@ -416,18 +423,23 @@ class RungFiringTimelines(Generic[K]):
             later = _trim_value_ranges(mine, last + 1, None)
             touched = next(_expanded(mine, first, last), None) is not None
             fired = self._fired_ranges.get(key[0], [])
+            # A trim may have taken every scan the column held before the window.
+            begun = bool(prefix or self._dropped.get(key))
             if (
                 not middle
                 and not touched
-                and not (prefix and next(_expanded(fired, first, last), None))
+                and not (begun and next(_expanded(fired, first, last), None))
             ):
                 continue  # Nothing to add, and the column stays as it was.
             if not (prefix or middle or later):
                 self._value_timelines.pop(key, None)
-                self._unknown_keys.pop(key, None)
-                self._entries.pop(key, None)
+                for table in (self._unknown_keys, self._entries, self._dropped, self._floors):
+                    table.pop(key, None)
                 continue
-            column_from = (prefix or middle or later)[0].start_scan_id
+            column_from = first - 1 if begun else (middle or later)[0].start_scan_id
+            prefix, dropped, floor = self._whole(key, prefix)
+            if floor is None:
+                self._floors.pop(key, None)  # The window starts the column again.
             # Readers that rank candidate scans see where each range starts.  So the ranges
             # at each join go in again as stepping appends them.
             timeline = _as_of(prefix, mine, first - 1)
@@ -443,8 +455,12 @@ class RungFiringTimelines(Generic[K]):
                 later[0].start_scan_id - 1 if later else None,
             )
             self._rejoined(timeline, [*missing, *later], len(missing))
+            self._recount(key, timeline, first, dropped)
+            if floor is not None:
+                timeline = self._cut(key, timeline, dropped, floor)
             self._value_timelines[key] = timeline
-            self._recount(key, timeline, first, self._trimmed_from(key, mine))
+        # A replay marks a column it wrote Unknown into, and the window keeps that Unknown.
+        self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
 
     def _recount(self, key: tuple[K, str], timeline: list[Any], first: int, trimmed: int) -> None:
@@ -470,8 +486,9 @@ class RungFiringTimelines(Generic[K]):
         self._rejoined(timeline, rest, len(rest))
 
     def _rejoined(self, timeline: list[Any], ranges: list[Any], appended_from: int = 0) -> None:
-        """Append *ranges* to *timeline* as stepping appends them, until the two agree.
+        """Join the settled ranges to the ranges on either side of the gap.
 
+        The column then has the same ranges it would have had if those scans had been stepped.
         Appending a scan reads the last two ranges at most.  The ranges from *appended_from* on
         came from appending, and the first of them may be cut short.  So two ranges on from
         that one, the rest go on unchanged once the last two agree.  Nothing is counted.
@@ -749,6 +766,8 @@ class RungFiringTimelines(Generic[K]):
         self._tags_by_rung.clear()
         self._writers_by_tag.clear()
         self._entries.clear()
+        self._dropped.clear()
+        self._floors.clear()
         self._unknown_keys.clear()
         self._partly_unknown.clear()
 
@@ -761,6 +780,7 @@ class RungFiringTimelines(Generic[K]):
         self._trim(max_scan_id=max_scan_id)
 
     def _trim(self, *, min_scan_id: int | None = None, max_scan_id: int | None = None) -> None:
+        assert min_scan_id is None or max_scan_id is None, "trim one end at a time"
         for rung, ranges in list(self._fired_ranges.items()):
             kept = _trim_scan_ranges(ranges, min_scan_id, max_scan_id)
             if kept:
@@ -768,24 +788,32 @@ class RungFiringTimelines(Generic[K]):
             else:
                 self._fired_ranges.pop(rung)
         for key, ranges in list(self._value_timelines.items()):
-            kept = _trim_value_ranges(ranges, min_scan_id, max_scan_id)
-            # A trim from the front keeps each column's count.  Stepping and a long run trim on
-            # different scans, and each must turn the column Unknown on the same scan.  A cut
-            # from the back counts the column again.
-            if max_scan_id is not None:
-                kept = _as_of(kept, ranges, max_scan_id)
-            gone = self._unknown_keys.get(key)
-            if max_scan_id is not None and (gone is None or gone > max_scan_id):
-                trimmed = self._trimmed_from(key, ranges)
-                self._unknown_keys.pop(key, None)  # It reached the limit after the cut.
-                self._entries[key] = trimmed + _written_out_length(kept)
-                if not self._entries[key]:
-                    del self._entries[key]
+            whole, dropped, floor = self._whole(key, ranges)
+            if min_scan_id is not None:
+                if min_scan_id <= ranges[0].start_scan_id:
+                    continue
+                # A trim from the front keeps each column's count.  Stepping and a long run
+                # trim on different scans, and each must turn the column Unknown on one scan.
+                kept = self._cut(key, whole, dropped, min_scan_id)
+            else:
+                # A cut from the back counts the column again.
+                kept = _as_of(_trim_value_ranges(whole, None, max_scan_id), whole, max_scan_id)
+                if floor is not None:
+                    kept = _trim_value_ranges(kept, floor, None)
+                gone = self._unknown_keys.get(key)
+                if gone is None or gone > max_scan_id:
+                    self._unknown_keys.pop(key, None)  # It reached the limit after the cut.
+                    held = self._dropped.get(key, 0) + _written_out_length(kept)
+                    if held:
+                        self._entries[key] = held
+                    else:
+                        self._entries.pop(key, None)
             if kept:
                 self._value_timelines[key] = kept
             else:
                 self._value_timelines.pop(key)
                 self._partly_unknown.discard(key)
+                self._floors.pop(key, None)
         for key, ranges in list(self._varied_ranges.items()):
             kept = _trim_scan_ranges(ranges, min_scan_id, max_scan_id)
             if kept:
@@ -794,13 +822,43 @@ class RungFiringTimelines(Generic[K]):
                 self._varied_ranges.pop(key)
         self._rebuild_indexes()
 
-    def _trimmed_from(self, key: tuple[K, str], ranges: list[Any]) -> int:
-        """The entries a column counted that a trim from the front took out of *ranges*."""
-        gone = self._unknown_keys.get(key)
-        if gone is None:
-            return self._entries.get(key, 0) - _written_out_length(ranges)
-        held = _as_of(_trim_value_ranges(ranges, None, gone), ranges, gone)
-        return _ENTRY_LIMIT - _written_out_length(held)
+    def _whole(self, key: tuple[K, str], ranges: list[Any]) -> tuple[list[Any], int, int | None]:
+        """*ranges* with the last two ranges a trim took off put back, as stepping held them.
+
+        Also gives the entries the trims took off the result, and the column's first scan.
+        """
+        dropped = self._dropped.get(key, 0)
+        held = self._floors.get(key)
+        if held is None or not ranges or type(ranges[0]) is not ValueRange:
+            return ranges, dropped, None
+        floor, before = held
+        if ranges[0].start_scan_id != floor:
+            return ranges, dropped, None
+        last = before[-1]
+        if last.end_scan_id < floor:
+            return [*before, *ranges], dropped - len(before), floor
+        # The trim cut this range short.
+        whole = ValueRange(last.start_scan_id, ranges[0].end_scan_id, last.payload)
+        if not _carries(ranges[0], whole):
+            return ranges, dropped, None  # Appends changed the piece the trim left.
+        return [*before[:-1], whole, *ranges[1:]], dropped - len(before) + 1, floor
+
+    def _cut(self, key: tuple[K, str], ranges: list[Any], dropped: int, floor: int) -> list[Any]:
+        """*ranges* from scan *floor* on.  Each scan before it still counts.
+
+        *dropped* is what trims took off *ranges* before.
+        """
+        end = bisect_right(ranges, floor - 1, key=_start_of)
+        cut = _trim_value_ranges(ranges[end - 1 : end], floor, None)
+        kept = [*cut, *ranges[end:]]
+        taken = ranges[:end]
+        self._dropped[key] = dropped + _written_out_length(taken) - _written_out_length(cut)
+        before = list(islice(_expanded_reversed(taken, floor - 1), 2))[::-1]
+        if kept and before:
+            self._floors[key] = (kept[0].start_scan_id, before)
+        else:
+            self._floors.pop(key, None)
+        return kept
 
     def carried_to(self, scan_id: int) -> RungFiringTimelines[K]:
         """An empty record that counts each column on from this one's count at *scan_id*.
@@ -810,14 +868,22 @@ class RungFiringTimelines(Generic[K]):
         """
         carried: RungFiringTimelines[K] = RungFiringTimelines()
         for key, ranges in self._value_timelines.items():
-            held = _as_of(_trim_value_ranges(ranges, None, scan_id), ranges, scan_id)
+            # The last three elements that start by *scan_id* hold its last two ranges.
+            end = bisect_right(ranges, scan_id, key=_start_of)
+            low = max(0, end - 3)
+            if low:
+                tail, dropped = ranges[low:end], self._dropped.get(key, 0)
+                dropped += _written_out_length(ranges[:low])
+            else:
+                tail, dropped, _floor = self._whole(key, ranges[:end])
+            held = _as_of(_trim_value_ranges(tail, None, scan_id), tail, scan_id)
             if not held:
                 continue
             gone = self._unknown_keys.get(key)
             if gone is not None and gone <= scan_id:
                 carried._unknown_keys[key] = gone
             else:
-                carried._entries[key] = self._trimmed_from(key, ranges) + _written_out_length(held)
+                carried._entries[key] = dropped + _written_out_length(held)
             _unroll_tail(held)
             carried._value_timelines[key] = held[-2:]
         carried._rebuild_indexes()
@@ -829,6 +895,8 @@ class RungFiringTimelines(Generic[K]):
         frozen._value_timelines = {k: list(ranges) for k, ranges in self._value_timelines.items()}
         frozen._varied_ranges = {k: list(ranges) for k, ranges in self._varied_ranges.items()}
         frozen._entries = dict(self._entries)
+        frozen._dropped = dict(self._dropped)
+        frozen._floors = dict(self._floors)
         frozen._unknown_keys = dict(self._unknown_keys)
         frozen._partly_unknown = set(self._partly_unknown)
         if up_to is None:
