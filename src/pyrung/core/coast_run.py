@@ -52,7 +52,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-from pyrung.core import compiled_run, jit_stats, scan_trace
+from pyrung.core import compiled_run, cycle_jump, jit_stats, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.compiled_run import _BoundsWatch, _install, _kernel_cannot_say_what_it_adds
 from pyrung.core.read_trace import _FIELD_READ, _READ_ALL, _traced_call
@@ -63,6 +63,7 @@ from pyrung.core.scan_trace import (
     DECLINING_SYSTEM_TAGS,
     MOVING_SYSTEM_TAGS,
     CoastMoves,
+    LoopShape,
     ScanLoop,
     ScanTrace,
     _record_block_writes,
@@ -120,6 +121,17 @@ MAX_WAIT_AFTER_SHORT = 64
 MAX_WAIT_AFTER_NONE = 256
 # A stretch this long paid for its entry into the kernel.
 PAYING_STRETCH = 16
+# What a stretch does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
+# how many cycles repeat exactly, and checks each scan the loop then runs against that.
+CYCLE_PREDICTIONS = "off"
+# True: a prediction the scans disagree with raises (tests/fold_check.py sets it).
+STRICT_CYCLE_CHECK = False
+# The most cycles one prediction looks ahead, and the longest cycle in scans it is made for.
+# Each scan of a cycle is run once on forms, and each clock or RTC value once per cycle.
+MAX_PREDICTED_CYCLES = 4096
+MAX_PREDICTED_PERIOD = 1024
+# Cycles a stretch waits before it tries again after a prediction it could not make.
+MAX_PREDICTION_WAIT = 64
 
 
 @dataclass(eq=False)
@@ -127,6 +139,18 @@ class _Loop:
     function: Callable[..., tuple[int, float]]
     moves: CoastMoves
     must_be_present: tuple[str, ...]
+    shape: LoopShape
+    # The iteration on forms, written when a prediction first needs it.  None if it cannot be.
+    on_forms: cycle_jump.Iteration | None | bool = False
+
+
+def _on_forms(loop: _Loop) -> cycle_jump.Iteration | None:
+    if loop.on_forms is False:
+        try:
+            loop.on_forms = cycle_jump.iteration_of(loop.shape)
+        except cycle_jump.Unsupported:
+            loop.on_forms = None
+    return cast("cycle_jump.Iteration | None", loop.on_forms)
 
 
 @dataclass(eq=False)
@@ -430,10 +454,16 @@ def _common_columns(
     return found
 
 
-def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPaths) -> None:
-    """Write what a stretch's scans did into the three timelines a stepped run writes."""
+def _record_segments(
+    plc: PLC, segments: list[_Segment], kernel_paths: _KernelPaths
+) -> list[tuple[int, int, int]]:
+    """Write what a stretch's scans did into the three timelines a stepped run writes.
+
+    Returns the runs of repeating cycles found, as :func:`_cycles_in` does.
+    """
     if not segments:
-        return
+        return []
+    runs = _cycles_in(segments)
     start = segments[0].first
     total = sum(segment.count for segment in segments)
     timelines_held = (
@@ -443,9 +473,9 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
     )
     if sum(timelines.run_count() for timelines in timelines_held) >= MAX_RECORD_RUNS:
         plc._note_unrecorded_scans(start, start + total - 1)
-        return
+        return runs
     cursor = 0
-    for lead, length, cycles in _cycles_in(segments):
+    for lead, length, cycles in runs:
         period = _scans(segments, lead, length)
         end = lead + cycles * length
         at = lead + WARM_CYCLES * length
@@ -470,6 +500,7 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
                 misses += 1
             at += length
     _record_scan_by_scan(plc, segments[cursor:], kernel_paths)
+    return runs
 
 
 def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
@@ -806,6 +837,62 @@ class _Segment:
     ends: dict[str, Any]
 
 
+class CycleMismatch(AssertionError):
+    """The scans a stretch ran disagree with a prediction of its cycle."""
+
+
+class _CycleWatch:
+    """Follows a stretch's segments through the cycle they repeat, and its prediction."""
+
+    def __init__(self) -> None:
+        self.keys: list[tuple[_Path, int]] = []
+        self.cycle: list[tuple[_Path, int]] | None = None
+        self.phase = -1  # segments of the cycle since it last began, or -1 when lost
+        self.prediction: cycle_jump.Prediction | None = None
+        self.start_scan = 0
+        # The timestamp the scans since the prediction reached, and at which scan.
+        self.time_mark = (0, 0.0)
+        self.ends: dict[int, int] = {}  # scans into a cycle -> the segment that ends there
+        self.wait_until = 0
+        self.wait = 1
+
+    def note(self, segment: _Segment) -> bool:
+        """Follow one more segment.  True if it ends a cycle."""
+        key = (segment.path, segment.count)
+        keys = self.keys
+        keys.append(key)
+        if len(keys) > 4 * MAX_CYCLE_SEGMENTS:
+            del keys[: -2 * MAX_CYCLE_SEGMENTS]
+        cycle = self.cycle
+        if cycle is None:
+            return False
+        if self.phase >= 0:
+            if key == cycle[self.phase]:
+                self.phase = (self.phase + 1) % len(cycle)
+                return self.phase == 0
+            self.phase = -1
+            return False
+        if key == cycle[-1] and keys[-len(cycle) :] == cycle:
+            self.phase = 0
+            return True
+        return False
+
+    def found(self, segments: list[_Segment], runs: list[tuple[int, int, int]]) -> bool:
+        """Take the cycle of the last run if the segments end in it.  True if they end one."""
+        if self.phase >= 0 or not runs:
+            return False
+        lead, length, cycles = runs[-1]
+        end = lead + cycles * length
+        cycle = [(segment.path, segment.count) for segment in segments[lead : lead + length]]
+        tail = [(segment.path, segment.count) for segment in segments[end:]]
+        if len(tail) >= length or tail != cycle[: len(tail)]:
+            return False
+        self.cycle = cycle
+        self.phase = len(tail)
+        self.prediction = None
+        return self.phase == 0
+
+
 class _NotDeclared(Exception):
     """A declared stop predicate read something it did not declare."""
 
@@ -889,10 +976,12 @@ def _loop_of(
         plan = path.trace.plan
         assert plan is not None
         started = time.perf_counter()
-        function, moves, _source = coast_loop(plan, replay._block_index_names, key[0], key[1])
+        function, moves, _source, shape = coast_loop(
+            plan, replay._block_index_names, key[0], key[1]
+        )
         if jit_stats.ACTIVE:
             jit_stats.add_cost("loop write", time.perf_counter() - started)
-        loop = _Loop(function, moves, tuple(sorted(key[0] | key[1])))
+        loop = _Loop(function, moves, tuple(sorted(key[0] | key[1])), shape)
         if len(path.loops) >= MAX_LOOPS_PER_PATH:
             path.loops.pop(next(iter(path.loops)))
     path.loops[key] = loop
@@ -972,6 +1061,141 @@ def _try_stretch(
     segments: list[_Segment] = []
     # What ended the last firing and whether a guard did, while the jit counters count.
     left_by: tuple[str, bool] | None = None
+    watch = _CycleWatch() if CYCLE_PREDICTIONS != "off" else None
+
+    asked_on: dict[Any, bool] = {}
+
+    def stops_on(values: Any, names: dict[tuple[Any, ...], str]) -> bool:
+        # A prediction asks about the same values on many scans, so each answer is kept until
+        # the next prediction.  The tags it does not show may change by then.
+        try:
+            key = tuple((cell, type(value), value) for cell, value in values.items())
+            return asked_on[key]
+        except TypeError:
+            key = None
+        except KeyError:
+            pass
+        shown = _Seen(dict(dict.items(seen)), declared)
+        for cell, value in values.items():
+            dict.__setitem__(shown, names[cell], value)
+        try:
+            answer = bool(predicate(_SeenState(shown)))
+        except Exception:
+            answer = True
+        if key is not None:
+            asked_on[key] = answer
+        return answer
+
+    def predict_cycle() -> None:
+        """Predict the cycle that ends here, or wait a while before asking again."""
+        assert watch is not None and watch.cycle is not None
+        steps: list[cycle_jump.Step] = []
+        names: dict[tuple[Any, ...], str] = {}
+        why = None
+        for path, count in watch.cycle:
+            looped = loops.get(id(path))
+            iteration = _on_forms(looped) if looped else None
+            if looped is None or iteration is None:
+                why = "a path's loop cannot run on forms"
+                break
+            steps.append(
+                cycle_jump.Step(iteration, path.trace.constants, count, bool(looped.shape.seen))
+            )
+            for name, cell, _always in looped.shape.seen:
+                names[cell] = name
+        period = sum(count for _path, count in watch.cycle)
+        horizon = min(MAX_PREDICTED_CYCLES, (limit - total) // period)
+        if why is None and period > MAX_PREDICTED_PERIOD:
+            why = "the cycle is too long"
+        if why is None and horizon < 2:
+            why = "the run ends within two cycles"
+        found: cycle_jump.Prediction | str = why or ""
+        if why is None:
+            asked_on.clear()
+            saved = (replay._rtc_fields, replay._rtc_fields_from, replay._rtc_fields_until)
+            try:
+                found = cycle_jump.predict(
+                    steps,
+                    lambda cell: _cell_value(state_kernel, cell),
+                    state_kernel.timestamp,
+                    replay._dt,
+                    loop._rtc_fields,
+                    horizon,
+                    lambda values: stops_on(values, names),
+                    frozenset(names),
+                )
+            finally:
+                replay._rtc_fields, replay._rtc_fields_from, replay._rtc_fields_until = saved
+        if isinstance(found, str):
+            memo.counts[f"cycle prediction declined: {found}"] += 1
+            if run is not None:
+                jit_stats.add_decline(f"cycle prediction: {found}")
+            watch.wait_until = state_kernel.scan_id + watch.wait * period
+            watch.wait = min(watch.wait * 2, MAX_PREDICTION_WAIT)
+            return
+        watch.wait = 1
+        watch.prediction = found
+        watch.start_scan = state_kernel.scan_id
+        watch.time_mark = (state_kernel.scan_id, state_kernel.timestamp)
+        offset = 0
+        watch.ends = {}
+        for index, (_path, count) in enumerate(watch.cycle[:-1]):
+            offset += count
+            watch.ends[offset] = index
+        memo.counts["cycle predictions"] += 1
+        memo.counts["cycles predicted"] += found.cycles
+
+    def check_prediction() -> None:
+        """Compare the state a firing left with what the prediction says it is."""
+        assert watch is not None and watch.prediction is not None
+        prediction = watch.prediction
+        scan_id = state_kernel.scan_id
+        k, into = divmod(scan_id - watch.start_scan, prediction.period)
+        if into == 0:
+            if k > prediction.cycles:
+                watch.prediction = None
+                return
+            expected = {cell: prediction.cell_at(cell, k) for cell in prediction.start}
+        else:
+            index = watch.ends.get(into)
+            if k >= prediction.cycles or index is None:
+                return
+            expected = {
+                cell: cycle_jump._value_at(form, k)
+                for cell, form in prediction.segment_ends[index].items()
+            }
+        wrong = [
+            cell for cell, value in expected.items() if not same(_cell_value(state_kernel, cell), value)
+        ]
+        if not wrong and into == 0 and STRICT_CYCLE_CHECK:
+            at, timestamp = watch.time_mark
+            for _ in range(scan_id - at):
+                timestamp += replay._dt
+            watch.time_mark = (scan_id, timestamp)
+            if timestamp != state_kernel.timestamp:
+                wrong = [("timestamp",)]
+        if wrong:
+            message = (
+                f"cycle prediction: scan {scan_id}, {k} cycles of {prediction.cycles} in,"
+                f" disagrees on {wrong[:5]}"
+            )
+            for observer in scan_trace.SELF_CHECK_OBSERVERS:
+                observer(message)
+            if STRICT_CYCLE_CHECK:
+                raise CycleMismatch(message)
+            memo.counts["cycle prediction mismatches"] += 1
+            watch.prediction = None
+            return
+        if into == 0 and k == prediction.cycles:
+            watch.prediction = None  # used up, so the next cycle start predicts again
+
+    def follow_cycle(segment: _Segment) -> None:
+        assert watch is not None
+        ends_a_cycle = watch.note(segment)
+        if watch.prediction is not None:
+            check_prediction()
+        if ends_a_cycle and watch.prediction is None and state_kernel.scan_id >= watch.wait_until:
+            predict_cycle()
 
     def fire(path: _Path) -> int:
         """Fire *path* for what its loop allows, or not at all."""
@@ -1035,6 +1259,8 @@ def _try_stretch(
             _record_block_writes(path.trace, state_kernel.blocks)
             total += used
             scan_trace.TOTALS["loop scans"] += used
+            if watch is not None:
+                follow_cycle(segments[-1])
         return used
 
     kept = paths.paths
@@ -1097,7 +1323,9 @@ def _try_stretch(
         if checkpoint or compiled_run.LOOP_OBSERVERS:
             state = replay._materialize_replay_state()
             if checkpoint:
-                _record_segments(plc, segments, paths)
+                runs = _record_segments(plc, segments, paths)
+                if watch is not None and watch.found(segments, runs) and watch.prediction is None:
+                    predict_cycle()
                 segments = []
                 _install(plc, replay, state)
                 plc._thin_checkpoints(MAX_CHECKPOINTS)

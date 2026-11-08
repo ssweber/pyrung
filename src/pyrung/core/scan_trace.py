@@ -1585,9 +1585,27 @@ class ScanTrace:
         }
 
 
+@dataclass(frozen=True)
+class LoopShape:
+    """One iteration of a loop, as data, for :mod:`~pyrung.core.cycle_jump` to reason about.
+
+    An iteration loads ``loads`` and the clock and RTC values, runs ``body`` in order, and
+    then assigns each of ``commits`` at once.
+    """
+
+    loads: tuple[tuple[tuple[Any, ...], str], ...]  # (cell, local)
+    clocks: tuple[tuple[str, float], ...]  # (local, half period)
+    rtc: tuple[tuple[str, str], ...]  # (local, field tag)
+    body: tuple[_Op | _Guard, ...]
+    commits: tuple[tuple[str, str], ...]  # (local, the value it takes, spelled)
+    constants: Mapping[str, Any]
+    seen: tuple[tuple[str, tuple[Any, ...], bool], ...]
+
+
 def _render_loop(tracer: _Tracer) -> ScanTrace:
     """The trace a finished tracer describes, with its plain loop."""
-    loop, source, body = _loop_function(tracer)
+    loop, source, shape = _loop_function(tracer)
+    body = shape.body
     block_writes: dict[str, set[int]] = {}
     for key in tracer.written:
         if key[0] == "block":
@@ -1610,7 +1628,7 @@ def _loop_function(
     *,
     guards: tuple[_Guard, ...] = (),
     seen: tuple[tuple[str, tuple[Any, ...], bool], ...] = (),
-) -> tuple[Callable[..., tuple[int, float]], str, list[_Op | _Guard]]:
+) -> tuple[Callable[..., tuple[int, float]], str, LoopShape]:
     """Write the loop a finished tracer describes.
 
     An iteration computes into temporaries and assigns the moving locals last, in
@@ -1631,16 +1649,22 @@ def _loop_function(
     live: set[str] = set()
     stores: list[str] = []
     new_values: dict[tuple[Any, ...], str] = {}
+    shape_loads: list[tuple[tuple[Any, ...], str]] = []
+    clocks: list[tuple[str, float]] = []
+    rtc: list[tuple[str, str]] = []
     needs_rtc = False
     for key, entry in tracer.entries.items():
         local = tracer.entry_locals[key]
         if key[0] == "tags" and key[1] in _CLOCK_HALF_PERIODS:
             refresh.append(f"{local} = clock_high(ts, {_CLOCK_HALF_PERIODS[key[1]]!r})")
+            clocks.append((local, _CLOCK_HALF_PERIODS[key[1]]))
             continue
         if key[0] == "tags" and key[1] in RTC_FIELD_TAG_NAMES:
             refresh.append(f"{local} = rtc_now[{key[1]!r}]")
+            rtc.append((local, key[1]))
             needs_rtc = True
             continue
+        shape_loads.append((key, local))
         if key[0] == "block":
             array = arrays.setdefault(key[1], f"B{len(arrays)}")
             place = f"{array}[{key[2]!r}]"
@@ -1721,9 +1745,19 @@ def _loop_function(
         "EXIT": [_LEFT_AT_LIMIT],
         "GUARDS": tuple(guard_list),
     }
-    namespace.update({f"K{i}": value for i, value in enumerate(tracer.loop_constants)})
+    constants = {f"K{i}": value for i, value in enumerate(tracer.loop_constants)}
+    namespace.update(constants)
     exec(compile(source, "<scan loop>", "exec"), namespace)  # noqa: S102
-    return namespace["_scan_loop"], source, body
+    shape = LoopShape(
+        tuple(shape_loads),
+        tuple(clocks),
+        tuple(rtc),
+        tuple(body),
+        tuple(zip(commit_targets, commit_values, strict=True)),
+        constants,
+        seen,
+    )
+    return namespace["_scan_loop"], source, shape
 
 
 # What a loop function writes in its EXIT when no guard failed.
@@ -1889,7 +1923,7 @@ def coast_loop(
     block_names: Mapping[str, Mapping[int, str]],
     watched: frozenset[str],
     seen: frozenset[str],
-) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str]:
+) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str, LoopShape]:
     """This trace's loop, kept to :class:`CoastMoves`.
 
     It leaves before the scan that would change a *watched* tag, which is the only
@@ -1900,8 +1934,8 @@ def coast_loop(
     one more reason to leave.
     """
     guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
-    loop, source, _body = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
-    return loop, moves, source
+    loop, source, shape = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
+    return loop, moves, source, shape
 
 
 def _coast_guards(
