@@ -278,12 +278,15 @@ class RungFiringTimelines(Generic[K]):
         if tail.start_scan_id <= last - 2 * period + 1 and end == last:
             # One range runs through the last two cycles, so each later scan extends it.  A
             # count keeps its rate, and any other range must hold the same values a cycle on.
+            # Any payload but a count gives a value set by the scan's parity alone, so the
+            # first two scans of the cycle stand for all of them.
+            first = last - period + 1
             if (
                 values
                 and not isinstance(tail.payload, Arithmetic)
                 and not all(
                     _same_value(_value_at(tail, scan_id), _value_at(tail, scan_id + period))
-                    for scan_id in range(last - period + 1, last + 1)
+                    for scan_id in range(first, min(first + 2, last + 1))
                 )
             ):
                 return False

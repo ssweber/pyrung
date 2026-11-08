@@ -131,7 +131,7 @@ PAYING_STRETCH = 16
 # how many cycles repeat exactly, and checks each scan the loop then runs against that.
 # "jump" predicts too, and moves the state over the cycles predicted without running them.
 CYCLE_PREDICTIONS = "jump"
-# True: a prediction the scans disagree with raises (tests/fold_check.py sets it).
+# Whether a prediction the scans disagree with raises.  tests/fold_check.py sets it.
 STRICT_CYCLE_CHECK = False
 # The most cycles one prediction looks ahead, and the longest cycle in scans it is made for.
 # Each scan of a cycle is run once on forms, and each clock or RTC value once per cycle.
@@ -881,6 +881,7 @@ class _CycleWatch:
         self.wait = 1
         self.names: dict[tuple[Any, ...], str] = {}  # the cells the stop predicate reads
         self.hooked = False  # whether a moving cell is one a scan hook reads
+        self.cut = False  # whether something ended the prediction before its horizon
 
     def note(self, segment: _Segment) -> bool:
         """Follow one more segment.  True if it ends a cycle."""
@@ -1140,6 +1141,7 @@ def _try_stretch(
         if why is None:
             asked_on.clear()
             saved = (replay._rtc_fields, replay._rtc_fields_from, replay._rtc_fields_until)
+            called = time.perf_counter() if run is not None else 0.0
             try:
                 found = cycle_jump.predict(
                     steps,
@@ -1153,6 +1155,8 @@ def _try_stretch(
                 )
             finally:
                 replay._rtc_fields, replay._rtc_fields_from, replay._rtc_fields_until = saved
+                if run is not None:
+                    jit_stats.add_cost("cycle prediction", time.perf_counter() - called)
         if isinstance(found, str):
             memo.counts[f"cycle prediction declined: {found}"] += 1
             if run is not None:
@@ -1163,7 +1167,10 @@ def _try_stretch(
         watch.wait = 1
         watch.prediction = found
         watch.names = names
+        watch.cut = found.cycles < horizon
         watch.hooked = any(cell in _HOOK_CELLS for cell in found.steps)
+        if watch.hooked and CYCLE_PREDICTIONS == "jump":
+            memo.counts["cycle jump declined: a scan hook reads a cell that moves"] += 1
         watch.start_scan = state_kernel.scan_id
         watch.time_mark = (state_kernel.scan_id, state_kernel.timestamp)
         offset = 0
@@ -1185,7 +1192,7 @@ def _try_stretch(
             return
         if not checking:
             if into == 0 and k == prediction.cycles:
-                watch.prediction = None
+                used_up()
             return
         if into == 0:
             expected = {cell: prediction.cell_at(cell, k) for cell in prediction.start}
@@ -1210,10 +1217,23 @@ def _try_stretch(
             if timestamp != state_kernel.timestamp:
                 wrong = [("timestamp",)]
         if wrong:
-            missed(f"scan {scan_id}, {k} cycles of {prediction.cycles} in, disagrees on {wrong[:5]}")
+            missed(
+                f"scan {scan_id}, {k} cycles of {prediction.cycles} in, disagrees on {wrong[:5]}"
+            )
             return
         if into == 0 and k == prediction.cycles:
-            watch.prediction = None  # used up, so the next cycle start predicts again
+            used_up()
+
+    def used_up() -> None:
+        """Drop a prediction whose cycles have all run.
+
+        A change that ended it before its horizon starts on this cycle, so a prediction here
+        would decline.  The next try then waits for the cycle after.
+        """
+        assert watch is not None
+        if watch.cut:
+            watch.wait_until = max(watch.wait_until, state_kernel.scan_id + 1)
+        watch.prediction = None
 
     def missed(what: str) -> None:
         assert watch is not None
@@ -1231,7 +1251,6 @@ def _try_stretch(
         The records of the cycles skipped go in as a repeat of the last cycle.  That needs
         the last few cycles in the records to be cycles of this prediction.
         """
-        nonlocal total, segments
         assert watch is not None and watch.prediction is not None
         prediction = watch.prediction
         period = prediction.period
@@ -1244,8 +1263,19 @@ def _try_stretch(
         if cycles < 1:
             return
         if watch.hooked:
-            memo.counts["cycle jump declined: a scan hook reads a cell that moves"] += 1
             return
+        called = time.perf_counter() if run is not None else 0.0
+        try:
+            jump_from(prediction, k, cycles)
+        finally:
+            if run is not None:
+                jit_stats.add_cost("cycle jump", time.perf_counter() - called)
+
+    def jump_from(prediction: cycle_jump.Prediction, k: int, cycles: int) -> None:
+        nonlocal total, segments
+        assert watch is not None
+        period = prediction.period
+        scan_id = state_kernel.scan_id
         # Stepping must have reached the state the prediction says, as a check on it.
         wrong = [
             cell
@@ -1269,6 +1299,10 @@ def _try_stretch(
                 plan = timelines.plan_repeat(scan_id, period)
                 if plan is None:
                     memo.counts["cycle jump declined: the records do not repeat"] += 1
+                    # Each try writes the records out first, so the next waits a while.
+                    watch.prediction = None
+                    watch.wait_until = scan_id + watch.wait * period
+                    watch.wait = min(watch.wait * 2, MAX_PREDICTION_WAIT)
                     return
                 cycles = min(cycles, plan.limit)
                 plans.append(plan)
@@ -1299,7 +1333,7 @@ def _try_stretch(
         memo.counts["cycle jumps"] += 1
         memo.counts["cycles jumped"] += cycles
         if landing == prediction.cycles:
-            watch.prediction = None
+            used_up()
             if state_kernel.scan_id >= watch.wait_until:
                 predict_cycle()
 

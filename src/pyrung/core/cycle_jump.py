@@ -325,7 +325,7 @@ def _call(bound: _Bound, name: str, *arguments: Any) -> Any:
         return Lin(-first.a, -first.b)
     if name in ("min", "max") and len(arguments) == 2:
         left, right = arguments
-        # As Python: min keeps the first unless the second is less.
+        # Python's min keeps the first unless the second is less.
         take_right = _cmp(bound, "lt" if name == "min" else "gt", right, left)
         return right if take_right else left
     raise Unsupported(f"{name}() of a form")
