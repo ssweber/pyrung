@@ -172,9 +172,7 @@ class RungFiringTimelines(Generic[K]):
             self._writers_by_tag.setdefault(tag_name, set()).add(rung_index)
             timeline = self._value_timelines.setdefault(key, [])
             if value is _UNKNOWN_VALUE:
-                self._note_unseen(key, timeline)
-            elif key in self._partly_unknown and type(value) is not bool:
-                self._go_unknown(key)
+                self._partly_unknown.add(key)
             if key in self._unknown_keys or value is _UNKNOWN_VALUE:
                 _append_unknown(timeline, scan_id)
             elif _append_value(timeline, scan_id, value):
@@ -398,9 +396,7 @@ class RungFiringTimelines(Generic[K]):
             self._writers_by_tag.setdefault(tag, set()).add(rung_index)
             timeline = self._value_timelines.setdefault(key, [])
             if value is _UNKNOWN_VALUE:
-                self._note_unseen(key, timeline)
-            elif key in self._partly_unknown and type(value) is not bool:
-                self._go_unknown(key)
+                self._partly_unknown.add(key)
             for offset in range(head):
                 self._append_written(
                     key,
@@ -442,25 +438,6 @@ class RungFiringTimelines(Generic[K]):
             _append_unknown(timeline, scan_id)
         elif _append_value(timeline, scan_id, value):
             self._note_new_value(key, timeline, value)
-
-    def _note_unseen(self, key: tuple[K, str], timeline: list[ValueRange]) -> None:
-        """Note a range the loop wrote as ``Unknown`` because it could not speak for it.
-
-        Stepping counts the values the loop did not see.  So this record cannot tell when
-        stepping's count reaches a hundred, and the column goes unknown now.  A column of bools
-        keeps its values, since it never holds more than two.
-        """
-        if key in self._partly_unknown:
-            return  # Either unknown already, or a column of bools.
-        self._partly_unknown.add(key)
-        if any(isinstance(range_.payload, Arithmetic) for range_ in _templates(timeline)) or any(
-            type(value) is not bool for value in _known_distinct_values(timeline)
-        ):
-            self._go_unknown(key)
-
-    def _go_unknown(self, key: tuple[K, str]) -> None:
-        self._unknown_keys.add(key)
-        self._distinct_values.pop(key, None)
 
     def _note_new_value(self, key: tuple[K, str], timeline: list[ValueRange], value: Any) -> None:
         if len(timeline) < _TRACK_DISTINCT_AFTER and _written_out_length(timeline) < (
@@ -526,12 +503,8 @@ class RungFiringTimelines(Generic[K]):
                 *later,
             ]
             timeline = list(prefix)
-            was_unknown = key in self._unknown_keys
             count, unknown = _restepped(timeline, again, count, unknown)
             self._value_timelines[key] = timeline
-            # A settle replaces scans the loop did not record, never a range it wrote as
-            # Unknown, so a column those ranges sent unknown stays unknown.
-            unknown = unknown or (was_unknown and key in self._partly_unknown)
             if unknown:
                 self._unknown_keys.add(key)
                 self._distinct_values.pop(key, None)

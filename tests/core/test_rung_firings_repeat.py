@@ -491,16 +491,15 @@ def test_a_settle_after_a_long_repeat_keeps_it_one_entry() -> None:
     assert record.value_at(0, "a", end + 9) == (end + 9) * 7
 
 
-def test_a_column_the_loop_could_not_speak_for_goes_unknown() -> None:
-    # The loop wrote Unknown at scan 3.  Stepping counted what it held there, so a known
-    # value after it might be one stepping no longer keeps.
+def test_a_column_the_loop_could_not_speak_for_keeps_its_later_values() -> None:
+    # The loop wrote Unknown at scan 3.  A value written after that is still the value written,
+    # even past the scan where stepping stops keeping values.
     record: RungFiringTimelines = RungFiringTimelines()
     record.append(0, 1, {"n": 5, "flag": True})
     record.append(0, 2, {"n": 9, "flag": False})
     record.append(0, 3, {"n": _UNKNOWN_VALUE, "flag": _UNKNOWN_VALUE})
     record.append(0, 4, {"n": 12, "flag": True})
-    assert record.value_at(0, "n", 4) is _UNKNOWN_VALUE
-    # A column of bools never holds a hundred values, so it keeps them.
+    assert record.value_at(0, "n", 4) == 12
     assert record.value_at(0, "flag", 4) is True
 
 
