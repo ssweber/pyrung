@@ -293,7 +293,7 @@ class ModbusSendInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if ctx.is_replay_io:
             return self._execute_replay(ctx, enabled)
-        if not self._is_live():
+        if not self._is_live() or ctx.modbus_stubbed:
             return
         return self._execute_live(ctx, enabled)
 
@@ -459,7 +459,7 @@ class ModbusReceiveInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if ctx.is_replay_io:
             return self._execute_replay(ctx, enabled)
-        if not self._is_live():
+        if not self._is_live() or ctx.modbus_stubbed:
             return
         return self._execute_live(ctx, enabled)
 

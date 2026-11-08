@@ -843,6 +843,10 @@ class ScanContext:
     def is_replay_io(self) -> bool:
         return self._is_replay_io
 
+    @property
+    def modbus_stubbed(self) -> bool:
+        return self._runner is not None and self._runner._modbus_stubbed
+
     def record_io_submit(self, key: str, record: IoSubmitRecord) -> None:
         self._io_submit_staging[key] = record
 

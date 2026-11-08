@@ -247,6 +247,9 @@ class ScanLog:
         copy._effective_input_cache = {}
         return copy
 
+    def has_io_records(self) -> bool:
+        return bool(self._io_submits_by_scan or self._io_drains_by_scan)
+
     def snapshot(self) -> ScanLogSnapshot:
         """Return a frozen view of the log, safe to outlive further writes."""
         return ScanLogSnapshot(

@@ -1089,6 +1089,7 @@ class Epoch:
     rtc_base: datetime
     rtc_base_sim_time: float
     keep_forces_on_run: bool
+    modbus_stubbed: bool = False
 
     @classmethod
     def seal(
@@ -1160,6 +1161,7 @@ class Epoch:
             rtc_base=plc._rtc_base,
             rtc_base_sim_time=plc._rtc_base_sim_time,
             keep_forces_on_run=plc._keep_forces_on_run,
+            modbus_stubbed=plc._modbus_stubbed,
         )
 
 
@@ -1218,6 +1220,7 @@ class EpochQuery:
         runner._unrecorded_scans = epoch.unrecorded_scans
         runner._causal_initial_tags = dict(epoch.causal_initial_tags)
         runner._causal_lineage = CausalLineage(runner)
+        runner._modbus_stubbed = epoch.modbus_stubbed
         runner._set_rtc_internal(epoch.rtc_base, epoch.rtc_base_sim_time)
         if epoch.synthesis is not None:
             from pyrung.core.synthesis import Synthesis
@@ -1741,6 +1744,9 @@ class PLC:
         self._unrecorded_scans: list[tuple[int, int]] = []
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
+        # how() sets this on its forks: their send()/receive() do no I/O, as for a string
+        # target, and every runner made from one (a fork, a replay) keeps it.
+        self._modbus_stubbed = False
         # What coasts keep for later coasts: a search's, shared with its forks.
         self._coast_memo: CoastMemo | None = None
         self._search_refuses_restart = False
@@ -2841,6 +2847,7 @@ class PLC:
         fork._set_time_mode(self._time_mode, dt=self._dt)
         fork._coast_memo = self._coast_memo
         fork._search_refuses_restart = self._search_refuses_restart
+        fork._modbus_stubbed = self._modbus_stubbed
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         if inherit_log:
@@ -3315,7 +3322,7 @@ class PLC:
                 jit_stats.add_cost("compile", time.perf_counter() - started)
                 for step, seconds in (timings or {}).items():
                     jit_stats.add_cost(f"compile: {step}", seconds)
-        if kernel.has_io_gaps:
+        if kernel.has_io_gaps and not self._modbus_stubbed:
             self._compiled_replay_kernel = False
             return None
         self._compiled_replay_kernel = kernel
@@ -3390,6 +3397,7 @@ class PLC:
         # as its source. PILOT holds and Harness plant rungs live outside the
         # user Program, so copy both brackets explicitly.
         self._copy_current_synthesis_onto(fork)
+        fork._modbus_stubbed = self._modbus_stubbed
         fork._replay_mode = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
@@ -3539,6 +3547,10 @@ class PLC:
             return None  # The kernel is compiled from the current plant.
         kernel = self._compiled_replay_supported_kernel()
         if kernel is None:
+            return None
+        if self._modbus_stubbed and self._scan_log.has_io_records():
+            # A kernel writes recorded I/O after its scan, and stepping wrote it at the
+            # instruction.  A how() fork may hold the session's own recorded I/O.
             return None
         anchor = self._nearest_checkpoint_at_or_before(scan_id)
         state = self._checkpoints[anchor] if anchor is not None else self._initial_state

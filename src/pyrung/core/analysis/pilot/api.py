@@ -9,7 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from functools import wraps
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec
 
 import pyrung.core.analysis.pilot.budget as _budget
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
@@ -267,6 +268,23 @@ def pilot_events(
         yield from _engine._pilot_loop_events(setup.work, replace(ctx, wall_clock=clock))
 
 
+_Options = ParamSpec("_Options")
+
+
+def _says_modbus_is_not_simulated(
+    how: Callable[Concatenate[PLC, _Options], Plan],
+) -> Callable[Concatenate[PLC, _Options], Plan]:
+    """A plan for a program with send() or receive() says that how() ran none of them."""
+
+    @wraps(how)
+    def said(plc: PLC, *args: _Options.args, **kwargs: _Options.kwargs) -> Plan:
+        plan = how(plc, *args, **kwargs)
+        return replace(plan, modbus_levers=_drive_setup.modbus_levers(plc._program))
+
+    return said
+
+
+@_says_modbus_is_not_simulated
 @_avoid_errors_named()
 def pilot_how(
     plc: PLC,
