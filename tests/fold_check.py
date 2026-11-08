@@ -555,6 +555,10 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return spans
 
 
+# Whether a loop run's records may say Unknown where stepping's know the value.
+LOOSE_UNKNOWN = False
+
+
 def _column_at(ranges: Any, scan: int) -> Any:
     """A column's value at *scan*; a scan no range covers is a scan with no write."""
     for r in _touching(ranges, scan, scan):
@@ -562,8 +566,12 @@ def _column_at(ranges: Any, scan: int) -> Any:
     return rung_firings._MISSING_WRITE
 
 
-def _column_differs(ours: Any, theirs: Any, first: int, last: int) -> int | None:
-    """Scan where two value columns differ, ``Unknown`` on ours agreeing with anything.
+def _column_differs(
+    ours: Any, theirs: Any, first: int, last: int, ours_may_say_unknown: bool
+) -> int | None:
+    """Scan where two value columns differ.  Each side says ``Unknown`` where the other does.
+
+    *ours_may_say_unknown* lets ours say ``Unknown`` where stepping knows the value.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a stretch of no boundary settle the whole of it.
@@ -578,11 +586,13 @@ def _column_differs(ours: Any, theirs: Any, first: int, last: int) -> int | None
         high = stop - 1
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
             mine = _column_at(ours, scan)
+            stepped = _column_at(theirs, scan)
+            if (mine is rung_firings._UNKNOWN_VALUE) != (stepped is rung_firings._UNKNOWN_VALUE):
+                if not (ours_may_say_unknown and mine is rung_firings._UNKNOWN_VALUE):
+                    return scan
+                continue
             if mine is rung_firings._UNKNOWN_VALUE:
                 continue
-            stepped = _column_at(theirs, scan)
-            if stepped is rung_firings._UNKNOWN_VALUE:
-                continue  # a fragmented column, where each counted its own values
             if _exact(mine) != _exact(stepped):
                 return scan
     return None
@@ -638,7 +648,7 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
         for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
             a = ours._value_timelines.get(key, ())
             b = theirs._value_timelines.get(key, ())
-            scan = _column_differs(a, b, first, end)
+            scan = _column_differs(a, b, first, end, LOOSE_UNKNOWN)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "

@@ -135,6 +135,13 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
     ours, theirs = _reads(repeated, last), _reads(stepped, last)
     for key in theirs:
         assert ours[key] == theirs[key], key
+    # A column goes unknown at its hundredth value, so later scans need the same count.
+    assert repeated._unknown_keys == stepped._unknown_keys
+    assert _counts(repeated) == _counts(stepped)
+
+
+def _counts(timelines: RungFiringTimelines) -> dict[Any, list[str]]:
+    return {key: sorted(map(_shown, values)) for key, values in timelines._distinct_values.items()}
 
 
 def _holds_a_repeat(timelines: RungFiringTimelines) -> bool:
@@ -305,3 +312,55 @@ def test_appends_after_a_cut_inside_a_repeat_read_back_as_scan_by_scan() -> None
         _record(early, scan_id, {0: ({"a": value}, frozenset())})
         _record(later, scan_id, {0: ({"a": value}, frozenset())})
     _assert_same(early, later, 33)
+
+
+def test_a_plan_left_unapplied_leaves_the_count_as_stepping_does() -> None:
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    planned: RungFiringTimelines = RungFiringTimelines()
+    scan_id = 1
+    # Three cycles of two scans, rung 0 writing a=1 on the first scan of each.
+    for _ in range(3):
+        for timelines in (stepped, planned):
+            timelines.append(0, scan_id, {"a": 1})
+        scan_id += 2
+    assert planned.plan_repeat(scan_id - 1, 2) is not None
+    for value in range(2, 140):
+        for timelines in (stepped, planned):
+            timelines.append(0, scan_id, {"a": value})
+        scan_id += 2
+    assert (0, "a") in stepped._unknown_keys
+    _assert_same(stepped, planned, scan_id)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_random_plans_left_unapplied_leave_the_column_as_stepping_does(seed: int) -> None:
+    rng = random.Random(2000 + seed)
+    prefix, cycle_at = _stepping(rng)
+    period = len(cycle_at(0))
+    scans = [*prefix, *(scan for r in range(3) for scan in cycle_at(r))]
+    scans += [_random_scan(rng) for _ in range(rng.randrange(0, 40))]
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    planned: RungFiringTimelines = RungFiringTimelines()
+    warm = len(prefix) + 3 * period
+    for scan_id, scan in enumerate(scans, start=1):
+        _record(stepped, scan_id, scan)
+        _record(planned, scan_id, scan)
+        if scan_id == warm:
+            planned.plan_repeat(warm, period)
+    _assert_same(stepped, planned, len(scans))
+
+
+def _ramp_then_rest(index: int) -> list[Scan]:
+    """A count of three scans that stepping folds into one range, then a scan with no write."""
+    return [
+        *({0: ({"a": 10 * index + offset}, frozenset())} for offset in range(3)),
+        {0: ({}, frozenset())},
+    ]
+
+
+def test_a_count_the_column_folds_away_is_counted_as_stepping_counts_it() -> None:
+    # Stepping counts the first two values of each ramp, and the third joins their range.
+    stepped, repeated, planned, last = _recorded_both_ways([], _ramp_then_rest, 120, [])
+    assert planned
+    assert (0, "a") in stepped._unknown_keys
+    _assert_same(stepped, repeated, last)
