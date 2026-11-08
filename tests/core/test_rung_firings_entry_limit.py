@@ -69,7 +69,7 @@ def test_stepping_turns_a_column_unknown_after_its_last_entry(writes, period) ->
 
 @pytest.mark.parametrize(("writes", "period"), SHAPES)
 def test_a_jump_turns_the_column_unknown_on_steppings_scan(writes, period) -> None:
-    # As the loop does: each plan goes as far as it may, and the next cycle goes in scan by scan.
+    # Each plan goes as far as it may, as the loop's plans do.  The next cycle goes in scan by scan.
     ours: RungFiringTimelines = RungFiringTimelines()
     scan_id, jumped = 1, 0
     while scan_id <= LAST:
@@ -168,7 +168,7 @@ def test_a_column_turned_unknown_takes_a_plan_once_it_settles() -> None:
     assert ours.run_count() < _ENTRY_LIMIT + 20
 
 
-# Shapes the review of the last count found wrong: the writes up to the settle, the gap, the
+# Shapes the last review found wrong.  Each gives the writes up to the settle, the gap, the
 # checkpoint the replay starts from, and the writes after the settle.
 _Shape = tuple[list[Any], int, int, int, list[Any]]
 
@@ -210,7 +210,7 @@ def _ramp_across_the_gaps_end() -> _Shape:
 
 
 def _replay_reaches_it_first(goes_on: bool) -> _Shape:
-    """The replay starts on a count's last two scans, which stepping folded into one range."""
+    """The replay starts on a count's last two scans, which stepping merged into one range."""
     if goes_on:
         writes = [*range(200), *_held_pairs(1000, 99)]
         return writes, 350, len(writes), 198, _held_pairs(1099, 11)
@@ -284,7 +284,7 @@ def test_a_trim_from_the_front_keeps_the_count() -> None:
     assert later._unknown_keys == {KEY: CROSSING}
 
 
-# A gap fuzz: random scans, gaps the jit left, records kept after each gap, and settles in any
+# Each seed writes random scans and leaves gaps as the jit does.  It settles the gaps in any
 # order.  These seeds reach the limit while a gap stepping joins to its edges is unsettled.
 _EDGE_JOINS = frozenset({9, 14, 26, 157})
 POOL = (0, 1, 2, 7)

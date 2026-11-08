@@ -770,7 +770,8 @@ class RungFiringTimelines(Generic[K]):
         for key, ranges in list(self._value_timelines.items()):
             kept = _trim_value_ranges(ranges, min_scan_id, max_scan_id)
             # A trim from the front keeps each column's count.  Stepping and a long run trim on
-            # different scans, and each must turn the column Unknown on the same scan.
+            # different scans, and each must turn the column Unknown on the same scan.  A cut
+            # from the back counts the column again.
             if max_scan_id is not None:
                 kept = _as_of(kept, ranges, max_scan_id)
             gone = self._unknown_keys.get(key)
