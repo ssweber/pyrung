@@ -5,11 +5,14 @@ from __future__ import annotations
 import random
 import tracemalloc
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from pyrung.core.analysis.pilot.requirement_repair import _program_guard_transition_candidates
 from pyrung.core.rung_firings import _UNKNOWN_VALUE, Repeat, RungFiringTimelines
+from pyrung.core.runner import RungId
 
 RUNGS = (0, 1, 2)
 TAGS = ("a", "b")
@@ -650,3 +653,36 @@ def test_a_gap_settled_back_half_first_knows_only_values_written() -> None:
             assert value == _square_or_ramp(scan_id), scan_id
             known += 1
     assert known >= 200
+
+
+def _guard_candidates(timelines: RungFiringTimelines) -> tuple[int, ...]:
+    owner = SimpleNamespace(
+        rung_firing_timelines=timelines, node_firing_timelines=RungFiringTimelines()
+    )
+    writers = frozenset((RungId(None, 0), RungId(None, 1)))
+    return _program_guard_transition_candidates(owner, writers, "T", before_scan=5)
+
+
+def test_how_ranks_the_same_guard_candidates_after_a_settle_as_after_stepping() -> None:
+    # Rung 0 writes T=1 on scans 1, 3 and 4, and fires without writing it on scan 2.  Rung 1
+    # writes T=0 on scan 3.  Ours missed scan 3, and the replay of it starts at scan 3.
+    first = {1: {"T": 1, "U": True}, 2: {"U": True}, 3: {"T": 1, "U": True}, 4: {"T": 1}}
+
+    def record(timelines: RungFiringTimelines, scans: list[int]) -> None:
+        for scan_id in scans:
+            timelines.append(0, scan_id, first[scan_id])
+            if scan_id == 3:
+                timelines.append(1, scan_id, {"T": 0})
+
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    record(stepped, [1, 2, 3, 4])
+    ours: RungFiringTimelines = RungFiringTimelines()
+    record(ours, [1, 2, 4])
+    replay: RungFiringTimelines = RungFiringTimelines()
+    record(replay, [3])
+    ours.replace_range(replay, 3, 3)
+    assert _guard_candidates(ours) == _guard_candidates(stepped)
+    one = frozenset((0,))
+    assert ours.latest_value_transition_scan_at_or_before(
+        one, "T", 1, 4
+    ) == stepped.latest_value_transition_scan_at_or_before(one, "T", 1, 4)
