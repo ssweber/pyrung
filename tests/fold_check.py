@@ -1712,7 +1712,8 @@ def install() -> None:
     setattr(scan_trace, "MIN_RUN_SCANS", 1)  # noqa: B010
     setattr(scan_trace, "BURST_SIZES", _LOOP_BURSTS)  # noqa: B010
     setattr(scan_trace, "STRICT_SELF_CHECK", True)  # noqa: B010
-    # Each cycle a stretch predicts is checked against the scans it runs, and a miss fails.
+    # The loop jumps the cycles it predicts.  STRICT_CYCLE_CHECK fails a run whose scans
+    # disagree with a prediction.
     setattr(coast_run, "CYCLE_PREDICTIONS", "jump")  # noqa: B010
     setattr(coast_run, "STRICT_CYCLE_CHECK", True)  # noqa: B010
     if _note_self_check_mismatch not in scan_trace.SELF_CHECK_OBSERVERS:
