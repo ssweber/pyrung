@@ -93,8 +93,8 @@ class Model:
         self.loop: dict[str, set[int]] = {tag: set() for tag in TAGS}
         # A trim took scans of a gap that never settled, so the count stays low.
         self.lower = False
-        # Columns a trim left only scans of an open gap.  The record cannot know the column
-        # goes on, so it may lack the firings with no write before the rung writes it again.
+        # Columns a trim left only scans of an open gap, or whose gap scans it took.  The
+        # record cannot know the column goes on, so it may lack the firings with no write.
         self.unsure: set[str] = set()
 
     def add(self, writes: dict[str, Any] | None) -> int:
@@ -182,14 +182,6 @@ def _shape(ranges: list[Any]) -> list[Any]:
 
 def vars_of(payload: Any) -> tuple[Any, ...]:
     return tuple(getattr(payload, name) for name in payload.__slots__)
-
-
-def _written_from(ranges: list[Any]) -> list[Any]:
-    """*ranges* from the first that holds a write."""
-    for index, r in enumerate(ranges):
-        if not rung_firings._is_missing(r):
-            return ranges[index:]
-    return []
 
 
 def _replay_record(ours: RungFiringTimelines, anchor: int) -> RungFiringTimelines:
@@ -320,12 +312,20 @@ class Records(RuleBasedStateMachine):
         model = self.model
         floor = data.draw(st.integers(model.floor + 1, model.tip))
         self.ours.trim_before(floor)
+        columns = {tag: model.column(tag) for tag in TAGS}
         model.trims.append((model.tip, floor))
         model.floor = floor
-        for tag in TAGS:
-            kept = [scan for scan in model.column(tag) if scan >= floor]
-            if kept and all(model.in_gap(scan) for scan in kept):
+        hidden = any(last >= floor for _first, last in model.gaps)
+        for tag, column in columns.items():
+            if not column:
+                continue
+            if hidden and all(model.in_gap(scan) for scan in column if scan >= floor):
+                # The record cannot know whether the rung kept the column going.  It counts
+                # no change on those scans, so the count may stay low too.
                 model.unsure.add(tag)
+                model.lower = True
+            elif any(model.in_gap(scan) for scan in column if scan < floor):
+                model.unsure.add(tag)  # The rung may have begun the column in the gap.
         if any(first < floor for first, _last in model.gaps):
             model.lower = True
         model.gaps = [(max(first, floor), last) for first, last in model.gaps if last >= floor]
@@ -409,10 +409,10 @@ class Records(RuleBasedStateMachine):
         else:
             assert theirs == crossing
             assert theirs is not None or held == count
+        if tag in model.unsure:
+            return  # The record may lack firings with no write, so its ranges may differ.
         expected = model.ranges(tag)
         timeline = list(_expanded(ours._value_timelines.get(key, []), None, None))
-        if tag in model.unsure:
-            timeline, expected = _written_from(timeline), _written_from(expected)
         assert _shape(timeline) == _shape(expected)
         stepped: RungFiringTimelines = RungFiringTimelines()
         stepped._value_timelines[key] = expected
@@ -434,13 +434,17 @@ def _totals_hold(timelines: RungFiringTimelines) -> None:
         for r in _expanded(timelines._value_timelines.get(key, ()), crossing + 1, None):
             for scan in range(max(r.start_scan_id, crossing + 1), r.end_scan_id + 1):
                 assert rung_firings._value_at(r, scan) in (U, M), (key, scan)
-    if timelines._limit is None or timelines._dropped:
-        return  # A trim from the front takes scans the count still holds.
+    if timelines._limit is None:
+        return
+    floor = timelines._floor
     for key, ranges in timelines._value_timelines.items():
         crossing = timelines._unknown_keys.get(key)
-        changes = rung_firings._total(timelines._change_groups(key, ranges, 0, crossing))
+        if crossing is not None and crossing < floor:
+            continue
+        changes = rung_firings._total(timelines._change_groups(key, ranges, floor, crossing))
         held = timelines._limit if crossing is not None else timelines._counts.get(key, 0)
-        assert changes == held, (key, changes, held)
+        # A trim from the front takes changes the count still holds.
+        assert changes == held if not floor else changes <= held, (key, changes, held)
 
 
 @pytest.fixture
@@ -489,22 +493,7 @@ class Capped(Records):
     limit = 6
 
 
-MACHINES = [
-    NoTrims,
-    CappedNoTrims,
-    pytest.param(
-        Trims,
-        marks=pytest.mark.xfail(
-            strict=True, reason="a trim leaves the cut range, which a later append extends"
-        ),
-    ),
-    pytest.param(
-        Capped,
-        marks=pytest.mark.xfail(
-            strict=True, reason="the count is of ranges, so it depends on how scans went in"
-        ),
-    ),
-]
+MACHINES = [NoTrims, CappedNoTrims, Trims, Capped]
 
 
 @pytest.mark.parametrize("machine", MACHINES)

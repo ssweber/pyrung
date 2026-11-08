@@ -2806,18 +2806,23 @@ class PLC:
                 discarded shortly after causal analysis.
         """
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
-        if not self.history.contains(target_scan_id):
+        # A replay of the oldest kept scan starts on the checkpoint a trim keeps before it.
+        below = _as_recorded and target_scan_id < self._initial_scan_id
+        if not below and not self.history.contains(target_scan_id):
             raise KeyError(target_scan_id)
-        historical_owner = self._causal_lineage.owner_at(target_scan_id)
+        historical_owner = self._causal_lineage.owner_at(
+            self._initial_scan_id if below else target_scan_id
+        )
         if historical_owner is None:
             raise KeyError(target_scan_id)
         # A runner's first scan belongs to its parent's epoch, but this runner ran on from
         # its own edit of that state (a harness moving a count, a tip seed).
-        historical_state = (
-            self._initial_state
-            if target_scan_id == self._initial_scan_id
-            else historical_owner.state_at(target_scan_id)
-        )
+        if below:
+            historical_state = self._checkpoints[target_scan_id]
+        elif target_scan_id == self._initial_scan_id:
+            historical_state = self._initial_state
+        else:
+            historical_state = historical_owner.state_at(target_scan_id)
         effective_budget = (
             history_budget if history_budget is not None else self._recent_state_cache_budget
         )
@@ -3178,16 +3183,20 @@ class PLC:
         new_floor_state = self._causal_state_at(scan_id)
         self._epoch_caches.on_history_trimmed()
         self._causal_lineage.trim_before(scan_id)
-        self._scan_log.trim_before(scan_id)
+        # A replay of the oldest kept scan starts on the checkpoint before it, so that
+        # checkpoint stays with the log from it on.
+        below = self._nearest_checkpoint_at_or_before(scan_id - 1)
+        horizon = scan_id if below is None else below
+        self._scan_log.trim_before(horizon)
         self._rung_firing_timelines.trim_before(scan_id)
         self._committed_tag_timelines.trim_before(scan_id)
         self._node_firing_timelines.trim_before(scan_id)
         self._unrecorded_scans = [
             (max(first, scan_id), last) for first, last in self._unrecorded_scans if last >= scan_id
         ]
-        for cp in [k for k in self._checkpoints if k < scan_id]:
+        for cp in [k for k in self._checkpoints if k < horizon]:
             del self._checkpoints[cp]
-        self._plant_changes = [c for c in self._plant_changes if c[0] >= scan_id]
+        self._plant_changes = [c for c in self._plant_changes if c[0] >= horizon]
         if scan_id > self._initial_scan_id:
             self._initial_scan_id = scan_id
             self._initial_state = new_floor_state
@@ -3211,9 +3220,11 @@ class PLC:
         if len(self._checkpoints) <= keep:
             return
         plant_changes = {changed_at for changed_at, _plant in self._plant_changes}
+        # The checkpoint a trim keeps before the oldest kept scan stays too.
+        kept = sorted(c for c in self._checkpoints if c >= self._initial_scan_id)
         dropped = {
             scan_id
-            for position, scan_id in enumerate(sorted(self._checkpoints))
+            for position, scan_id in enumerate(kept)
             if position % 2 == 1 and scan_id not in plant_changes
         }
         for scan_id in dropped:

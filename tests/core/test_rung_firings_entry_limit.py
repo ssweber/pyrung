@@ -659,7 +659,6 @@ def test_a_window_of_a_few_hundred_scans_never_caps_a_column() -> None:
     assert dict(plc.rung_firings(oldest)[0]) == {Phase.name: oldest % 4}
 
 
-@pytest.mark.xfail(strict=True, reason="a trim leaves no checkpoint before the oldest kept scan")
 def test_the_oldest_kept_scan_answers_once_its_column_turned_unknown() -> None:
     # A replay of the oldest kept scan starts on a checkpoint before it.
     plc = PLC(_sequencer(), dt=0.01, history=2000)
@@ -686,10 +685,11 @@ def test_a_run_notes_its_unrecorded_scans_before_it_trims_history() -> None:
     oldest = plc.history.oldest_scan_id
     assert oldest > 1
     assert plc._unrecorded_scans and plc._unrecorded_scans[0][0] >= oldest
-    assert plc._rung_firing_timelines._gaps == plc._unrecorded_scans
+    # The record keeps the two scans before the floor, which the floor's scan looks back at.
+    gaps = [(max(first, oldest), last) for first, last in plc._rung_firing_timelines._gaps]
+    assert gaps == plc._unrecorded_scans
 
 
-@pytest.mark.xfail(strict=True, reason="a trim leaves no checkpoint before the oldest kept scan")
 def test_a_trim_during_a_run_leaves_the_oldest_kept_scan_answering() -> None:
     plc = PLC(_toggle(), dt=0.01, history=2000)
     plc.run_for(50)
