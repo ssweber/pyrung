@@ -444,10 +444,10 @@ class RungFiringTimelines(Generic[K]):
             )
             self._rejoined(timeline, [*missing, *later], len(missing))
             self._value_timelines[key] = timeline
-            self._recount(key, timeline, first)
+            self._recount(key, timeline, first, self._trimmed_from(key, mine))
         self._rebuild_indexes()
 
-    def _recount(self, key: tuple[K, str], timeline: list[Any], first: int) -> None:
+    def _recount(self, key: tuple[K, str], timeline: list[Any], first: int, trimmed: int) -> None:
         """Count a column filled in from *first*, and turn it Unknown where stepping would.
 
         The scans after the window kept values this record counted without the window's
@@ -455,11 +455,11 @@ class RungFiringTimelines(Generic[K]):
         """
         gone = self._unknown_keys.get(key)
         if gone is None or gone >= first:
-            found = _limit_scan(timeline)
+            found = _limit_scan(timeline, trimmed)
             if found is not None and (gone is None or found < gone):
                 gone = found
         if gone is None:
-            self._entries[key] = _written_out_length(timeline)
+            self._entries[key] = trimmed + _written_out_length(timeline)
             return
         self._unknown_keys[key] = gone
         self._entries.pop(key, None)
@@ -769,20 +769,22 @@ class RungFiringTimelines(Generic[K]):
                 self._fired_ranges.pop(rung)
         for key, ranges in list(self._value_timelines.items()):
             kept = _trim_value_ranges(ranges, min_scan_id, max_scan_id)
+            # A trim from the front keeps each column's count.  Stepping and a long run trim on
+            # different scans, and each must turn the column Unknown on the same scan.
             if max_scan_id is not None:
                 kept = _as_of(kept, ranges, max_scan_id)
             gone = self._unknown_keys.get(key)
-            if gone is not None and max_scan_id is not None and gone > max_scan_id:
-                del self._unknown_keys[key]  # It reached the limit after the last scan kept.
-            if not kept:
+            if max_scan_id is not None and (gone is None or gone > max_scan_id):
+                trimmed = self._trimmed_from(key, ranges)
+                self._unknown_keys.pop(key, None)  # It reached the limit after the cut.
+                self._entries[key] = trimmed + _written_out_length(kept)
+                if not self._entries[key]:
+                    del self._entries[key]
+            if kept:
+                self._value_timelines[key] = kept
+            else:
                 self._value_timelines.pop(key)
-                self._entries.pop(key, None)
-                self._unknown_keys.pop(key, None)
                 self._partly_unknown.discard(key)
-                continue
-            self._value_timelines[key] = kept
-            if key not in self._unknown_keys:
-                self._entries[key] = _written_out_length(kept)
         for key, ranges in list(self._varied_ranges.items()):
             kept = _trim_scan_ranges(ranges, min_scan_id, max_scan_id)
             if kept:
@@ -790,6 +792,14 @@ class RungFiringTimelines(Generic[K]):
             else:
                 self._varied_ranges.pop(key)
         self._rebuild_indexes()
+
+    def _trimmed_from(self, key: tuple[K, str], ranges: list[Any]) -> int:
+        """The entries a column counted that a trim from the front took out of *ranges*."""
+        gone = self._unknown_keys.get(key)
+        if gone is None:
+            return self._entries.get(key, 0) - _written_out_length(ranges)
+        held = _as_of(_trim_value_ranges(ranges, None, gone), ranges, gone)
+        return _ENTRY_LIMIT - _written_out_length(held)
 
     def snapshot(self, *, up_to: int | None = None) -> RungFiringTimelines[K]:
         frozen: RungFiringTimelines[K] = RungFiringTimelines()
@@ -1416,13 +1426,12 @@ def _carries(tail: Any, range_: ValueRange) -> bool:
     )
 
 
-def _limit_scan(ranges: Sequence[Any]) -> int | None:
+def _limit_scan(ranges: Sequence[Any], held: int) -> int | None:
     """The first scan on which stepping's column reached ``_ENTRY_LIMIT`` entries, or None.
 
     Appending makes an alternating or arithmetic range on its third scan out of two single
     scans.  So the column holds one entry more on such a range's second scan.
     """
-    held = 0
     for element in ranges:
         pieces: Sequence[Any] = (element,)
         if type(element) is Repeat:

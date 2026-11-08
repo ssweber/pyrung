@@ -34,6 +34,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung_firings,
     runner,
     scan_trace,
     system,
@@ -248,6 +249,12 @@ def _same_tags(ours: dict[str, Any], theirs: dict[str, Any]) -> None:
 
 
 @pytest.fixture
+def small_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A column turns Unknown after a hundred entries, so a short run reaches the limit."""
+    monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
+
+
+@pytest.fixture
 def strict(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(scan_trace, "STRICT_SELF_CHECK", True)
     monkeypatch.setattr(compiled_run, "LOOP_OBSERVERS", [])
@@ -441,6 +448,7 @@ class TestRecordedRuns:
         assert runs._unknown_keys == scans._unknown_keys
         assert runs._partly_unknown == scans._partly_unknown
 
+    @pytest.mark.usefixtures("small_limit")
     def test_a_tag_of_many_values_goes_unknown_as_it_would(self) -> None:
         path = _FakePath({"rung": _Recording({}, (("A", None, False),), frozenset())})
         runs: RungFiringTimelines[str] = RungFiringTimelines()
@@ -451,9 +459,11 @@ class TestRecordedRuns:
             scans.append("rung", scan, {"A": value})
             segments.append(SimpleNamespace(path=path, first=scan, count=1, ends={"A": value}))
         _record_columns(runs, segments, 0, frozenset())
+        assert scans._unknown_keys
         assert runs._unknown_keys == scans._unknown_keys
         assert runs._value_timelines == scans._value_timelines
 
+    @pytest.mark.usefixtures("small_limit")
     def test_a_column_that_goes_unknown_in_a_head_stays_unknown(self) -> None:
         repeated: RungFiringTimelines[str] = RungFiringTimelines()
         tag_run: RungFiringTimelines[str] = RungFiringTimelines()
@@ -556,6 +566,7 @@ def _writes_too_many_values() -> None:
         out(Hit)
 
 
+@pytest.mark.usefixtures("small_limit")
 class TestRungFiringsAlwaysHaveTheirValues:
     SCANS = 1000
 
@@ -854,9 +865,9 @@ def _fires_every_other_scan() -> None:
 
 
 def test_a_count_with_values_before_the_loop_goes_unknown_on_the_scan_stepping_does(
-    strict,
+    strict, small_limit
 ) -> None:
-    # Forty scans first give the count more than eight values, so the loop counts from them.
+    # Forty scans first give the count twenty entries, so the loop counts on from them.
     plc = _runner(_fires_every_other_scan, 0.01)
     for _ in range(40):
         plc.step()
@@ -886,7 +897,7 @@ def test_counts_that_go_unknown_cycles_apart_keep_the_loop_planning(
 ) -> None:
     plc = _runner(_three_counts, 0.01)
     # Each count first takes squares, three more than the count before.  So the counts reach
-    # their hundredth values three cycles apart.
+    # the entry limit three cycles apart.
     for value in range(19):
         plc.patch(
             {
