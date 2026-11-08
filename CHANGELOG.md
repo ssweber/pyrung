@@ -488,7 +488,7 @@
 
 ### Performance
 
-- `run_for()`, `run_until()` and `how()` run compiled on a program with `nop()`, `raw()`, or a `send()` or `receive()` whose target is a name such as `"panel"`. Every scan of such a program ran interpreted. `how()` also runs compiled when the target is a `ModbusTcpTarget` or `ModbusRtuTarget`.
+- `run_for()`, `run_until()` and `how()` run compiled on a program with `nop()`, `raw()`, or a `send()` or `receive()` whose target is a name such as `"panel"` (every scan ran interpreted). `how()` also runs compiled when the target is a `ModbusTcpTarget` or `ModbusRtuTarget`.
 - `how()` starts faster.
   - A second `how()` on an unchanged program skips several seconds of setup.
   - The first `how()` takes about half as long to set up.
