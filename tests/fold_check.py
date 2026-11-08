@@ -26,8 +26,9 @@ have proved nothing about the loop.
 
 A run is skipped, and counted, when the twin cannot reproduce it: an active
 ``when()`` registration or a monitor other than a Harness feedback notifier
-(their callbacks act on the folded runner only), replay mode, or a time mode other
-than fixed-step.  A compiled run or a coast longer than ``FOLD_CHECK_MAX_SCANS`` scans
+(their callbacks act on the folded runner only), replay mode, a time mode other
+than fixed-step, or a send() or receive() that talks to a device.  A device's answer
+comes from another thread, and the twin would collect the run's own request.  A compiled run or a coast longer than ``FOLD_CHECK_MAX_SCANS`` scans
 (default 200000) is compared at its landing with real compiled scans, and its loop scans
 counted apart from those compared scan by scan.
 
@@ -260,6 +261,8 @@ def _skip_reason(plc: Any) -> str | None:
         return "replay mode"
     if getattr(getattr(plc, "_time_mode", None), "name", "") != "FIXED_STEP":
         return "not fixed-step"
+    if _talks_to_a_device(plc):
+        return "live Modbus"
     for reg in getattr(plc, "_breakpoints_by_id", {}).values():
         if reg.enabled and not reg.removed:
             return "when() registration"
@@ -269,6 +272,21 @@ def _skip_reason(plc: Any) -> str | None:
             if "_make_fb_callback" not in name:
                 return "monitor"
     return None
+
+
+def _talks_to_a_device(plc: Any) -> bool:
+    from pyrung.core.instruction.send_receive._core import (
+        ModbusReceiveInstruction,
+        ModbusSendInstruction,
+    )
+    from pyrung.core.validation._common import walk_instructions
+
+    if plc._modbus_stubbed or plc._program is None:
+        return False
+    return any(
+        isinstance(instr, ModbusSendInstruction | ModbusReceiveInstruction) and instr._is_live()
+        for instr in walk_instructions(plc._program)
+    )
 
 
 def _twin(plc: Any) -> Any:
