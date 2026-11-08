@@ -154,7 +154,7 @@ class RungFiringTimelines(Generic[K]):
         # The entries trims from the front took out of each column.  Stepping counts them still.
         self._dropped: dict[tuple[K, str], int] = {}
         # The first scan each trimmed column holds, and the last two ranges the trim took off.
-        # Stepping appended the scans after a gap at that scan to those ranges as they were.
+        # A settle of a gap at that scan appends to those two ranges, as stepping did.
         self._floors: dict[tuple[K, str], tuple[int, list[ValueRange]]] = {}
         # Each column that turned Unknown, and the scan whose entry reached the limit.
         self._unknown_keys: dict[tuple[K, str], int] = {}
@@ -459,12 +459,17 @@ class RungFiringTimelines(Generic[K]):
             if floor is not None:
                 timeline = self._cut(key, timeline, dropped, floor)
             self._value_timelines[key] = timeline
-        # A replay marks a column it wrote Unknown into, and the window keeps that Unknown.
+        # A replay marks each column it wrote Unknown into.  The window keeps that Unknown.
         self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
 
     def _recount(
-        self, key: tuple[K, str], timeline: list[Any], first: int, trimmed: int, replayed: int | None
+        self,
+        key: tuple[K, str],
+        timeline: list[Any],
+        first: int,
+        trimmed: int,
+        replayed: int | None,
     ) -> None:
         """Count a column filled in from *first*, and turn it Unknown where stepping would.
 
@@ -796,9 +801,10 @@ class RungFiringTimelines(Generic[K]):
                 if min_scan_id <= ranges[0].start_scan_id:
                     continue
                 # A trim from the front keeps each column's count.  Stepping and a long run
-                # trim on different scans, and each must turn the column Unknown on one scan.
+                # trim on different scans.  Each must turn the column Unknown on the same scan.
                 kept = self._cut(key, whole, dropped, min_scan_id)
             else:
+                assert max_scan_id is not None
                 # A cut from the back counts the column again.
                 kept = _as_of(_trim_value_ranges(whole, None, max_scan_id), whole, max_scan_id)
                 if floor is not None:
@@ -828,7 +834,8 @@ class RungFiringTimelines(Generic[K]):
     def _whole(self, key: tuple[K, str], ranges: list[Any]) -> tuple[list[Any], int, int | None]:
         """*ranges* with the last two ranges a trim took off put back, as stepping held them.
 
-        Also gives the entries the trims took off the result, and the column's first scan.
+        It also returns the entries trims took off the result, and the first scan the column
+        holds.  That scan is None when nothing went back.
         """
         dropped = self._dropped.get(key, 0)
         held = self._floors.get(key)

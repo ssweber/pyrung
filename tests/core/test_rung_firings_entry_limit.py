@@ -443,7 +443,9 @@ def _review_put(records: RungFiringTimelines, scan_id: int, event: tuple[str, An
         records.append(0, scan_id, {} if kind == "m" else {"a": value})
 
 
-def _review_jump(ours: RungFiringTimelines, events: list, scan_id: int, end: int, since: int) -> int:
+def _review_jump(
+    ours: RungFiringTimelines, events: list, scan_id: int, end: int, since: int
+) -> int:
     """Scans a plan records from *scan_id*, once three cycles after the last gap are alike."""
     for period in range(1, 7):
         if scan_id - since < 3 * period or not all(
@@ -500,7 +502,7 @@ def _review_trial(seed: int, mode: str, jumps: str, trims: str) -> tuple[Any, ..
             scan_id += 1
             continue
         _review_put(ours, scan_id, events[scan_id - 1])
-        if not trimmed and scan_id >= trim_at:
+        if trim_at is not None and not trimmed and scan_id >= trim_at:
             ours.trim_before(floor)
             trimmed = True
         if jumped and rng.random() < 0.3:
@@ -646,7 +648,10 @@ def test_runs_with_gaps_settle_to_the_records_stepping_keeps() -> None:
         assert ours._unknown_keys == stepped._unknown_keys, name
         for rung, tag in ours._value_timelines.keys() | stepped._value_timelines.keys():
             for scan_id in range(1, last + 1):
-                mine, theirs = ours.value_at(rung, tag, scan_id), stepped.value_at(rung, tag, scan_id)
+                mine, theirs = (
+                    ours.value_at(rung, tag, scan_id),
+                    stepped.value_at(rung, tag, scan_id),
+                )
                 where = (name, rung, tag, scan_id)
                 assert mine is theirs or (
                     _UNKNOWN_VALUE not in (mine, theirs) and mine == theirs
