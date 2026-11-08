@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import time
 import tracemalloc
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -128,7 +129,7 @@ def _recorded_both_ways(
     plan = repeated.plan_repeat(warm, period)
     first = warm + 1
     if plan is not None:
-        added = cycles - 3
+        added = min(plan.limit, cycles - 3)
         if added > 0:
             plan.apply(added)
             first += added * period
@@ -365,13 +366,32 @@ def _kept(cycle: Callable[[int], list[Scan]], cycles: int) -> RungFiringTimeline
     return truth
 
 
-def test_a_count_with_steps_goes_in_as_one_repeat_past_its_hundredth_value() -> None:
+def test_a_count_with_steps_stops_short_of_its_hundredth_value() -> None:
     stepped, repeated, planned, last = _recorded_both_ways([], _counting_up, 300, [])
     assert planned
     assert (0, "a") in stepped._unknown_keys
-    assert (0, "a") not in repeated._unknown_keys
-    assert repeated.run_count() < 20
+    assert (0, "a") in repeated._unknown_keys
     _assert_true_to(stepped, _kept(_counting_up, 300), repeated, last)
+
+
+def test_a_long_count_leaves_how_a_hundred_candidates_or_so() -> None:
+    # The loop plans as far as each plan lets it, then steps one cycle, and plans again.
+    record: RungFiringTimelines = RungFiringTimelines()
+    scan_id, value = 1, 0
+    started = time.perf_counter()
+    while scan_id < 2_000_000:
+        plan = record.plan_repeat(scan_id - 1, 2) if value >= 3 else None
+        if plan is not None:
+            cycles = min(plan.limit, (2_000_000 - scan_id) // 2)
+            plan.apply(cycles)
+            scan_id, value = scan_id + 2 * cycles, value + cycles
+        record.append(0, scan_id, {"a": value})
+        record.append(0, scan_id + 1, {"a": 7})
+        scan_id, value = scan_id + 2, value + 1
+    candidates = record.tag_transition_candidate_scans_before(frozenset((0,)), "a", scan_id)
+    assert len(candidates) <= 110
+    assert record.run_count() <= 120
+    assert time.perf_counter() - started < 5
 
 
 def test_appends_after_a_cut_inside_a_repeat_read_back_as_scan_by_scan() -> None:

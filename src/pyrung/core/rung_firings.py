@@ -263,7 +263,7 @@ class RungFiringTimelines(Generic[K]):
                     return None
                 if action is not None:
                     actions.append((key if values else None, ranges, action))
-        return RepeatPlan(actions, period)
+        return RepeatPlan(self, actions, period)
 
     def _repeat_action(
         self, key: Any, ranges: list[Any], last: int, period: int, values: bool
@@ -343,9 +343,18 @@ class RungFiringTimelines(Generic[K]):
             # value comes from before that, so it cannot repeat.
             if not all(_unknown_or_missing(range_) for range_ in cycle):
                 return None
-        # The plan leaves the column's count alone.  A repeat stays one entry however many
-        # values its steps reach.
-        return _Cycle(cycle, steps, step, trailing)
+            return _Cycle(cycle, steps, step, trailing)
+        if not values or not steps:
+            return _Cycle(cycle, steps, step, trailing)
+        # Each cycle with steps brings new values, and how() tries a candidate scan for each.
+        # So the cycles stop short of the column's own hundredth value.  The count takes two
+        # values for each range that steps, which may send the column unknown sooner.
+        known = self._distinct_values.get(key)
+        held = len(known) if known is not None else len(_known_distinct_values(ranges))
+        limit = (_VALUE_VARIETY_THRESHOLD - 1 - held) // (2 * sum(1 for shift in steps if shift))
+        if limit < 1:
+            return None
+        return _Cycle(cycle, steps, step, trailing, limit)
 
     def tags_of(self, rung_index: K) -> Iterable[str]:
         """Every tag this rung has written."""
@@ -1407,6 +1416,7 @@ def _is_missing(range_: Any) -> bool:
 
 
 _EXTEND = "extend"
+_NO_LIMIT = 1 << 62
 
 
 @dataclass(frozen=True, slots=True)
@@ -1417,6 +1427,7 @@ class _Cycle:
     steps: tuple[int, ...]
     step: int  # how far each of the column's whole numbers moves a cycle
     trailing: tuple[Any, ...]  # the next cycle's first scans, recorded already
+    limit: int = _NO_LIMIT  # the most cycles the plan may record
 
 
 def _rejoined(timeline: list[Any], ranges: list[Any]) -> None:
@@ -1608,18 +1619,28 @@ def _step_of(range_: Any, step: int) -> int:
 class RepeatPlan:
     """How a timelines object takes more cycles of its last one.  See ``plan_repeat``."""
 
-    __slots__ = ("_actions", "_period")
+    __slots__ = ("_actions", "_period", "_timelines", "limit")
 
-    def __init__(self, actions: list[tuple[Any, list[Any], Any]], period: int) -> None:
+    def __init__(
+        self,
+        timelines: RungFiringTimelines[Any],
+        actions: list[tuple[Any, list[Any], Any]],
+        period: int,
+    ) -> None:
+        self._timelines = timelines
         self._actions = actions
         self._period = period
+        self.limit = min(
+            (action.limit for _key, _ranges, action in actions if action != _EXTEND),
+            default=_NO_LIMIT,
+        )
 
     def apply(self, cycles: int) -> None:
-        """Record *cycles* more cycles."""
-        assert cycles > 0
+        """Record *cycles* more cycles, no more than ``limit``."""
+        assert 0 < cycles <= self.limit
         period = self._period
         added = cycles * period
-        for _key, ranges, action in self._actions:
+        for key, ranges, action in self._actions:
             if action == _EXTEND:
                 _unroll_tail(ranges)
                 tail = ranges[-1]
@@ -1649,6 +1670,31 @@ class RepeatPlan:
                 ranges.append(Repeat(cycle[0].start_scan_id, end, period, cycle, 1 + cycles, steps))
             moved = [_moved(range_, added, _step_of(range_, step) * cycles) for range_ in trailing]
             ranges.extend(moved)
+            if key is not None and steps:
+                self._count(key, ranges, cycle, steps, cycles)
+
+    def _count(
+        self,
+        key: Any,
+        ranges: list[Any],
+        cycle: tuple[Any, ...],
+        steps: tuple[int, ...],
+        cycles: int,
+    ) -> None:
+        """Add the values the ranges that step take on the recorded cycles to the count."""
+        timelines = self._timelines
+        count = timelines._distinct_values.get(key)
+        if count is None:
+            count = timelines._distinct_values[key] = _known_distinct_values(ranges)
+        for index in range(1, cycles + 1):
+            for range_, shift in zip(cycle, steps, strict=True):
+                if not shift:
+                    continue
+                placed = _moved(range_, index * self._period, shift * index)
+                for scan_id in {placed.start_scan_id, placed.end_scan_id}:
+                    value = _value_at(placed, scan_id)
+                    if value is not _MISSING_WRITE and not any(_equal(value, v) for v in count):
+                        count.append(value)
 
 
 def _moved_end(range_: Any, end: int) -> Any:
