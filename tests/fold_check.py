@@ -556,21 +556,6 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return spans
 
 
-def _last_known(ranges: Any, end: int) -> int:
-    """The last scan up to *end* that holds a known value, or 0."""
-    for range_ in rung_firings._expanded_reversed(ranges, end):
-        for scan in range(min(range_.end_scan_id, end), range_.start_scan_id - 1, -1):
-            value = rung_firings._value_at(range_, scan)
-            if (
-                value is not rung_firings._UNKNOWN_VALUE
-                and value is not rung_firings._MISSING_WRITE
-            ):
-                return scan
-            if scan < min(range_.end_scan_id, end) - 1:
-                break  # Two scans settle a range's kind.
-    return 0
-
-
 def _column_at(ranges: Any, scan: int) -> Any:
     """A column's value at *scan*; a scan no range covers is a scan with no write."""
     for r in _touching(ranges, scan, scan):
@@ -751,21 +736,14 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
             # range the loop could not speak for.
             partly = key in ours._partly_unknown
             capped: list[Any] = []
-            if _unknown_scans(a, first, end):
-                capped, _gone = _capped(twin, attribute, key)
-            # A column may go unknown sooner than stepping, by its own count.  Its Unknown
-            # after its last known value needs nothing more.  Before that, the loop's Unknown
-            # or stepping's is needed.
-            mine_from = _last_known(a, end) if key in ours._unknown_keys else end
+            gone = False
+            if not partly and (key in ours._unknown_keys or _unknown_scans(a, first, end)):
+                capped, gone = _capped(twin, attribute, key)
+            if key in ours._unknown_keys and not partly and not gone:
+                raise _mismatch(f"fold-check ({kind}): {name} {key!r} unknown, stepped not")
 
-            def unknown_ok(
-                scan: int, partly: bool = partly, capped: Any = capped, since: int = mine_from
-            ) -> bool:
-                return (
-                    scan > since
-                    or partly
-                    or _column_at(capped, scan) is rung_firings._UNKNOWN_VALUE
-                )
+            def unknown_ok(scan: int, partly: bool = partly, capped: Any = capped) -> bool:
+                return partly or _column_at(capped, scan) is rung_firings._UNKNOWN_VALUE
 
             scan = _column_differs(a, b, first, end, unknown_ok, capped)
             if scan is not None:

@@ -489,11 +489,17 @@ def _record_segments(
         end = lead + cycles * length
         at = lead + WARM_CYCLES * length
         misses = 0
-        # A column may not repeat yet, or a plan may stop short of a column's hundredth value.
+        # A column may not repeat yet, or a plan may stop before a column's hundredth value.
         # One cycle more goes in scan by scan before the next plan.
         while at + length <= end and misses < WARM_CYCLES:
+            unknown = sum(len(timelines._unknown_keys) for timelines in timelines_held)
             _record_scan_by_scan(plc, segments[cursor:at], kernel_paths)
             cursor = at
+            # A column that just went unknown still shows a cycle with values.  Its next
+            # cycle repeats, so a plan declined for it is not a miss.
+            went_unknown = unknown < sum(
+                len(timelines._unknown_keys) for timelines in timelines_held
+            )
             last = segments[at - 1].first + segments[at - 1].count - 1
             plans = [timelines.plan_repeat(last, period) for timelines in timelines_held]
             more = (end - at) // length
@@ -505,7 +511,7 @@ def _record_segments(
                     plan.apply(more)
                 cursor = at = at + more * length
                 misses = 0
-            else:
+            elif not went_unknown:
                 misses += 1
             at += length
     _record_scan_by_scan(plc, segments[cursor:], kernel_paths)
@@ -1335,8 +1341,6 @@ def _try_stretch(
                     return
                 cycles = min(cycles, plan.limit)
                 plans.append(plan)
-            if cycles < 1:
-                return
         scans = cycles * period
         if recorded:
             for plan in plans:

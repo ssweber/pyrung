@@ -366,32 +366,124 @@ def _kept(cycle: Callable[[int], list[Scan]], cycles: int) -> RungFiringTimeline
     return truth
 
 
-def test_a_count_with_steps_stops_short_of_its_hundredth_value() -> None:
+def test_a_count_with_steps_goes_unknown_on_the_scan_stepping_does() -> None:
     stepped, repeated, planned, last = _recorded_both_ways([], _counting_up, 300, [])
     assert planned
     assert (0, "a") in stepped._unknown_keys
-    assert (0, "a") in repeated._unknown_keys
-    _assert_true_to(stepped, _kept(_counting_up, 300), repeated, last)
+    assert repeated.run_count() <= stepped.run_count()
+    _assert_same(stepped, repeated, last)
+
+
+def _held_count(index: int) -> list[Scan]:
+    """Rung 0 holds a count for three scans, one more each cycle."""
+    return [{0: ({"a": index}, frozenset())}] * 3
+
+
+def _held_with_a_flag(index: int) -> list[Scan]:
+    """Rung 0 writes a count on the first scan of each cycle and a flag on every scan."""
+    return [
+        {0: ({"a": index, "b": 1}, frozenset())},
+        {0: ({"b": 1}, frozenset())},
+        {0: ({"b": 1}, frozenset())},
+    ]
+
+
+def _two_counts(index: int) -> list[Scan]:
+    """Rung 0 holds two counts, and b has counted a few values more."""
+    return [{0: ({"a": index, "b": index}, frozenset())}] * 3
+
+
+def _looped(
+    cycle: Callable[[int], list[Scan]], cycles: int, prefix: list[Scan]
+) -> tuple[RungFiringTimelines, int, int]:
+    """The cycles recorded as coast_run's loop records them.
+
+    Also the cycles it stepped, and the plans that stopped before the last cycle.
+
+    The loop plans as far as each plan lets it, steps one cycle, and plans again.  It stops
+    planning after three declines in a row.  A decline after a column went unknown does not
+    count.
+    """
+    period = len(cycle(0))
+    record: RungFiringTimelines = RungFiringTimelines()
+    for scan_id, scan in enumerate(prefix, start=1):
+        _record(record, scan_id, scan)
+    stepped = stopped = 0
+
+    def step(index: int) -> None:
+        for offset, scan in enumerate(cycle(index)):
+            _record(record, len(prefix) + index * period + offset + 1, scan)
+
+    at, cursor, misses = 3, 0, 0
+    while at < cycles and misses < 3:
+        unknown = len(record._unknown_keys)
+        for index in range(cursor, at):
+            step(index)
+            stepped += 1
+        cursor = at
+        plan = record.plan_repeat(len(prefix) + at * period, period)
+        more = 0 if plan is None else min(cycles - at, plan.limit)
+        if more > 0:
+            plan.apply(more)
+            stopped += more < cycles - at
+            cursor = at = at + more
+            misses = 0
+        elif len(record._unknown_keys) == unknown:
+            misses += 1
+        at += 1
+    for index in range(cursor, cycles):
+        step(index)
+        stepped += 1
+    return record, stepped, stopped
+
+
+def _stepped(
+    cycle: Callable[[int], list[Scan]], cycles: int, prefix: list[Scan]
+) -> tuple[RungFiringTimelines, int]:
+    scans = [*prefix, *(scan for index in range(cycles) for scan in cycle(index))]
+    stepped: RungFiringTimelines = RungFiringTimelines()
+    for scan_id, scan in enumerate(scans, start=1):
+        _record(stepped, scan_id, scan)
+    return stepped, len(scans)
+
+
+@pytest.mark.parametrize(
+    ("cycle", "prefix"),
+    [
+        (_held_count, []),
+        (_held_with_a_flag, []),
+        *(
+            (_two_counts, [{0: ({"b": 5000 + v}, frozenset())} for v in range(k)])
+            for k in (1, 2, 5)
+        ),
+    ],
+)
+def test_the_loop_leaves_a_count_as_stepping_does(
+    cycle: Callable[[int], list[Scan]], prefix: list[Scan]
+) -> None:
+    ours, stepped_cycles, stopped = _looped(cycle, 400, prefix)
+    stepped, last = _stepped(cycle, 400, prefix)
+    assert stepped._unknown_keys
+    assert stopped
+    assert stepped_cycles <= 10
+    _assert_same(stepped, ours, last)
 
 
 def test_a_long_count_leaves_how_a_hundred_candidates_or_so() -> None:
-    # The loop plans as far as each plan lets it, then steps one cycle, and plans again.
-    record: RungFiringTimelines = RungFiringTimelines()
-    scan_id, value = 1, 0
     started = time.perf_counter()
-    while scan_id < 2_000_000:
-        plan = record.plan_repeat(scan_id - 1, 2) if value >= 3 else None
-        if plan is not None:
-            cycles = min(plan.limit, (2_000_000 - scan_id) // 2)
-            plan.apply(cycles)
-            scan_id, value = scan_id + 2 * cycles, value + cycles
-        record.append(0, scan_id, {"a": value})
-        record.append(0, scan_id + 1, {"a": 7})
-        scan_id, value = scan_id + 2, value + 1
-    candidates = record.tag_transition_candidate_scans_before(frozenset((0,)), "a", scan_id)
-    assert len(candidates) <= 110
-    assert record.run_count() <= 120
-    assert time.perf_counter() - started < 5
+    ours, stepped_cycles, stopped = _looped(_held_count, 1_000_000, [])
+    elapsed = time.perf_counter() - started
+    stepped, last = _stepped(_held_count, 400, [])
+    # The loop recorded the first 400 cycles as stepping does.
+    one = frozenset((0,))
+    assert ours.tag_transition_candidate_scans_before(
+        one, "a", last + 1
+    ) == stepped.tag_transition_candidate_scans_before(one, "a", last + 1)
+    assert len(ours.tag_transition_candidate_scans_before(one, "a", 3_000_001)) <= 110
+    assert ours.run_count() <= 20 < stepped.run_count()
+    assert stopped
+    assert stepped_cycles <= 10
+    assert elapsed < 5
 
 
 def test_appends_after_a_cut_inside_a_repeat_read_back_as_scan_by_scan() -> None:
