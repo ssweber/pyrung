@@ -322,7 +322,7 @@ class Records(RuleBasedStateMachine):
 
     @rule(length=st.integers(1, 8), values=st.lists(st.integers(0, 3), min_size=8, max_size=8))
     def loop_unknown(self, length: int, values: list[int]) -> None:
-        """A run the loop could not speak for: it reads Unknown, whatever ran."""
+        """A run the loop could not speak for.  It reads Unknown, whatever ran."""
         first = self.model.tip + 1
         for k in range(length):
             self.model.loop["a"].add(self.model.add({"a": values[k]}))

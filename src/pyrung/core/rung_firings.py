@@ -959,7 +959,7 @@ class RungFiringTimelines(Generic[K]):
             if min_scan_id is not None:
                 if not ranges or min_scan_id <= ranges[0].start_scan_id:
                     continue
-                # Both engines fold the kept scans again from the floor.  A range cut short
+                # Both engines append the kept scans again from the floor.  A range cut short
                 # would read as more scans than appending them makes.
                 kept: list[Any] = []
                 self._rejoined(kept, _trim_value_ranges(ranges, min_scan_id, None))
