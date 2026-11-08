@@ -4753,6 +4753,12 @@ class PLC:
             windows[-1] = (windows[-1][0], last)
         else:
             windows.append((first, last))
+        for timelines in (
+            self._rung_firing_timelines,
+            self._committed_tag_timelines,
+            self._node_firing_timelines,
+        ):
+            timelines.note_gap(first, last)
 
     def _record_landing(self, first_scan_id: int | None = None) -> None:
         """Cache the state a compiled run landed on, and checkpoint it if one is due.

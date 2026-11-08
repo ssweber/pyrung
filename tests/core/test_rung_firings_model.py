@@ -397,18 +397,18 @@ class Records(RuleBasedStateMachine):
                 assert scan in loop or (theirs is not None and scan > theirs), scan
             else:
                 assert _spelled(mine) == _spelled(column.get(scan, M)), scan
-        counts = getattr(ours, "_counts", None)
-        if model.gaps or model.lower or model.loop[tag]:
+        if model.loop[tag]:
+            return  # The loop's Unknown counts as it reads, so only known values must agree.
+        held = ours._counts.get(key, 0)
+        if model.gaps or model.lower:
             # The count may be low, never high.
             assert theirs is None or (crossing is not None and theirs >= crossing)
-            if counts is not None and theirs is None:
-                assert counts.get(key, 0) <= count
-            if model.gaps or model.loop[tag] or crossing is not None:
+            assert theirs is not None or held <= count
+            if model.gaps or crossing is not None:
                 return
         else:
             assert theirs == crossing
-            if counts is not None and theirs is None:
-                assert counts.get(key, 0) == count
+            assert theirs is not None or held == count
         expected = model.ranges(tag)
         timeline = list(_expanded(ours._value_timelines.get(key, []), None, None))
         if tag in model.unsure:
@@ -476,14 +476,22 @@ class Trims(Records):
     """No column reaches its limit."""
 
 
+class CappedNoTrims(Records):
+    """Columns reach a limit of a few changes, and nothing trims from the front."""
+
+    limit = 6
+    trims = False
+
+
 class Capped(Records):
-    """Columns reach a limit of a few values."""
+    """Columns reach a limit of a few changes."""
 
     limit = 6
 
 
 MACHINES = [
     NoTrims,
+    CappedNoTrims,
     pytest.param(
         Trims,
         marks=pytest.mark.xfail(
