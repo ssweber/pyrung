@@ -122,7 +122,12 @@ class Repeat:
 
 
 class RungFiringTimelines(Generic[K]):
-    """Append-only columnar firing index, generic over rung identity."""
+    """Append-only columnar firing index, generic over rung identity.
+
+    A column stops keeping values at its hundredth distinct value, to save memory.  A record
+    that counted fewer values may keep them past that point, and a known value is always the
+    value written.
+    """
 
     __slots__ = (
         "_fired_ranges",
