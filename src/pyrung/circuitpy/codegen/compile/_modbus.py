@@ -177,6 +177,15 @@ def _modbus_client_spec_for_instruction(
     return spec
 
 
+def _mark_live_without_client(
+    instr: ModbusSendInstruction | ModbusReceiveInstruction, ctx: CodegenContext
+) -> None:
+    # A kernel cannot run a live request, whose status bits come from another thread.
+    # A plain string target never talks to a device and writes nothing, so it needs no code.
+    if instr._is_live():
+        ctx.has_io_gaps = True
+
+
 def _compile_modbus_send_instruction(
     instr: ModbusSendInstruction,
     enabled_expr: str,
@@ -184,7 +193,7 @@ def _compile_modbus_send_instruction(
     indent: int,
 ) -> list[str]:
     if ctx.modbus_client is None:
-        ctx.has_io_gaps = True
+        _mark_live_without_client(instr, ctx)
         return []
     spec = _modbus_client_spec_for_instruction(instr, ctx)
     if ctx._current_function is not None:
@@ -199,7 +208,7 @@ def _compile_modbus_receive_instruction(
     indent: int,
 ) -> list[str]:
     if ctx.modbus_client is None:
-        ctx.has_io_gaps = True
+        _mark_live_without_client(instr, ctx)
         return []
     spec = _modbus_client_spec_for_instruction(instr, ctx)
     if ctx._current_function is not None:
