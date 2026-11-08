@@ -474,8 +474,8 @@ class RungFiringTimelines(Generic[K]):
                 self._distinct_values.pop(key, None)
                 continue
             column_from = (prefix or middle or later)[0].start_scan_id
-            # The scans after the window keep what ours recorded, because each is a value
-            # written or an Unknown.
+            # The scans after the window keep what this record holds.  Each is a value written
+            # or an Unknown.
             self._value_timelines[key] = _coalesced(
                 [
                     *prefix,
