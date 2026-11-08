@@ -106,7 +106,10 @@ def _recorded_both_ways(
 
     *cycle* gives the scans of each cycle, or of cycle r when it is a function.
     """
-    cycle_at = cycle if callable(cycle) else lambda _r: cycle
+
+    def cycle_at(r: int) -> list[Scan]:
+        return cycle if isinstance(cycle, list) else cycle(r)
+
     period = len(cycle_at(0))
     scans = [*prefix, *(scan for r in range(cycles) for scan in cycle_at(r)), *suffix]
     stepped: RungFiringTimelines = RungFiringTimelines()
@@ -222,7 +225,7 @@ def _stepping(rng: random.Random) -> tuple[list[Scan], Callable[[int], list[Scan
         scan = {}
         for rung in RUNGS:
             if rng.random() < 0.6:
-                writes = {}
+                writes: dict[str, Any] = {}
                 for tag in TAGS:
                     if rng.random() < 0.8:
                         stepping = steps[(rung, tag)] != 0
@@ -290,3 +293,15 @@ def test_a_count_steps_until_its_column_would_go_unknown() -> None:
     assert (0, "a") in stepped._unknown_keys
     assert (0, "a") in repeated._unknown_keys
     _assert_same(stepped, repeated, last)
+
+
+def test_appends_after_a_cut_inside_a_repeat_read_back_as_scan_by_scan() -> None:
+    # The cut leaves the repeat second to last, and an append reads the last two ranges.
+    cycle: list[Scan] = [{0: ({"a": value}, frozenset())} for value in ("p", "q", "r")]
+    stepped, repeated, planned, _last = _recorded_both_ways([], cycle, 20, [])
+    assert planned
+    early, later = stepped.snapshot(up_to=31), repeated.snapshot(up_to=31)
+    for scan_id, value in ((32, "r"), (33, "p")):
+        _record(early, scan_id, {0: ({"a": value}, frozenset())})
+        _record(later, scan_id, {0: ({"a": value}, frozenset())})
+    _assert_same(early, later, 33)

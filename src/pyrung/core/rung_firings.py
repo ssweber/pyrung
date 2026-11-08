@@ -239,11 +239,11 @@ class RungFiringTimelines(Generic[K]):
     def plan_repeat(self, last_scan_id: int, period: int) -> RepeatPlan | None:
         """How to record more cycles of the last *period* scans, or None if it cannot.
 
-        The caller vouches for what each later cycle appends.  It is what the cycle before it
-        appended, one period later, with each whole number moved as it moved between the last
-        two cycles.  Each column must also have taken the same shape on its last cycles, which
-        may start on any scan of the period.  Then appending the later cycles scan by scan would
-        repeat that shape, and each later cycle reads back as appending it would have.  Record
+        The caller promises that each later cycle appends what the last cycle appended, moved
+        one period on.  Each whole number also moves as it moved between the last two cycles.
+        Each column must have taken the same shape on its last cycles.  A column's cycle may
+        start on any scan of the period.  Then appending the later cycles scan by scan would
+        repeat that shape.  So each later cycle reads back as appending it would have.  Record
         no more than the plan's ``limit``.
         """
         actions: list[tuple[Any, list[Any], Any]] = []
@@ -315,7 +315,9 @@ class RungFiringTimelines(Generic[K]):
         if not cycles[-1]:
             return None
         steps = _cycle_steps(cycles[-2], cycles[-1], period)
-        if steps is None or (len(cycles) == 3 and steps != _cycle_steps(*cycles[:2], period)):
+        if steps is None or (
+            len(cycles) == 3 and steps != _cycle_steps(cycles[0], cycles[1], period)
+        ):
             return None
         cycle = tuple(cycles[-1])
         step = 0
@@ -331,7 +333,14 @@ class RungFiringTimelines(Generic[K]):
             return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
         # A column that reaches a hundred values goes unknown, so the cycles stop short of it.
         distinct = self._distinct_values.get(key)
-        held = _known_distinct_values(ranges) if distinct is None else list(distinct)
+        if distinct is None:
+            # Keep the count, as appending a new value does.  Counting again on every plan
+            # would walk the whole column each time.
+            distinct = _known_distinct_values(ranges)
+            if len(distinct) >= _VALUE_VARIETY_THRESHOLD:
+                return None
+            self._distinct_values[key] = distinct
+        held = list(distinct)
         limit = 0
         while limit < _VALUE_VARIETY_THRESHOLD:
             more = [*_stepped_cycle(cycle, steps, limit + 1)]
@@ -1163,11 +1172,11 @@ def _overlapping(repeat: Repeat, first: int | None, last: int | None) -> tuple[i
 
 def _expanded(ranges: Sequence[Any], first: int | None, last: int | None) -> Iterator[Any]:
     """The written-out ranges with a scan in *first*..*last*, in order."""
-    for element in ranges:
+    start = 0 if first is None else bisect_left(ranges, first, key=_end_of)
+    for position in range(start, len(ranges)):
+        element = ranges[position]
         if last is not None and element.start_scan_id > last:
             return
-        if first is not None and element.end_scan_id < first:
-            continue
         if type(element) is not Repeat:
             yield element
             continue
@@ -1182,9 +1191,9 @@ def _expanded(ranges: Sequence[Any], first: int | None, last: int | None) -> Ite
 
 def _expanded_reversed(ranges: Sequence[Any], last: int | None) -> Iterator[Any]:
     """The written-out ranges that start at or before *last*, latest first."""
-    for element in reversed(ranges):
-        if last is not None and element.start_scan_id > last:
-            continue
+    stop = len(ranges) if last is None else bisect_right(ranges, last, key=_start_of)
+    for position in range(stop - 1, -1, -1):
+        element = ranges[position]
         if type(element) is not Repeat:
             yield element
             continue
@@ -1193,6 +1202,14 @@ def _expanded_reversed(ranges: Sequence[Any], last: int | None) -> Iterator[Any]
             for range_ in reversed(_repetition(element, index)):
                 if last is None or range_.start_scan_id <= last:
                     yield range_
+
+
+def _end_of(element: Any) -> int:
+    return element.end_scan_id
+
+
+def _start_of(element: Any) -> int:
+    return element.start_scan_id
 
 
 def _templates(ranges: Sequence[Any]) -> Iterator[Any]:
@@ -1224,11 +1241,18 @@ def _last_written_out(ranges: Sequence[Any]) -> Any:
 
 
 def _unroll_tail(ranges: list[Any]) -> None:
-    """Write out a list's last repetition, so that an append may change its last range."""
-    if ranges and type(ranges[-1]) is Repeat:
+    """Write out a list's last two ranges, which an append reads and may change."""
+    while True:
+        if ranges and type(ranges[-1]) is Repeat:
+            after: list[Any] = []
+        elif len(ranges) >= 2 and type(ranges[-2]) is Repeat:
+            after = [ranges.pop()]
+        else:
+            return
         repeat = ranges.pop()
         ranges.extend(_repeats(repeat, 0, repeat.count - 2))
         ranges.extend(_repetition(repeat, repeat.count - 1))
+        ranges.extend(after)
 
 
 def _trim_repeat(
@@ -1398,6 +1422,7 @@ class RepeatPlan:
         added = cycles * period
         for key, ranges, action in self._actions:
             if action == _EXTEND:
+                _unroll_tail(ranges)
                 tail = ranges[-1]
                 ranges[-1] = _moved_end(tail, tail.end_scan_id + added)
                 continue
@@ -1427,7 +1452,8 @@ class RepeatPlan:
             ranges.extend(moved)
             distinct = self._timelines._distinct_values.get(key) if key is not None else None
             if distinct is not None:
-                seen = [_stepped_cycle(cycle, steps, index) for index in range(1, cycles + 1)]
+                indices = range(1, cycles + 1) if steps else (1,)
+                seen = [_stepped_cycle(cycle, steps, index) for index in indices]
                 for value in _known_distinct_values([*(r for c in seen for r in c), *moved]):
                     if not any(_equal(value, prior) for prior in distinct):
                         distinct.append(value)

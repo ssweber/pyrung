@@ -985,16 +985,26 @@ def _flips_between_two_values() -> None:
         copy(7, FlipY)
 
 
-def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(strict) -> None:
-    plc = _runner(_flips_between_two_values, 0.01)
-    stepped = _runner(_flips_between_two_values, 0.01)  # the surveys read a runner's own epoch
+@pytest.mark.parametrize(
+    "build, steps",
+    [(_flips_between_two_values, False), (_fires_every_other_scan, True)],
+    ids=["same values", "a count that steps"],
+)
+def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(
+    strict, build, steps: bool
+) -> None:
+    plc = _runner(build, 0.01)
+    stepped = _runner(build, 0.01)  # the surveys read a runner's own epoch
     start = plc.current_state.scan_id
     coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset())
     while stepped.current_state.scan_id < plc.current_state.scan_id:
         stepped.step()
     timelines = plc._rung_firing_timelines
-    assert any(type(e) is Repeat for ranges in timelines._fired_ranges.values() for e in ranges)
-    assert timelines.run_count() < 50 < stepped._rung_firing_timelines.run_count()
+    tables = (timelines._fired_ranges, timelines._value_timelines)
+    repeats = [e for t in tables for ranges in t.values() for e in ranges if type(e) is Repeat]
+    assert repeats
+    assert any(repeat.steps for repeat in repeats) == steps
+    assert timelines.run_count() < 100 < stepped._rung_firing_timelines.run_count()
     compare_records("repeat", plc, stepped, start)
     assert plc.query.cold_rungs() == stepped.query.cold_rungs()
     assert plc.query.hot_rungs() == stepped.query.hot_rungs()
@@ -1003,7 +1013,7 @@ def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(stri
     for scan in (start + 1, start + 2, middle, middle + 1, tip - 1, tip):
         assert plc.rung_firings(scan) == stepped.rung_firings(scan), scan
         assert dict(plc.history.at(scan).tags) == dict(stepped.history.at(scan).tags), scan
-        for tag in (Toggle, FlipY):
+        for tag in (Toggle, FlipY, X):
             assert str(plc.cause(tag, scan)) == str(stepped.cause(tag, scan)), (tag, scan)
             assert str(plc.effect(tag, scan, max_scans=50)) == str(
                 stepped.effect(tag, scan, max_scans=50)

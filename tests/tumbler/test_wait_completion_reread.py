@@ -11,9 +11,9 @@ import time
 
 import pytest
 
-from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
 from tests.fold_check import wall_budget
+from tests.tumbler.bench import tumbler_plc
 
 pytestmark = pytest.mark.tumbler
 
@@ -24,7 +24,7 @@ GATE_WALL_BUDGET_S = 240.0
 def test_cold_boot_first_bearing_is_the_current_state_boundary(tumbler_logic) -> None:
     """Deep target leaves cannot hide the known edge out of ABORTED."""
 
-    plc = PLC(tumbler_logic, dt=0.010)
+    plc = tumbler_plc(tumbler_logic, dt=0.010)
     plc.step()
     target = plc._known_tags_by_name["y_BurnerLoop"]
 
@@ -48,7 +48,7 @@ def test_cold_boot_how_y_burnerloop_completes(tumbler_logic) -> None:
     earned through its own incident and survives later reverts (the banked
     checkpoint) — a hold solves one transition, not the passage.
     """
-    plc = PLC(tumbler_logic, dt=0.010)
+    plc = tumbler_plc(tumbler_logic, dt=0.010)
     plc.step()
     target = plc._known_tags_by_name["y_BurnerLoop"]
 

@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC
 from pyrung.core.analysis.pilot import attempt_transition as attempt_transition_module
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot import theory_recording as theory_recording_module
 from pyrung.core.runner import _compile_avoid
 from tests.fold_check import wall_budget
+from tests.tumbler.bench import tumbler_plc
 
 pytestmark = pytest.mark.tumbler
 
@@ -40,7 +40,7 @@ def test_mode_request_reads_exact_atomic_operation_before_separate_clear(
     monkeypatch.setattr(theory_recording_module, "_record_controlling_theory_fact", record_fact)
     monkeypatch.setattr(attempt_transition_module, "transition_once", transition_once)
 
-    plc = PLC(tumbler_logic, dt=0.010)
+    plc = tumbler_plc(tumbler_logic, dt=0.010)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
