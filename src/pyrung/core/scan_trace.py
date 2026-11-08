@@ -1609,7 +1609,7 @@ def _loop_function(
     tracer: _Tracer,
     *,
     guards: tuple[_Guard, ...] = (),
-    seen: tuple[tuple[str, tuple[Any, ...]], ...] = (),
+    seen: tuple[tuple[str, tuple[Any, ...], bool], ...] = (),
 ) -> tuple[Callable[..., tuple[int, float]], str, list[_Op | _Guard]]:
     """Write the loop a finished tracer describes.
 
@@ -1618,8 +1618,10 @@ def _loop_function(
     Only what changed goes back to the kernel, and only if a scan ran.
 
     *guards* are extra, checked after the scan's own and before its commit.  *seen*
-    lists (name, cell): after each commit those values go in the loop's ``seen``
-    argument and it asks its ``stop`` argument whether to leave.
+    lists (name, cell, whether every scan changes it).  After a commit that changed
+    one of those values, they go in the loop's ``seen`` argument and it asks its
+    ``stop`` argument whether to leave.  A stop predicate reads only what ``seen``
+    holds, so after a scan that changed none of it the answer is the one it gave last.
     """
     arrays: dict[str, str] = {}
     loads: list[str] = []
@@ -1628,6 +1630,7 @@ def _loop_function(
     commit_values: list[str] = []
     live: set[str] = set()
     stores: list[str] = []
+    new_values: dict[tuple[Any, ...], str] = {}
     needs_rtc = False
     for key, entry in tracer.entries.items():
         local = tracer.entry_locals[key]
@@ -1647,7 +1650,8 @@ def _loop_function(
         cell = tracer.cells[key]
         if cell is not entry:
             commit_targets.append(local)
-            commit_values.append(tracer._atom(cell))
+            new_values[key] = tracer._atom(cell)
+            commit_values.append(new_values[key])
             stores.append(f"{place} = {local}")
             if cell.local is not None:
                 live.add(cell.local)
@@ -1678,6 +1682,15 @@ def _loop_function(
             guard_list.append(op)
         else:
             lines.append(f"            {op.target} = {op.expression}")
+    # Whether this scan changes what the stop predicate reads, if not every scan does.
+    ask_when_changed = bool(seen) and not any(always for _name, _key, always in seen)
+    if ask_when_changed:
+        changes = " or ".join(
+            f"not ({new_values[key]} is {tracer.entry_locals[key]} or "
+            f"same({new_values[key]}, {tracer.entry_locals[key]}))"
+            for _name, key, _always in seen
+        )
+        lines.append(f"            changed = {changes}")
     if commit_targets:
         lines.append(f"            {', '.join(commit_targets)}, = {', '.join(commit_values)},")
     lines += [
@@ -1685,8 +1698,12 @@ def _loop_function(
         "            ts += dt",
     ]
     if seen:
-        lines += [f"            seen[{name!r}] = {tracer.entry_locals[key]}" for name, key in seen]
-        lines.append(f"            if stop(): EXIT[0] = {_LEFT_ON_STOP}; break")
+        indent = "            "
+        if ask_when_changed:
+            lines.append(f"{indent}if changed:")
+            indent += "    "
+        lines += [f"{indent}seen[{name!r}] = {tracer.entry_locals[key]}" for name, key, _ in seen]
+        lines.append(f"{indent}if stop(): EXIT[0] = {_LEFT_ON_STOP}; break")
     lines += [
         "    except Exception:",
         # As a failed guard: the real scan runs this iteration.
@@ -1700,6 +1717,7 @@ def _loop_function(
     namespace: dict[str, Any] = {
         "clock_high": clock_high,
         "math": math,
+        "same": same,
         "EXIT": [_LEFT_AT_LIMIT],
         "GUARDS": tuple(guard_list),
     }
@@ -1877,9 +1895,9 @@ def coast_loop(
     It leaves before the scan that would change a *watched* tag, which is the only
     thing it asks of that tag: where this trace moved it, the scans the loop runs are
     not the trace's own, and the moves it returns and :func:`coast_moves` differ on the
-    tag.  A coast does not fire such a loop.  After each scan it hands the moving tags
-    in *seen* to its ``seen`` argument and asks ``stop``, and those are only further
-    reasons to leave.
+    tag.  A coast does not fire such a loop.  After a scan that changes a moving tag in
+    *seen*, it hands them to its ``seen`` argument and asks ``stop``, and those are only
+    further reasons to leave.
     """
     guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
     loop, source, _body = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
@@ -1891,13 +1909,14 @@ def _coast_guards(
     block_names: Mapping[str, Mapping[int, str]],
     watched: frozenset[str],
     seen: frozenset[str],
-) -> tuple[list[_Guard], CoastMoves, list[tuple[str, tuple[Any, ...]]]]:
+) -> tuple[list[_Guard], CoastMoves, list[tuple[str, tuple[Any, ...], bool]]]:
     guards: list[_Guard] = []
     moved: list[tuple[str, int]] = []
     free: list[str] = []
     flips: list[tuple[str, Any, Any]] = []
     held: list[str] = []
-    seen_cells: list[tuple[str, tuple[Any, ...]]] = []
+    # (name, cell, whether every scan changes it)
+    seen_cells: list[tuple[str, tuple[Any, ...], bool]] = []
     for key, name in moving_tags(plan, block_names).items():
         cell = plan.cells[key]
         old = plan.entry_locals[key]
@@ -1905,8 +1924,7 @@ def _coast_guards(
         uses = (old,) if cell.local is None else (old, cell.local)
         before = plan.entries[key].concrete
         after = cell.concrete
-        if name in seen:
-            seen_cells.append((name, key))
+        always = False
         free_to_move = name not in watched and cell.local is not None
         if free_to_move and type(after) is int and type(before) is int:
             delta = after - before
@@ -1917,6 +1935,7 @@ def _coast_guards(
             )
             if delta:
                 moved.append((name, delta))
+                always = True
             else:
                 held.append(name)
         elif free_to_move and type(after) is float and type(before) is float:
@@ -1942,6 +1961,9 @@ def _coast_guards(
                     _Guard(f"{new} != {plan._atom(_Value(after))}", (cell.local,), why=flip)
                 )
             flips.append((name, before, after))
+            always = True
+        if name in seen:
+            seen_cells.append((name, key, always))
     return guards, CoastMoves(tuple(moved), tuple(free), tuple(flips), tuple(held)), seen_cells
 
 

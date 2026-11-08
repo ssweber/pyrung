@@ -916,3 +916,25 @@ class TestRecordsPastTheirCap:
         monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 10)
         with pytest.raises(UnrecordedScansError):
             plc.query.cold_rungs()
+
+
+def test_a_loop_asks_the_stop_predicate_only_after_a_scan_that_changes_its_reads() -> None:
+    # X steps once in 50 scans.  In between, the loop writes X but holds it.
+    plc = _runner(_ramp, 0.01)
+    twin = plc.fork()
+    asked_in_the_loop = 0
+
+    def reached(state: Any) -> bool:
+        nonlocal asked_in_the_loop
+        if isinstance(state, coast_run._SeenState):
+            asked_in_the_loop += 1
+        return state.tags[X.name] >= 5
+
+    stats: dict[str, int] = {}
+    hit = coast_until(plc, reached, budget=SCANS, predicate_reads=frozenset((X.name,)), stats=stats)
+    while twin.current_state.tags[X.name] < 5:
+        twin.step()
+    assert hit
+    assert plc.current_state.scan_id == twin.current_state.scan_id
+    assert stats["stretched_scans"] > 150
+    assert asked_in_the_loop <= 5
