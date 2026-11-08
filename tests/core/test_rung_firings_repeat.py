@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import random
 import tracemalloc
 from collections.abc import Callable
@@ -162,8 +161,7 @@ def _assert_true_to(
     """Each value ours knows is the value written, and ours says Unknown only where stepping does.
 
     *truth* is stepping that keeps every value.  A column that holds no Unknown answers every
-    other read as one of the two answers it.  A range may start on a different scan, so the
-    candidate scans may differ.
+    other read as one of the two answers it.
     """
     holes: set[str] = set()
     for rung in RUNGS:
@@ -178,19 +176,9 @@ def _assert_true_to(
                     assert _loose(mine) == _loose(truth.value_at(rung, tag, scan_id)), where
     capped, kept = _flat(_reads(stepped, last, _loose)), _flat(_reads(truth, last, _loose))
     for key, read in _flat(_reads(ours, last, _loose)).items():
-        if key.startswith("candidates ") or any(hole in f"{key} " for hole in holes):
+        if any(hole in f"{key} " for hole in holes):
             continue
-        if read in (kept.get(key), capped.get(key)):
-            continue
-        assert key.startswith("transition "), key
-        # Stepping may name a later scan of the same run of the value.
-        _word, rung, tag, _scan, shown, _missing = key.split(" ")
-        value = ast.literal_eval(shown)
-        low, high = sorted((read, kept[key]))
-        assert all(
-            _loose(truth.value_at(int(rung), tag, scan_id)) == value
-            for scan_id in range(low, high + 1)
-        ), key
+        assert read in (kept.get(key), capped.get(key)), key
 
 
 def _flat(reads: dict[str, Any]) -> dict[str, Any]:

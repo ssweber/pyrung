@@ -453,8 +453,8 @@ class RungFiringTimelines(Generic[K]):
         """Take scans *first*..*last* from *settled*, an index of them made later."""
         _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
         _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
-        # Each column keeps its own count.  The values the settle adds go uncounted, so the
-        # column may keep values past its hundredth, and each one is the value written.
+        # Each column keeps its own count.  Values copied in from the replay are not counted,
+        # so a column may hold more than 100 distinct values.  Each one is the value written.
         for key in settled._value_timelines.keys() | self._value_timelines.keys():
             middle = _trim_value_ranges(settled._value_timelines.get(key, []), first, last)
             mine = self._value_timelines.get(key, [])
@@ -474,25 +474,34 @@ class RungFiringTimelines(Generic[K]):
                 self._distinct_values.pop(key, None)
                 continue
             column_from = (prefix or middle or later)[0].start_scan_id
-            # The scans after the window keep what this record holds.  Each is a value written
-            # or an Unknown.
-            self._value_timelines[key] = _coalesced(
+            # Readers that rank candidate scans see where each range starts.  So the ranges
+            # at each join go in again as stepping appends them.
+            timeline = _as_of(prefix, mine, first - 1)
+            _rejoined(
+                timeline,
                 [
-                    *prefix,
                     *_missing_writes(
                         fired,
                         max(first, column_from + 1),
                         middle[0].start_scan_id - 1 if middle else last,
                     ),
                     *middle,
+                ],
+            )
+            # The scans after the window keep the values this record holds.  Each is a value
+            # written or an Unknown.
+            _rejoined(
+                timeline,
+                [
                     *_missing_writes(
                         fired,
                         max(last + 1, column_from + 1),
                         later[0].start_scan_id - 1 if later else None,
                     ),
                     *later,
-                ]
+                ],
             )
+            self._value_timelines[key] = timeline
         self._partly_unknown |= settled._partly_unknown
         self._rebuild_indexes()
 
@@ -1408,6 +1417,156 @@ class _Cycle:
     steps: tuple[int, ...]
     step: int  # how far each of the column's whole numbers moves a cycle
     trailing: tuple[Any, ...]  # the next cycle's first scans, recorded already
+
+
+def _rejoined(timeline: list[Any], ranges: list[Any]) -> None:
+    """Append *ranges* to *timeline* as stepping appends them, until the two agree.
+
+    Appending a scan reads the last two ranges at most.  Once the last two are the ones
+    *ranges* holds, the rest of *ranges* goes on unchanged.  Nothing is counted.
+    """
+    for index, item in enumerate(ranges):
+        if (
+            index >= 2
+            and len(timeline) >= 2
+            and _same_range(timeline[-1], ranges[index - 1])
+            and _same_range(timeline[-2], ranges[index - 2])
+        ):
+            timeline.extend(ranges[index:])
+            return
+        if type(item) is Repeat:
+            _rejoined_repeat(timeline, item)
+        else:
+            _append_range(timeline, item)
+
+
+# The most repetitions a join appends one by one before it takes the rest as they are.
+_REJOIN_REPETITIONS = 8
+
+
+def _rejoined_repeat(timeline: list[Any], repeat: Repeat) -> None:
+    """Append *repeat* as stepping appends it, as one repeat once its repetitions settle.
+
+    Appending a scan reads the last two ranges at most.  So once three repetitions in a row
+    append the same ranges a period apart, each moved as the one before it, every later
+    repetition does the same.  The rest then go in as one repeat.
+    """
+    _unroll_tail(timeline)
+    period = repeat.period
+    marks: list[tuple[int, int, Any]] = []
+    for index in range(repeat.count):
+        start = len(timeline)
+        for range_ in _repetition(repeat, index):
+            _append_range(timeline, range_)
+        marks.append((start, len(timeline), timeline[-1]))
+        rest = repeat.count - 1 - index
+        if not rest:
+            return
+        steps = _repeats_alike(timeline, marks[-3:], period)
+        if steps is not None:
+            _join_rest(timeline, marks[-1], period, rest, steps)
+            return
+        if index + 1 >= _REJOIN_REPETITIONS:
+            timeline[:] = _coalesced([*timeline, *_repeats(repeat, index + 1, repeat.count - 1)])
+            return
+
+
+def _repeats_alike(
+    timeline: list[Any], marks: list[tuple[int, int, Any]], period: int
+) -> tuple[int, ...] | None:
+    """How far each range moved a repetition, if three in a row appended alike ranges."""
+    if len(marks) < 3:
+        return None
+    if len({end - start for start, end, _last in marks}) != 1:
+        return None
+    moved: set[tuple[int, ...] | None] = set()
+    for (start, end, last), (after, after_end, _last) in zip(marks, marks[1:], strict=False):
+        if start == end:
+            continue  # It appended no range, and only lengthened the tail.
+        # The next repetition must leave this one's ranges as it found them.
+        if end != after or timeline[end - 1] is not last:
+            return None
+        moved.add(_cycle_steps(timeline[start:end], timeline[after:after_end], period))
+    if None in moved or len(moved) > 1:
+        return None
+    return moved.pop() if moved else ()
+
+
+def _join_rest(
+    timeline: list[Any], mark: tuple[int, int, Any], period: int, rest: int, steps: tuple[int, ...]
+) -> None:
+    """Append *rest* more repetitions like the last one, as one repeat with it."""
+    start, end, _last = mark
+    if start == end:
+        tail = timeline[-1]
+        timeline[-1] = ValueRange(
+            tail.start_scan_id, tail.end_scan_id + rest * period, tail.payload
+        )
+        return
+    cycle = tuple(timeline[start:end])
+    timeline[start:] = [
+        Repeat(
+            cycle[0].start_scan_id,
+            cycle[-1].end_scan_id + rest * period,
+            period,
+            cycle,
+            rest + 1,
+            steps if any(steps) else (),
+        )
+    ]
+
+
+def _same_range(left: Any, right: Any) -> bool:
+    return (
+        type(left) is ValueRange
+        and type(right) is ValueRange
+        and left.start_scan_id == right.start_scan_id
+        and left.end_scan_id == right.end_scan_id
+        and _same_payload(left.payload, right.payload)
+    )
+
+
+def _append_range(timeline: list[Any], range_: ValueRange) -> None:
+    """Append each scan of *range_* as stepping does, without counting values.
+
+    A tail of the same kind that agrees on the range's last two scans carries the rest.
+    """
+    low, high = range_.start_scan_id, range_.end_scan_id
+    for scan_id in range(low, high + 1):
+        _append_value(timeline, scan_id, _value_at(range_, scan_id))
+        tail = timeline[-1]
+        if (
+            low < scan_id < high
+            and type(tail.payload) is type(range_.payload)
+            and _equal(_value_at(tail, high), _value_at(range_, high))
+            and _equal(_value_at(tail, high - 1), _value_at(range_, high - 1))
+        ):
+            timeline[-1] = ValueRange(tail.start_scan_id, high, tail.payload)
+            return
+
+
+def _as_of(prefix: list[Any], ranges: list[Any], scan_id: int) -> list[Any]:
+    """*prefix*, the ranges up to *scan_id*, as appending them had left them by then.
+
+    Appending makes an alternating or arithmetic range only on its third scan.  So a range
+    cut short of three scans was single scans then.
+    """
+    if not prefix or type(prefix[-1]) is Repeat:
+        return list(prefix)
+    cut = prefix[-1]
+    whole = next(_expanded(ranges, scan_id, scan_id), None)
+    if (
+        whole is None
+        or whole.end_scan_id == cut.end_scan_id
+        or not isinstance(cut.payload, (Alternating, Arithmetic))
+        or cut.end_scan_id - cut.start_scan_id >= 2
+    ):
+        return list(prefix)
+    singles = [
+        ValueRange(scan, scan, Constant(_value_at(cut, scan)))
+        for scan in range(cut.start_scan_id, cut.end_scan_id + 1)
+    ]
+    return [*prefix[:-1], *singles]
 
 
 def _missing_writes(fired: list[Any], first: int, last: int | None) -> list[Any]:
