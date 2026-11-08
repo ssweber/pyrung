@@ -1198,7 +1198,7 @@ def _trim_value_ranges(
     ranges: list[ValueRange], min_scan: int | None, max_scan: int | None
 ) -> list[ValueRange]:
     # A settle trims each column it touches several times.  Only the elements at each end
-    # can change, so the ones between go over as they are.
+    # can change.  The ones between go over as they are.
     low = 0 if min_scan is None else bisect_left(ranges, min_scan, key=_end_of)
     high = len(ranges) if max_scan is None else bisect_right(ranges, max_scan, key=_start_of)
     if high - low <= 2:

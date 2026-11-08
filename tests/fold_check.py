@@ -570,8 +570,8 @@ def _column_differs(
 
     A column the loop wrote Unknown into holds other ranges than stepping's.  So ours may
     turn Unknown first, and only their known values must agree.  A scan with a write must
-    still be one in both.  The loop counts each run it wrote Unknown as one range, so such a
-    column may stay known after stepping's reached its limit on scan *full*.
+    still be one in both.  The loop counts each run it wrote Unknown as one range.  So such a
+    column may stay known after stepping's column reached its limit on scan *full*.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a run of scans with no boundary settle the whole of it.
