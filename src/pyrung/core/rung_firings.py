@@ -107,10 +107,10 @@ class Repeat:
     """Ranges that repeat unchanged every *period* scans, *count* times, in one entry.
 
     ``ranges`` are the first repetition's.  Repetition r is the same ranges moved r * period
-    scans later.  A list holding one reads as the list with every repetition written out,
-    which is the list appending each scan would have made.  A later kind of span, one whose
-    values come from a closed form or from running a trace again, goes in as another entry
-    that reads as its written-out ranges.
+    scans later.  A list holding a repeat reads as the list with every repetition written out.
+    That is the list that appending each scan would have made.  A later kind of entry may
+    compute its values from a formula or by running a trace again.  It too must read as its
+    written-out ranges.
     """
 
     start_scan_id: int
@@ -1054,7 +1054,7 @@ def _repetition(repeat: Repeat, index: int) -> list[Any]:
 
 
 def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
-    """Repetitions *first*..*last* of *repeat*: one entry, or plain ranges for one of them."""
+    """Repetitions *first*..*last* of *repeat*, as one entry.  A single repetition is written out."""
     if first > last:
         return []
     if first == last:

@@ -105,7 +105,7 @@ MAX_INTERNED = 4096
 MAX_LOOPS_PER_PATH = 8
 MAX_SUCCESSORS = 4
 # Segments in the longest cycle a stretch's record looks for.  Under a bang-bang hold the paths
-# take turns, and a cycle goes in as one repeat after its first few cycles go in scan by scan.
+# take turns.  The first few cycles go in scan by scan, and the rest go in as one repeat.
 MAX_CYCLE_SEGMENTS = 8
 # The cycles that go in scan by scan first, which the timelines check for the same shape.
 WARM_CYCLES = 3
@@ -462,15 +462,17 @@ def _record_segments(plc: PLC, segments: list[_Segment], kernel_paths: _KernelPa
 def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
     """Runs of segments that repeat a cycle, as (first, segments a cycle, cycles), in order.
 
-    A segment's records follow from its path, its count and where it left the tags it moves.
-    So segments that agree on those record the same scans, a cycle later.  A run must save
-    ``MIN_REPEAT_SCANS``, since each one splits the scan by scan record that batches the rest.
+    A segment's records follow from three things.  These are its path, its count and the values
+    it left in the tags it moves.  So segments that agree on all three record the same scans a
+    cycle later.  A run must save ``MIN_REPEAT_SCANS``, since each run splits the scan by scan
+    record that batches the rest.
     """
     found: list[tuple[int, int, int]] = []
     count = len(segments)
     first = 0
     while first < count:
-        # Paths and counts first, which is cheap.  The ends only for a run long enough to use.
+        # Comparing paths and counts is cheap, so it goes first.  The ends are compared only
+        # for a run long enough to use.
         cycles, length = 0, 1
         for candidate in range(1, MAX_CYCLE_SEGMENTS + 1):
             end = first + candidate
