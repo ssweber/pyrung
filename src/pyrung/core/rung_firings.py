@@ -281,6 +281,8 @@ class RungFiringTimelines(Generic[K]):
             # Any payload but a count gives a value set by the scan's parity alone, so the
             # first two scans of the cycle stand for all of them.
             first = last - period + 1
+            if values and key in self._unknown_keys and not _unknown_or_missing(tail):
+                return False  # Stepping writes Unknown into it from now on.
             if (
                 values
                 and not isinstance(tail.payload, Arithmetic)
@@ -335,13 +337,7 @@ class RungFiringTimelines(Generic[K]):
         if values and key in self._unknown_keys:
             # Stepping writes Unknown into a column that went unknown.  A cycle that holds a
             # value comes from before that, so it cannot repeat.
-            if any(
-                not isinstance(range_.payload, Unknown)
-                and not (
-                    isinstance(range_.payload, Constant) and range_.payload.value is _MISSING_WRITE
-                )
-                for range_ in cycle
-            ):
+            if not all(_unknown_or_missing(range_) for range_ in cycle):
                 return None
             return _Cycle(cycle, steps, step, trailing, _NO_LIMIT)
         if not values:
@@ -1410,7 +1406,8 @@ class _Cycle:
     counts: tuple[list[Any] | None, ...] = ()
 
 
-# Cycles a plan appends to a copy of a column to find its count, if no cycle sets it.
+# The most cycles a plan without steps appends to a copy of a column.  It plans no further
+# than that.
 _COUNTED_CYCLES = 16
 
 
@@ -1426,8 +1423,9 @@ def _counts_as_stepping(
     """The column's count of values after each later cycle, and how many cycles keep it known.
 
     Stepping counts a column's values only from its eighth range on.  It counts a value when
-    it first appends it, and a value that later joins a count's range stays counted.  So each
-    later cycle is appended to a copy of the column scan by scan, as stepping appends it.
+    it first appends it, and a value that later joins a range of whole numbers stepping by one
+    amount stays counted.  So each later cycle is appended to a copy of the column scan by
+    scan, as stepping appends it.
     """
     scratch = list(ranges)
     count = None if distinct is None else list(distinct)
@@ -1580,6 +1578,14 @@ def _as_unknown(range_: ValueRange) -> ValueRange:
             ),
         )
     return ValueRange(range_.start_scan_id, range_.end_scan_id, Unknown())
+
+
+def _unknown_or_missing(range_: Any) -> bool:
+    """Whether *range_* is all ``Unknown`` or all scans with no write."""
+    payload = range_.payload
+    return isinstance(payload, Unknown) or (
+        isinstance(payload, Constant) and payload.value is _MISSING_WRITE
+    )
 
 
 def _step_of(range_: Any, step: int) -> int:

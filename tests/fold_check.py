@@ -297,6 +297,7 @@ def _twin(plc: Any) -> Any:
     )
     # The twin starts forced, unlike a new runner: its log has to say so.
     twin._forces_last_recorded = {}
+    seed_records(twin, plc)
     return twin
 
 
@@ -555,21 +556,6 @@ def _spans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return spans
 
 
-# The first scan a settle replaced in each timelines object, by id.  A settled range counts
-# its column's values from its own first scan, so the column may stay known after stepping's
-# went unknown.
-_SETTLED_FROM: dict[int, int] = {}
-_replace_range = rung_firings.RungFiringTimelines.replace_range
-
-
-def _noting_replace_range(self: Any, settled: Any, first: int, last: int) -> None:
-    _SETTLED_FROM[id(self)] = min(first, _SETTLED_FROM.get(id(self), first))
-    _replace_range(self, settled, first, last)
-
-
-rung_firings.RungFiringTimelines.replace_range = _noting_replace_range  # type: ignore[method-assign]
-
-
 def _column_at(ranges: Any, scan: int) -> Any:
     """A column's value at *scan*; a scan no range covers is a scan with no write."""
     for r in _touching(ranges, scan, scan):
@@ -577,16 +563,14 @@ def _column_at(ranges: Any, scan: int) -> Any:
     return rung_firings._MISSING_WRITE
 
 
-def _column_differs(
-    ours: Any, theirs: Any, first: int, last: int, settled_from: int | None
-) -> int | None:
+def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool) -> int | None:
     """Scan where two value columns differ.  Ours says ``Unknown`` wherever stepping does.
 
-    Ours may also say ``Unknown`` where stepping knows the value.  From *settled_from* on, ours
-    may know a value where stepping says ``Unknown``.
+    If *partly*, the loop wrote ``Unknown`` for a range it could not speak for.  Then ours may
+    say ``Unknown`` where stepping knows the value.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
-    two scans at each end of a stretch of no boundary settle the whole of it.
+    two scans at each end of a run of scans with no boundary settle the whole of it.
     """
     ours, theirs = _touching(ours, first, last), _touching(theirs, first, last)
     cuts = sorted(
@@ -599,14 +583,8 @@ def _column_differs(
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
             mine = _column_at(ours, scan)
             stepped = _column_at(theirs, scan)
-            if stepped is rung_firings._UNKNOWN_VALUE:
-                if mine is not rung_firings._UNKNOWN_VALUE and (
-                    settled_from is None or scan < settled_from
-                ):
-                    return scan  # a column counts its values as stepping does
+            if mine is rung_firings._UNKNOWN_VALUE and stepped is not mine and partly:
                 continue
-            if mine is rung_firings._UNKNOWN_VALUE:
-                continue  # a range the loop could not speak for
             if _exact(mine) != _exact(stepped):
                 return scan
     return None
@@ -617,38 +595,57 @@ def _unknown_scans(ranges: Any, first: int, last: int) -> list[tuple[int, int]]:
     return _spans([r for r in touching if isinstance(r.payload, rung_firings.Unknown)], first, last)
 
 
-def _record_pieces(plc: Any, first: int, end: int) -> list[tuple[Any, int, int, bool]]:
-    """Who holds the records of *first*..*end*: *plc*, or for scans it left out a replay of them.
+def _as_settled(plc: Any, first: int, end: int) -> Any:
+    """*plc*'s records of *first*..*end*, with the scans it left out settled as a settle would.
 
-    It is what a settle would install, stepped here on the side, since a settle changes the
-    runner under test: a question that comes later still has to find those scans as it left them.
+    The settle happens on copies, since a settle changes the runner under test.  A question
+    that comes later still has to find those scans as the run left them.
     """
-    pieces = []
-    cursor = first
+    gaps = []
     for low, high in sorted(plc._unrecorded_scans):
         low, high = max(low, first), min(high, end)
-        if low > high:
-            continue
-        if cursor < low:
-            pieces.append((plc, cursor, low - 1, False))
-        pieces.append((plc._stepped_again(low, high, None), low, high, True))
+        if low <= high:
+            gaps.append((low, high))
+    if not gaps:
+        return plc
+    copies = types.SimpleNamespace(
+        _rung_firing_timelines=plc._rung_firing_timelines.snapshot(),
+        _node_firing_timelines=plc._node_firing_timelines.snapshot(),
+        _committed_tag_timelines=plc._committed_tag_timelines.snapshot(),
+    )
+    for low, high in gaps:
+        replay = plc._stepped_again(low, high, None)
+        for name in (
+            "_rung_firing_timelines",
+            "_node_firing_timelines",
+            "_committed_tag_timelines",
+        ):
+            getattr(copies, name).replace_range(getattr(replay, name), low, high)
         STATS["scans out of the records, settled to compare"] += high - low + 1
-        cursor = high + 1
-    if cursor <= end:
-        pieces.append((plc, cursor, end, False))
-    return pieces
+    return copies
 
 
 def compare_records(kind: str, plc: Any, twin: Any, start: int) -> None:
-    """What scans after *start* left in the firing indexes, against what stepping left."""
-    for holder, first, last, settled in _record_pieces(plc, start + 1, plc._state.scan_id):
-        _compare_records_over(kind, holder, twin, first, last, settled)
+    """What scans after *start* left in the firing indexes, against what stepping left.
+
+    The twin must start from *plc*'s records at *start* (:func:`seed_records`).  A column
+    counts its values from its first scan, and goes unknown at the hundredth.
+    """
+    end = plc._state.scan_id
+    _compare_records_over(kind, _as_settled(plc, start + 1, end), twin, start + 1, end)
     STATS[f"records compared: {kind}"] += 1
 
 
-def _compare_records_over(
-    kind: str, plc: Any, twin: Any, first: int, end: int, settled: bool
-) -> None:
+def seed_records(twin: Any, plc: Any) -> None:
+    """Give *twin* a copy of *plc*'s records, as a twin made now of *plc* should start."""
+    for name in ("_rung_firing_timelines", "_node_firing_timelines", "_committed_tag_timelines"):
+        theirs = getattr(twin, name)
+        copy = getattr(plc, name).snapshot()
+        for slot in rung_firings.RungFiringTimelines.__slots__:
+            setattr(theirs, slot, getattr(copy, slot))
+
+
+def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) -> None:
     for name, ours, theirs in (
         ("rung", plc._rung_firing_timelines, twin._rung_firing_timelines),
         ("node", plc._node_firing_timelines, twin._node_firing_timelines),
@@ -664,16 +661,15 @@ def _compare_records_over(
         for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
             a = ours._value_timelines.get(key, ())
             b = theirs._value_timelines.get(key, ())
+            partly = key in ours._partly_unknown
             # A column goes unknown at its hundredth value, so ours goes when stepping's does.
-            # Ours may say Unknown sooner for a range the loop could not speak for.
-            settled_from = first if settled else _SETTLED_FROM.get(id(ours))
-            if (
-                key in ours._unknown_keys
-                and key not in theirs._unknown_keys
-                and _SETTLED_FROM.get(id(theirs)) is None
-            ):
-                raise _mismatch(f"fold-check ({kind}): {name} {key!r} went unknown, stepped not")
-            scan = _column_differs(a, b, first, end, settled_from)
+            # A range the loop wrote as Unknown holds values ours did not count.
+            if (key in ours._unknown_keys) != (key in theirs._unknown_keys) and not partly:
+                raise _mismatch(
+                    f"fold-check ({kind}): {name} {key!r} unknown "
+                    f"{key in ours._unknown_keys}, stepped {key in theirs._unknown_keys}"
+                )
+            scan = _column_differs(a, b, first, end, partly)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "

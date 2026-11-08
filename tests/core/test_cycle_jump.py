@@ -242,6 +242,7 @@ def _coast_and_step(
     """
     plc = _runner(build, dt)
     twin = plc.fork()
+    fold_check.seed_records(twin, plc)
     start = plc.current_state.scan_id
 
     if reached is None:

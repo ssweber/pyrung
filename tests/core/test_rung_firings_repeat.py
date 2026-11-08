@@ -432,3 +432,12 @@ def test_a_settle_leaves_the_records_stepping_leaves(seed: int) -> None:
             _record(settled, scan_id, scan)
     ours.replace_range(settled, first, last)
     _assert_same(stepped, ours, count)
+
+
+def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
+    # Stepping writes Unknown into the column from now on, so a plan may not lengthen 5.
+    timelines: RungFiringTimelines = RungFiringTimelines()
+    for scan_id in range(1, 31):
+        timelines.append(0, scan_id, {"a": 5})
+    timelines._unknown_keys.add((0, "a"))
+    assert timelines.plan_repeat(30, 2) is None
