@@ -79,8 +79,7 @@ class Program:
     def _cached_graph(self) -> ProgramGraph | None:
         """The built graph, or None once a tag's settings changed since it was built.
 
-        The graph reads pointer bounds and external slots, so an edit to a
-        tag's settings makes it stale.
+        The graph reads tags' settings, so an edit to one makes it stale.
         """
         from pyrung.core.tag import metadata_edits
 

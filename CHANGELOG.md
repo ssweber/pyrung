@@ -320,6 +320,7 @@
 
 ### Fixes
 
+- `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
   - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
   - a target with a second route through a pointer or a for loop
