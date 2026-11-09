@@ -844,8 +844,24 @@ class ScanContext:
         return self._is_replay_io
 
     @property
-    def modbus_stubbed(self) -> bool:
-        return self._runner is not None and self._runner._modbus_stubbed
+    def modbus_io(self) -> Literal["replay", "live"] | None:
+        """What a send() or receive() does on this scan, decided here for every runner.
+
+        Only a real forward scan talks to the device.  A replay, a cause() rebuild, how()
+        or a context with no runner would send requests the session never made.
+        """
+        if self._is_replay_io:
+            return "replay"
+        runner = self._runner
+        if runner is None or runner._replay_mode or runner._reconstructs_history:
+            return None
+        return None if runner._modbus_stubbed else "live"
+
+    @property
+    def modbus_requests(self) -> dict[int, Any]:
+        """The runner's requests in flight, by instruction ``id()``.  A fork owns its own."""
+        assert self._runner is not None
+        return self._runner._modbus_requests
 
     def record_io_submit(self, key: str, record: IoSubmitRecord) -> None:
         self._io_submit_staging[key] = record

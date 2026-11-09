@@ -10,8 +10,10 @@ from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.click import ModbusTcpTarget, nop, raw, receive, send
 from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
+from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
+from pyrung.core.context import ScanContext
 from pyrung.core.instruction.send_receive import _core as _sr
-from pyrung.core.runner import PLC
+from pyrung.core.runner import PLC, EpochQuery
 
 SCANS = 2500
 NEVER = Bool("KioNever")
@@ -136,10 +138,6 @@ def _live_send_program():
     return program
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="fork() shares the Program, so a fork collects the parent's request (runner.py fork)",
-)
 def test_a_fork_does_not_collect_its_parent_s_request(monkeypatch: pytest.MonkeyPatch) -> None:
     _answered_at_once(monkeypatch)
     parent = PLC(_live_send_program(), dt=0.01)
@@ -200,3 +198,122 @@ def test_how_runs_no_modbus_and_steers_what_the_device_supplies(
     plc.run_for(0.05)
     assert calls
     assert plc._compiled_replay_supported_kernel() is None
+
+
+def _held(monkeypatch: pytest.MonkeyPatch) -> list[Future]:
+    """Requests the test answers by hand, so a request sent by mistake stays visible."""
+    futures: list[Future] = []
+
+    def submit(**_kwargs):
+        futures.append(Future())
+        return futures[-1]
+
+    monkeypatch.setattr(_sr, "_submit_click_send_request", submit)
+    monkeypatch.setattr(_sr, "_submit_click_receive_request", submit)
+    return futures
+
+
+def _live_receive_program():
+    with Program(strict=False) as program:
+        with Rung(Enable):
+            receive(target=_LIVE, remote_start="DS1", dest=Level, receiving=RxBusy, success=RxOk)
+        with Rung(RxOk):
+            copy(Level, Local)
+        with Rung(Local > 5):
+            out(Lamp)
+    return program
+
+
+def _session_after_one_answer(futures: list[Future]) -> tuple[PLC, dict[int, dict]]:
+    """Scan 1 sends, scans 2-4 wait, scan 5 takes the answer 9.  The cache is then dropped."""
+    plc = PLC(_live_receive_program(), dt=0.01)
+    recorded: dict[int, dict] = {}
+    plc.patch({Enable.name: True})
+    for scan in range(1, 7):
+        if scan == 5:
+            futures[0].set_result(_sr._RequestResult(ok=True, exception_code=0, values=(9,)))
+            plc.patch({Enable.name: False})
+        plc.step()
+        recorded[scan] = dict(plc.state.tags)
+    plc._recent_state_cache.clear()
+    plc._replay_slabs.clear()
+    return plc, recorded
+
+
+def test_a_replay_sends_nothing_and_writes_the_recorded_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    futures = _held(monkeypatch)
+    plc, recorded = _session_after_one_answer(futures)
+    assert recorded[5][Local.name] == 9 and recorded[5][Lamp.name] is True
+    for scan in range(1, 7):
+        assert dict(plc.replay_to(scan).state.tags) == recorded[scan]
+        assert dict(plc.history.at(scan).tags) == recorded[scan]
+    assert len(futures) == 1
+    plc.step()  # A request a replay sent would make this scan wait on it.
+    assert plc.state.tags[RxBusy.name] is False and plc.state.tags[RxOk.name] is True
+
+
+def test_cause_and_effect_send_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    futures = _held(monkeypatch)
+    plc, _recorded = _session_after_one_answer(futures)
+    plc.cause(Lamp, scan=5)
+    plc.cause(RxBusy, to=True)
+    plc.effect(Enable, to_value=True)
+    idle = PLC(_live_receive_program(), dt=0.01)
+    idle.step()
+    idle.cause(RxBusy, to=True)
+    idle.cause(Level, to=5)
+    assert len(futures) == 1
+    assert plc._modbus_requests == {} and idle._modbus_requests == {}
+
+
+def test_a_how_fork_reading_the_session_s_history_sends_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    futures = _held(monkeypatch)
+    plc, recorded = _session_after_one_answer(futures)
+    fork = fork_with_pilot_rungs(plc, (), history_budget=float("inf"))
+    assert dict(fork.history.at(3).tags) == recorded[3]
+    fork.cause(RxBusy, scan=3)
+    fork.step()
+    assert len(futures) == 1
+
+
+def test_only_a_forward_runner_talks_to_the_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    _held(monkeypatch)
+    plc = PLC(_live_receive_program(), dt=0.01)
+    plc.step()
+    plc.step()
+    state = plc.state
+
+    def rebuilt(runner: PLC) -> PLC:
+        return runner._fork_from_reconstructed_state(
+            runner.state,
+            rtc_at_state=runner._rtc_at_sim_time(runner.state.timestamp),
+            forces={},
+            replay_mode=False,
+        )
+
+    def query_runner(runner: PLC) -> PLC:
+        epoch = runner._causal_lineage.current_epoch()
+        assert epoch is not None
+        return EpochQuery(epoch)._runner()
+
+    stubbed = fork_with_pilot_rungs(plc, (), history_budget=float("inf"))
+    stubbed.step()
+    runners = {
+        "session": plc,
+        "fork": plc.fork(),
+        "replay": plc.replay_to(1),
+        "rebuilt": rebuilt(plc),
+        "epoch query": query_runner(plc),
+        "how() fork": stubbed,
+        "how() fork rebuilt": rebuilt(stubbed),
+        "how() fork epoch query": query_runner(stubbed),
+    }
+    live = {name: ScanContext(state, runner=r).modbus_io for name, r in runners.items()}
+    assert live == {name: "live" if name in ("session", "fork") else None for name in runners}
+    assert ScanContext(state).modbus_io is None
+    for name in ("how() fork rebuilt", "how() fork epoch query"):
+        assert runners[name]._modbus_stubbed, name

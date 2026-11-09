@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import itertools
 from concurrent.futures import Future
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyclickplc.addresses import parse_address
@@ -250,7 +250,6 @@ class ModbusSendInstruction(Instruction):
     word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
-    _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
 
     def always_execute(self) -> bool:
         return True
@@ -291,26 +290,27 @@ class ModbusSendInstruction(Instruction):
         return f"send:{self.target_name}:{self.sending.name}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if ctx.is_replay_io:
-            return self._execute_replay(ctx, enabled)
-        if not self._is_live() or ctx.modbus_stubbed:
-            return
-        return self._execute_live(ctx, enabled)
+        io = ctx.modbus_io
+        if io == "replay":
+            self._execute_replay(ctx, enabled)
+        elif io == "live" and self._is_live():
+            self._execute_live(ctx, enabled)
 
     def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
         key = self._io_key
 
-        if self._pending is not None:
-            if not self._pending.future.done():
+        pending = ctx.modbus_requests.get(id(self))
+        if pending is not None:
+            if not pending.future.done():
                 ctx.set_tag(self.sending.name, True)
                 return
 
             try:
-                result = self._pending.future.result()
+                result = pending.future.result()
             except Exception:
                 result = _RequestResult(ok=False, exception_code=0)
 
-            self._pending = None
+            del ctx.modbus_requests[id(self)]
             if result.ok:
                 drain_writes: dict[str, Any] = {
                     self.sending.name: False,
@@ -342,7 +342,7 @@ class ModbusSendInstruction(Instruction):
 
         source_tags = _normalize_operand_tags(self.source, ctx)
         values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
-        self._pending = _PendingRequest(future=self._submit(source_tags, values))
+        ctx.modbus_requests[id(self)] = _PendingRequest(future=self._submit(source_tags, values))
         submit_writes: dict[str, Any] = {
             self.sending.name: True,
             self.success.name: False,
@@ -404,7 +404,6 @@ class ModbusReceiveInstruction(Instruction):
     word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
-    _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
 
     def always_execute(self) -> bool:
         return True
@@ -457,27 +456,28 @@ class ModbusReceiveInstruction(Instruction):
         return f"recv:{self.target_name}:{self.receiving.name}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if ctx.is_replay_io:
-            return self._execute_replay(ctx, enabled)
-        if not self._is_live() or ctx.modbus_stubbed:
-            return
-        return self._execute_live(ctx, enabled)
+        io = ctx.modbus_io
+        if io == "replay":
+            self._execute_replay(ctx, enabled)
+        elif io == "live" and self._is_live():
+            self._execute_live(ctx, enabled)
 
     def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
         key = self._io_key
 
-        if self._pending is not None:
-            if not self._pending.future.done():
+        pending = ctx.modbus_requests.get(id(self))
+        if pending is not None:
+            if not pending.future.done():
                 ctx.set_tag(self.receiving.name, True)
                 return
 
-            target_tags = self._pending.target_tags or []
+            target_tags = pending.target_tags or []
             try:
-                result = self._pending.future.result()
+                result = pending.future.result()
             except Exception:
                 result = _RequestResult(ok=False, exception_code=0)
 
-            self._pending = None
+            del ctx.modbus_requests[id(self)]
             if not result.ok:
                 drain_writes: dict[str, Any] = {
                     self.receiving.name: False,
@@ -545,7 +545,7 @@ class ModbusReceiveInstruction(Instruction):
             return
 
         dest_tags = _normalize_operand_tags(self.dest, ctx)
-        self._pending = _PendingRequest(
+        ctx.modbus_requests[id(self)] = _PendingRequest(
             future=self._submit(dest_tags),
             target_tags=dest_tags,
         )

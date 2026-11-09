@@ -466,8 +466,8 @@ class Plan:
     session_inputs: dict[str, Any] = field(default_factory=dict)
     # Those of them no scan had applied, so the plan's first scan is theirs.
     waiting_overrides: tuple[str, ...] = ()
-    # The tags a Modbus device supplies, which how() may set, or None when the program has no
-    # send() or receive().  how() does no Modbus I/O, and the text says so.
+    # The tags a Modbus device would supply, which how() may set.  None means the program has
+    # no send() or receive().  When it is set, the text ends with a line saying how() did no Modbus I/O.
     modbus_levers: frozenset[str] | None = None
 
     def __post_init__(self) -> None:

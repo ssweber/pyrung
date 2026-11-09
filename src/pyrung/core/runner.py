@@ -1221,6 +1221,7 @@ class EpochQuery:
         runner._causal_initial_tags = dict(epoch.causal_initial_tags)
         runner._causal_lineage = CausalLineage(runner)
         runner._modbus_stubbed = epoch.modbus_stubbed
+        runner._reconstructs_history = True
         runner._set_rtc_internal(epoch.rtc_base, epoch.rtc_base_sim_time)
         if epoch.synthesis is not None:
             from pyrung.core.synthesis import Synthesis
@@ -1747,6 +1748,12 @@ class PLC:
         # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
         # string target.  Every runner made from one, such as a fork or a replay, keeps it.
         self._modbus_stubbed = False
+        # A runner that rebuilds recorded scans for cause() or the epoch does no Modbus I/O.
+        # ScanContext.modbus_io reads both flags and ``_replay_mode``.
+        self._reconstructs_history = False
+        # Each live send()/receive() request in flight.  A fork starts with none, so it
+        # can't collect a request its parent sent.
+        self._modbus_requests: dict[int, Any] = {}
         # What coasts keep for later coasts: a search's, shared with its forks.
         self._coast_memo: CoastMemo | None = None
         self._search_refuses_restart = False
@@ -2848,6 +2855,7 @@ class PLC:
         fork._coast_memo = self._coast_memo
         fork._search_refuses_restart = self._search_refuses_restart
         fork._modbus_stubbed = self._modbus_stubbed
+        fork._reconstructs_history = self._reconstructs_history
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         if inherit_log:
@@ -3398,6 +3406,7 @@ class PLC:
         # user Program, so copy both brackets explicitly.
         self._copy_current_synthesis_onto(fork)
         fork._modbus_stubbed = self._modbus_stubbed
+        fork._reconstructs_history = True
         fork._replay_mode = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
@@ -3547,10 +3556,6 @@ class PLC:
             return None  # The kernel is compiled from the current plant.
         kernel = self._compiled_replay_supported_kernel()
         if kernel is None:
-            return None
-        if self._modbus_stubbed and self._scan_log.has_io_records():
-            # A kernel writes recorded I/O after its scan, and stepping writes it at the
-            # instruction.  A how() fork may hold the session's own recorded I/O.
             return None
         anchor = self._nearest_checkpoint_at_or_before(scan_id)
         state = self._checkpoints[anchor] if anchor is not None else self._initial_state

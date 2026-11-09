@@ -301,10 +301,12 @@
   - the VS Code History panel shows the same scans, one-scan pulses included, and **Load older** reads further back
 
   A question that would step more than 250,000 scans raises `UnrecordedScansError` naming the range, instead of running for minutes.
-- `how()` plans for a program with `send()` or `receive()` without talking to a Modbus device:
-  - it sets a `receive()` destination, and the success or error bit of a `send()` or `receive()`, the way it sets an input. Each such step says "This value stands for the Modbus device's answer."
+- `how()` plans for a program with `send()` or `receive()` without talking to a Modbus device (it sent real requests):
+  - it sets a `receive()` destination, or the success or error bit of a `send()` or `receive()`, the way it sets an input
+  - each step that sets one says "This value stands for the Modbus device's answer."
   - the other status bits keep their values
   - the plan's last line says that `how()` does not simulate Modbus
+  - the forks `how()` returns, such as `plan.fork`, don't talk to the device either
   - `step()`, `run_for()` and the debugger still talk to the device
 - `how()` has a time limit, `wall_clock_s=300.0` by default (`None` turns it off). When it runs out, the plan ends with `wall-clock budget exhausted (300 s); still waiting on ...`. A search that grows to about 1 GB ends with `memory budget exhausted`.
 - A reached `how()` plan uses temporary logic only where the plan needs it, so `Rung(En): on_delay(W, 3000)` plans "Set En=True, wait ~3s" (it latched `En` with temporary logic until `W.Done`):
@@ -325,6 +327,8 @@
 
 ### Fixes
 
+- `history.at()`, `replay_to()`, `cause()` and `effect()` no longer send Modbus requests (a replayed `send()` could write to the device again). A replayed scan writes the answer the device gave on that scan.
+- A `fork()` of a PLC with a live `send()` or `receive()` sends its own requests (it could collect the answer to its parent's request).
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
   - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
   - a target with a second route through a pointer or a for loop

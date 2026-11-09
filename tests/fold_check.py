@@ -27,10 +27,10 @@ have proved nothing about the loop.
 A run is skipped, and counted, when the twin cannot reproduce it: an active
 ``when()`` registration or a monitor other than a Harness feedback notifier
 (their callbacks act on the folded runner only), replay mode, a time mode other
-than fixed-step, or a send() or receive() that talks to a device.  A device's answer
-comes from another thread, and the twin would collect the run's own request.  A compiled run or a coast longer than ``FOLD_CHECK_MAX_SCANS`` scans
-(default 200000) is compared at its landing with real compiled scans, and its loop scans
-counted apart from those compared scan by scan.
+than fixed-step, or a send() or receive() that talks to a device.  The twin sends no
+requests, so it can't repeat the device's answers.  A compiled run or a coast longer
+than ``FOLD_CHECK_MAX_SCANS`` scans (default 200000) is compared at its landing with
+real compiled scans, and its loop scans counted apart from those compared scan by scan.
 
 A coast is compared like a compiled run: exactly, and with the runner around the state,
 since both run real scans and the loop.  Its stretches fire finely here too.  It keeps its
@@ -281,7 +281,7 @@ def _talks_to_a_device(plc: Any) -> bool:
     )
     from pyrung.core.validation._common import walk_instructions
 
-    if plc._modbus_stubbed or plc._program is None:
+    if plc._modbus_stubbed or plc._reconstructs_history or plc._program is None:
         return False
     return any(
         isinstance(instr, ModbusSendInstruction | ModbusReceiveInstruction) and instr._is_live()

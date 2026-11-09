@@ -73,7 +73,12 @@ This also covers a hardware timing case. On a real CLICK, if the TCP connection 
 
 ### how()
 
-`how()` sends no request. It sets a `receive()` destination, and the success and error bits of a `send()` or `receive()`, as if the device had answered. The other status bits keep their values, and the plan ends with a line saying so.
+`how()` sends no Modbus request. It may set these tags the way it sets an input:
+
+- a `receive()` destination
+- the success or error bit of a `send()` or `receive()`
+
+A plan step that sets one stands for the device's answer. The busy bit and the exception code keep their values. The forks `how()` returns don't talk to the device either.
 
 ### Remote addressing
 

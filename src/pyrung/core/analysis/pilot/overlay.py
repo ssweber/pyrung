@@ -621,7 +621,7 @@ def fork_with_pilot_rungs(
         history_budget=history_budget,
         inherit_log=inherit_log,
     )
-    # how() does no Modbus I/O, so a fork can't take a request the session has in flight.
+    # how() does no Modbus I/O.  The forks it returns, plan.fork among them, keep the flag.
     fork._modbus_stubbed = True
     if keep_overrides:
         fork._forces.update(source._forces)
