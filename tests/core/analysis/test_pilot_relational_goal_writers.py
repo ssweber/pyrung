@@ -112,6 +112,9 @@ def test_a_threshold_on_a_count_is_reached_by_counting(
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.fork.state.tags["Go"] is True
     assert compare(plan.replay().state.tags["Count"], bound)
+    # The trace names Go for every comparison.  An == goal still reaches only through the last resort.
+    if compare is not operator.eq:
+        assert plan.last_resort is None
 
 
 def test_a_constant_copy_that_differs_meets_a_not_equal_goal() -> None:
@@ -125,6 +128,7 @@ def test_a_constant_copy_that_differs_meets_a_not_equal_goal() -> None:
     plan = plc.how(level != 0, max_scans=600)
 
     assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
     assert plan.replay().state.tags["Level"] == 5
 
 
