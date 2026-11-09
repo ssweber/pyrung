@@ -148,7 +148,7 @@ def _bound_operand_authorities(
 
     source_work = checkpoint.world.work
     source_tags = source_work.state.tags
-    known = source_work._known_tags_by_name
+    known = source_work.tags
     program_written = frozenset(ctx.pdg.writers_of)
     configured = _checkpoint_configured_inputs(checkpoint)
     temporal_owned = temporal_setup_rung_identities(state.theory_state)

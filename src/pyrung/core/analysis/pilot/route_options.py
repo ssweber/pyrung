@@ -751,7 +751,7 @@ def _oscillating_rungs(
     """
     from pyrung.core.condition import AllCondition, CompareEq, CompareNe
 
-    source = plc._known_tags_by_name[tag]
+    source = plc.tags[tag]
     if isinstance(value, bool):
         resting = bool(ctx.resting.get(tag, False))
         other = not resting
@@ -834,7 +834,7 @@ def _managed_boolean_rungs(
             or ((tag in ctx.edge_tags or detail.pulse) and value is not True)
         ):
             continue
-        source = state.work._known_tags_by_name.get(tag)
+        source = state.work._tag_known_or_reached(tag)
         if source is None:
             continue
         active_owner = overlay.owner(tag)

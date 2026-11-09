@@ -64,7 +64,7 @@ class LastResort:
 
 
 def _input_values(setup: Any, name: str, current: Any) -> tuple[Any, ...]:
-    tag = setup.work._known_tags_by_name.get(name)
+    tag = setup.work._tag_known_or_reached(name)
     if tag is None:
         return ()
     if tag.type is TagType.BOOL:

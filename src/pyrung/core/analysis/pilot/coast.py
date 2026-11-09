@@ -704,7 +704,7 @@ def value_trigger(
         return _values_match(s.tags.get(tag_name), value)
 
     condition = None
-    tag = plc._known_tags_by_name.get(tag_name)
+    tag = plc._tag_known_or_reached(tag_name)
     if tag is not None and isinstance(value, (bool, int, float, str)):
         from pyrung.core.condition import CompareEq
 
@@ -765,7 +765,7 @@ def _departure_condition(plc: PLC, holds: dict[str, Any], excluding: dict[str, A
 
     legs = []
     for t, held in holds.items():
-        tag = plc._known_tags_by_name.get(t)
+        tag = plc._tag_known_or_reached(t)
         if tag is None or not isinstance(held, (bool, int, float, str)):
             return None
         leg: Any = CompareNe(tag, held)

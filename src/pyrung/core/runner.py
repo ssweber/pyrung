@@ -4329,8 +4329,12 @@ class PLC:
         return known.type
 
     def _tag_known_or_reached(self, name: str) -> Tag | None:
+        """The tag *name* names, or None.  A slot its factory refuses is None, as in ``plc.tags``."""
         known = self._known_tags_by_name.get(name)
-        return known if known is not None else self._tags_rungs_reach.get(name)
+        if known is not None:
+            return known
+        reach = self._tags_rungs_reach
+        return None if reach.refusal_of(name) is not None else reach.get(name)
 
     def _register_tag_no_rung_gave(self, tag: Tag) -> None:
         no_rung = tag.name not in self._known_tags_by_name or tag.name in self._names_no_rung_gave

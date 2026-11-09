@@ -143,7 +143,7 @@ def _make_pilot_context(
     # kept off prerequisite holds and off preferred init/reset writer selection.
     clear_only = compute_clear_only(
         setup.pdg,
-        work._known_tags_by_name,
+        work.tags,
         setup.program,
     )
     return _PilotContext(
@@ -182,6 +182,7 @@ def prepare_drive(
 
     configured_inputs = _configured_input_names(plc)
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    _seed_reached_slots(work)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
@@ -190,12 +191,12 @@ def prepare_drive(
     waiting = _waiting_overrides(plc)
     if waiting:
         work.step()
-    ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
-    steerable = compute_steerable(pdg, work._known_tags_by_name, program)
+    ref_consts = compute_reference_constants(pdg, program, work.tags)
+    steerable = compute_steerable(pdg, work.tags, program)
     steerable |= {name for name in modbus_levers(program) or () if pdg.readers_of.get(name)}
     steerable -= harness_fb | ref_consts
     edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
+    resting = compute_resting_values(steerable, work.tags, pdg, program)
     diag_snapshot = dict(work.state.tags)
     prover = build_prover_context(program)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
@@ -219,6 +220,24 @@ def prepare_drive(
         session_inputs={**plc._pending_patches, **plc._forces},
         waiting_overrides=waiting,
     )
+
+
+def _seed_reached_slots(work: PLC) -> None:
+    """Put in the state how() starts from the default of each slot the rungs reach that it lacks.
+
+    A PLC built after another analysis of the program already holds these defaults, because it
+    knows the slots that analysis made.  Seeding them here gives how() the same snapshot either way.
+    A slot read with no value reads its default, so no scan sees a difference.
+    """
+    reach = work._tags_rungs_reach
+    missing = reach.names() - set(work.state.tags) - reach.refused()
+    seed = {}
+    for name in sorted(missing):
+        tag = reach.get(name)
+        if tag is not None:
+            seed[name] = tag.default
+    if seed:
+        work._edit_tip_tags(seed)
 
 
 def modbus_levers(program: Any) -> frozenset[str] | None:
@@ -248,10 +267,9 @@ def modbus_levers(program: Any) -> frozenset[str] | None:
 def _waiting_overrides(plc: PLC) -> tuple[str, ...]:
     """Tags whose pending patch or force no scan has applied, in the order a person set them."""
     tags = plc.state.tags
-    known = plc._known_tags_by_name
     names = dict.fromkeys(plc._pending_patches)
     for name, value in plc._forces.items():
-        tag = known.get(name)
+        tag = plc._tag_known_or_reached(name)
         current = tags.get(name, None if tag is None else tag.default)
         if current != value:
             names[name] = None

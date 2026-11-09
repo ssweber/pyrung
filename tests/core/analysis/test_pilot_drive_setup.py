@@ -15,7 +15,7 @@ def _setup() -> drive_setup.DriveSetup:
     evidence = SimpleNamespace(affine_projections=lambda: {"Derived": "projection"})
     return drive_setup.DriveSetup(
         work=SimpleNamespace(
-            _known_tags_by_name={"SetupWork": object()},
+            tags={"SetupWork": object()},
             state=SimpleNamespace(tags={"SetupWork": 1}),
         ),
         program=object(),
@@ -117,7 +117,7 @@ def test_context_factory_carries_drive_setup_receipts_exactly(monkeypatch: Any) 
     )
     assert ("pipeline", *shared_owners) in calls
     assert ("chart", *shared_owners) in calls
-    assert ("clear", setup.pdg, setup.work._known_tags_by_name, setup.program) in calls
+    assert ("clear", setup.pdg, setup.work.tags, setup.program) in calls
 
 
 def test_prepare_target_context_preserves_work_and_compass_defaults_and_overrides(
@@ -125,7 +125,7 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
 ) -> None:
     setup = _setup()
     override_work = SimpleNamespace(
-        _known_tags_by_name={"OverrideWork": object()},
+        tags={"OverrideWork": object()},
         state=SimpleNamespace(tags={"OverrideWork": 2}),
     )
     override_compass = Compass(knowledge=CompassKnowledge())

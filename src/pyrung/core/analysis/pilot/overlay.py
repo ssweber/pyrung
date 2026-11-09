@@ -134,11 +134,10 @@ def _constraint_condition(
     if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
         return None
 
-    tag = plc._known_tags_by_name.get(constraint.tag)
+    tag = plc._tag_known_or_reached(constraint.tag)
     if tag is None:
-        # Static block ranges are intentionally lazy in the runner's tag
-        # inventory.  An advance profile still owns concrete Tag objects for
-        # its channels, so use that authoritative channel metadata.
+        # An advance profile owns concrete Tag objects for its channels, so a
+        # channel the runner neither knows nor reaches takes its metadata from the profile.
         from pyrung.core.analysis.pilot.advance import build_advance_index
 
         owner = (
@@ -165,7 +164,7 @@ def _constraint_condition(
         return AllCondition(*terms) if unresolved else AnyCondition(*terms)
 
     if isinstance(constraint, AffineCmp):
-        operand = plc._known_tags_by_name.get(constraint.bound_tag)
+        operand = plc._tag_known_or_reached(constraint.bound_tag)
         if operand is None:
             return None
         if constraint.scale != 1:
@@ -173,7 +172,7 @@ def _constraint_condition(
         if constraint.offset != 0:
             operand = operand + constraint.offset
     elif constraint.bound_is_tag:
-        operand = plc._known_tags_by_name.get(str(constraint.bound))
+        operand = plc._tag_known_or_reached(str(constraint.bound))
         if operand is None:
             return None
     else:
@@ -239,18 +238,14 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
 
     from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
-    tag = plc._known_tags_by_name.get(atom.tag)
+    tag = plc._tag_known_or_reached(atom.tag)
     if tag is None:
         tag = SYSTEM_TAGS_BY_NAME.get(atom.tag)
     if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
 
     form = atom.form
-    operand = (
-        plc._known_tags_by_name.get(atom.operand, atom.operand)
-        if atom.operand_is_tag
-        else atom.operand
-    )
+    operand = plc.tags.get(atom.operand, atom.operand) if atom.operand_is_tag else atom.operand
     if atom.operand_is_tag:
         if atom.operand_scale != 1:
             operand = operand * atom.operand_scale
@@ -303,7 +298,7 @@ def _target_unresolved_condition(
         return _until_unresolved_condition(plc, target_predicate)
     from pyrung.core.condition import CompareNe
 
-    tag = plc._known_tags_by_name.get(target_tag)
+    tag = plc._tag_known_or_reached(target_tag)
     if tag is None:
         raise KeyError(f"pilot target guard tag {target_tag!r} is not a program tag")
     return CompareNe(tag, target_value)
@@ -514,7 +509,7 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
     expanded = _expand_pilot_rules(materialized)
     rules: list[tuple[Any, Any, Any]] = []
     for rule in expanded:
-        dest = plc._known_tags_by_name.get(rule.rung.dest)
+        dest = plc._tag_known_or_reached(rule.rung.dest)
         if dest is None:
             raise KeyError(f"pilot rung destination {rule.rung.dest!r} is not a program tag")
         rules.append((dest, rule.rung.value, rule.guard))

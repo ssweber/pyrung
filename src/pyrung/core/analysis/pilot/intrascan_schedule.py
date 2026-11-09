@@ -296,7 +296,7 @@ def compile_scalar_schedule(
     for name, conditions in sorted(by_tag.items()):
         if name in guard_names:
             return ScheduleCompilation(detail=f"repair guard self-demands {name!r}")
-        tag = plc._known_tags_by_name.get(name)
+        tag = plc._tag_known_or_reached(name)
         if tag is None:
             return ScheduleCompilation(detail=f"unknown assignment destination {name!r}")
         value = _satisfying_value(tag, tuple(conditions), snapshot)

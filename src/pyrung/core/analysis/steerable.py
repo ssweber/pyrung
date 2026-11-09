@@ -28,6 +28,8 @@ from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pyrung.core.analysis.pdg import ProgramGraph
 
 __all__ = ["compute_clear_only", "compute_steerable"]
@@ -226,7 +228,7 @@ def _operator_interface(
 
 def compute_steerable(
     pdg: ProgramGraph,
-    known: dict[str, Any],
+    known: Mapping[str, Any],
     program: Any,
 ) -> frozenset[str]:
     """Tags the program does not author, by intrinsic characteristics — any type.
@@ -256,7 +258,7 @@ def compute_steerable(
 
 def compute_clear_only(
     pdg: ProgramGraph,
-    known: dict[str, Any],
+    known: Mapping[str, Any],
     program: Any,
 ) -> frozenset[str]:
     """Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.

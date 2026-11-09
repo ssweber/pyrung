@@ -6,6 +6,7 @@ choose a route, execute a scan, or own execution evidence.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pyrung.core.analysis import steerable as _steerable
@@ -16,7 +17,7 @@ from pyrung.core.analysis.sp_values import _expr_tag_names, _values_match
 
 
 def compute_reference_constants(
-    pdg: ProgramGraph, program: Any, known: dict[str, Any] | None = None
+    pdg: ProgramGraph, program: Any, known: Mapping[str, Any] | None = None
 ) -> frozenset[str]:
     """Never-written, non-external tags used as program reference values.
 
@@ -197,7 +198,7 @@ def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:
 
 def compute_resting_values(
     steerable: frozenset[str],
-    known: dict[str, Any],
+    known: Mapping[str, Any],
     pdg: ProgramGraph,
     program: Any,
 ) -> dict[str, Any]:
