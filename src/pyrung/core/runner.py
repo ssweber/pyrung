@@ -3190,10 +3190,6 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
-    def _nearest_checkpoint_at_or_after(self, scan_id: int) -> int | None:
-        """Smallest retained checkpoint scan_id >= ``scan_id``, or None."""
-        return min((c for c in self._checkpoints if c >= scan_id), default=None)
-
     def _trim_history_before(self, scan_id: int) -> None:
         """Advance the replay horizon to *scan_id*.
 
@@ -5061,32 +5057,26 @@ class PLC:
         self._sync_runtime_flags_from_state()
 
     def _apply_history_retention(self, new_scan_id: int) -> None:
-        """Trim history to the floor that the tip and ``history=`` set.
+        """Trim history to the floor that the tip, ``history=`` and the memory budget set.
 
-        The floor moves once per checkpoint interval.  Stepping and a long run checkpoint on
-        different scans, so the floor must not depend on where the checkpoints are.  Over the
-        memory budget, a checkpoint scan trims to the checkpoint an interval past the horizon.
-        That checkpoint and the bytes held differ between stepping and a long run.
+        Stepping and a long run checkpoint on different scans and cache different states.  So
+        the floor depends only on the last interval scan, the oldest kept state and the
+        settings.  Over the budget the floor moves one interval more.  The bytes weighed are the
+        checkpoints stepping keeps in the window, each the size of the oldest kept state.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval
         if retention is None:
             return
-        horizon = new_scan_id - new_scan_id % interval - retention
+        last_checkpoint = new_scan_id - new_scan_id % interval
+        horizon = last_checkpoint - retention
         floor = -(-horizon // interval) * interval
         if floor > self._initial_scan_id:
             self._trim_history_before(floor)
-        if new_scan_id % interval == 0 and horizon > 0:
-            total = (
-                self._recent_state_cache_bytes
-                + sum(_estimate_state_bytes(s) for s in self._checkpoints.values())
-                + self._scan_log.bytes_estimate()
-                + sum(getattr(self, name).bytes_estimate() for name in _RECORDS)
-            )
-            if total > self._recent_state_cache_budget:
-                extra_horizon = horizon + self._checkpoint_interval
-                extra_cp = self._nearest_checkpoint_at_or_after(extra_horizon)
-                if extra_cp is not None:
-                    self._trim_history_before(extra_cp)
+        if horizon > 0 and floor + interval > self._initial_scan_id:
+            checkpoints = (last_checkpoint - self._initial_scan_id) // interval + 1
+            held = checkpoints * _estimate_state_bytes(self._initial_state)
+            if held > self._recent_state_cache_budget:
+                self._trim_history_before(floor + interval)
 
     def _evaluate_monitors(
         self, *, previous_state: SystemState, current_state: SystemState

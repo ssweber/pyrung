@@ -891,19 +891,6 @@ class RungFiringTimelines(Generic[K]):
                     candidates.add(end)
         return tuple(sorted(candidates, reverse=True))
 
-    def bytes_estimate(self) -> int:
-        """About the bytes the record's ranges take, at a range's measured size.
-
-        A repeat holds its cycle's ranges once, whatever its count.
-        """
-        tables = (self._fired_ranges, self._value_timelines, self._varied_ranges)
-        return 160 * sum(
-            len(element.ranges) if type(element) is Repeat else 1
-            for table in tables
-            for ranges in table.values()
-            for element in ranges
-        )
-
     def value_is_known(self, rung_index: K, tag_name: str) -> bool:
         """Whether retained final values remain exact for this one column."""
         key = (rung_index, tag_name)
