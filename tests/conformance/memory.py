@@ -525,9 +525,9 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "modbus_raw": {
         "C": range(1999, 2001),
         "DS": (range(4061, 4076), range(4500, 4501)),
-        "DD": range(201, 207),
+        "DD": range(201, 208),
         "DF": range(101, 116),
-        "DH": range(101, 127),
+        "DH": range(101, 129),
         "TXT": range(401, 407),
     },
 }

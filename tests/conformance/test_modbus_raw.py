@@ -1,5 +1,10 @@
 """Raw Modbus requests, and what the ladder saw of each write: part ``modbus_raw``.
 
+**It writes into a real CLICK's memory past the DD bank, at DD1531, and at the Modbus address
+past DD1000 that may hold it.**  Do not run it on a CLICK whose memory matters.  It writes 0
+to DD1531 last, which ``faults/pointer_past_bank_lands`` (part ``system``) expects to read.  The
+simulator and the P1AM code have no memory there.
+
 The rest of the suite reads and writes slot DS only, through pyclickplc's client.  This part
 asks what a CLICK answers to the requests that client never sends or refuses to send.  Its
 ladder stages values for the harness to read raw.  After each raw write the ladder echoes what
@@ -8,7 +13,7 @@ it then holds, so a reading tells "the write was stored" apart from "the server 
 registers or bits, the exception code, or ``timeout``.  It reads each value twice, raw and
 through pyclickplc's ``ClickClient``, which decodes it or raises.  Nothing here is asserted
 against an answer.  On a CLICK each probe goes into ``readings.toml``.  On a local target it goes
-into ``build/conformance-modbus_raw/<target>.toml``, for setting the two side by side.
+into ``build/modbus_raw-readings/<target>.toml``, for setting the two side by side.
 
 The ladder (case ``raw_values``), on the scan ``Cmd`` arrives:
 
@@ -17,11 +22,15 @@ The ladder (case ``raw_values``), on the scan ``Cmd`` arrives:
 - The write targets: DF111..DF113 = 2.5, DF114 and DF115 = NaN, DD203 and DD205 = 0x00010002,
   DD206 = 0x00030004, TXT405 = 'Y' and TXT406 = 'Z'.
 
-Every scan while ``Cmd`` is up, it copies each DF and DD above into two DH (an Unpack Copy, low
-word first) and each TXT into a DS (a Copy to ASCII).  It scores each write-target DF into
-DS4071..DS4075: 1 if it equals itself (not NaN), 2 if it is above 3.0E38, 4 if it equals 2.5.
-Last, it copies ``Cmd`` into ``Scratch``.  The harness writes, then writes a new ``Cmd``, and
-reads the echo once ``Scratch`` holds it.
+On the staging scan, and on every scan while ``Cmd`` is above 1, the ladder echoes:
+
+- each DF and DD above into two DH (an Unpack Copy, low word first);
+- each TXT into a DS (a Copy to ASCII);
+- a score of each write-target DF into DS4071..DS4075.  The score is 1 if the DF equals itself
+  (not NaN), plus 2 if it is above 3.0E38, plus 4 if it equals 2.5.
+
+Last, on every scan, it copies ``Cmd`` into ``Scratch``.  The harness writes, then writes a new
+``Cmd``, and reads the echo once ``Scratch`` holds it.
 
 The probes, each one entry (``modbus_raw/<probe>``):
 
@@ -48,14 +57,23 @@ The probes, each one entry (``modbus_raw/<probe>``):
   then YD1 read back.  If it lands on YD1 it turns Y116 on until the harness writes it back.
 - ``sd29_write``: FC06 to SD29 of a year one past what it holds, then FC04 back, then the old
   value written back.
+- ``past_bank_alias``: whether DD1531, which a pointer reaches past the bank, is the memory at
+  Modbus 19444 (DD1 is 16384, two registers each).  FC03 x2 at 18384 (DD1001) and 19444 first.
+  Then the ladder reads DD1531 through a pointer (DS4064 = 1531) and writes 1234 there only if
+  it read 0.  FC03 at 19444 again.  Then FC16 of 4321 there, and if a server takes
+  it, the ladder reads DD1531 back and the harness writes the old registers back.  Last, the
+  ladder writes 0 to DD1531 whatever happened.  The probe also asks whether DH follows DD in
+  memory, two DH to a DD (so DD1064 would be DH127 and DH128).  The ladder sets DH127 = 0x1357
+  and DH128 = 0x2468, then reads DD1064 through the same pointer into DD207.  DD207 reads
+  0x24681357 if DH127 is DD1064's low word, and 0x13572468 if it is the high word.
 - ``fc03_x126``, ``fc03_x200``, ``fc15_x1969``: requests past Modbus's limits (125 registers,
   1968 coils), which a server should refuse with exception 03.  The FC15 writes C1..C1969 with
   what they read just before.
 - ``sc51_watchdog_reset``, ``sc50_stop``: only with ``PYRUNG_CONFORMANCE_STOP=1``, last.  SC50 puts
   the PLC in STOP: the probe records the exception, then SC11 after.  Put the PLC back in RUN.
 
-Each probe writes only the part's own memory, or restores what it wrote, except where a CLICK
-should refuse the write.  The reset (``Cmd = 0``) clears the part's memory at the end.
+Each probe writes only the part's own memory, or restores what it wrote.  The exceptions are
+the writes a CLICK should refuse, and ``past_bank_alias``.  The reset (``Cmd = 0``) clears the part's memory at the end.
 """
 
 from __future__ import annotations
@@ -72,7 +90,8 @@ from typing import Any
 import pytest
 
 from pyrung.conformance import Endpoint, Group, assert_all_passed, case, read_program_hash, run
-from pyrung.core import Rung, copy, fill, math, reset, to_ascii, to_binary, unpack_to_words
+from pyrung.core import Or, Rung, copy, fill, math, reset, to_ascii, to_binary, unpack_to_words
+from tests.conformance.copy.test_past_bank_write import ADDRESS
 from tests.conformance.memory import c, dd, df, dh, ds, txt
 from tests.conformance.probe_kit import between, class_of, finish, once, record_raw_readings
 
@@ -104,11 +123,54 @@ SCORE_DS = 4071
 #: The DS that holds 200 for the Copy Binary into TXT403.
 BYTE_DS = 4067
 LAST_DS = 4500
+#: ``past_bank_alias``: the step the harness asks of the ladder, DD1531 as the ladder found it,
+#: and DD1531 as the ladder reads it back.
+PAST_OP_DS, PAST_FOUND_DS, PAST_BACK_DS = 4068, 4069, 4070
+#: What the ladder writes through the pointer, and what the harness writes over Modbus.
+LADDER_VALUE, MODBUS_VALUE = 1234, 4321
+#: If DH follows DD in a CLICK's memory, two DH to a DD, then DD1064 is DH127 and DH128.
+#: The ladder sets that pair to a pattern and reads DD1064 through the pointer into DD207.
+AFTER_DD, PATTERN = 1064, (0x1357, 0x2468)
+DH_PAIR = (2 * (AFTER_DD - 1000) - 1, 2 * (AFTER_DD - 1000))
+AFTER_INTO = dd[207]
+# The pointer's choices bound it, or the build would take a write through it for a write to the
+# whole DD bank.  ``past_write`` owns DS4226, its pointer, so this part has its own.
+POINTER = ds[4064]
+ds.slot(
+    4064, choices={0: "unset", AFTER_DD: "DH127 if DH follows DD", ADDRESS: "past the DD bank"}
+)
 
 
 def _word_source(name: str) -> Any:
     bank = {"DF": df, "DD": dd}[name[:2]]
     return bank[int(name[2:])]
+
+
+def _past_bank_steps(slot: Any) -> None:
+    """The ladder's half of ``past_bank_alias``, one step for each value of DS4068.
+
+    Each step does the same on every scan it is held, so the harness waits for one scan and
+    reads.  Step 1 reads DD1531 as found, and DD1064 after the DH pattern.  Step 2 writes 1234
+    to DD1531 only if step 1 found 0.  Step 3 only reads.  Step 4 writes 0 there whatever it
+    holds.
+    """
+    step, found, back = ds[PAST_OP_DS], ds[PAST_FOUND_DS], ds[PAST_BACK_DS]
+    with Rung(slot.Cmd != 0, step != 0):
+        copy(PATTERN[0], dh[DH_PAIR[0]])
+        copy(PATTERN[1], dh[DH_PAIR[1]])
+        copy(AFTER_DD, POINTER)
+    with Rung(slot.Cmd != 0, step == 1):
+        copy(dd[POINTER], AFTER_INTO)
+    with Rung(slot.Cmd != 0, step != 0):
+        copy(ADDRESS, POINTER)
+    with Rung(slot.Cmd != 0, step == 1):
+        copy(dd[POINTER], found)
+    with Rung(slot.Cmd != 0, step == 2, found == 0):
+        copy(LADDER_VALUE, dd[POINTER])
+    with Rung(slot.Cmd != 0, step == 4):
+        copy(0, dd[POINTER])
+    with Rung(slot.Cmd != 0, step >= 2):
+        copy(dd[POINTER], back)
 
 
 def prove_raw_values(slot: Any) -> None:
@@ -134,24 +196,28 @@ def prove_raw_values(slot: Any) -> None:
         copy(65538, dd[203])
         copy(65538, dd[205])
         copy(196612, dd[206])
+    # The echo runs on the staging scan and while the harness holds a Cmd above 1, not on
+    # every scan.  The loop declines a scan with an Unpack Copy of a Real.
+    echo = (slot.Cmd != 0, Or(slot.Fired == 0, slot.Cmd > 1))
     names = list(ECHO_WORDS)
     for start in range(0, len(names), 5):
-        with Rung(slot.Cmd != 0):
+        with Rung(*echo):
             for name in names[start : start + 5]:
                 first = ECHO_WORDS[name]
                 unpack_to_words(_word_source(name), dh.select(first, first + 1))
-    with Rung(slot.Cmd != 0):
+    with Rung(*echo):
         for n, into in ECHO_TEXT.items():
             copy(txt[n], ds[into], convert=to_ascii)
         fill(0, ds.select(SCORE_DS, SCORE_DS + len(SCORED) - 1))
     for k, n in enumerate(SCORED):
         score = ds[SCORE_DS + k]
-        with Rung(slot.Cmd != 0, df[n] == df[n]):
+        with Rung(*echo, df[n] == df[n]):
             math(score + 1, score)
-        with Rung(slot.Cmd != 0, df[n] > 3.0e38):
+        with Rung(*echo, df[n] > 3.0e38):
             math(score + 2, score)
-        with Rung(slot.Cmd != 0, df[n] == 2.5):
+        with Rung(*echo, df[n] == 2.5):
             math(score + 4, score)
+    _past_bank_steps(slot)
     with Rung(*once(slot)):
         copy(ds[ECHO_TEXT[401]], slot.Result1)
         copy(ds[ECHO_TEXT[403]], slot.Result2)
@@ -164,11 +230,12 @@ def prove_raw_values(slot: Any) -> None:
 
 def init_raw_values(slot: Any) -> None:
     fill(0.0, df.select(101, 115))
-    fill(0, dd.select(201, 206))
-    fill(0, dh.select(101, 126))
+    fill(0, dd.select(201, 207))
+    fill(0, dh.select(101, 128))
     fill("\x00", txt.select(401, 406))
     fill(0, ds.select(4061, 4075))
     copy(0, ds[LAST_DS])
+    copy(0, POINTER)
     reset(c.select(1999, 2000))
 
 
@@ -176,7 +243,8 @@ group = Group(
     GROUP,
     [
         case(
-            "Stages values for raw Modbus reads and echoes what each raw write left: TXT401 "
+            "WRITES PAST THE DD BANK on a CLICK, at DD1531, when the harness asks, and clears "
+            "it last.  Stages values for raw Modbus reads and echoes what each raw write left: TXT401 "
             "'A' as ASCII (Result1), TXT403's byte 200 (Result2), DD201's high word in the "
             "second DH (Result3 = 1) and DF 2.5's high word 0x4020 there too (Result4 = 1)",
             ladder=prove_raw_values,
@@ -705,6 +773,56 @@ async def _sd29_write(s: _Session) -> None:
     }
 
 
+async def _past_step(s: _Session, step: int) -> bool:
+    await s.w.click.ds.write(PAST_OP_DS, step)
+    return await s.settle(f"past_bank_alias step {step}")
+
+
+async def _past_bank_alias(s: _Session) -> None:
+    """Whether the memory a pointer reaches past the DD bank is the memory Modbus finds there.
+
+    If the Modbus map runs on past DD1000 at two registers each, DD1001 is 18384 and DD1531 is
+    19444, in the gap before DH.  The ladder's step 4 clears DD1531 even if a step fails.
+    """
+    w = s.w
+    here = _dd(ADDRESS)
+    reading: dict[str, Any] = {
+        "dd1001_before": await w.registers(3, _dd(1001), 2),
+        "dd1531_before": await w.registers(3, here, 2),
+    }
+    settled = True
+    try:
+        settled &= await _past_step(s, 1)
+        reading["ladder_found"] = await s.ds(PAST_FOUND_DS)
+        low, high = PATTERN
+        reading["after_dd"] = {
+            "dh_pattern": await s.both(
+                w.registers(3, _dh(DH_PAIR[0]), 2), lambda cl: cl.dh.read(*DH_PAIR)
+            ),
+            f"dd{AFTER_DD}_by_pointer": await s.dd(207),
+            "if_dh_low_word_first": high << 16 | low,
+            "if_dh_high_word_first": low << 16 | high,
+        }
+        settled &= await _past_step(s, 2)
+        reading["after_ladder_write"] = await w.registers(3, here, 2)
+        reading["ladder_back"] = await s.ds(PAST_BACK_DS)
+        reading["fc16"] = await w.write_registers(here, [MODBUS_VALUE, 0])
+        if reading["fc16"] == "ok":
+            settled &= await _past_step(s, 3)
+            reading["after_fc16"] = await w.registers(3, here, 2)
+            reading["ladder_back_after_fc16"] = await s.ds(PAST_BACK_DS)
+            old = reading["dd1531_before"]
+            if isinstance(old, list) and len(old) == 2:
+                reading["fc16_restored"] = await w.write_registers(here, [int(x, 16) for x in old])
+    finally:
+        settled &= await _past_step(s, 4)
+        reading["after_clear"] = await w.registers(3, here, 2)
+        reading["ladder_back_after_clear"] = await s.ds(PAST_BACK_DS)
+        await w.click.ds.write(PAST_OP_DS, 0)
+        reading["settled"] = int(settled)
+        s.readings["past_bank_alias"] = reading
+
+
 async def _limits(s: _Session) -> None:
     w = s.w
     s.readings["fc03_x126"] = {"raw": _count(await w.registers(3, _ds(1), 126))}
@@ -755,6 +873,7 @@ async def _probe_all(s: _Session) -> None:
     await _function_codes(s)
     await _xd_yd(s)
     await _sd29_write(s)
+    await _past_bank_alias(s)
     await _limits(s)
     # The reset clears the part's memory: DF, DD, DH, TXT, DS4500, C1999..C2000.
     await s.w.click.ds.write(s.slot["Cmd"], 0)
@@ -772,8 +891,9 @@ def _target_name(sim: type) -> str:
     return {"SimServer": "pyrung", "CircuitPySim": "circuitpy"}.get(sim.__name__, sim.__name__)
 
 
-#: Where a local target's answers go, one file per target, rewritten on each run.
-LOCAL_READINGS = Path(__file__).parents[2] / "build" / "conformance-modbus_raw"
+#: Where a local target's answers go, one file per target, rewritten on each run.  Not the
+#: export's folder, which a person loads into the CLICK.
+LOCAL_READINGS = Path(__file__).parents[2] / "build" / "modbus_raw-readings"
 
 _LOCAL_HEADER = """\
 # What a local target answered to the raw requests of test_modbus_raw.py, rewritten each run.
