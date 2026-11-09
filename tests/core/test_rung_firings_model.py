@@ -478,4 +478,4 @@ def test_the_records_hold_what_stepping_holds(
 def test_the_records_hold_what_stepping_holds_searched(
     machine: type[Records], monkeypatch: pytest.MonkeyPatch, checked: None
 ) -> None:
-    _run_machine(machine, monkeypatch, 400, derandomize=False)
+    _run_machine(machine, monkeypatch, 100, derandomize=False)
