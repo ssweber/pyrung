@@ -377,7 +377,8 @@ def _iter_tags_and_edge_names(
 
     *block_uses*, when given, also collects each range and pointer into a block.
     *beyond_rungs*, when given, also collects the tags found by going on into those blocks
-    and programs, once the rungs are done: some other tag of the same name yields to a rung's.
+    once the rungs are done.  A tag a rung names wins over another of the same name.  A
+    program is never walked past its rungs and subroutines.
     """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.memory_block import (
@@ -420,18 +421,20 @@ def _iter_tags_and_edge_names(
                 continue
 
             current_id = id(current)
-            if on_the_rungs and isinstance(current, Block | Program):
+            if on_the_rungs and isinstance(current, Block):
                 if current_id not in held_back:
                     held_back[current_id] = current
-                    if isinstance(current, Block):
-                        queue.extend(current._mapped_tags.values())
-                    else:
-                        queue.extend(current.rungs)
-                        queue.extend(current.subroutines.values())
+                    queue.extend(current._mapped_tags.values())
                 continue
             if current_id in visited:
                 continue
             visited.add(current_id)
+            if isinstance(current, Program):
+                # A program is its rungs and subroutines. The rest is caches that how() fills,
+                # which hold no tag the rungs use and are slow to walk.
+                queue.extend(current.rungs)
+                queue.extend(current.subroutines.values())
+                continue
 
             if (
                 on_the_rungs
