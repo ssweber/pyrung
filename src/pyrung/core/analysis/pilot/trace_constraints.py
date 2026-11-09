@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.trace_read as _trace_read
+from pyrung.core.analysis.crossings._ranges import stored_value_possible
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
@@ -18,11 +20,13 @@ from pyrung.core.analysis.pilot.writer_selection import _sole_write_instr
 from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.analysis.simplified import Atom
 from pyrung.core.analysis.sp_values import (
+    _CMP_OPS,
     _FLIP_FORM,
+    _values_match,
     _satisfying_value,
     _written_value_for_tag,
 )
-from pyrung.core.crossing import AffineCmp, Cmp, Constraint, Eq, Literal
+from pyrung.core.crossing import Affine, AffineCmp, Cmp, Constraint, Eq, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -143,7 +147,12 @@ def _written_value_satisfying(
     pdg: ProgramGraph,
     program: Any,
 ) -> Any | None:
-    """The literal a writer of this tag writes that satisfies the comparison, if any."""
+    """The value a writer of this tag writes that satisfies the comparison, if any.
+
+    A writer that adds a constant to the tag itself counts too.  Its value is the first
+    count from the current one that satisfies the comparison, so the trace back reaches
+    the current value one write at a time.
+    """
 
     if program is None:
         return None
@@ -156,7 +165,43 @@ def _written_value_satisfying(
         value = _written_value_for_tag(rung, atom.tag) if rung is not None else None
         if isinstance(value, Literal):
             written.append(value.value)
+        elif isinstance(value, Affine) and value.source == atom.tag and value.scale == 1:
+            counted = _counted_value_satisfying(atom, threshold, snapshot, value.offset, pdg)
+            if counted is not None:
+                written.append(counted)
+    if atom.form == "ne":
+        return next((value for value in written if not _values_match(value, threshold)), None)
     return _satisfying_value(atom.form, threshold, tuple(written)) if written else None
+
+
+_HOLDS = {**_CMP_OPS, "ne": lambda value, bound: value != bound}
+
+
+def _counted_value_satisfying(
+    atom: Atom, threshold: Any, snapshot: dict[str, Any], step: Any, pdg: ProgramGraph
+) -> Any | None:
+    """The first value of ``now + n * step`` (n >= 1) that satisfies *atom*, if one is in range."""
+
+    now = snapshot.get(atom.tag)
+    numbers = (now, threshold, step)
+    if any(not isinstance(x, (int, float)) or isinstance(x, bool) for x in numbers) or not step:
+        return None
+    holds = _HOLDS.get(atom.form)
+    if holds is None:
+        return None
+    if atom.form == "ne":
+        n = 1
+    elif (step > 0) != (atom.form in ("gt", "ge")):
+        return None
+    else:
+        n = max(1, math.ceil((threshold - now) / step))
+    # Float rounding can leave the first guess one step short.
+    for count in (n, n + 1, n + 2):
+        value = now + count * step
+        if holds(value, threshold):
+            tag = pdg.tags.get(atom.tag)
+            return value if stored_value_possible(getattr(tag, "type", None), value) else None
+    return None
 
 
 def _inequality_levers(

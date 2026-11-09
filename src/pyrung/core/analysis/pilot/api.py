@@ -45,11 +45,11 @@ def _relational_target_atom(cond: Any) -> Any | None:
     operand is the RHS tag name (a *live* threshold) or a literal.
     """
     from pyrung.core.analysis.simplified import Atom
-    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt
+    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt, CompareNe
     from pyrung.core.expression import Expression
     from pyrung.core.tag import Tag
 
-    forms = {CompareLt: "lt", CompareLe: "le", CompareGt: "gt", CompareGe: "ge"}
+    forms = {CompareLt: "lt", CompareLe: "le", CompareGt: "gt", CompareGe: "ge", CompareNe: "ne"}
     form = forms.get(type(cond))
     if form is None:
         return None
