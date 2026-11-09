@@ -73,6 +73,7 @@ from typing import Any
 
 import pyrung.core.coast_run as coast_module
 import pyrung.core.compiled_run as compiled_run
+import pyrung.core.jit_stats as jit_stats
 import pyrung.core.rung_firings as rung_firings
 import pyrung.core.scan_trace as scan_trace
 from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime
@@ -1112,15 +1113,19 @@ class _PrivateCopy:
         if fn.__closure__ is not None:
             cells = tuple(types.CellType() for _ in fn.__closure__)
         # Module-level names the function reads are state too.  So the copy gets a private
-        # globals dict holding copies of just those names.
+        # globals dict holding copies of just those names.  pyrung's own are the engine's, which
+        # the twin shares.  A copy of the read trace stack would hide what a coast keeps untraced.
         names: set[str] = set()
         todo = [fn.__code__]
         while todo:
             code = todo.pop()
             names.update(code.co_names)
             todo.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
+        module = fn.__globals__.get("__name__", "")
         private = self.module_globals.get(id(fn.__globals__))
-        if private is None:
+        if module == "pyrung" or module.startswith("pyrung."):
+            private = fn.__globals__
+        elif private is None:
             private = {
                 "__builtins__": fn.__globals__.get("__builtins__", {}),
                 "__name__": fn.__globals__.get("__name__", ""),
@@ -1530,6 +1535,9 @@ def _hold_to_the_stepped_price(
     executed: set[int] = set()
     stepped: dict[str, int] = {}
     setattr(coast_module, "TRACE_ROOM", 10**9)  # noqa: B010
+    # The stats a caller collects are of its own run.
+    collecting = list(jit_stats.ACTIVE)
+    jit_stats.ACTIVE.clear()
     global _depth
     _depth += 1
     went_on = False
@@ -1547,6 +1555,7 @@ def _hold_to_the_stepped_price(
         return
     finally:
         _depth -= 1
+        jit_stats.ACTIVE[:] = collecting
         setattr(coast_module, "TRACE_ROOM", room)  # noqa: B010
     assert scan_trace.TOTALS["loop scans"] == loop_scans, "the stepped twin ran the loop"
     if _OpaqueAvoid.was_true:
