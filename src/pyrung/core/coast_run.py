@@ -134,11 +134,12 @@ PAYING_STRETCH = 16
 # every scan of it is interpreted.  Such a wait has one of these:
 # - a program with no kernel (it writes a read-only system tag, it has a Modbus send or
 #   receive, a run_function() in it or in the overlay keeps state, or it does not compile)
-# - a runner the loop refuses (not fixed-step, a breakpoint, a watched tag moving without a
-#   write)
+# - a runner the loop refuses (not fixed-step, a breakpoint, a force, a watched tag moving
+#   without a write)
 # - a stop predicate whose reads the loop cannot watch
 # The price is settled after the first scans, before the loop's first try.  The first try
-# comes after ENTRY_WAIT scans, so ENTRY_WAIT must not be less.
+# comes after ENTRY_WAIT scans, so ENTRY_WAIT must not be less.  A stop predicate may come to
+# read what the loop cannot watch later in the wait.  Each scan from there costs a unit.
 UNIT_SCANS_AT_START = 2
 # What a loop run does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
 # how many cycles repeat exactly, and checks each scan the loop then runs against that.
@@ -280,7 +281,9 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
     memo.compiles += 1
     memo.kernels[key] = (kernel, (plc._program, plant, holds))
     if len(memo.kernels) > MAX_KERNELS:
-        memo.kernels.pop(next(iter(memo.kernels)))
+        # A program with no kernel goes first.  Keeping it saves only a compile that fails.
+        unused = (k for k, (cached, _keep) in memo.kernels.items() if cached is None)
+        memo.kernels.pop(next(unused, next(iter(memo.kernels))))
     return kernel
 
 
@@ -1620,8 +1623,12 @@ def _coast_until(
 
     # The interpreted scans priced as loop scans, for the ledger to read off the runner.
     waiting: list[int] = []
-    # Whether this wait costs a unit a scan, settled once by settle() (see UNIT_SCANS_AT_START).
+    # Whether this wait costs a unit a scan, settled by settle() (see UNIT_SCANS_AT_START).
+    # keep_watch() may turn it True later, and the scans priced as loop scans until then stay so.
     by_scan: bool | None = None
+    cheap = 0
+    # The stop predicate's traced reads and their values, when it has no declared reads.
+    reads_seen: dict[str, Any] | None = None
 
     def note(scan: int) -> None:
         nonlocal kernel_scans, last_noted
@@ -1634,17 +1641,33 @@ def _coast_until(
 
     def unit_scans() -> int:
         logical = plc.state.scan_id - start_scan
-        return min(logical, UNIT_SCANS_AT_START) if by_scan is False else logical
+        return min(logical, UNIT_SCANS_AT_START) if by_scan is False else logical - cheap
+
+    def watch_reads() -> bool:
+        nonlocal reads_seen
+        try:
+            _hit, traced = _traced_call(predicate, plc)
+        except Exception:
+            return False
+        if not _watchable(traced):
+            return False
+        tags = plc.state.tags
+        reads_seen = {name: tags.get(name) for name in traced}
+        return True
 
     def settle() -> None:
         nonlocal by_scan, can_loop, kernel
         if by_scan is not None:
             return
         if can_loop:
-            kernel = _kernel_for(plc, memo)
-            if kernel is None:
+            # The loop declines every try while a force is on, and a wait does not lift one.
+            forced = bool(plc._input_overrides.forces)
+            kernel = None if forced else _kernel_for(plc, memo)
+            if forced:
+                reason = "a force"
+            elif kernel is None:
                 reason = "no kernel"
-            elif predicate_reads is None and not _loop_can_watch(predicate, plc):
+            elif predicate_reads is None and not watch_reads():
                 reason = "the stop predicate reads what a loop cannot watch"
             else:
                 by_scan = False
@@ -1654,12 +1677,31 @@ def _coast_until(
                 jit_stats.add_decline(f"interpreted: {reason}")
         by_scan = True
 
+    def keep_watch() -> None:
+        # The predicate answers from its reads alone, so what it reads changes only on a scan
+        # that moves one of them.  The loop never runs past such a scan, so both engines switch
+        # on the same scan.
+        nonlocal by_scan, can_loop, cheap
+        if by_scan is not False or reads_seen is None:
+            return
+        tags = plc.state.tags
+        if all(_same_value(tags.get(name), value) for name, value in reads_seen.items()):
+            return
+        if watch_reads():
+            return
+        cheap = plc.state.scan_id - start_scan - UNIT_SCANS_AT_START
+        by_scan = True
+        can_loop = False
+        if run is not None:
+            jit_stats.add_decline(
+                "interpreted: the stop predicate now reads what a loop cannot watch"
+            )
+
     def finish(reached: bool) -> bool:
         # A stretch may be what landed, and a caller reads its answer there.
         if plc.state.scan_id != last_noted:
             note(plc.state.scan_id)
-        landed_late = bool(waiting) and waiting[-1] == plc.state.scan_id
-        if landed_late:
+        if waiting and waiting[-1] == plc.state.scan_id:
             waiting.pop()
         plc._loop_priced_scans.update(waiting)
         if stats is not None:
@@ -1669,7 +1711,7 @@ def _coast_until(
                 kernel_scans=kernel_scans,
                 stretches=stretches,
                 stretched_scans=logical - kernel_scans,
-                unit_scans=unit_scans() + landed_late,
+                unit_scans=kernel_scans - len(waiting),
             )
         return reached
 
@@ -1737,6 +1779,7 @@ def _coast_until(
         hit = bool(predicate(plc.state))
         if hit or paused:
             return finish(hit)
+        keep_watch()
         # What the budget left pays for, less the part of a unit the scans so far have used.
         waited = plc.state.scan_id - start_scan - unit_scans()
         limit = (budget - charged()) * loop_scans_per_unit - waited % loop_scans_per_unit
@@ -1752,21 +1795,8 @@ def _coast_until(
         reads = predicate_reads
         watched = monitored
         if reads is None:
-            try:
-                _hit, traced = _traced_call(predicate, plc)
-            except Exception:
-                can_loop = False
-                if run is not None:
-                    jit_stats.add_decline("interpreted: tracing the stop predicate's reads raised")
-                continue
-            if not _watchable(traced):
-                wait = min(wait * 2, MAX_WAIT_AFTER_NONE)
-                if run is not None:
-                    jit_stats.add_decline(
-                        "attempt: the stop predicate reads what a loop cannot watch"
-                    )
-                continue
-            watched = monitored | {str(name) for name in traced}
+            assert reads_seen is not None
+            watched = monitored | {str(name) for name in reads_seen}
         used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, run)
         if used:
             stretches += 1
@@ -1774,6 +1804,7 @@ def _coast_until(
             hit = bool(predicate(plc.state))
             if hit or paused:
                 return finish(hit)
+            keep_watch()
             if used >= PAYING_STRETCH or plc.state.scan_id % _stretch_checkpoint_interval(plc) == 0:
                 fails = 0
                 wait = ENTRY_WAIT
@@ -1799,14 +1830,6 @@ def _why_interpreted(plc: PLC) -> str:
 def work_charged(logical_scans: int, unit_scans: int, loop_scans_per_unit: int) -> int:
     """What *logical_scans* cost, *unit_scans* of them a unit each and the rest at loop price."""
     return unit_scans + (logical_scans - unit_scans) // loop_scans_per_unit
-
-
-def _loop_can_watch(predicate: Callable[[Any], bool], plc: PLC) -> bool:
-    try:
-        _hit, traced = _traced_call(predicate, plc)
-    except Exception:
-        return False
-    return _watchable(traced)
 
 
 def _watchable(traced: frozenset[str]) -> bool:

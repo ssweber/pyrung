@@ -1910,10 +1910,14 @@ class TestACoastStoppedByTheLedger:
         with_kernel = _timed()
         assert with_kernel._compiled_replay_supported_kernel() is not None
         assert priced("coast", with_kernel, 50, 40, 3) == 3
-        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="charged 4 of 50"):
-            priced("coast", with_kernel, 50, 0, 4)
-        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="paid by the scan"):
+        # Its stop predicate came to read what no loop can watch after 30 scans.
+        assert priced("coast", with_kernel, 50, 28, 22) == 22
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="charged 2 of 50"):
+            priced("coast", with_kernel, 50, 0, 2)
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="ran 40 loop scans"):
             priced("coast", with_kernel, 50, 40, 50)
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="ran 40 loop scans"):
+            priced("coast", with_kernel, 50, 40, 20)
         with fold_check.deliberate(), pytest.raises(FoldMismatch, match="with no kernel"):
             priced("coast", no_kernel, 50, 0, 3)
 

@@ -2632,7 +2632,7 @@ class PLC:
                 budget.  A wait pyrung cannot run compiled counts one for every scan.  A
                 Modbus ``send()`` or ``receive()`` makes one, and so do a write to a
                 read-only system tag and a ``run_function()`` that keeps state between
-                calls.
+                calls.  A forced tag makes one too.
             wall_clock_s: Seconds of real time before the search stops and says so, or
                 ``None`` for no limit.  A search this ends may have reached on a faster
                 machine.

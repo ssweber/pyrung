@@ -1447,16 +1447,20 @@ def _priced_by_the_rule(kind: str, plc: Any, n: int, loop_scans: int, said: int 
     """The scans a coast of *n* scans charged a unit each, held to how it ran.
 
     A wait the loop may run charges its first scans and its landing a unit each.  A wait no
-    loop may run charges every scan (``coast_run.UNIT_SCANS_AT_START``).  A loop that ran
-    says which, and so does a program with no kernel.  A raised coast says nothing.
+    loop may run charges every scan (``coast_run.UNIT_SCANS_AT_START``).  A wait whose stop
+    predicate comes to read what no loop can watch charges between the two.  A loop scan is
+    a unit only as the landing, and a program with no kernel charges every scan.  A raised
+    coast says nothing.
     """
     if said is None:
         return 0
     cheap = min(n, UNIT_SCANS_AT_START) + (n > UNIT_SCANS_AT_START)
-    if said not in (cheap, n):
+    if not cheap <= said <= n:
         raise _mismatch(f"fold-check ({kind}): charged {said} of {n} scans a unit each")
-    if said != cheap and loop_scans:
-        raise _mismatch(f"fold-check ({kind}): ran {loop_scans} loop scans and paid by the scan")
+    if loop_scans > n - said + 1:
+        raise _mismatch(
+            f"fold-check ({kind}): ran {loop_scans} loop scans and charged {said} of {n} a unit each"
+        )
     if said != n and not isinstance(plc._compiled_replay_kernel, CompiledKernel):
         raise _mismatch(f"fold-check ({kind}): paid the loop's price with no kernel")
     return said

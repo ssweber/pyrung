@@ -252,8 +252,9 @@ an answer through the ledger. A stepped scan is a unit. So are a coast's first t
 and its landing. Its other scans are one unit per `STRETCH_SCANS_PER_UNIT`, interpreted or
 not. The runner names the interpreted ones (`_loop_priced_scans`), and
 `ExecutionSpan.loop_priced` carries them to the ledger. A coast no loop may ever run pays a
-unit a scan. The coast settles that once, after its first two scans, from the kernel gate
-(`_kernel_for`) and its stop predicate. The scans at the loop's price are charged when their
+unit a scan. The coast settles that after its first two scans, from the kernel gate
+(`_kernel_for`), a force and its stop predicate. A stop predicate that comes to read what no
+loop can watch later makes the rest of the coast pay a unit a scan. The scans at the loop's price are charged when their
 seek returns and never stop it (charging them by the scan would turn right answers into
 declines). A seek's unit scans stop at what the ledger has left. A seek's own budget counts scans, except a live wait under the plan's holds with a ledger that can pay for it
 (`CoastSession.loop_scans_per_unit`), which counts them as the ledger does: its timers' length

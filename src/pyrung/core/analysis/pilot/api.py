@@ -295,9 +295,10 @@ def pilot_how(
     refunds it. Each scan the search steps counts one, and so do the first two
     scans and the last scan of each wait. The other scans of a wait count a
     hundredth each, whether the guarded loop ran them or not, so a long timer fits
-    a small budget. A wait no loop may run counts one for every scan
-    (``coast_run.UNIT_SCANS_AT_START`` lists what makes one). Research tools also
-    keep their local caps.
+    a small budget. A wait pyrung cannot run compiled counts one for every scan.
+    A Modbus ``send()`` or ``receive()`` makes one, and so do a write to a
+    read-only system tag and a ``run_function()`` that keeps state between calls.
+    A forced tag makes one too. Research tools also keep their local caps.
 
     ``wall_clock_s`` is a backstop on real time, since most of a search's time
     is work the ledger does not charge. A how() that runs out of it stops and

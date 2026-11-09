@@ -28,7 +28,7 @@ from pyrung import (
     system,
 )
 from pyrung.circuitpy import codegen
-from pyrung.core import coast_run, runner
+from pyrung.core import coast_run, runner, scan_trace
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import budget
 from pyrung.core.analysis.pilot import coast as pilot_coast
@@ -124,7 +124,9 @@ class TestTheLoopDoesNotMoveTheLedger:
     ) -> None:
         looped = _slow_lamp(preset).how(Lamp, max_scans=max_scans)
         monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
+        loop_scans = scan_trace.TOTALS["loop scans"]
         stepped = _slow_lamp(preset).how(Lamp, max_scans=max_scans)
+        assert scan_trace.TOTALS["loop scans"] == loop_scans
         assert looped.status is status
         assert (stepped.status, stepped.reason, stepped.total_scans) == (
             looped.status,
@@ -283,6 +285,32 @@ class TestAWaitNoLoopMayRun:
     def test_a_stop_predicate_the_loop_cannot_watch_pays_by_the_scan(self) -> None:
         stats = self._out_of_work(_unreachable(), lambda state: state.scan_id < 0)
         assert (stats.get("out_of_work"), stats["logical_scans"]) == (1, 5)
+
+    def test_a_stop_predicate_that_comes_to_read_what_the_loop_cannot_watch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # It reads only Lamp until Lamp turns on, and then a tag that moves on every scan.  The
+        # scans from there cost a unit each, and the loop runs the scans before.
+        counter = system.sys.scan_counter.name
+
+        def predicate(state: Any) -> bool:
+            return bool(state.tags.get(Lamp.name)) and state.tags.get(counter, 0) < 0
+
+        def wait() -> dict[str, int]:
+            plc = _slow_lamp(50)
+            coast_run.memo_of(plc).work_left = lambda: 20
+            stats: dict[str, int] = {}
+            coast_run.coast_until(plc, predicate, budget=2000, stats=stats, loop_scans_per_unit=100)
+            assert plc.state.tags[Lamp.name]
+            return stats
+
+        looped = wait()
+        monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
+        stepped = wait()
+        assert looped["stretched_scans"] > 0 and stepped["stretched_scans"] == 0
+        keys = ("logical_scans", "unit_scans", "out_of_work")
+        assert [looped.get(key) for key in keys] == [stepped.get(key) for key in keys]
+        assert stepped["out_of_work"] == 1
 
 
 def _linked_motor() -> PLC:

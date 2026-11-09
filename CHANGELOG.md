@@ -305,7 +305,7 @@
 - `how(max_scans=)` charges a scan the same whether pyrung runs it compiled or not:
   - each scan `how()` steps counts one against `max_scans`, and so do the first two scans and the last scan of each wait
   - the other scans of a wait count a hundredth each, so a long timer fits a small budget
-  - a wait pyrung cannot run compiled counts one for every scan. A Modbus `send()` or `receive()` makes one, and so do a write to a read-only system tag and a `run_function()` that keeps state between calls (a callable object, a closure, a global or a mutable default)
+  - a wait pyrung cannot run compiled counts one for every scan. A Modbus `send()` or `receive()` makes one, and so do a write to a read-only system tag and a `run_function()` that keeps state between calls (a callable object, a closure, a global or a mutable default). A forced tag makes one too
 - A reached `how()` plan uses temporary logic only where the plan needs it, so `Rung(En): on_delay(W, 3000)` plans "Set En=True, wait ~3s" (it latched `En` with temporary logic until `W.Done`):
   - `how()` reruns the plan with each piece of temporary logic left out, then with a Set of its value instead
   - it keeps the simpler plan only when that plan reaches the goal on the same scan and meets nothing in `avoid=`
