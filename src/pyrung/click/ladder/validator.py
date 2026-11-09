@@ -62,7 +62,7 @@ class _ValidationMixin:
         # can run past its bank warns too, as the CLICK takes the write.
         warn_only = (CLK_STEP_LIMIT, CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK, CLK_PTR_PAST_BANK)
         for finding in findings:
-            if finding.code in warn_only:
+            if finding.code in warn_only and finding.code not in allow:
                 warnings.warn(
                     f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip(),
                     stacklevel=5,
