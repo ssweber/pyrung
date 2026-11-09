@@ -5050,7 +5050,9 @@ class PLC:
         recording = not self._records_full
         if recording:
             for name, after in pending.items():
-                if value_changed(entry_tags.get(name), after):
+                # The identity test first spares most tags the call, on every scan.
+                before = entry_tags.get(name)
+                if before is not after and value_changed(before, after):
                     self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None
