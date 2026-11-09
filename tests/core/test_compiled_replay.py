@@ -1030,6 +1030,42 @@ def test_a_fork_steps_on_as_the_stopped_or_battery_less_state_it_forks() -> None
     assert dict(stopped.state.tags) == dict(source.state.tags)
 
 
+@pytest.mark.parametrize("stopped_by", ["stop", "program"])
+def test_a_replay_of_a_stopped_tip_restarts_on_its_next_scan_as_live_does(
+    stopped_by: str,
+) -> None:
+    tick, count, kill = Bool("RestartTick"), Int("RestartCount"), Bool("RestartKill")
+    with Program(strict=False) as program:
+        with Rung(~tick):
+            out(tick)
+        with Rung(tick):
+            math(count + 1, count)
+        with Rung(kill):
+            out(system.sys.cmd_mode_stop)
+    source = PLC(program, dt=0.01, checkpoint_interval=100)
+    for _ in range(230):
+        source.step()
+    if stopped_by == "stop":
+        source.stop()
+    else:
+        # The PLC reads the stop bit one scan after the program writes it.
+        source.patch({"RestartKill": True})
+        source.step()
+        source.step()
+    assert source.mode == "stop"
+    tip = source.state.scan_id
+
+    runners = [source.fork(), source.replay_to(tip), source._replay_to_interpreted(tip)]
+    for _ in range(3):
+        source.step()
+        for runner in runners:
+            runner.step()
+            assert runner.mode == "run"
+            assert runner.state.scan_id == source.state.scan_id
+            assert dict(runner.state.tags) == dict(source.state.tags)
+            assert dict(runner.state.memory) == dict(source.state.memory)
+
+
 def test_interpreted_replay_preserves_active_pilot_holds() -> None:
     from pyrung.core.analysis.pilot.overlay import PilotRung, _set_pilot_rungs
 

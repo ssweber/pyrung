@@ -1755,6 +1755,10 @@ class PLC:
         self._records_bounded = True
         self._records_full = False
         self._replay_mode: bool = False
+        # Set while a replay steps the scans of its recording.  A stop in a recording scans on
+        # until a later call, so the walk never restarts.  The fork a replay returns restarts as
+        # a live PLC does.
+        self._walks_a_recording = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
         # string target.  Every runner made from one, such as a fork or a replay, keeps it.
@@ -2559,7 +2563,7 @@ class PLC:
     def _settle_window(
         self, first: int, last: int, check_limits: Callable[[], None] | None
     ) -> None:
-        # The scans after a plant change or an edit step again from its checkpoint.
+        # Each scan after a plant change or an edit is stepped again from that checkpoint.
         for at, _plant in self._plant_changes:
             if first <= at < last:
                 self._settle_window(first, at, check_limits)
@@ -2866,8 +2870,8 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        # A new PLC runs with its battery.  A fork of a stopped state, or of one without the
-        # battery, steps on as that state would.
+        # A new PLC starts in RUN with the battery in.  A fork of a stopped state, or of one
+        # without the battery, steps on as that state would.
         memory = historical_state.memory
         if not (memory.get(_MODE_RUN_KEY, True) and memory.get(_BATTERY_PRESENT_KEY, True)):
             fork._start_from_state(seeded)
@@ -3037,7 +3041,8 @@ class PLC:
         slab_end = scan_id
 
         kernel = self._replay_kernel_from(anchor_scan)
-        # One kernel run would step across an edited checkpoint.  _replay_range splits there.
+        # A single kernel run cannot cross an edited checkpoint, so _replay_range splits the
+        # range there.
         crosses = any(slab_start <= at <= slab_end for at, _plant in self._plant_changes)
         if slab_start > anchor_scan + 1 and kernel is not None and not crosses:
             # History ownership has already selected the immutable execution
@@ -3147,7 +3152,7 @@ class PLC:
             self._checkpoint_the_tip([] if self._synthesis is None else list(self._synthesis.plant))
 
     def _checkpoint_the_tip(self, plant: list[Any] | None) -> None:
-        """Keep the tip as a checkpoint that no replay steps across, as its scans ran.
+        """Keep the tip as a checkpoint that no replay steps across.
 
         *plant* is the plant that ran the scans so far, or None when the plant stays.
         """
@@ -3446,6 +3451,7 @@ class PLC:
         fork._modbus_stubbed = self._modbus_stubbed
         fork._reconstructs_history = True
         fork._replay_mode = replay_mode
+        fork._walks_a_recording = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
 
@@ -3457,8 +3463,8 @@ class PLC:
     ) -> tuple[PLC, ScanLogSnapshot, int, dict[int, list[LifecycleEvent]]]:
         """A replay fork at the checkpoint *anchor*, or at scan *through* if *kernel* runs to it.
 
-        Every replay builds its fork here, from the checkpoint's state or the kernel's.  So each
-        replay steps its scans under the same plant, forces, run mode, battery and time mode.
+        The fork starts from the checkpoint's state or the kernel's.  So each replay steps its
+        scans under the plant, forces, run mode, battery and time mode they ran under.
         ``anchor`` is a key in ``self._checkpoints``, or None for the oldest kept scan.  Returns
         the fork, the log, the scan the fork is at, and the lifecycle events by scan.
         """
@@ -3622,6 +3628,7 @@ class PLC:
         lifecycle_by_scan: dict[int, list[LifecycleEvent]],
     ) -> PLC:
         """Start *replay* at the target, with its source's limits.  The caller may step it on."""
+        replay._walks_a_recording = False
         replay._history_retention_scans = self._history_retention_scans
         replay._records_bounded = self._records_bounded
         # Each replay path starts its fork at the target.  The two forks then trim alike.
@@ -3828,23 +3835,15 @@ class PLC:
         # the shared historical slab.  A causal walk asks for many adjacent and
         # repeated points, so the bounded slab is intentional amortization; its
         # refill may use a compiled run-up without throwing that locality away.
+        # The log starts at or before the oldest kept scan, so it holds the scan before the target.
         prev_scan = target_scan_id - 1
-        if prev_scan >= self._initial_scan_id and prev_scan >= self._scan_log.base_scan:
-            prev_state = self._state_at(prev_scan)
-            replay = self._fork_from_reconstructed_state(
-                prev_state,
-                rtc_at_state=self._replay_rtc_at_state(prev_state, log),
-                forces=self._replay_force_map_at_scan(prev_scan, log),
-                replay_mode=True,
-            )
-        else:
-            # ``target`` is the first reconstructable scan — nothing before it to
-            # replay to; build the fork directly at the anchor.
-            anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-            replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
-            for scan_id in range(anchor_scan_id + 1, target_scan_id):
-                self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
-                replay.step()
+        prev_state = self._state_at(prev_scan)
+        replay = self._fork_from_reconstructed_state(
+            prev_state,
+            rtc_at_state=self._replay_rtc_at_state(prev_state, log),
+            forces=self._replay_force_map_at_scan(prev_scan, log),
+            replay_mode=True,
+        )
 
         # Final scan: run the live program path with a capturing observer.
         self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
@@ -4516,9 +4515,7 @@ class PLC:
         # Not through _refuse_inside_a_call: every scan pays for this line.
         if self._user_calls_running:
             raise refused_inside_its_own_scan()
-        # A replay walks one recording, and a restart ends a recording: a stop inside
-        # it scanned on until a later call, which is past the end of this log.
-        if not self._running and not self._replay_mode:
+        if not self._running and not self._walks_a_recording:
             if self._search_refuses_restart:
                 raise SearchStopped(self._state.scan_id)
             self._stop_to_run_transition()

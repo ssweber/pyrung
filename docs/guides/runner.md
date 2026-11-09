@@ -333,7 +333,7 @@ alt = runner.fork(scan_id=10)    # from a retained historical scan
 alt = runner.fork_from(scan_id=10)  # alias
 ```
 
-The fork starts with the snapshot's state and the same time mode. It has clean runtime state, so no forces, patches, breakpoints, or monitors carry over. Only the fork snapshot is in its initial history.
+The fork starts with the snapshot's state and the same time mode. It has clean runtime state, so no forces, patches, breakpoints, or monitors carry over. A fork of a stopped PLC is stopped too, so its first scan restarts it. Only the fork snapshot is in its initial history.
 
 See [Testing — Forking](testing.md#forking-test-alternate-outcomes) for the alternate-outcomes pattern.
 
