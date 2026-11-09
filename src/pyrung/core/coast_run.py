@@ -56,7 +56,7 @@ from pyrung.core import compiled_run, cycle_jump, jit_stats, scan_trace
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.compiled_run import _BoundsWatch, _install, _kernel_cannot_say_what_it_adds
 from pyrung.core.read_trace import _FIELD_READ, _READ_ALL, _traced_call
-from pyrung.core.rung_firings import _MISSING_WRITE, _UNKNOWN_VALUE, RepeatPlan
+from pyrung.core.rung_firings import _ABSENT, _MISSING_WRITE, _UNKNOWN_VALUE, RepeatPlan
 from pyrung.core.rung_firings import _equal as _same_value
 from pyrung.core.scan_trace import (
     _CLASSIFIED_SYSTEM_TAGS,
@@ -677,15 +677,19 @@ def _record_scan_by_scan(plc: PLC, segments: list[_Segment], kernel_paths: _Kern
 class _ColumnRuns:
     """One rung's column while a stretch goes in: when it has fired, and each tag's run."""
 
-    __slots__ = ("first", "last", "recording", "runs")
+    __slots__ = ("first", "last", "recording", "runs", "turns")
 
     def __init__(self) -> None:
         self.first = 0
         self.last = 0
         self.recording: _Recording | None = None
-        # tag -> [value on its first scan, delta, its first scan, varied].  A run goes on until
-        # something says otherwise, so a tag no path moves is looked at only when it changes.
+        # tag -> [value on its first scan, delta, its first scan, varied, value on its second
+        # scan if it takes turns, else _ABSENT].  A run goes on until something says otherwise,
+        # so a tag no path moves is looked at only when it changes.
         self.runs: dict[str, list[Any]] = {}
+        # Each tag whose run takes turns, and the last scan that kept them.  A segment that
+        # leaves the tag alone holds its value, so its turns end there.
+        self.turns: dict[str, int] = {}
 
 
 def _record_columns(
@@ -703,9 +707,10 @@ def _record_columns(
 
     def finish(key: Any, column: _ColumnRuns) -> None:
         timelines.append_fired_run(key, column.first, column.last)
-        for tag, (value, delta, first, varied) in column.runs.items():
-            timelines.append_tag_run(key, tag, first, column.last, value, delta, varied)
+        for tag, (value, delta, first, varied, odd) in column.runs.items():
+            timelines.append_tag_run(key, tag, first, column.last, value, delta, varied, odd)
         column.runs.clear()
+        column.turns.clear()
 
     for segment in segments:
         path = segment.path
@@ -754,30 +759,85 @@ def _record_columns(
                             recording.changes.clear()
                         recording.changes[before] = changes
                 for tag, value, varied in changes:
-                    run = runs.get(tag)
-                    if run is not None:
-                        timelines.append_tag_run(
-                            key, tag, run[2], column.last, run[0], run[1], run[3]
-                        )
-                    runs[tag] = [value, None, first, varied]
+                    _put_run(timelines, key, column, tag, value, None, varied, first, count)
                 column.recording = recording
             for tag, delta, varied in recording.from_ends:
                 value = ends[tag]
+                run = runs.get(tag)
                 if delta is not None:
                     value -= delta * (count - 1)
-                run = runs.get(tag)
-                if run is not None:
-                    if run[1] == delta and run[3] == varied:
-                        if delta is None:
-                            if _same_value(run[0], value):
-                                continue
-                        elif type(value) is int and run[0] + delta * (first - run[2]) == value:
-                            continue
-                    timelines.append_tag_run(key, tag, run[2], column.last, run[0], run[1], run[3])
-                runs[tag] = [value, delta, first, varied]
+                    if (
+                        run is not None
+                        and run[1] == delta
+                        and run[3] == varied
+                        and type(value) is int
+                        and run[0] + delta * (first - run[2]) == value
+                    ):
+                        continue  # Most segments carry the count on, and need no call for it.
+                elif (
+                    run is not None
+                    and run[1] is None
+                    and run[3] == varied
+                    and run[4] is _ABSENT
+                    and _same_value(run[0], value)
+                ):
+                    continue  # Most segments hold the value, and need no call for it.
+                _put_run(timelines, key, column, tag, value, delta, varied, first, count)
+            turns = column.turns
+            if turns:
+                held = [tag for tag, kept in turns.items() if kept != first]
+                for tag in held:
+                    # This segment left the tag alone, so it holds the value it took last.
+                    run = runs[tag]
+                    value = run[0] if (first - 1 - run[2]) % 2 == 0 else run[4]
+                    timelines.append_tag_run(
+                        key, tag, run[2], first - 1, run[0], None, run[3], run[4]
+                    )
+                    runs[tag] = [value, None, first, run[3], _ABSENT]
+                    del turns[tag]
             column.last = last
     for key, column in columns.items():
         finish(key, column)
+
+
+def _put_run(
+    timelines: Any,
+    key: Any,
+    column: _ColumnRuns,
+    tag: str,
+    value: Any,
+    delta: int | None,
+    varied: bool,
+    first: int,
+    count: int,
+) -> None:
+    """Carry the tag's run on to a segment of *count* scans from *first*, or start a new one.
+
+    A tag that takes turns between two values every scan keeps one run, since one call
+    records it as appending each scan would.
+    """
+    runs = column.runs
+    run = runs.get(tag)
+    if run is not None:
+        if run[1] == delta and run[3] == varied:
+            if delta is not None:
+                if type(value) is int and run[0] + delta * (first - run[2]) == value:
+                    return
+            elif run[4] is _ABSENT:
+                if _same_value(run[0], value):
+                    return
+                if count == 1 and run[2] == first - 1:
+                    run[4] = value
+                    column.turns[tag] = first
+                    return
+            elif count == 1 and same(run[0] if (first - run[2]) % 2 == 0 else run[4], value):
+                # The run says its first two values for every scan, so a later value must be
+                # the same, not just equal.  1 and True record differently.
+                column.turns[tag] = first
+                return
+        timelines.append_tag_run(key, tag, run[2], column.last, run[0], run[1], run[3], run[4])
+        column.turns.pop(tag, None)
+    runs[tag] = [value, delta, first, varied, _ABSENT]
 
 
 def _changes_between(before: _Recording, after: _Recording) -> list[tuple[str, Any, bool]]:
@@ -802,14 +862,29 @@ def _changes_between(before: _Recording, after: _Recording) -> list[tuple[str, A
     return changes
 
 
+_FLIPS = object()
+
+
 def _record_committed(committed: Any, segments: list[_Segment]) -> None:
-    """What each tag committed.  A tag moving on one line goes in as one run."""
-    # A run is [delta, base, first, last]; a delta of None is a run nothing can say.
+    """What each tag committed.  A tag moving on one line goes in as one run.
+
+    So does a tag that flips back and forth every scan, since one call records it as
+    appending each scan would.
+    """
+    # A run is [delta, base, first, last, odd].  A delta of None is a run nothing can say.  A
+    # delta of _FLIPS is a run of flips, which commits base and odd by turns.  Its odd is
+    # _ABSENT while it is one scan long.
     runs: dict[str, list[Any]] = {}
 
     def flush(name: str, run: list[Any]) -> None:
-        delta, base, first, last = run
-        if delta is None:
+        delta, base, first, last, odd = run
+        if delta is _FLIPS:
+            if odd is _ABSENT:
+                committed.append(name, first, {name: base})
+            else:
+                committed.append_fired_run(name, first, last)
+                committed.append_tag_run(name, name, first, last, base, None, False, odd)
+        elif delta is None:
             committed.append_repeated(name, first, last - first + 1, {name: 0.0}, unknown={name})
         else:
             committed.append_repeated(
@@ -833,7 +908,7 @@ def _record_committed(committed: Any, segments: list[_Segment]) -> None:
                     run[3] = last
                     continue
                 flush(name, run)
-            runs[name] = [delta, base, first, last]
+            runs[name] = [delta, base, first, last, _ABSENT]
         for name in moves.free:
             run = runs.get(name)
             if run is not None:
@@ -841,12 +916,22 @@ def _record_committed(committed: Any, segments: list[_Segment]) -> None:
                     run[3] = last
                     continue
                 flush(name, run)
-            runs[name] = [None, 0.0, first, last]
+            runs[name] = [None, 0.0, first, last, _ABSENT]
         for name, _before, after in moves.flips:
-            run = runs.pop(name, None)
+            # A flip commits on the segment's first scan only.
+            run = runs.get(name)
             if run is not None:
+                if run[0] is _FLIPS and run[3] == first - 1:
+                    odd = run[4]
+                    if odd is _ABSENT:
+                        if not _same_value(run[1], after):
+                            run[3], run[4] = first, after
+                            continue
+                    elif same(run[1] if (first - run[2]) % 2 == 0 else odd, after):
+                        run[3] = first
+                        continue
                 flush(name, run)
-            committed.append(name, first, {name: after})
+            runs[name] = [_FLIPS, after, first, first, _ABSENT]
     for name, run in runs.items():
         flush(name, run)
 

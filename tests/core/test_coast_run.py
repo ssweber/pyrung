@@ -47,6 +47,7 @@ from pyrung.core.rung_firings import (
     SearchQuestionRefused,
     UnrecordedScansError,
 )
+from pyrung.core.scan_trace import CoastMoves
 from pyrung.core.tag import Dint
 from tests.fold_check import compare_records, seed_records
 
@@ -375,7 +376,10 @@ class _FakePath:
         self.capture = SimpleNamespace(recordings=(recordings,))
 
 
-def _random_recording(rng: random.Random) -> _Recording:
+_VALUES = [0, 1, 1.0, True, False, "x", pymath.nan]
+
+
+def _random_recording(rng: random.Random, values: list[Any] = _VALUES) -> _Recording:
     tags = rng.sample(["A", "B", "C", "D", "E"], rng.randint(0, 5))
     settled: dict[str, Any] = {}
     from_ends: list[tuple[str, int | None, bool]] = []
@@ -387,7 +391,7 @@ def _random_recording(rng: random.Random) -> _Recording:
         elif kind < 0.4:
             settled[tag] = _UNKNOWN_VALUE
         else:
-            settled[tag] = rng.choice([0, 1, 1.0, True, False, "x", pymath.nan])
+            settled[tag] = rng.choice(values)
     return _Recording(settled, tuple(from_ends), varied)
 
 
@@ -506,6 +510,113 @@ class TestRecordedRuns:
         _record_columns(runs, segments, 0, frozenset())
         assert calls["tag"] == 2
         assert dict(runs.rung_writes_at("rung", 5000)) == {"Still": 3, "Acc": 5000}
+
+    @pytest.mark.parametrize("seed", range(60))
+    def test_paths_that_take_turns_record_as_appending_each_scan(self, seed: int) -> None:
+        # Recordings in a fixed order, mostly one scan each, so tags take turns between values.
+        # Values equal across types (1, 1.0, True) are left out.  Stepping keeps the first of
+        # them that a range sees, and a batch may see another first.
+        rng = random.Random(seed)
+        values = [0, 1, "x", pymath.nan]
+        paths = [
+            _FakePath({key: _random_recording(rng, values) for key in ("rung0", "rung1")})
+            for _ in range(rng.randint(2, 3))
+        ]
+        runs: RungFiringTimelines[str] = RungFiringTimelines()
+        scans: RungFiringTimelines[str] = RungFiringTimelines()
+        current = {"A": 5, "B": 7, "C": 100, "D": 0, "E": 2}
+        scan = 1
+        segments: list[SimpleNamespace] = []
+        for index in range(rng.randint(1, 120)):
+            path = paths[index % len(paths)] if rng.random() < 0.9 else rng.choice(paths)
+            count = 1 if rng.random() < 0.9 else rng.choice([2, 3])
+            ends = {}
+            for recording in path.capture.recordings[0].values():
+                for tag, delta, _varied in recording.from_ends:
+                    if rng.random() < 0.1:
+                        current[tag] += 1
+                    ends[tag] = current[tag] + (delta or 0) * (count - 1)
+            for key, recording in path.capture.recordings[0].items():
+                for offset in range(count):
+                    writes = dict(recording.settled)
+                    for tag, delta, _varied in recording.from_ends:
+                        writes[tag] = (
+                            ends[tag] if delta is None else ends[tag] - delta * (count - 1 - offset)
+                        )
+                    scans.append(key, scan + offset, writes, recording.varied)
+            segments.append(SimpleNamespace(path=path, first=scan, count=count, ends=ends))
+            current.update(ends)
+            scan += count
+        _record_columns(runs, segments, 0, frozenset())
+
+        assert runs._fired_ranges == scans._fired_ranges
+        assert _columns(runs) == _columns(scans)
+        assert runs._varied_ranges == scans._varied_ranges
+        assert runs._tags_by_rung == scans._tags_by_rung
+        assert runs._writers_by_tag == scans._writers_by_tag
+        assert runs._partly_unknown == scans._partly_unknown
+
+    def test_a_tag_that_takes_turns_costs_a_run_not_a_scan(self) -> None:
+        on = _FakePath({"rung": _Recording({"Out": 1, "Still": 3}, (), frozenset())})
+        off = _FakePath({"rung": _Recording({"Out": 0, "Still": 3}, (), frozenset())})
+        calls = {"tag": 0}
+
+        class Counting(RungFiringTimelines[str]):
+            __slots__ = ()
+
+            def append_tag_run(self, *args: Any, **kwargs: Any) -> None:
+                calls["tag"] += 1
+                super().append_tag_run(*args, **kwargs)
+
+        runs = Counting()
+        # Two scans with one recording end the turns, and they start again after.
+        order = [on, off] * 2000 + [off] + [on, off] * 500
+        segments = [
+            SimpleNamespace(path=path, first=scan, count=1, ends={})
+            for scan, path in enumerate(order, start=1)
+        ]
+        _record_columns(runs, segments, 0, frozenset())
+        assert calls["tag"] == 3
+        for scan, out_value in ((3999, 1), (4000, 0), (4001, 0), (4002, 1), (4003, 0)):
+            assert dict(runs.rung_writes_at("rung", scan)) == {"Out": out_value, "Still": 3}
+
+    def test_flips_that_take_turns_commit_as_appending_each_scan(self) -> None:
+        calls = {"n": 0}
+
+        class Counting(RungFiringTimelines[str]):
+            __slots__ = ()
+
+            def append(self, *args: Any, **kwargs: Any) -> None:
+                calls["n"] += 1
+                super().append(*args, **kwargs)
+
+            def append_tag_run(self, *args: Any, **kwargs: Any) -> None:
+                calls["n"] += 1
+                super().append_tag_run(*args, **kwargs)
+
+        runs = Counting()
+        scans: RungFiringTimelines[str] = RungFiringTimelines()
+        on = SimpleNamespace(moves=CoastMoves((), (), (("Q", False, True),), ()))
+        off = SimpleNamespace(moves=CoastMoves((), (), (("Q", True, False),), ()))
+        counting = SimpleNamespace(moves=CoastMoves((("Q", 1),), (), (), ()))
+        segments = []
+        scan = 1
+        for path in [on, off] * 300 + [counting, on, off, on]:
+            count = 3 if path is counting else 1
+            ends = {"Q": 4 + count - 1} if path is counting else {}
+            segments.append(SimpleNamespace(path=path, first=scan, count=count, ends=ends))
+            for offset in range(count):
+                if path is counting:
+                    value = 4 + offset
+                else:
+                    value = path.moves.flips[0][2]
+                scans.append("Q", scan + offset, {"Q": value})
+            scan += count
+        coast_run._record_committed(runs, segments)
+        assert calls["n"] == 3  # the turns, the count, and the turns again
+        assert runs._fired_ranges == scans._fired_ranges
+        assert _columns(runs) == _columns(scans)
+        assert runs._counts == scans._counts
 
 
 class TestARungThatFiresInsideARange:
@@ -1128,6 +1239,53 @@ def test_a_repeating_stretch_goes_in_as_a_repeat_and_reads_back_as_stepping(
         assert plc.rung_firings(scan) == stepped.rung_firings(scan), scan
         assert dict(plc.history.at(scan).tags) == dict(stepped.history.at(scan).tags), scan
         for tag in (Toggle, FlipY, X):
+            assert str(plc.cause(tag, scan)) == str(stepped.cause(tag, scan)), (tag, scan)
+            assert str(plc.effect(tag, scan, max_scans=50)) == str(
+                stepped.effect(tag, scan, max_scans=50)
+            ), (tag, scan)
+
+
+TurnRamp = Real("AdvTurnRamp")
+
+
+def _takes_turns_beside_a_ramp() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        copy(5, FlipY)
+    with Rung(~Toggle):
+        copy(7, FlipY)
+    with Rung():
+        math(TurnRamp + 0.1, TurnRamp)
+
+
+def test_tags_that_take_turns_go_in_as_runs_and_read_back_as_stepping(
+    strict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plc = _runner(_takes_turns_beside_a_ramp, 0.01)
+    stepped = _runner(_takes_turns_beside_a_ramp, 0.01)
+    seed_records(stepped, plc)
+    start = plc.current_state.scan_id
+    turns = {"n": 0}
+    append_tag_run = RungFiringTimelines.append_tag_run
+
+    def counted(self: Any, *args: Any, **kwargs: Any) -> None:
+        if len(args) == 8 and args[7] is not rung_firings._ABSENT:
+            turns["n"] += 1
+        append_tag_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(RungFiringTimelines, "append_tag_run", counted)
+    stats: dict[str, int] = {}
+    coast_until(plc, lambda _s: False, budget=SCANS * 5, predicate_reads=frozenset(), stats=stats)
+    while stepped.current_state.scan_id < plc.current_state.scan_id:
+        stepped.step()
+    assert stats["stretched_scans"] > SCANS * 4
+    assert turns["n"]
+    compare_records("turns", plc, stepped, start)
+    tip = plc.current_state.scan_id
+    for scan in (start + 1, start + 2, tip - 1, tip):
+        assert plc.rung_firings(scan) == stepped.rung_firings(scan), scan
+        for tag in (Toggle, FlipY):
             assert str(plc.cause(tag, scan)) == str(stepped.cause(tag, scan)), (tag, scan)
             assert str(plc.effect(tag, scan, max_scans=50)) == str(
                 stepped.effect(tag, scan, max_scans=50)
