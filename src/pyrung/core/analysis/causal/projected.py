@@ -214,7 +214,8 @@ def _condition_relation(
     seen_moves: set[tuple[str, Any]] = set()
 
     def add_move(tag: str, value: Any, source: str) -> None:
-        key = (tag, value)
+        # Each NaN hashes apart, so every NaN shares one key.
+        key = (tag, _NAN_KEY if _values_equal(value, _NAN) else value)
         if key in seen_moves or _values_equal(state.tags.get(tag), value):
             return
         seen_moves.add(key)
@@ -264,9 +265,13 @@ def _relation_rhs_repr(rhs: Any) -> str:
     return repr(rhs)
 
 
+_NAN = float("nan")
+_NAN_KEY = object()
+
+
 def _values_equal(left: Any, right: Any) -> bool:
     try:
-        return left == right
+        return not value_changed(left, right)
     except Exception:
         return False
 
@@ -816,7 +821,10 @@ def projected_cause(
                     if (
                         isinstance(constraint, Eq)
                         and len(constraint.values) == 1
-                        and constraint != eq_target(tag_name, to_value)
+                        and (
+                            constraint.tag != tag_name
+                            or value_changed(next(iter(constraint.values)), to_value)
+                        )
                     ):
                         source_req = (
                             constraint.tag,

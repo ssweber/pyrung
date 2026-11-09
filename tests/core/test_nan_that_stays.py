@@ -14,6 +14,7 @@ import pytest
 
 from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, math
 from pyrung.core import scan_trace
+from pyrung.core.analysis.causal.projected import _values_equal
 from pyrung.core.coast_run import coast_until
 from pyrung.core.state import value_changed
 from pyrung.dap.handlers.history_seek import _window_entry
@@ -54,6 +55,13 @@ def _plc() -> PLC:
 )
 def test_value_changed(old: Any, new: Any, changed: bool) -> None:
     assert value_changed(old, new) is changed
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "equal"), [(NAN, float("nan"), True), (1.0, NAN, False), (2, 2.0, True)]
+)
+def test_a_projected_cause_holds_a_nan_equal_to_a_nan(left: Any, right: Any, equal: bool) -> None:
+    assert _values_equal(left, right) is equal
 
 
 def test_cause_and_previous_transition_find_the_scan_it_became_nan() -> None:
