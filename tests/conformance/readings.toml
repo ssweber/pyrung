@@ -548,3 +548,39 @@ case = "drum_branch/drum_in_loop"
 hash = "b8eaae081f30"
 on = "2026-11-09"
 read = { Result2 = 30, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "flag_boxes/boxes_by_pointer"
+hash = "4581e8852792"
+on = "2026-11-09"
+read = { Result1 = 31, Result2 = 0, Result3 = 0, Result4 = 7 }
+
+[[reading]]
+case = "flag_boxes/ton_ctu_by_pointer"
+hash = "2d5b7aea4626"
+on = "2026-11-09"
+read = { Result1 = 1, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/bulk_ops_settle_sc43"
+hash = "e0212f018121"
+on = "2026-11-09"
+read = { Result1 = 127, Result2 = 1 }
+
+[[reading]]
+case = "flag_halves/oneshot_settles_sc43"
+hash = "628531fc6aae"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/source_sc43"
+hash = "6210bddfeeda"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/df_into_dd"
+hash = "0cc3cee5e95f"
+on = "2026-11-09"
+read = { Result1 = 1, Result2 = 21474, Result3 = 0 }
