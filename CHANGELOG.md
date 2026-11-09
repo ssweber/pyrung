@@ -342,6 +342,12 @@
 - `history.at()`, `replay_to()`, `cause()` and `effect()` no longer send Modbus requests (a replayed `send()` could write to the device again). A replayed scan writes the answer the device gave on that scan.
 - `replay_to()` and `plan.replay()` return a fork whose history starts at the scan replayed to (on some programs the fork also kept the scans from the checkpoint before).
 - `rung_firings()`, `cause()` and `cold_rungs()` on a fork from `replay_to()` or `plan.replay()` now see the scan replayed to (they said no rung fired on it).
+- `replay_to()` of an earlier scan returns the state that `history.at()` and `fork()` give for it. A battery change or `clear_forces()` made after that scan now takes effect on the next scan (`replay_to()` applied it to the scan replayed to). `replay_to()` of the last scan still shows a battery change, `clear_forces()` or `stop()` made after it.
+- A `fork()` keeps the run mode and battery of the scan it forks (it always started in RUN with the battery in).
+- The fork that `replay_to()` returns for a PLC in STOP restarts on its next scan, as the PLC does (it scanned on in STOP).
+- `how()` on a PLC in STOP says `Stopped`, because its next scan would restart the PLC (it planned as if the PLC were running).
+- `history.at()` and `replay_to()` keep what a harness uninstall or a debugger reload changes between two scans (they lost it once that scan left the cache, unless it fell on a checkpoint).
+- `replay_trace_at()` of a scan that holds a checkpoint returns the rung traces of that scan (it returned those of the next scan).
 - `cold_rungs()` and `hot_rungs()` on a `fork()` now read the scans the fork took from its parent (`hot_rungs()` found no rung, and `cold_rungs()` listed a rung that fired only before the fork).
 - A `fork()` of a PLC with a live `send()` or `receive()` sends its own requests (it could collect the answer to its parent's request). A fork made while a request is in flight never gets that request's answer.
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
