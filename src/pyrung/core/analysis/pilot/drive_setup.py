@@ -223,10 +223,10 @@ def prepare_drive(
 
 
 def _seed_reached_slots(work: PLC) -> None:
-    """Give each slot the rungs reach, and the state lacks, its default in the state how() starts from.
+    """Put in the state how() starts from the default of each slot the rungs reach that it lacks.
 
-    A PLC built after another analysis of the program already holds these, because it knows
-    the slots that analysis made.  Seeding them here gives how() the same snapshot either way.
+    A PLC built after another analysis of the program already holds these defaults, because it
+    knows the slots that analysis made.  Seeding them here gives how() the same snapshot either way.
     A slot read with no value reads its default, so no scan sees a difference.
     """
     reach = work._tags_rungs_reach
