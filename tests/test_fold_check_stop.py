@@ -1899,27 +1899,33 @@ class TestACoastStoppedByTheLedger:
 
     def test_a_raised_coast_says_nothing_about_it(self) -> None:
         fold_check._hold_to_the_ledger("coast", 5, {})
-        assert fold_check._priced_by_the_rule("coast", _timed(), 50, 0, None) == 0
 
-    def test_its_price_is_held_to_how_it_ran(self) -> None:
-        priced = fold_check._priced_by_the_rule
-        no_kernel = _timed()
-        no_kernel._compiled_replay_kernel = False
-        assert priced("coast", no_kernel, 50, 0, 50) == 50
-        assert priced("coast", no_kernel, 2, 0, 2) == 2
-        with_kernel = _timed()
-        assert with_kernel._compiled_replay_supported_kernel() is not None
-        assert priced("coast", with_kernel, 50, 40, 3) == 3
-        # Its stop predicate came to read what no loop can watch after 30 scans.
-        assert priced("coast", with_kernel, 50, 28, 22) == 22
-        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="charged 2 of 50"):
-            priced("coast", with_kernel, 50, 0, 2)
-        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="ran 40 loop scans"):
-            priced("coast", with_kernel, 50, 40, 50)
-        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="ran 40 loop scans"):
-            priced("coast", with_kernel, 50, 40, 20)
-        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="with no kernel"):
-            priced("coast", no_kernel, 50, 0, 3)
+    def _priced(self, coast_run: Any, monkeypatch: Any, coast: Any) -> int:
+        monkeypatch.setattr(coast_run, "TRACE_ROOM", coast_run.TRACE_ROOM)
+        monkeypatch.setattr(coast_run, "coast_until", coast)
+        fold_check.install()
+        priced = fold_check.STATS["coasts priced against stepping"]
+        loop_scans = scan_trace.TOTALS["loop scans"]
+        plc = _timed()
+        coast_run.coast_until(plc, lambda _s: False, budget=60, loop_scans_per_unit=100)
+        assert scan_trace.TOTALS["loop scans"] > loop_scans
+        return fold_check.STATS["coasts priced against stepping"] - priced
+
+    def test_its_price_is_held_to_stepping(self, installed, monkeypatch) -> None:
+        assert self._priced(installed, monkeypatch, installed.coast_until) == 1
+
+    def test_a_price_that_depends_on_the_loop_is_caught(self, installed, monkeypatch) -> None:
+        honest = installed.coast_until
+
+        def by_the_engine(plc: Any, predicate: Any, **kwargs: Any) -> Any:
+            # Each interpreted scan a unit and each loop scan a hundredth, as dev priced them.
+            try:
+                return honest(plc, predicate, **kwargs)
+            finally:
+                plc._loop_priced_scans.clear()
+
+        with fold_check.deliberate(), pytest.raises(FoldMismatch, match="stepping landed"):
+            self._priced(installed, monkeypatch, by_the_engine)
 
 
 def test_inside_an_own_twin_block_it_may_land_short() -> None:

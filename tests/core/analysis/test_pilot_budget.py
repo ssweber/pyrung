@@ -312,6 +312,34 @@ class TestAWaitNoLoopMayRun:
         assert [looped.get(key) for key in keys] == [stepped.get(key) for key in keys]
         assert stepped["out_of_work"] == 1
 
+    def test_a_wait_its_stop_predicate_ends_by_raising_is_priced_as_stepping_prices_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def predicate(state: Any) -> bool:
+            if state.tags.get(Lamp.name):
+                raise ZeroDivisionError("division by zero")
+            return False
+
+        def wait() -> tuple[int, list[int]]:
+            plc = _slow_lamp(50)
+            executed: set[int] = set()
+            with pytest.raises(ZeroDivisionError):
+                coast_run.coast_until(
+                    plc,
+                    predicate,
+                    budget=2000,
+                    on_kernel_scan=executed.add,
+                    loop_scans_per_unit=100,
+                )
+            # The scans the ledger charges a unit each.
+            return plc.state.scan_id, sorted(executed - plc._loop_priced_scans)
+
+        loop_scans = scan_trace.TOTALS["loop scans"]
+        looped = wait()
+        assert scan_trace.TOTALS["loop scans"] > loop_scans
+        monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
+        assert wait() == looped
+
 
 def _linked_motor() -> PLC:
     x_Go = Bool("x_Go")

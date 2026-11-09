@@ -1697,13 +1697,17 @@ def _coast_until(
                 "interpreted: the stop predicate now reads what a loop cannot watch"
             )
 
-    def finish(reached: bool) -> bool:
-        # A stretch may be what landed, and a caller reads its answer there.
+    def price() -> None:
+        # A stretch may be what landed, and a caller reads its answer there.  The landing is a
+        # unit, so a stretch that landed is priced as stepping prices it.
         if plc.state.scan_id != last_noted:
             note(plc.state.scan_id)
         if waiting and waiting[-1] == plc.state.scan_id:
             waiting.pop()
         plc._loop_priced_scans.update(waiting)
+
+    def finish(reached: bool) -> bool:
+        price()
         if stats is not None:
             logical = plc.state.scan_id - start_scan
             stats.update(
@@ -1748,73 +1752,81 @@ def _coast_until(
     def charged() -> int:
         return work_charged(plc.state.scan_id - start_scan, unit_scans(), loop_scans_per_unit)
 
-    while charged() < budget:
-        if work is not None and unit_scans() >= work:
-            if stats is not None:
-                stats["out_of_work"] = 1
-            break
-        if plc.state.scan_id - start_scan >= UNIT_SCANS_AT_START:
-            settle()
-        if memo.check_limits is not None:
-            memo.check_limits()
-        plc._consume_pause_request()
-        plc._ensure_running()
-        plc._run_single_scan(consume_pause_request=False)
-        note(plc._state.scan_id)
-        since += 1
-        if not plc._running:
-            # The program stopped itself.  The next scan would be a restart, a new recording
-            # with scan ids from 0, and that is for a caller to choose.
-            if stats is not None:
-                stats["stopped"] = 1
-            return finish(bool(predicate(plc.state)))
-        if learned is not None:
-            assert kernel is not None
-            if learned.capture is None:
-                learned.capture = _capture_of(
-                    plc, learned, _paths_for(memo, kernel), plc._state.scan_id
-                )
-            learned = None
-        paused = plc._consume_pause_request()
-        hit = bool(predicate(plc.state))
-        if hit or paused:
-            return finish(hit)
-        keep_watch()
-        # What the budget left pays for, less the part of a unit the scans so far have used.
-        waited = plc.state.scan_id - start_scan - unit_scans()
-        limit = (budget - charged()) * loop_scans_per_unit - waited % loop_scans_per_unit
-        if not can_loop or since < wait or limit < 2:
-            continue
-        # The first try comes after UNIT_SCANS_AT_START scans, and no loop runs a wait that
-        # costs a unit a scan.
-        settle()
-        if not can_loop:
-            continue
-        assert kernel is not None
-        since = 0
-        reads = predicate_reads
-        watched = monitored
-        if reads is None:
-            assert reads_seen is not None
-            watched = monitored | {str(name) for name in reads_seen}
-        used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, run)
-        if used:
-            stretches += 1
+    # A raise ends the wait too.  Its scans are priced all the same, as stepping's would be.
+    try:
+        while charged() < budget:
+            if work is not None and unit_scans() >= work:
+                if stats is not None:
+                    stats["out_of_work"] = 1
+                break
+            if plc.state.scan_id - start_scan >= UNIT_SCANS_AT_START:
+                settle()
+            if memo.check_limits is not None:
+                memo.check_limits()
+            plc._consume_pause_request()
+            plc._ensure_running()
+            plc._run_single_scan(consume_pause_request=False)
+            note(plc._state.scan_id)
+            since += 1
+            if not plc._running:
+                # The program stopped itself.  The next scan would be a restart, a new recording
+                # with scan ids from 0, and that is for a caller to choose.
+                if stats is not None:
+                    stats["stopped"] = 1
+                return finish(bool(predicate(plc.state)))
+            if learned is not None:
+                assert kernel is not None
+                if learned.capture is None:
+                    learned.capture = _capture_of(
+                        plc, learned, _paths_for(memo, kernel), plc._state.scan_id
+                    )
+                learned = None
             paused = plc._consume_pause_request()
             hit = bool(predicate(plc.state))
             if hit or paused:
                 return finish(hit)
             keep_watch()
-            if used >= PAYING_STRETCH or plc.state.scan_id % _stretch_checkpoint_interval(plc) == 0:
-                fails = 0
-                wait = ENTRY_WAIT
+            # What the budget left pays for, less the part of a unit the scans so far have used.
+            waited = plc.state.scan_id - start_scan - unit_scans()
+            limit = (budget - charged()) * loop_scans_per_unit - waited % loop_scans_per_unit
+            if not can_loop or since < wait or limit < 2:
+                continue
+            # The first try comes after UNIT_SCANS_AT_START scans, and no loop runs a wait that
+            # costs a unit a scan.
+            settle()
+            if not can_loop:
+                continue
+            assert kernel is not None
+            since = 0
+            reads = predicate_reads
+            watched = monitored
+            if reads is None:
+                assert reads_seen is not None
+                watched = monitored | {str(name) for name in reads_seen}
+            used, learned = _try_stretch(plc, kernel, memo, predicate, reads, watched, limit, run)
+            if used:
+                stretches += 1
+                paused = plc._consume_pause_request()
+                hit = bool(predicate(plc.state))
+                if hit or paused:
+                    return finish(hit)
+                keep_watch()
+                if (
+                    used >= PAYING_STRETCH
+                    or plc.state.scan_id % _stretch_checkpoint_interval(plc) == 0
+                ):
+                    fails = 0
+                    wait = ENTRY_WAIT
+                else:
+                    fails += 1
+                    wait = min(ENTRY_WAIT * 2**fails, MAX_WAIT_AFTER_SHORT)
             else:
                 fails += 1
-                wait = min(ENTRY_WAIT * 2**fails, MAX_WAIT_AFTER_SHORT)
-        else:
-            fails += 1
-            wait = min(ENTRY_WAIT * 2**fails, MAX_WAIT_AFTER_NONE)
-    return finish(bool(predicate(plc.state)))
+                wait = min(ENTRY_WAIT * 2**fails, MAX_WAIT_AFTER_NONE)
+        return finish(bool(predicate(plc.state)))
+    except BaseException:
+        price()
+        raise
 
 
 def _why_interpreted(plc: PLC) -> str:
