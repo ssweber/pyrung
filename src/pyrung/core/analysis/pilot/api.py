@@ -332,8 +332,9 @@ def pilot_how(
     """
     stopped = _in_stop(plc, conditions)
     if stopped is not None:
-        for event in _stopped_events(stopped) if on_event is not None else ():
-            on_event(event)
+        if on_event is not None:
+            for event in _stopped_events(stopped):
+                on_event(event)
         return stopped
     clock = _budget.WallClock.starting_now(wall_clock_s)
     plan, setup, outcome = _how_from(
