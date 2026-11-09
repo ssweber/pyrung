@@ -500,3 +500,51 @@ hash = "efe7146a9620"
 on = "2026-11-07"
 step = "load 2026-11-07"
 read = { Result1 = 1, Result2 = 1, Result3 = 11, Result4 = 1, ErrorCode = 1 }
+
+[[reading]]
+case = "real_sum/f64_row"
+hash = "efaaae94f85e"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "drum_branch/correction_with_flag"
+hash = "1c4fdc6c4bac"
+on = "2026-11-09"
+read = { Result2 = 1414, Result3 = 1414, Result4 = 5454, ErrorCode = 1414 }
+
+[[reading]]
+case = "drum_branch/flag_cleared"
+hash = "7f04a17fe297"
+on = "2026-11-09"
+read = { Result2 = 1010, Result3 = 2222, Result4 = 2222 }
+
+[[reading]]
+case = "drum_branch/reset_paths"
+hash = "f7bba5fd42fc"
+on = "2026-11-09"
+read = { Result2 = 1010, Result3 = 1111, Result4 = 1111, ErrorCode = 1111 }
+
+[[reading]]
+case = "drum_branch/written_and_paused_acc"
+hash = "ec902c90547e"
+on = "2026-11-09"
+read = { Result2 = 3333, Result3 = 9, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "drum_branch/event_rises_in_pause"
+hash = "97f89b78f612"
+on = "2026-11-09"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1122 }
+
+[[reading]]
+case = "drum_branch/te_event_before_time"
+hash = "839de1312cff"
+on = "2026-11-09"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1 }
+
+[[reading]]
+case = "drum_branch/drum_in_loop"
+hash = "b8eaae081f30"
+on = "2026-11-09"
+read = { Result2 = 30, Result3 = 2, Result4 = 2 }
