@@ -9,13 +9,27 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, coast_run, copy, math, out, rung_firings
+from pyrung.core import (
+    PLC,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    coast_run,
+    compiled_run,
+    copy,
+    math,
+    out,
+    rung_firings,
+)
 from pyrung.core.coast_run import coast_until
 from pyrung.core.rung_firings import _ENTRY_LIMIT, _UNKNOWN_VALUE, RungFiringTimelines, _expanded
+from tests import fold_check
 from tests.fold_check import compare_records, seed_records
 
 KEY = (0, "a")
@@ -744,7 +758,10 @@ def _forty_counts() -> Program:
 @pytest.mark.parametrize("history", [3000, 6000])
 def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(history: int) -> None:
     plc = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
-    plc.run_for(100)
+    # Under fold-check its own twin finds the floors differ first, which is what this pins.
+    checked = getattr(compiled_run, "_fold_check_installed", False)
+    with fold_check.deliberate() if checked else nullcontext():
+        plc.run_for(100)
     twin = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
     while twin.current_state.scan_id < plc.current_state.scan_id:
         twin.step()
