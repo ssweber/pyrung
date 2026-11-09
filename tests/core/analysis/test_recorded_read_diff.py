@@ -94,6 +94,22 @@ def test_read_diff_names_changed_and_nonzero_operand() -> None:
     assert not diff.empty
 
 
+def test_read_diff_is_the_same_on_a_plc_built_before_the_program_graph() -> None:
+    # The state lacks a slot no scan has written, so the diff reads that slot's default.
+    prog = _sum_program()
+    plc = PLC(prog, dt=0.010)
+    node = _writer_node(prog)
+    plc.step()
+    plc.patch({"DS2": 5})
+    plc.step()
+
+    scan = plc.history.scan_ids()[-1]
+    diff = recorded_read_changes(plc.history, node.data_reads, scan)
+
+    assert diff.changed == [("DS2", 0, 5)]
+    assert diff.nonzero_now == ["DS2"]
+
+
 def test_steady_nonzero_operand_is_enabler_not_trigger() -> None:
     """An operand that was already nonzero is an enabler (nonzero_now), not a
     trigger (changed) — the burner door-held-open case."""

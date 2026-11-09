@@ -156,7 +156,7 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             except ExpressionParseError as exc:
                 raise adapter.DAPAdapterError(f"how: {exc}") from exc
             try:
-                conditions = to_conditions(expr, runner._known_tags_by_name)
+                conditions = to_conditions(expr, runner.tags)
             except KeyError as exc:
                 raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
             path = runner.how(*conditions)
