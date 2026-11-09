@@ -52,8 +52,8 @@ from .findings import (
     CLK_PROFILE_UNAVAILABLE,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
-    CLK_PTR_PAST_BANK,
     CLK_PTR_EXPR_NOT_ALLOWED,
+    CLK_PTR_PAST_BANK,
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_RAND_BOUND_TYPE,
     CLK_RAND_EQUAL_BOUNDS,
@@ -96,6 +96,7 @@ from .hardware import (
 )
 from .identity import _evaluate_address_identity_conflicts
 from .nicknames import _evaluate_nickname_lengths
+from .pointer_range import _evaluate_pointer_past_bank, _PointerBounds
 from .portability import (
     _evaluate_fact,
     _evaluate_forloop_count,
@@ -112,7 +113,6 @@ from .portability import (
     _evaluate_text_windows,
     _evaluate_wide_constants,
 )
-from .pointer_range import _evaluate_pointer_past_bank, _PointerBounds
 from .resolve import _ResolutionCache
 
 if TYPE_CHECKING:

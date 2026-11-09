@@ -442,6 +442,10 @@ Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hint
 
 A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_ladder(logic, mapping))` estimates a program's count, and validation reports `CLK_STEP_LIMIT` as a program nears or passes the limit. Export still writes such a program, with the finding as a `UserWarning`.
 
+### Pointers past a bank
+
+Validation warns with `CLK_PTR_PAST_BANK` when the values pyrung knows for a pointer can address memory past the end of its bank. Those values are the tag's `choices`, its `min` and `max`, and what the program writes into it. A CLICK writes into that memory, and pyrung drops the write. A pointer with no known bound is not reported. Export still writes the program, with the finding as a `UserWarning`.
+
 ## Ladder CSV export
 
 `pyrung_to_ladder(program, tag_map)` emits deterministic CLICK ladder CSV row matrices via `LadderBundle`.
