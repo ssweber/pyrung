@@ -6,7 +6,8 @@ requested conditions into that engine's inputs and assembles public plans.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+import math
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import wraps
@@ -23,6 +24,7 @@ import pyrung.core.analysis.pilot.trim as _trim
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
 from pyrung.core.analysis.pilot.avoid import _AvoidCheckRaised
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
+from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.types import PilotEvent
 from pyrung.core.runner import AvoidCheckError
 
@@ -151,14 +153,16 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     return _parse_one(conditions[0])
 
 
-def _check_operands(targets: list[tuple[str, Any, Any]], setup: _drive_setup.DriveSetup) -> None:
+def _check_operands(
+    targets: list[tuple[str, Any, Any]], pdg: Any, snapshot: Mapping[str, Any]
+) -> None:
     """A relational operand has to have a value in the search, or the goal has no meaning."""
     for tag, _value, predicate in targets:
         if (
             predicate is not None
             and predicate.operand_is_tag
-            and predicate.operand not in setup.pdg.tags
-            and predicate.operand not in setup.diag_snapshot
+            and predicate.operand not in pdg.tags
+            and predicate.operand not in snapshot
         ):
             raise ValueError(
                 f"pilot: how() target {tag} is compared with {predicate.operand}, and no rung "
@@ -258,7 +262,7 @@ def pilot_events(
     clock = _budget.WallClock.starting_now(wall_clock_s)
     target_tag, target_value, target_predicate = _parse_target(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    _check_operands([(target_tag, target_value, target_predicate)], setup)
+    _check_operands([(target_tag, target_value, target_predicate)], setup.pdg, setup.diag_snapshot)
     _carry_goal_tags(setup, conditions)
     with _avoid_errors_named():
         ctx, _route_taken = _drive_setup.prepare_target_context(
@@ -399,23 +403,33 @@ def pilot_how(
 
 
 def _in_stop(plc: PLC, conditions: tuple[Any, ...]) -> Plan | None:
-    """A Stopped plan for a PLC in STOP, whose next scan is a restart.
+    """The plan for a PLC in STOP, whose next scan is a restart.
 
-    The setup must not step it.  A pending patch or force would have it restart there, and
-    the plan would start from a scan the PLC no longer has.
+    A goal that already holds is reached with nothing to plan.  Any other goal is Stopped.
+    The setup must not step it.  A waiting patch or force would make that step restart the
+    PLC, and the plan would start from a scan the restarted PLC no longer has.
     """
     if plc._running:
         return None
+    from pyrung.core.analysis.pdg import build_program_graph
+
     targets = _parse_targets(*conditions)
+    _check_operands(targets, build_program_graph(plc._program), plc.state.tags)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
+    goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()
+    holds = _goal_check(conditions)
+    already = holds is not None and holds(plc.state.tags)
     return Plan(
-        reachable=False,
+        reachable=already,
         target_tag=goal.tag,
         target_value=goal.value,
-        targets=tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else (),
+        targets=goal_pairs,
         target_predicate=goal.predicate,
-        reason=_engine.restart_ahead(f"the PLC is in STOP at scan {plc.state.scan_id}"),
-        status=PlanStatus.STOPPED,
+        fork=fork_with_pilot_rungs(plc, (), history_budget=math.inf) if already else None,
+        reason=None
+        if already
+        else _engine.restart_ahead(f"the PLC is in STOP at scan {plc.state.scan_id}"),
+        status=PlanStatus.REACHED if already else PlanStatus.STOPPED,
         anchor_scan=plc.state.scan_id,
         session_inputs={**plc._pending_patches, **plc._forces},
         waiting_overrides=_drive_setup._waiting_overrides(plc),
@@ -425,22 +439,23 @@ def _in_stop(plc: PLC, conditions: tuple[Any, ...]) -> Plan | None:
 def _stopped_events(plan: Plan) -> Iterator[PilotEvent]:
     """The events of a search that ends as *plan* before it steps anything."""
     scan, reason = plan.anchor_scan, plan.reason
-    yield PilotEvent(
-        "stuck",
-        scan,
-        {
-            "reason": reason,
-            "distance": None,
-            "candidate_count": 0,
-            "nogoods_at_key": 0,
-            "terminal": True,
-        },
-    )
+    if plan.status is not PlanStatus.REACHED:
+        yield PilotEvent(
+            "stuck",
+            scan,
+            {
+                "reason": reason,
+                "distance": None,
+                "candidate_count": 0,
+                "nogoods_at_key": 0,
+                "terminal": True,
+            },
+        )
     yield PilotEvent(
         "finished",
         scan,
         {
-            "reached": False,
+            "reached": plan.reachable,
             "cut_short": False,
             "steps": (),
             "journey": (),
@@ -479,7 +494,7 @@ def _how_from(
     clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    _check_operands(targets, setup)
+    _check_operands(targets, setup.pdg, setup.diag_snapshot)
     _carry_goal_tags(setup, conditions)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()

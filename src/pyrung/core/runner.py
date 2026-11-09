@@ -373,12 +373,11 @@ def _iter_tags_and_edge_names(
     The tags returned are what the rungs say.  A range holds its block, whose cache is every
     slot anything has asked for, and a call holds its program, which holds what has run and
     been asked of it, so the walk takes neither on its way.  Of a block's slots it takes the
-    ones a map_to put there; of a program, its rungs and subroutines.
+    ones a map_to put there.  Of a program it takes only its rungs and subroutines.
 
     *block_uses*, when given, also collects each range and pointer into a block.
-    *beyond_rungs*, when given, also collects the tags found by going on into those blocks
-    once the rungs are done.  A tag a rung names wins over another of the same name.  A
-    program is never walked past its rungs and subroutines.
+    *beyond_rungs*, when given, also collects the tags found in those blocks
+    once the rungs are done.  A tag a rung names wins over another of the same name.
     """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.memory_block import (
@@ -1758,9 +1757,9 @@ class PLC:
         self._records_bounded = True
         self._records_full = False
         self._replay_mode: bool = False
-        # Set while a replay steps the scans of its recording.  A stop in a recording scans on
-        # until a later call, so the walk never restarts.  The fork a replay returns restarts as
-        # a live PLC does.
+        # Set while a replay steps the scans of its recording.  A restart would end the
+        # recording, so the walk never restarts.  The fork a replay returns restarts on its
+        # next scan, as a live PLC does.
         self._walks_a_recording = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # how() sets this on its forks.  Their send() and receive() do no I/O, as for a

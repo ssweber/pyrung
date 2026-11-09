@@ -231,3 +231,39 @@ def test_pilot_events_on_a_plc_in_stop_stream_only_the_stop(stop, then) -> None:
     assert events[1].data["work"] is None
     assert seen == events
     assert plc.state is state
+
+
+def test_a_goal_that_already_holds_is_reached_in_stop() -> None:
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    _stop_by_calling_stop(plc)
+    _patch_the_count(plc)
+    assert plc.mode == "stop"
+    assert plc.state.tags["Count"] > 10
+    state = plc.state
+
+    plan = plc.how(Count > 10, max_scans=500)
+    events = list(pilot_events(plc, Count > 10, max_scans=500))
+
+    assert plan.status is PlanStatus.REACHED
+    assert plan.reachable
+    assert plan.fork is not None
+    assert plan.journey == ()
+    assert [event.kind for event in events] == ["finished"]
+    assert events[0].data["reached"] is True
+    assert plc.state is state
+
+
+@pytest.mark.parametrize("stopped", [False, True], ids=["running", "stopped"])
+def test_a_bad_operand_raises_in_stop_as_it_does_running(stopped: bool) -> None:
+    unused = Int("StopUnusedOperand")
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    if stopped:
+        _stop_by_calling_stop(plc)
+        assert plc.mode == "stop"
+
+    with pytest.raises(ValueError, match="no rung uses that tag"):
+        plc.how(Count > unused, max_scans=500)
