@@ -842,10 +842,10 @@ class QueryNamespace:
     def cold_rungs(self) -> list[str]:
         """Rung labels that never fired across retained history.
 
-        Backed by :class:`RungFiringTimelines` — a rung with no timeline
-        (or an empty timeline) is cold.  Covers main rungs (the int firing
-        log) and subroutine rungs (the node firing log), so a subroutine
-        that was never called is reported as cold.
+        A rung is cold when no firing record has it on a retained scan.  A fork
+        reads its parent's records for the scans it took from the parent.
+        Covers main rungs and subroutine rungs, so a subroutine that was never
+        called is reported as cold.
 
         Labels are **1-indexed** to match ``why()``/``cause()`` and the
         debugger: ``"3"`` for a main rung, ``"MySub:3"`` for a subroutine
@@ -869,9 +869,20 @@ class QueryNamespace:
         """
         plc = self._plc
         plc._settle_compiled_ranges()
+        sealed = plc._causal_lineage.sealed_epochs
+        spans = [
+            (epoch.rung_firing_timelines, epoch.node_firing_timelines, epoch.first_scan, epoch.last_scan)
+            for epoch in sealed
+        ]
+        # This runner's records are read in place.  Sealing them copies them on every new scan.
+        own_first = plc._initial_scan_id + 1 if sealed else plc._initial_scan_id
+        spans.append(
+            (plc._rung_firing_timelines, plc._node_firing_timelines, own_first, plc._state.scan_id)
+        )
         return [
-            (epoch.rung_firing_timelines, epoch.node_firing_timelines, lo, hi)
-            for epoch, lo, hi in plc._causal_lineage.epochs_covering(first, plc._state.scan_id)
+            (main, nodes, max(lo, first), hi)
+            for main, nodes, lo, hi in spans
+            if max(lo, first) <= hi
         ]
 
     def hot_rungs(self) -> list[str]:

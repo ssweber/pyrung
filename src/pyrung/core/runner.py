@@ -4101,9 +4101,19 @@ class PLC:
                 replay.patch_as_recorded(log.patches_by_scan[scan_id])
             if scan_id >= start_scan_id:
                 replay.step()
-                results.append(replay.current_state)
             else:
                 replay.step_replay()
+            # The kernel runs no send() or receive(), so each scan takes the recorded answers.
+            for record in log.io_submits_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay.apply_replay_io_write(tag_name, value)
+            for record in log.io_drains_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay.apply_replay_io_write(tag_name, value)
+            if scan_id >= start_scan_id:
+                if log.io_submits_by_scan.get(scan_id) or log.io_drains_by_scan.get(scan_id):
+                    replay._materialize_replay_state()
+                results.append(replay.current_state)
 
         return results
 
