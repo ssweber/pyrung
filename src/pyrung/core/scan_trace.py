@@ -17,9 +17,12 @@ every value it reads is one of two things:
 
 * A **constant**: a recorded (key, value) pair.  A trace only runs from a state
   in which every recorded pair still holds, compared by type and value.  Here and
-  below any NaN is the same value as any other.  The kernel computes the same from
-  each NaN, and no reader tells one NaN from another
-  (:func:`~pyrung.core.state.value_changed`).
+  below any NaN is the same value as any other.  From any NaN the kernel takes the
+  same decisions and stores a NaN in the same cells, though its sign may differ
+  (``math(-R, R)``).  No pyrung reader tells two NaNs apart.  History, the DAP
+  and ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag
+  changed.  Text shows every NaN as ``nan``.
+  An Unpack Copy and the Modbus servers give CLICK's 0xFFFF:0xFFFF for any NaN.
 * A **moving** value: read from the loop's locals on every iteration.  These are
   the time-derived system tags (:data:`MOVING_SYSTEM_TAGS`), plus every cell the
   scan changes, found by a fixed point: trace, and any cell whose end-of-scan

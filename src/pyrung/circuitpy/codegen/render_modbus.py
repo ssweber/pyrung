@@ -19,6 +19,18 @@ _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
 #: the XD/YD word images have their own paths.
 _RAW_BANKS = frozenset(MODBUS_MAPPINGS) - {"SC", "SD", "XD", "YD"}
 
+
+def _df_words(value: str) -> str:
+    """Python source for the two Modbus words of the float in *value*, low word first.
+
+    A CLICK serves every NaN as 0xFFFF:0xFFFF, so the generated code does too.
+    """
+    return (
+        f"((0xFFFF, 0xFFFF) if {value} != {value} "
+        f"else struct.unpack('<HH', struct.pack('<f', float({value}))))"
+    )
+
+
 _BANK_DESCRIPTIONS: dict[str, str] = {
     "X": "digital inputs",
     "Y": "digital outputs",
@@ -362,9 +374,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
                 f"struct.unpack('<HH', struct.pack('<i', int({slot.symbol})))[int(reg_pos)]"
             ]
         elif slot.data_type == DataType.FLOAT:
-            read_lines = [
-                f"struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[int(reg_pos)]"
-            ]
+            read_lines = [f"{_df_words(slot.symbol)}[int(reg_pos)]"]
         elif slot.data_type == DataType.TXT:
             pair_index = (slot.index - 1) // 2 * 2 + 1
             # Skip even slots whose odd pair is already in reg_slots (avoids
@@ -443,8 +453,8 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         elif slot.data_type == DataType.FLOAT:
             store_expr = (
                 f"struct.unpack('<f', struct.pack('<HH', _word if int(reg_pos) == 0 else "
-                f"struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[0], "
-                f"_word if int(reg_pos) == 1 else struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[1]))[0]"
+                f"{_df_words(slot.symbol)}[0], "
+                f"_word if int(reg_pos) == 1 else {_df_words(slot.symbol)}[1]))[0]"
             )
         elif slot.data_type == DataType.TXT:
             pair_index = (slot.index - 1) // 2 * 2 + 1
@@ -1002,7 +1012,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         "    if bank == 'DF':",
         "        _regs = []",
         "        for _value in values:",
-        "            _regs.extend(struct.unpack('<HH', struct.pack('<f', float(_value))))",
+        f"            _regs.extend({_df_words('_value')})",
         "        return _regs",
         "    if bank in ('DH', 'XD', 'YD'):",
         "        return [int(_value) & 0xFFFF for _value in values]",
@@ -1066,7 +1076,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
                 "        elif _tt == 'REAL':",
                 "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
                 "            _bf = '>f' if word_order == 'high_low' else '<f'",
-                "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+                "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
                 "        elif _tt == 'INT':",
                 "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
                 "        else:",

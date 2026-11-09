@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -37,6 +38,7 @@ for _lo, _hi in _XY_SLOT_RANGES:
         raise RuntimeError("Each X/Y sparse slot must be 16 bits wide.")
 
 _WORD_SIZE = 16
+_CLICK_NAN: float = struct.unpack("<f", b"\xff\xff\xff\xff")[0]
 _MIRRORED_WORD_BANKS: dict[str, str] = {"XD": "X", "YD": "Y"}
 
 
@@ -155,7 +157,11 @@ class ClickDataProvider:
         normalized, bank, index = self._normalize(address)
         if bank in _MIRRORED_WORD_BANKS:
             return self._read_mirrored_word(bank, index)
-        return self._read_mapped_or_fallback(normalized)
+        value = self._read_mapped_or_fallback(normalized)
+        if isinstance(value, float) and value != value:
+            # A CLICK serves every NaN as 0xFFFF:0xFFFF, whatever sign or payload it has.
+            return _CLICK_NAN
+        return value
 
     def write(self, address: str, value: PlcValue) -> None:
         normalized, bank, index = self._normalize(address)

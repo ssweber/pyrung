@@ -142,6 +142,75 @@ def test_read_and_write_backed_coil_and_register(monkeypatch):
     assert namespace[reg_symbol] == 42
 
 
+class _IdleBase:
+    def rollCall(self, modules):
+        return None
+
+    def readDiscrete(self, slot):
+        return 0
+
+    def writeDiscrete(self, value, slot):
+        return None
+
+    def readAnalog(self, slot, ch):
+        return 0
+
+    def writeAnalog(self, value, slot, ch):
+        return None
+
+    def readTemperature(self, slot, ch):
+        return 0.0
+
+
+def _float_from_bits(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+@pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+def test_a_df_holding_any_nan_serves_as_a_click_serves_it(monkeypatch, bits):
+    level = Real("Level")
+    mapping = TagMap({level: df[1]})
+    with Program(strict=False) as prog:
+        pass
+    result = _ctx_and_source(prog, mapping)
+    ns = _run_single_scan_source(
+        result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime
+    )
+    handle = ns["_mb_handle"]
+    addr = plc_to_modbus("DF", 1)[0]
+    ns["_t_Level"] = _float_from_bits(bits)
+
+    resp = handle(_mbap(1, struct.pack(">BHH", 3, addr, 2)), 12)
+    assert struct.unpack(">HH", resp[-4:]) == (0xFFFF, 0xFFFF)
+    # A write to the high word keeps the low word the client read.
+    req = _mbap(2, struct.pack(">BHH", 6, addr + 1, 0x4000))
+    assert handle(req, len(req)) == req
+    assert struct.unpack("<I", struct.pack("<f", ns["_t_Level"]))[0] == 0x4000FFFF
+
+
+@pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+def test_a_send_of_any_nan_sends_what_a_click_sends(monkeypatch, bits):
+    source = Real("Source")
+    flags = {name: Bool(name) for name in ("Sending", "Success", "Error")}
+    with Program(strict=False) as prog:
+        with Rung():
+            for remote_start in ("DF1", ModbusAddress(0x300)):
+                send(
+                    target="peer",
+                    remote_start=remote_start,
+                    source=source,
+                    sending=flags["Sending"],
+                    success=flags["Success"],
+                    error=flags["Error"],
+                )
+    ns, _sockets = _run_raw_client_job(monkeypatch, prog)
+    nan = _float_from_bits(bits)
+    assert ns["_mb_client_pack_register_values"]("DF", [nan]) == [0xFFFF, 0xFFFF]
+    for order in ("high_low", "low_high"):
+        raw = ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], order)
+        assert raw == [0xFFFF, 0xFFFF]
+
+
 def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
     """A calc marks a math-import flag, not a runtime name; code.py must still import."""
     src = Int("Src", default=6)

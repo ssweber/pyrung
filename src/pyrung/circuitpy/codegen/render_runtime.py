@@ -17,6 +17,7 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._helpers import _render_helper_defs
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.render_modbus import _df_words
 
 
 def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
@@ -256,7 +257,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
         "    if bank == 'DF':",
         "        _regs = []",
         "        for _value in values:",
-        "            _regs.extend(struct.unpack('<HH', struct.pack('<f', float(_value))))",
+        f"            _regs.extend({_df_words('_value')})",
         "        return _regs",
         "    if bank in ('DH', 'XD', 'YD'):",
         "        return [int(_value) & 0xFFFF for _value in values]",
@@ -319,7 +320,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "        elif _tt == 'REAL':",
             "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
             "            _bf = '>f' if word_order == 'high_low' else '<f'",
-            "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+            "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
             "        elif _tt == 'INT':",
             "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
             "        else:",

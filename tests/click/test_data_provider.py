@@ -320,3 +320,20 @@ def test_a_real_holding_inf_reads_as_inf_and_an_inf_write_is_refused():
     assert provider.read("DF1") == math.inf
     with pytest.raises(ValueError, match="finite"):
         provider.write("DF1", math.nan)
+
+
+@pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+def test_a_real_holding_any_nan_serves_as_a_click_serves_it(bits):
+    import struct
+
+    from pyclickplc.banks import DataType
+    from pyclickplc.modbus import pack_value
+
+    level = Tag("Level", TagType.REAL)
+    mapping = TagMap({level: df[1]})
+    runner = PLC(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+    runner.patch({"Level": struct.unpack("<f", struct.pack("<I", bits))[0]})
+    runner.step()
+
+    assert pack_value(provider.read("DF1"), DataType.FLOAT) == [0xFFFF, 0xFFFF]
