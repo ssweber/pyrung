@@ -2527,6 +2527,8 @@ class PLC:
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         # The window takes the replay's values, and this record counts their changes itself.
+        # So the replay trims nothing, or its own memory budget would drop scans the window needs.
+        replay._history_retention_scans = None
         for name in _RECORDS:
             setattr(replay, name, RungFiringTimelines(capped=False))
         for scan_id in range(anchor_scan_id + 1, last + 1):
@@ -5042,8 +5044,7 @@ class PLC:
         That checkpoint and the bytes held differ between stepping and a long run.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval
-        # A replay's records go back into its parent, so its own budget must not trim them.
-        if retention is None or self._replay_mode:
+        if retention is None:
             return
         horizon = new_scan_id - new_scan_id % interval - retention
         floor = -(-horizon // interval) * interval

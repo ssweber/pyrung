@@ -751,16 +751,28 @@ def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(history: int
     assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
 
 
-def test_a_replay_over_the_memory_budget_keeps_every_scan_it_steps() -> None:
+def test_a_settles_replay_over_the_memory_budget_keeps_every_scan_it_steps() -> None:
     # A settle hands its replay's records to the runner.  So the replay trims nothing (its own
     # budget took the oldest interval a long run kept).  A long run would trip the budget trim
-    # the xfail above pins, so this replay steps from a fresh runner.
+    # the xfail above pins, so this replay steps the scans of a stepped runner.
     plc = PLC(_forty_counts(), dt=0.01, history=3000, history_budget=1_048_576)
-    replay, *_ = plc._build_replay_fork(None)
     for _ in range(10_000):
-        replay.step()
-    assert replay.history.oldest_scan_id == 0
-    assert len(replay.rung_firings(1)) == 40
+        plc.step()
+    oldest = plc.history.oldest_scan_id
+    replay = plc._stepped_again(oldest, 10_000, None)
+    anchor = plc._nearest_checkpoint_at_or_before(oldest - 1)
+    assert anchor is not None and replay.history.oldest_scan_id == anchor < oldest
+    assert len(replay.rung_firings(oldest)) == 40
+
+
+def test_a_replay_handed_to_the_user_trims_as_its_runner_does() -> None:
+    plc = PLC(_noise(), dt=0.01, history=400)
+    for _ in range(1000):
+        plc.step()
+    fork = plc.replay_to(900)
+    for _ in range(8000):
+        fork.step()
+    assert fork.history.oldest_scan_id >= 8900 - 400 - 200
 
 
 Noise = Int("EntryNoise")

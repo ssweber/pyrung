@@ -294,10 +294,10 @@
   - the VS Code History panel shows the same scans, one-scan pulses included, and **Load older** reads further back
 
   A question that would step more than 250,000 scans raises `UnrecordedScansError` naming the range, instead of running for minutes.
-- The record of what each rung wrote has a memory limit without `history=`, and counts toward `history_budget` with it:
-  - without `history=`, after one rung's writes to one tag have changed 1,000 times, `rung_firings()` and `cause()` read the later writes by stepping the scan again from the nearest checkpoint (they read every write from the record)
-  - with `history=`, the runner keeps every write in the window, and `history_budget` counts them
-  - a value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag. Over `history_budget`, each checkpoint trims only one interval more than `history=` asks for. Shorten `history=` for a program with many such tags
+- Without `history=`, `rung_firings()` and `cause()` read a tag's later writes by stepping again, once one rung's writes to it have changed 1,000 times (they read every write from the record).
+- With `history=`, the runner keeps every write in the window, and `history_budget` counts them:
+  - a value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag
+  - over `history_budget`, each checkpoint trims only one interval more than `history=` asks for. Shorten `history=` for a program with many such tags
 - `how()` has a time limit, `wall_clock_s=300.0` by default (`None` turns it off). When it runs out, the plan ends with `wall-clock budget exhausted (300 s); still waiting on ...`. A search that grows to about 1 GB ends with `memory budget exhausted`.
 - A reached `how()` plan uses temporary logic only where the plan needs it, so `Rung(En): on_delay(W, 3000)` plans "Set En=True, wait ~3s" (it latched `En` with temporary logic until `W.Done`):
   - `how()` reruns the plan with each piece of temporary logic left out, then with a Set of its value instead

@@ -130,9 +130,10 @@ class RungFiringTimelines(Generic[K]):
     changes its column unless it holds the value before it, or flips or counts as the scan
     before it did.  A scan's change depends only on the scan and the three before it.  So
     each way of recording scans counts the same, in any order.  Until then a column holds at
-    most two ranges per change.  After it the column still keeps a range for each run of scans
-    that wrote, and one for each run that did not.  A rung's fired ranges have no limit.  So
-    without a history window, a rung that fires every few scans gains a range each firing.
+    most two ranges per change.  After the column turns Unknown, it still keeps a range for
+    each run of scans that wrote, and one for each run that did not.  A rung's fired ranges
+    have no limit.  So without a history window, a rung that fires every few scans gains a
+    range each firing.
 
     A record trimmed to a history window has no limit, since the window bounds its memory.
     After a trim each column holds the kept scans from its first write on.  So what a record
