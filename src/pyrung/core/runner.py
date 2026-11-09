@@ -1073,7 +1073,7 @@ class Epoch:
     # for every fork that holds this epoch.
     unrecorded_scans: list[tuple[int, int]]
     synthesis: Any | None
-    plant_changes: tuple[tuple[int, list[Any]], ...]
+    plant_changes: tuple[tuple[int, list[Any] | None], ...]
     program: Any | None
     logic: tuple[Any, ...]
     time_mode: TimeMode
@@ -1842,9 +1842,10 @@ class PLC:
         # ``plant`` post-scan (feedback).  ``None`` ⇒ no overlay (the common
         # case; deploy/prove never set it).  See ``core/synthesis.py``.
         self._synthesis: Any | None = None
-        # ``(scan_id, plant)``: the plant that ran the scans up to *scan_id*, each
-        # kept when a coupling change replaced it there (:meth:`_note_plant_change`).
-        self._plant_changes: list[tuple[int, list[Any]]] = []
+        # ``(scan_id, plant)``: a checkpoint no replay steps across.  *plant* is the plant
+        # that ran the scans up to *scan_id*, kept when a coupling change replaced it there
+        # (:meth:`_note_plant_change`).  It is None when only the state was edited there.
+        self._plant_changes: list[tuple[int, list[Any] | None]] = []
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
         if _tag_index is not None:
@@ -2558,6 +2559,12 @@ class PLC:
     def _settle_window(
         self, first: int, last: int, check_limits: Callable[[], None] | None
     ) -> None:
+        # The scans after a plant change or an edit step again from its checkpoint.
+        for at, _plant in self._plant_changes:
+            if first <= at < last:
+                self._settle_window(first, at, check_limits)
+                self._settle_window(at + 1, last, check_limits)
+                return
         replay = self._stepped_again(first, last, check_limits)
         for name in _RECORDS:
             getattr(self, name).replace_range(getattr(replay, name), first, last)
@@ -3030,7 +3037,9 @@ class PLC:
         slab_end = scan_id
 
         kernel = self._replay_kernel_from(anchor_scan)
-        if slab_start > anchor_scan + 1 and kernel is not None:
+        # One kernel run would step across an edited checkpoint.  _replay_range splits there.
+        crosses = any(slab_start <= at <= slab_end for at, _plant in self._plant_changes)
+        if slab_start > anchor_scan + 1 and kernel is not None and not crosses:
             # History ownership has already selected the immutable execution
             # epoch that ran this scan. Its synthesis brackets are therefore
             # stable replay logic, just like the bare Program. A descendant never
@@ -3116,11 +3125,14 @@ class PLC:
         if replaced is not None:
             self._recent_state_cache_bytes -= replaced[1]
         self._cache_state(state)
-        if scan_id in self._checkpoints:
-            self._checkpoints[scan_id] = state
         at_initial = scan_id == self._initial_scan_id
         if at_initial:
             self._initial_state = state
+            if scan_id in self._checkpoints:
+                self._checkpoints[scan_id] = state
+        else:
+            # The scans after this one run from the edit, so no replay may step across it.
+            self._checkpoint_the_tip(None)
         for name, value in tags.items():
             if at_initial or name not in self._causal_initial_tags:
                 self._causal_initial_tags[name] = value
@@ -3131,20 +3143,27 @@ class PLC:
         Replay runs a scan under the plant that ran it.  A checkpoint here starts any
         later scan's replay on this side of the change, so no replay crosses it.
         """
+        if self._state.scan_id != self._initial_scan_id:
+            self._checkpoint_the_tip([] if self._synthesis is None else list(self._synthesis.plant))
+
+    def _checkpoint_the_tip(self, plant: list[Any] | None) -> None:
+        """Keep the tip as a checkpoint that no replay steps across, as its scans ran.
+
+        *plant* is the plant that ran the scans so far, or None when the plant stays.
+        """
         scan_id = self._state.scan_id
-        if scan_id == self._initial_scan_id:
-            return
-        if self._plant_changes and self._plant_changes[-1][0] == scan_id:
-            return
-        plant = [] if self._synthesis is None else list(self._synthesis.plant)
-        self._plant_changes.append((scan_id, plant))
-        self._scan_log.record_force_changes(scan_id, self._forces_last_recorded)
+        last = self._plant_changes[-1] if self._plant_changes else None
+        if last is None or last[0] != scan_id:
+            self._plant_changes.append((scan_id, plant))
+            self._scan_log.record_force_changes(scan_id, self._forces_last_recorded)
+        elif last[1] is None and plant is not None:
+            self._plant_changes[-1] = (scan_id, plant)
         self._checkpoints[scan_id] = self._state
 
     def _earlier_plant_at(self, scan_id: int) -> list[Any] | None:
         """The plant the scans after *scan_id* ran under, when it is not the current one."""
         for changed_at, plant in self._plant_changes:
-            if scan_id < changed_at:
+            if scan_id < changed_at and plant is not None:
                 return plant
         return None
 
@@ -3619,10 +3638,11 @@ class PLC:
         current_plant = self._earlier_plant_at(target_scan_id) is None
         if current_plant and self._harness is not None:
             self._harness.fork_onto(replay, as_recorded=True)
-        # A stop() or a battery change after the target scan changes the state but not its
-        # checkpoint, so these events go on after the checkpoint.
-        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-            _apply_lifecycle_to_replay(replay, event)
+        # A stop() or a battery change after the last scan is in history's tip state.  One
+        # after an earlier scan belongs to the next scan, as a force or a patch does.
+        if target_scan_id == self._state.scan_id:
+            for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+                _apply_lifecycle_to_replay(replay, event)
         return replay
 
     def _start_from_state(self, state: SystemState) -> None:

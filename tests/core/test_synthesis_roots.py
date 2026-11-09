@@ -19,6 +19,7 @@ from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
+from pyrung.core.state import SystemState
 from tests.core.scan_loop_counts import ScansOutsideLoop
 
 _SWITCH = Physical("Switch", on_delay="200ms", off_delay="100ms")
@@ -498,6 +499,67 @@ def test_a_replay_of_a_scan_a_reload_edited_starts_from_the_edit() -> None:
             replay.step()
             assert _exact(replay.state.tags) == _exact(ran[scan].tags), scan
             assert dict(replay.state.memory) == dict(ran[scan].memory), scan
+
+
+def _states_agree(state: Any, ran: Any) -> bool:
+    return _exact(state.tags) == _exact(ran.tags) and dict(state.memory) == dict(ran.memory)
+
+
+def test_history_keeps_a_reload_edit_off_a_checkpoint() -> None:
+    """A reload between scans 611 and 612, off the 200-scan checkpoint grid."""
+    fb = Bool("OffGridFb", physical=Physical("S", on_delay="300ms"), link="OffGridEn")
+    enable, lamp, toggle = Bool("OffGridEn"), Bool("OffGridLamp"), Bool("OffGridTog")
+    with Program(strict=False) as prog:
+        with Rung(~toggle):
+            out(toggle)
+        with Rung(toggle):
+            out(enable)
+        with Rung(fb):
+            out(lamp)
+    plc = PLC(prog, dt=0.01, cache=0, checkpoint_interval=200)
+    Harness(plc).install()
+    ran = _run_recording(plc, 611)
+    dropped = [name for name in plc.state.memory if ":plant:fb." in name]
+    assert dropped
+    plc._edit_tip_tags({}, drop_memory=dropped)
+    ran[611] = plc.state
+    ran.update(_run_recording(plc, 300))
+    assert 611 not in plc._recent_state_cache
+
+    for scan in (611, 612, 650, 700):
+        assert _states_agree(plc.history.at(scan), ran[scan]), scan
+    for target in (611, 650):
+        for replay in (plc.replay_to(target), plc._replay_to_interpreted(target)):
+            assert _states_agree(replay.state, ran[target]), target
+            for scan in range(target + 1, target + 60):
+                replay.step()
+                assert _states_agree(replay.state, ran[scan]), (target, scan)
+
+
+def test_history_keeps_the_memory_an_uninstall_with_no_overlay_drops() -> None:
+    """With no overlay, an uninstall has no plant to keep, so it only drops coil memory."""
+    toggle = Bool("NoOverlayTog")
+    with Program(strict=False) as prog:
+        with Rung(~toggle):
+            out(toggle)
+    stale = "_debounce_rung:plant:fb.NoOverlayFb"
+    plc = PLC(prog, dt=0.01, cache=0, initial_state=SystemState().with_memory({stale: True}))
+    harness = Harness(plc)
+    harness.install()
+    plc._synthesis = None
+    _run_recording(plc, 250)
+    harness.uninstall()
+    assert stale not in plc.state.memory
+    _run_recording(plc, 100)
+    assert 250 not in plc._recent_state_cache
+
+    for state in (
+        plc.history.at(250),
+        plc.history.at(300),
+        plc.replay_to(250).state,
+        plc._replay_to_interpreted(250).state,
+    ):
+        assert stale not in state.memory, state.scan_id
 
 
 def test_a_replayed_range_across_a_late_install_keeps_each_side() -> None:

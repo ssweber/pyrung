@@ -951,28 +951,83 @@ def test_a_replay_of_a_checkpoint_keeps_a_stop_made_after_it() -> None:
         assert dict(fork.state.memory) == dict(source.state.memory)
 
 
-def test_a_replay_of_a_checkpoint_steps_on_with_a_battery_change_made_after_it() -> None:
+def _battery_program() -> Program:
     toggle, seen = Bool("BatteryToggle"), Bool("BatterySeen")
     with Program(strict=False) as program:
         with Rung(~toggle):
             out(toggle)
         with Rung(system.sys.battery_present):
             out(seen)
-    source = PLC(program, dt=0.01, checkpoint_interval=100)
+    return program
+
+
+def test_a_replay_of_a_checkpoint_steps_on_with_a_battery_change_made_after_it() -> None:
+    source = PLC(_battery_program(), dt=0.01, checkpoint_interval=100)
     for _ in range(200):
         source.step()
     source.battery_present = False
+    at_the_tip = _replay_both_ways(source, 200)
     live = {}
     for _ in range(50):
         source.step()
         live[source.state.scan_id] = source.state
 
-    for fork in _replay_both_ways(source, 200):
+    for fork in at_the_tip:
         assert not fork._battery_present
         for scan in range(201, 251):
             fork.step()
             assert dict(fork.state.tags) == dict(live[scan].tags), scan
             assert dict(fork.state.memory) == dict(live[scan].memory), scan
+    # Past the tip, the change belongs to scan 201, as in history and fork().
+    for fork in _replay_both_ways(source, 200):
+        assert fork._battery_present
+        assert dict(fork.state.memory) == dict(source.history.at(200).memory)
+
+
+@pytest.mark.parametrize("changed_after", [200, 250], ids=["checkpoint", "mid_interval"])
+def test_replay_to_history_and_fork_agree_on_a_battery_change_after_an_earlier_scan(
+    changed_after: int,
+) -> None:
+    source = PLC(_battery_program(), dt=0.01, checkpoint_interval=100)
+    for _ in range(changed_after):
+        source.step()
+    source.battery_present = False
+    for _ in range(100):
+        source.step()
+
+    for target in (changed_after, changed_after + 1):
+        truth = source.history.at(target)
+        forked = source.fork(target)
+        assert forked._battery_present == (target == changed_after)
+        forked.step()
+        for fork in _replay_both_ways(source, target):
+            assert dict(fork.state.tags) == dict(truth.tags), target
+            assert dict(fork.state.memory) == dict(truth.memory), target
+            assert fork._battery_present == (target == changed_after)
+            fork.step()
+            assert dict(fork.state.tags) == dict(forked.state.tags), target
+            assert dict(fork.state.memory) == dict(forked.state.memory), target
+
+
+def test_a_fork_steps_on_as_the_stopped_or_battery_less_state_it_forks() -> None:
+    source = PLC(_battery_program(), dt=0.01, checkpoint_interval=100)
+    for _ in range(200):
+        source.step()
+    source.battery_present = False
+    for _ in range(100):
+        source.step()
+
+    for forked in (source.fork(300), source.fork(250)):
+        assert not forked.battery_present
+        forked.step()
+        assert forked.state.tags["BatterySeen"] is False
+        assert forked.state.memory["_sys.battery_present"] is False
+    source.stop()
+    stopped = source.fork()
+    assert stopped.mode == "stop"
+    source.step()
+    stopped.step()
+    assert dict(stopped.state.tags) == dict(source.state.tags)
 
 
 def test_interpreted_replay_preserves_active_pilot_holds() -> None:
