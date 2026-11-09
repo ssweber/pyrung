@@ -822,8 +822,8 @@ def _noise() -> Program:
 
 
 def test_the_records_do_not_count_toward_the_memory_budget() -> None:
-    # A value that changes every scan keeps a range a scan.  A long run records those ranges
-    # only when a question asks.  So the budget leaves them out, and history= sets the floor.
+    # A value that changes every scan keeps a range a scan.  A compiled run records those
+    # ranges only when a question asks.  So the budget leaves them out, and history= sets the floor.
     plc = PLC(_noise(), dt=0.01, history=8000, cache=100, history_budget=1_048_576)
     for _ in range(10_000):
         plc.step()

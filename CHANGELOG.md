@@ -314,7 +314,7 @@
   - a question that would step more than 250,000 scans raises `UnrecordedScansError`
   - pass `history=` to keep every record in the window
 - With `history=`, the runner keeps every write in the window. A value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag. `history_budget` does not count these writes. Shorten `history=` for a program with many such tags.
-- Over `history_budget`, the runner weighs only the window's checkpoints, so a compiled `run_for()` keeps the same scans as stepping (it also weighed the recent-state cache, the scan log and the recorded writes).
+- A compiled `run_for()` keeps the same scans as stepping when the runner is over `history_budget`. The runner weighs only the window's checkpoints against the budget (it also weighed the recent-state cache, the scan log and the recorded writes).
 - `how()` has a time limit, `wall_clock_s=300.0` by default (`None` turns it off). When it runs out, the plan ends with `wall-clock budget exhausted (300 s); still waiting on ...`. A search that grows to about 1 GB ends with `memory budget exhausted`.
 - `how(max_scans=)` charges a scan the same whether pyrung runs it compiled or not:
   - each scan `how()` steps counts one against `max_scans`, and so do the first two scans and the last scan of each wait
