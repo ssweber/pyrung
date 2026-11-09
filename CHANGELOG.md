@@ -301,6 +301,13 @@
   - the VS Code History panel shows the same scans, one-scan pulses included, and **Load older** reads further back
 
   A question that would step more than 250,000 scans raises `UnrecordedScansError` naming the range, instead of running for minutes.
+- `how()` plans for a program with `send()` or `receive()` without talking to a Modbus device (it sent real requests):
+  - it sets a `receive()` destination, or the success or error bit of a `send()` or `receive()`, the way it sets an input
+  - each step that sets one says "This value stands for the Modbus device's answer."
+  - the other status bits keep their values
+  - the plan's last line says that `how()` does not simulate Modbus
+  - the forks `how()` returns, such as `plan.fork`, don't talk to the device either
+  - `step()`, `run_for()` and the debugger still talk to the device
 - `how()` has a time limit, `wall_clock_s=300.0` by default (`None` turns it off). When it runs out, the plan ends with `wall-clock budget exhausted (300 s); still waiting on ...`. A search that grows to about 1 GB ends with `memory budget exhausted`.
 - A reached `how()` plan uses temporary logic only where the plan needs it, so `Rung(En): on_delay(W, 3000)` plans "Set En=True, wait ~3s" (it latched `En` with temporary logic until `W.Done`):
   - `how()` reruns the plan with each piece of temporary logic left out, then with a Set of its value instead
@@ -321,6 +328,8 @@
 ### Fixes
 
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
+- `history.at()`, `replay_to()`, `cause()` and `effect()` no longer send Modbus requests (a replayed `send()` could write to the device again). A replayed scan writes the answer the device gave on that scan.
+- A `fork()` of a PLC with a live `send()` or `receive()` sends its own requests (it could collect the answer to its parent's request). A fork made while a request is in flight never gets that request's answer.
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
   - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
   - a target with a second route through a pointer or a for loop
@@ -484,6 +493,7 @@
 
 ### Performance
 
+- `run_for()`, `run_until()` and `how()` run compiled on a program with `nop()`, `raw()`, or a `send()` or `receive()` whose target is a name such as `"panel"` (every scan ran interpreted). `how()` also runs compiled when the target is a `ModbusTcpTarget` or `ModbusRtuTarget`.
 - `how()` starts faster.
   - A second `how()` on an unchanged program skips several seconds of setup.
   - The first `how()` takes about half as long to set up.

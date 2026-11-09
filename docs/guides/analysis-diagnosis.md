@@ -161,6 +161,8 @@ The headline is deliberately specific:
 - `Cannot reach` means `how()` proved a conflict or physical constraint.
 - `Stopped` means it could not identify another safe action. It does not call an unknown path impossible.
 
+For a program with `send()` or `receive()`, see [how() and Modbus](../instructions/communication.md#how).
+
 The debug console reports long-running work as it happens:
 
 ```

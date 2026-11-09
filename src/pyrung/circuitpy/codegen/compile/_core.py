@@ -19,6 +19,8 @@ from pyrung.circuitpy.codegen._util import (
 from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
+from pyrung.click.nop import NopInstruction
+from pyrung.click.raw import RawInstruction
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -455,6 +457,14 @@ def compile_instruction(
         return _compile_modbus_send_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ModbusReceiveInstruction):
         return _compile_modbus_receive_instruction(instr, enabled_expr, ctx, indent)
+    if (
+        isinstance(instr, NopInstruction | RawInstruction)
+        and ctx.kernel_runtime
+        and not ctx.proof_metadata
+    ):
+        # pyrung runs both as no-ops, so the runner's kernel skips them.
+        # A code.py and the prover's kernel still refuse them, as before.
+        return []
 
     loc = _source_location(instr)
     raise NotImplementedError(f"Unsupported instruction type: {type(instr).__name__} at {loc}")

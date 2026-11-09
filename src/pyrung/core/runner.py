@@ -1089,6 +1089,7 @@ class Epoch:
     rtc_base: datetime
     rtc_base_sim_time: float
     keep_forces_on_run: bool
+    modbus_stubbed: bool = False
 
     @classmethod
     def seal(
@@ -1160,6 +1161,7 @@ class Epoch:
             rtc_base=plc._rtc_base,
             rtc_base_sim_time=plc._rtc_base_sim_time,
             keep_forces_on_run=plc._keep_forces_on_run,
+            modbus_stubbed=plc._modbus_stubbed,
         )
 
 
@@ -1218,6 +1220,8 @@ class EpochQuery:
         runner._unrecorded_scans = epoch.unrecorded_scans
         runner._causal_initial_tags = dict(epoch.causal_initial_tags)
         runner._causal_lineage = CausalLineage(runner)
+        runner._modbus_stubbed = epoch.modbus_stubbed
+        runner._reconstructs_history = True
         runner._set_rtc_internal(epoch.rtc_base, epoch.rtc_base_sim_time)
         if epoch.synthesis is not None:
             from pyrung.core.synthesis import Synthesis
@@ -1741,6 +1745,15 @@ class PLC:
         self._unrecorded_scans: list[tuple[int, int]] = []
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
+        # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
+        # string target.  Every runner made from one, such as a fork or a replay, keeps it.
+        self._modbus_stubbed = False
+        # A runner that rebuilds recorded scans for cause() or the epoch does no Modbus I/O.
+        # ScanContext.modbus_io reads both flags and ``_replay_mode``.
+        self._reconstructs_history = False
+        # Each live send()/receive() request in flight.  A fork starts with none, so it
+        # can't collect a request its parent sent.
+        self._modbus_requests: dict[int, Any] = {}
         # What coasts keep for later coasts: a search's, shared with its forks.
         self._coast_memo: CoastMemo | None = None
         self._search_refuses_restart = False
@@ -2841,6 +2854,8 @@ class PLC:
         fork._set_time_mode(self._time_mode, dt=self._dt)
         fork._coast_memo = self._coast_memo
         fork._search_refuses_restart = self._search_refuses_restart
+        fork._modbus_stubbed = self._modbus_stubbed
+        fork._reconstructs_history = self._reconstructs_history
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         if inherit_log:
@@ -3315,7 +3330,7 @@ class PLC:
                 jit_stats.add_cost("compile", time.perf_counter() - started)
                 for step, seconds in (timings or {}).items():
                     jit_stats.add_cost(f"compile: {step}", seconds)
-        if kernel.has_io_gaps:
+        if kernel.has_io_gaps and not self._modbus_stubbed:
             self._compiled_replay_kernel = False
             return None
         self._compiled_replay_kernel = kernel
@@ -3390,6 +3405,8 @@ class PLC:
         # as its source. PILOT holds and Harness plant rungs live outside the
         # user Program, so copy both brackets explicitly.
         self._copy_current_synthesis_onto(fork)
+        fork._modbus_stubbed = self._modbus_stubbed
+        fork._reconstructs_history = True
         fork._replay_mode = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
@@ -3414,6 +3431,7 @@ class PLC:
         self._copy_current_synthesis_onto(replay)
         self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
+        replay._reconstructs_history = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3491,9 +3509,8 @@ class PLC:
         changes, patches, and per-scan ``dt`` in REALTIME mode.
 
         Returns a fork positioned at ``target_scan_id`` with
-        ``_replay_mode=True``.  The returned fork is primarily for
-        inspection; callers who want to continue it as a live
-        investigation session can clear ``fork._replay_mode = False``.
+        ``_replay_mode=True``.  The returned fork is for inspection.  It never
+        talks to a Modbus device, even with ``_replay_mode`` cleared.
         """
         if target_scan_id < self._initial_scan_id:
             raise ValueError(
