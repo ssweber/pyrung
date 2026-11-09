@@ -934,8 +934,8 @@ def test_a_raised_run_is_compared_and_raises_on(installed) -> None:
 def test_a_raised_run_landing_on_the_wrong_state_is_caught(installed, monkeypatch) -> None:
     real = compiled_run._install
 
-    def scanned_past(plc, replay, state):
-        return real(plc, replay, state.with_tags({"Cnt": state.tags["Cnt"] + 300}))
+    def scanned_past(plc, replay, state, *rest):
+        return real(plc, replay, state.with_tags({"Cnt": state.tags["Cnt"] + 300}), *rest)
 
     monkeypatch.setattr(compiled_run, "_install", scanned_past)
     fold_check.install()
@@ -1922,8 +1922,8 @@ def test_inside_an_own_twin_block_it_may_land_short() -> None:
 def _after_install(monkeypatch: pytest.MonkeyPatch, change: Any) -> None:
     real = compiled_run._install
 
-    def install(plc, replay, state):
-        real(plc, replay, state)
+    def install(plc, replay, state, *rest):
+        real(plc, replay, state, *rest)
         change(plc)
 
     monkeypatch.setattr(compiled_run, "_install", install)

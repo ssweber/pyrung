@@ -783,7 +783,7 @@ def test_a_settle_that_sends_a_column_unknown_keeps_a_later_repeat() -> None:
     scan_id = 1101 + 6 * 4
     plan = ours.plan_repeat(scan_id - 1, 6)
     assert plan is not None
-    assert plan.limit > 200
+    assert 6 * plan.limit > 1000  # The repeat runs on past the scan stepping went unknown on.
     plan.apply(plan.limit)
     scan_id += 6 * plan.limit
     for _ in range(3):
@@ -846,8 +846,8 @@ def test_scans_after_a_gap_not_yet_settled_keep_the_value_written(small_limit: i
 
 
 def _square_or_ramp(scan_id: int) -> int:
-    """97 values, then a ramp that stepping keeps as one range, so it never counts 100."""
-    return (scan_id * scan_id) % 1009 if scan_id < 98 else 5000 + scan_id
+    """96 values, then a ramp that counts three changes, so stepping never counts 100."""
+    return (scan_id * scan_id) % 1009 if scan_id < 97 else 5000 + scan_id
 
 
 def _squares_then_a_ramp(record: RungFiringTimelines, scans: Any) -> None:
