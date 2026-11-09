@@ -3192,13 +3192,14 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
-    def _trim_history_before(self, scan_id: int) -> None:
+    def _trim_history_before(self, scan_id: int, *, trim_records: bool = True) -> None:
         """Advance the replay horizon to *scan_id*.
 
         Trims the scan log, rung-firing timelines, and checkpoints in
         lockstep and advances ``_initial_scan_id`` so that
         ``History.oldest_scan_id`` / ``contains()`` / ``scan_ids()``
-        reflect the narrowed range.
+        reflect the narrowed range.  A caller whose records already start
+        at *scan_id* passes ``trim_records=False``.
         """
         if not self._causal_history_contains(scan_id):
             raise KeyError(scan_id)
@@ -3210,7 +3211,7 @@ class PLC:
         below = self._nearest_checkpoint_at_or_before(scan_id - 1)
         horizon = scan_id if below is None else below
         self._scan_log.trim_before(horizon)
-        for name in _RECORDS:
+        for name in _RECORDS if trim_records else ():
             getattr(self, name).trim_before(scan_id)
         self._unrecorded_scans = [
             (max(first, scan_id), last) for first, last in self._unrecorded_scans if last >= scan_id
@@ -3553,6 +3554,12 @@ class PLC:
 
         for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            if scan_id == target_scan_id:
+                # A compiled replay holds no scan before the target, so this fork's records
+                # start there too.  A record without history= has a limit and cannot be trimmed.
+                capped = self._history_retention_scans is None
+                for name in _RECORDS:
+                    setattr(replay, name, RungFiringTimelines(capped=capped))
             replay.step()
 
         # Trailing lifecycle events that fired after the last committed
@@ -3563,7 +3570,9 @@ class PLC:
         # The caller keeps this fork and may step it on, so it bounds its memory as its source does.
         replay._history_retention_scans = self._history_retention_scans
         replay._records_bounded = self._records_bounded
-        replay._apply_history_retention(replay._state.scan_id)
+        # Both replays start at the target, so a fork trims alike on either.
+        if target_scan_id > replay._initial_scan_id:
+            replay._trim_history_before(target_scan_id, trim_records=False)
         return replay
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
@@ -3648,12 +3657,14 @@ class PLC:
             _apply_lifecycle_to_replay(replay, event)
 
         state = replay._materialize_replay_state()
-        return self._fork_from_reconstructed_state(
+        fork = self._fork_from_reconstructed_state(
             state,
             rtc_at_state=replay._rtc_at_sim_time(state.timestamp),
             forces=replay._input_overrides.forces_mutable,
             replay_mode=True,
         )
+        fork._records_bounded = self._records_bounded
+        return fork
 
     def replay_to(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state, preferring compiled replay when supported."""
