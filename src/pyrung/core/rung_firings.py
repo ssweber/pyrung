@@ -598,8 +598,8 @@ class RungFiringTimelines(Generic[K]):
         """Count the changes a settle from *first* on added, and turn Unknown where stepping did.
 
         *old* is the column before the settle, and *gaps* the gaps after it.  The count is the
-        same up to *first*.  A scan in a gap counts no change, and nor do the three after it.  So
-        a settle only adds changes, and the column turns Unknown no later than it did.
+        same up to *first*.  A scan in a gap counts no change, and nor does a scan whose change
+        depends on one.  So a settle only adds changes, and the column turns Unknown no later.
         """
         if self._limit is None:
             return
@@ -1646,7 +1646,7 @@ def _continues(value: Any, one: Any, two: Any, three: Any) -> bool:
 
 
 def _kind(value: Any, one: Any, two: Any) -> Any:
-    """How *value* goes on from *one* and *two*: "held", "flip", "count", or else None."""
+    """The way *value* goes on from *one* and *two*, or None if it does not go on."""
     if one is _HIDDEN or one is _ABSENT:
         return None if one is _ABSENT else _HIDDEN
     if _equal(value, one):
