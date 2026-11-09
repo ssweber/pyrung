@@ -384,47 +384,55 @@ def test_a_default_no_literal_can_spell_stays_at_zero(
     assert namespace["_b_Fl"][4] == 0.0
 
 
-def test_a_cached_factory_value_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A slot already reached holds the value the interpreter drew, whatever comes next."""
+def _counting_factory() -> tuple[Block, dict[str, int]]:
     draws = {"count": 0}
 
     def counter(_addr: int) -> int:
         draws["count"] += 1
         return draws["count"]
 
-    slots = Block("Cb", TagType.INT, 1, 8, default_factory=counter)
-    assert slots[3].default == 1
-    program = _read_slot_through_a_pointer(slots, 3)
+    return Block("Cb", TagType.INT, 1, 8, default_factory=counter), draws
 
+
+def test_a_counting_factory_seeds_each_slot_its_answer_in_address_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The factory is asked once per slot, lowest address first, whichever slot is read first."""
+    slots, draws = _counting_factory()
+    program = _read_slot_through_a_pointer(slots, 3)
     first = _generate(program)
-    second = _generate(program)
-    assert first.code == second.code
-    assert [line for line in first.code.splitlines() if line.startswith("_b_Cb")] == [
-        "_b_Cb = [0] * 8",
-        "_b_Cb[2] = 1",
-    ]
+    assert draws["count"] == 8
 
     runner = PLC(program, dt=0.010)
     runner.step()
-    assert _run(first, monkeypatch)["_t_Seen"] == runner.current_state.tags["Seen"] == 1
+    assert slots[6].default == 6
+    assert _generate(program).code == first.code
+    assert draws["count"] == 8
+
+    namespace = _run(first, monkeypatch)
+    assert namespace["_t_Seen"] == runner.current_state.tags["Seen"] == 3
+    assert namespace["_b_Cb"] == [1, 2, 3, 4, 5, 6, 7, 8]
 
 
-def test_an_impure_factory_is_not_seeded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Its next answer is not a power-on value; such a slot stays at zero, as it always did."""
-    draws = {"count": 0}
+def test_an_export_after_a_run_is_the_export_before_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    def build() -> tuple[Program, dict[str, int]]:
+        slots, draws = _counting_factory()
+        return _read_slot_through_a_pointer(slots, 3), draws
 
-    def counter(_addr: int) -> int:
-        draws["count"] += 1
-        return draws["count"]
+    program, _draws = build()
+    before = _generate(program).code
 
-    slots = Block("Cb", TagType.INT, 1, 8, default_factory=counter)
-    program = _read_slot_through_a_pointer(slots, 3)
-    first = _generate(program)
-    called = draws["count"]
-    second = _generate(program)
-    assert first.code == second.code
-    assert called <= 2, "one repeat is enough to tell"
-    assert _run(first, monkeypatch)["_b_Cb"] == [0] * 8
+    program, _draws = build()
+    runner = PLC(program, dt=0.010)
+    runner.patch({"Jx": 7})
+    runner.step()
+    after = _generate(program)
+    assert after.code == before
+
+    program, _draws = build()
+    stepped = PLC(program, dt=0.010)
+    stepped.step()
+    assert _run(after, monkeypatch)["_t_Seen"] == stepped.current_state.tags["Seen"] == 3
 
 
 def test_a_partial_factory_seeds_what_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -441,7 +449,7 @@ def test_a_partial_factory_seeds_what_it_answers(monkeypatch: pytest.MonkeyPatch
     assert namespace["_b_Cb"] == [0, 0, 30, 0, 0, 0, 0, 0]
 
 
-def test_a_factory_that_raises_on_its_second_answer_is_not_seeded(
+def test_a_factory_that_answers_once_seeds_only_the_first_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = iter([7])
@@ -450,7 +458,9 @@ def test_a_factory_that_raises_on_its_second_answer_is_not_seeded(
         return next(calls)
 
     slots = Block("Cb", TagType.INT, 1, 8, default_factory=once)
-    assert _run(_generate(_read_slot_through_a_pointer(slots, 3)), monkeypatch)["_b_Cb"] == [0] * 8
+    namespace = _run(_generate(_read_slot_through_a_pointer(slots, 3)), monkeypatch)
+    assert namespace["_b_Cb"] == [7, 0, 0, 0, 0, 0, 0, 0]
+    assert slots[1].default == 7
 
 
 def test_a_pure_factory_generates_the_same_code_whatever_was_indexed() -> None:

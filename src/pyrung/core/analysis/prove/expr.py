@@ -70,7 +70,11 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         return None
 
     eval_atom = atom
-    if atom.operand_is_tag and atom.operand in state:
+    if atom.operand_is_tag:
+        # An operand tag the state lacks leaves the atom undecided, as a missing left-hand tag
+        # does.  Comparing with the operand's name would give a wrong answer or raise TypeError.
+        if atom.operand not in state:
+            return None
         try:
             operand = atom.operand_scale * state[atom.operand] + atom.operand_offset
         except TypeError:

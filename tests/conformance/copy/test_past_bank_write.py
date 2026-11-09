@@ -13,7 +13,8 @@ anything is left alone (the case then reads Result1 as that value, and the write
 flags and read after are not what it asks).  Result2 is the read after.  Result3 has
 bit 1 for SC43 on after the write and bit 2 for SC44.  A last Copy writes 0 back,
 under the same guard, so the 5 does not outlive the case: it once outlived two
-project loads and broke ``faults/pointer_past_bank_lands``.
+project loads and broke ``faults/pointer_past_bank_lands``.  A nonzero DD1531 is left
+alone, and ``past_clean`` clears it.
 
 A CLICK (2026-11-07) answered that the write lands and raises no flag: 0, 5, 0.
 pyrung drops the write and reads 0, 0, 0, so the case is ``pending="PASTBANK"``.

@@ -219,7 +219,7 @@ class SlotView:
     def reset(self) -> None:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
-        self._block._slot_config.pop(self._addr, None)
+        self._block._drop_slot_config(self._addr)
         self._block._slot_names_changed += 1
         note_metadata_edit()
 
@@ -250,7 +250,7 @@ class RangeSlotView:
         for addr in addresses:
             self._block._assert_not_materialized(addr, action="reset slot")
         for addr in addresses:
-            self._block._slot_config.pop(addr, None)
+            self._block._drop_slot_config(addr)
         self._block._slot_names_changed += 1
         note_metadata_edit()
 
@@ -430,6 +430,11 @@ class Block:
     _factory_given: dict[int, Any] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+    _factory_asked_through: int = field(default=-1, init=False, repr=False, compare=False)
+    # The addresses the user's code wrote as ``block[n]``.  ``_tag_cache`` also holds every
+    # slot a scan or an analysis asked for, so a runner reads only these from it.  pyrung's
+    # own code asks with ``_get_tag`` or ``_tag_at`` and leaves this alone.
+    _indexed: set[int] = field(default_factory=set, init=False, repr=False, compare=False)
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
     _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
         default=None, init=False, repr=False
@@ -506,6 +511,7 @@ class Block:
 
         if isinstance(key, int):
             self._validate_address(key)
+            self._indexed.add(key)
             return self._get_tag(key)
         elif isinstance(key, slice):
             raise TypeError("Use .select(start, end) instead of slice syntax")
@@ -517,6 +523,14 @@ class Block:
             raise TypeError(
                 f"Invalid key type: {type(key).__name__}. Expected int, Tag, or Expression."
             )
+
+    def _tag_at(self, addr: int) -> LiveTag:
+        """``block[addr]`` for pyrung's own code.
+
+        A runner built later does not learn of a slot asked for here.
+        """
+        self._validate_address(addr)
+        return self._get_tag(addr)
 
     def _get_tag(self, addr: int) -> LiveTag:
         """Get or create a Tag for the given address."""
@@ -641,10 +655,25 @@ class Block:
         return retentive, default
 
     def _factory_default(self, addr: int) -> Any:
-        """What the factory gives a slot, asked once however often the answer is wanted."""
+        """What the factory gives a slot, asked once however often the answer is wanted.
+
+        Before it answers a slot, the factory answers each lower slot, in address order.
+        A slot's own default or mapping only decides whether its answer is used.  So a
+        factory that counts gives slot n its nth answer, whatever was asked first and
+        whatever the other slots override.  A lower slot the factory raises for is skipped.
+        """
         if addr not in self._factory_given:
-            assert self.default_factory is not None
-            self._factory_given[addr] = self.default_factory(addr)
+            factory = self.default_factory
+            assert factory is not None
+            lower = max(self.start, self._factory_asked_through + 1)
+            for earlier in self._window_addresses(lower, addr - 1):
+                if earlier not in self._factory_given:
+                    try:
+                        self._factory_given[earlier] = factory(earlier)
+                    except Exception:
+                        pass
+            self._factory_asked_through = max(self._factory_asked_through, addr)
+            self._factory_given[addr] = factory(addr)
         return self._factory_given[addr]
 
     def _slot_asks_factory(self, addr: int) -> bool:
@@ -692,11 +721,39 @@ class Block:
         )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
-        if addr in self._tag_cache:
+        # Only a slot the user's code indexed or mapped refuses a reset.  A tag a scan or an
+        # analysis made takes the reset in place (``_drop_slot_config``), so whether a reset
+        # works never depends on what ran.
+        if addr in self._tag_cache and (addr in self._indexed or addr in self._mapped_tags):
             raise ValueError(
                 f"Cannot {action} {self.name}[{addr}] after tag materialization. "
                 "Configure slot metadata before reading/indexing that slot."
             )
+
+    def _drop_slot_config(self, addr: int) -> None:
+        """Clear a slot's overrides, and give a tag already made for it what it inherits.
+
+        Setting a field changes such a tag in place (``_apply_slot_override``), and so does
+        this, so the tag holds what a tag made after the reset would hold.
+        """
+        entry = self._slot_config.pop(addr, None)
+        tag = self._tag_cache.get(addr)
+        if entry is None or tag is None or addr in self._mapped_tags:
+            return
+        retentive, default = self._effective_slot_policy(addr)
+        inherited = {
+            **self._effective_slot_hints(addr)._asdict(),
+            "name": self._effective_slot_name(addr),
+            "retentive": retentive,
+            "default": default,
+            "comment": self._effective_slot_comment(addr),
+        }
+        for field_name, value in inherited.items():
+            if getattr(entry, field_name) is not UNSET:
+                object.__setattr__(tag, field_name, value)
+        if entry.default is not UNSET:
+            explicit = default is not None and self.default_factory is not None
+            object.__setattr__(tag, "_default_explicit", explicit)
 
     def _apply_slot_override(
         self,
@@ -737,6 +794,8 @@ class Block:
         self._mapped_tags.clear()
         self._hw_alias.clear()
         self._factory_given.clear()
+        self._factory_asked_through = -1
+        self._indexed.clear()
         self._slot_names_changed += 1
 
     @overload

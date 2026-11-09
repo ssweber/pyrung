@@ -46,13 +46,15 @@ LAYOUT_VERSION = 3
 #: bounds, and Math constants past 16 bits, and measures what CLICK does with them.
 #: It also pastes forms CLICK's editor refuses and that an earlier round read: a bit in a
 #: Math formula (``flag_probe``) and an Out-coil preset of 0 or below (``coil_timing``,
-#: ``out_more``).
+#: ``out_more``).  ``past_write`` and ``past_clean`` run a pointer past DD1000 on purpose,
+#: so the export's warning for it is let through too.
 PASTE_PROBE_FINDINGS = (
     "CLK_RAND_BOUND_TYPE",
     "CLK_RAND_EQUAL_BOUNDS",
     "CLK_MATH_WIDE_CONSTANT",
     "CLK_MATH_BIT_OPERAND",
     "CLK_TIMER_PRESET_TOO_LOW",
+    "CLK_PTR_PAST_BANK",
 )
 
 

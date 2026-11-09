@@ -805,8 +805,8 @@ class Harness:
                 continue
             for idx in range(1, count + 1):
                 try:
-                    en_tag = en_block[idx]
-                    fb_tag = fb_block[idx]
+                    en_tag = en_block._tag_at(idx)
+                    fb_tag = fb_block._tag_at(idx)
                 except (KeyError, IndexError):
                     continue
                 self._plc._register_known_tag(en_tag)

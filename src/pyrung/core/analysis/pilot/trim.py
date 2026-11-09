@@ -368,13 +368,13 @@ def _patches_under(
 
 def trim_holds(
     plan: Plan,
-    goal: Callable[[Any], bool] | None,
+    goal: Callable[[Any], bool],
     avoid: Any,
     settable: frozenset[str],
     clock: WallClock | None,
 ) -> Plan:
     """*plan* with the temporary logic it reaches without taken out, or *plan* as it was."""
-    if not plan.reachable or plan.fork is None or goal is None:
+    if not plan.reachable or plan.fork is None:
         return plan
     timeline = _timeline(plan)
     installed = _installed(timeline or [])

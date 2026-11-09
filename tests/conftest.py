@@ -122,6 +122,7 @@ def _clean_block_state() -> Iterator[None]:
                 block._slot_config = {addr: copy.copy(e) for addr, e in slot_config.items()}
                 block._mapped_tags = dict(mapped_tags)
             block._tag_cache.clear()
+            block._indexed.clear()
         for block in _HARDWARE_BLOCK_CACHE.values():
             block.reset()
         _HARDWARE_BLOCK_CACHE.clear()

@@ -14,6 +14,7 @@ from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
 from pyrung.click.validation.findings import (
     CLK_NESTED_CALL,
+    CLK_PTR_PAST_BANK,
     CLK_STEP_LIMIT,
     CLK_TEXT_PAST_BANK,
     CLK_TEXT_PAST_BLOCK,
@@ -57,10 +58,14 @@ class _ValidationMixin:
         findings = [*report.errors, *report.warnings, *report.hints]
         # The step count is the whole project's, and an estimate: rows over the
         # limit still render faithfully, so it warns instead of refusing.  So does
-        # a text past its bank or block, a store the CLICK editor takes.
-        warn_only = (CLK_STEP_LIMIT, CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK)
+        # a text past its bank or block, a store the CLICK editor takes.  A pointer that
+        # can run past its bank warns too, as the CLICK takes the write.
+        warn_only = (CLK_STEP_LIMIT, CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK, CLK_PTR_PAST_BANK)
+        # The step limit warns whatever *allow* holds.
         for finding in findings:
-            if finding.code in warn_only:
+            if finding.code in warn_only and (
+                finding.code == CLK_STEP_LIMIT or finding.code not in allow
+            ):
                 warnings.warn(
                     f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip(),
                     stacklevel=5,

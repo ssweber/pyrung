@@ -2,9 +2,10 @@
 
 Part ``copy`` (``suite.PARTS``).  The harness reads slots, so the raw IEEE bits a CLICK
 keeps in a DF, which is what two Modbus registers would show, come through an
-Unpack Copy into two DH and a compare on each.  Expectations are what pyrung reads
-today (the float64 it keeps packed to a float32), so a CLICK that reads otherwise
-is an answer.
+Unpack Copy into two DH and a compare on each.  ``underflow`` and ``float32_equality``
+expect what a CLICK read (2026-11-07) and are ``pending="F32"``.  The other cases still
+expect what pyrung reads (a float64 packed to a float32), so a CLICK that reads
+otherwise is an answer.
 
 - ``minus_zero_math``: DF 0.0 * -1.0.  IEEE keeps the sign: high word 0x8000
   (Result1 = 1; 2 is 0x0000, any other 0), low word 0 (ErrorCode = 1).  A store that

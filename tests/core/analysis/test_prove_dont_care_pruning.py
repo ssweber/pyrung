@@ -78,6 +78,13 @@ class TestDontCarePruning:
         assert _eval_expr_from_state(expr, {"A": 2}) is None
         assert _eval_expr_from_state(expr, {"A": True, "B": 3}) is None
 
+    @pytest.mark.parametrize("form", ["eq", "ne", "lt", "le", "gt", "ge"])
+    def test_eval_expr_from_state_leaves_a_tag_operand_with_no_value_unknown(self, form):
+        expr = Atom("A", form, "B", operand_is_tag=True)
+
+        assert _eval_expr_from_state(expr, {"A": 2}) is None
+        assert _eval_expr_from_state(expr, {"A": 2, "B": 2}) is (form in ("eq", "le", "ge"))
+
     def test_eval_expr_from_state_keeps_edge_atoms_unknown(self):
         expr = ExprAnd((Atom("Ready", "xic"), Atom("Pulse", "rise")))
 

@@ -1,7 +1,6 @@
 """What the debugger knows of a slot a range reaches, named outside the rungs.
 
-A slot something has asked for is known to the adapter's readers whichever way the rungs
-reach it.
+The adapter's readers know a slot the rungs reach, whether or not the user's code names it.
 """
 
 from __future__ import annotations
@@ -86,6 +85,23 @@ def test_how_knows_such_a_slot(tmp_path: Path) -> None:
     adapter, out = _launched(tmp_path)
     answer = _say(adapter, out, "how Rq2 == 7")
     assert "unknown tag" not in str(answer)
+
+
+_NOT_NAMED = _NAMED_OUTSIDE_THE_RUNGS.replace("alias = recipe[2]\n", "")
+
+
+def test_prove_resolves_a_label_of_a_slot_no_code_names(tmp_path: Path) -> None:
+    adapter, out = _launched(tmp_path, _NOT_NAMED)
+    answer = _say(adapter, out, "prove always Rq2 != seven")
+    assert answer["success"] is True, answer
+    assert "Counterexample" in answer["body"]["result"]
+
+
+def test_how_knows_a_slot_no_code_names(tmp_path: Path) -> None:
+    adapter, out = _launched(tmp_path, _NOT_NAMED)
+    answer = _say(adapter, out, "how Rq2 == seven")
+    assert "unknown tag" not in str(answer)
+    assert answer["success"] is True, answer
 
 
 def test_the_data_view_knows_its_type_and_hints(tmp_path: Path) -> None:

@@ -444,10 +444,10 @@ def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> Non
 
 
 def test_a_condition_with_a_program_owned_side_denies_no_hold() -> None:
-    """``Input > Limit``: the baseline has no Limit, and the compare raises on what it finds."""
+    """``Input > Limit``: the baseline has no Limit, and a real state without Limit is avoided."""
     ctx = _hold_ctx(_compile_avoid(Int("Input") > Int("Limit")), {"Input": 0})
-    with pytest.raises(_AvoidCheckRaised):
-        _avoid_scan_names(ctx.avoid_pred, {"Input": 5})
+    assert _avoid_scan_names(ctx.avoid_pred, {"Input": 5})
+    assert not _avoid_scan_names(ctx.avoid_pred, {"Input": 5, "Limit": 9})
 
     assert _hold_allowed(ctx, ("Input", 5)) is True
 
