@@ -302,10 +302,13 @@ def test_only_a_forward_runner_talks_to_the_device(monkeypatch: pytest.MonkeyPat
 
     stubbed = fork_with_pilot_rungs(plc, (), history_budget=float("inf"))
     stubbed.step()
+    cleared = plc.replay_to(1)
+    cleared._replay_mode = False
     runners = {
         "session": plc,
         "fork": plc.fork(),
         "replay": plc.replay_to(1),
+        "replay, flag cleared": cleared,
         "rebuilt": rebuilt(plc),
         "epoch query": query_runner(plc),
         "how() fork": stubbed,

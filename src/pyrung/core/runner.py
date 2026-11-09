@@ -3431,6 +3431,7 @@ class PLC:
         self._copy_current_synthesis_onto(replay)
         self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
+        replay._reconstructs_history = True
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3508,9 +3509,8 @@ class PLC:
         changes, patches, and per-scan ``dt`` in REALTIME mode.
 
         Returns a fork positioned at ``target_scan_id`` with
-        ``_replay_mode=True``.  The returned fork is primarily for
-        inspection; callers who want to continue it as a live
-        investigation session can clear ``fork._replay_mode = False``.
+        ``_replay_mode=True``.  The returned fork is for inspection.  It never
+        talks to a Modbus device, even with ``_replay_mode`` cleared.
         """
         if target_scan_id < self._initial_scan_id:
             raise ValueError(
