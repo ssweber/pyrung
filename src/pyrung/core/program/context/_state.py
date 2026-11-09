@@ -2,25 +2,39 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 from pyrung.core.rung import Rung as RungLogic
 
 if TYPE_CHECKING:
     from ._control_flow import ForLoop
+    from ._program import Program
     from ._rung import Rung
 
-_rung_stack: list[Rung] = []
 
-# Open forloop() scopes, innermost last.  Its length is the nesting depth.
-_forloop_stack: list[ForLoop] = []
+class _Building(threading.local):
+    """The open scopes of what this thread is building, innermost last.
+
+    Each thread has its own, so two threads can build programs at once.
+    """
+
+    def __init__(self) -> None:
+        self.programs: list[Program] = []
+        self.rungs: list[Rung] = []
+        # The length of the forloop() stack is the nesting depth.
+        self.forloops: list[ForLoop] = []
+
+
+_building = _Building()
 
 _MAX_FORLOOP_DEPTH = 3
 
 
 def _current_rung() -> Rung | None:
     """Get the current rung context (if any)."""
-    return _rung_stack[-1] if _rung_stack else None
+    rungs = _building.rungs
+    return rungs[-1] if rungs else None
 
 
 def _require_rung_context(func_name: str) -> Rung:
@@ -37,9 +51,9 @@ def _current_forloop_body() -> ForLoop | None:
     Inside ``with forloop(...)`` the current rung context is the loop's
     capture context until a body ``Rung`` (or a nested loop) opens.
     """
-    if not _forloop_stack:
+    if not _building.forloops:
         return None
-    loop = _forloop_stack[-1]
+    loop = _building.forloops[-1]
     current = _current_rung()
     if current is not None and current is loop._capture_ctx:
         return loop
@@ -48,12 +62,12 @@ def _current_forloop_body() -> ForLoop | None:
 
 def _push_rung_context(ctx: Rung) -> None:
     """Push a rung context onto the active stack."""
-    _rung_stack.append(ctx)
+    _building.rungs.append(ctx)
 
 
 def _pop_rung_context() -> None:
     """Pop the current rung context from the active stack."""
-    _rung_stack.pop()
+    _building.rungs.pop()
 
 
 def _new_capture_context(rung: RungLogic) -> Rung:

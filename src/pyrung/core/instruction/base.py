@@ -165,30 +165,13 @@ class LoopContinueSignal(Exception):
 class OneShotMixin:
     """Mixin for instructions that support one-shot mode.
 
-    One-shot instructions execute only once per rung activation.
-    They must be reset when the rung goes false.
+    One-shot instructions execute only once per rung activation.  Each keeps that
+    memory in the scan state (``memory_key("_oneshot")``), so each PLC has its own.
     """
 
     def __init__(self, oneshot: bool = False):
         self._oneshot = oneshot
-        self._has_executed = False
 
     @property
     def oneshot(self) -> bool:
         return self._oneshot
-
-    def should_execute(self, enabled: bool) -> bool:
-        """Check if instruction should execute (respects oneshot)."""
-        if not enabled:
-            self._has_executed = False
-            return False
-        if not self._oneshot:
-            return True
-        if self._has_executed:
-            return False
-        self._has_executed = True
-        return True
-
-    def reset_oneshot(self) -> None:
-        """Reset oneshot state (call when rung goes false)."""
-        self._has_executed = False

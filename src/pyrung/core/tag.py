@@ -412,11 +412,9 @@ class Tag:
 
         If *target* is a block slot (e.g. ``ds[165]``), the tag is
         registered as the canonical occupant of that address so that
-        ``block[addr]`` returns this tag directly.  The registration
-        survives ``Block.reset()`` (which only clears slot overrides
-        and the tag cache), so cached module imports remain correct
-        across test boundaries.  A system point can't be one: see
-        `refuse_system_point_in_block`.
+        ``block[addr]`` returns this tag directly.  ``Block.reset()``
+        clears the registration with the slot overrides.  A system point
+        can't be one (`refuse_system_point_in_block`).
         """
         block = getattr(target, "_pyrung_block", None)
         if block is not None:

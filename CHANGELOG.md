@@ -339,6 +339,9 @@
 ### Fixes
 
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
+- After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
+- Rungs after a `with Program()` block nested in another one join the outer program (they joined no program).
+- Two threads can build programs at the same time (a rung could join the other thread's program).
 - `history.at()`, `replay_to()`, `cause()` and `effect()` no longer send Modbus requests (a replayed `send()` could write to the device again). A replayed scan writes the answer the device gave on that scan.
 - `replay_to()` and `plan.replay()` return a fork whose history starts at the scan replayed to (on some programs the fork also kept the scans from the checkpoint before).
 - `rung_firings()`, `cause()` and `cold_rungs()` on a fork from `replay_to()` or `plan.replay()` now see the scan replayed to (they said no rung fired on it).

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import inspect
+import itertools
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from pyrung.core.instruction import SubroutineReturnSignal
 from pyrung.core.rung import Rung as RungLogic
 
 from ..validation import _check_with_body_from_frame
+from . import _state
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.dataview import DataView
@@ -39,7 +41,6 @@ class Program:
         runner = PLC(logic)
     """
 
-    _active: Program | None = None
     _dialect_validators: ClassVar[dict[str, DialectValidator]] = {}
 
     def __init__(self, *, strict: bool = True) -> None:
@@ -53,6 +54,8 @@ class Program:
         # how()'s prover facts, with the graph they were built from.
         self._cached_prover_context: Any = None
         self._site_table: SiteTable | None = None
+        # Numbers the hidden status tags of a send() or receive() with a bit left off.
+        self._status_sites = itertools.count(1)
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -63,11 +66,14 @@ class Program:
                     _check_with_body_from_frame(caller, opt_out_hint="Program(strict=False)")
             finally:
                 del frame
-        Program._active = self
+        _state._building.programs.append(self)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        Program._active = None
+        # The program this one was built inside is current again.
+        programs = _state._building.programs
+        if programs and programs[-1] is self:
+            programs.pop()
         if exc_type is None:
             self._assign_state_keys()
             self._validate_call_targets()
@@ -196,7 +202,8 @@ class Program:
     @classmethod
     def _current(cls) -> Program | None:
         """Get the current program context (if any)."""
-        return cls._active
+        programs = _state._building.programs
+        return programs[-1] if programs else None
 
     @classmethod
     def register_dialect(cls, name: str, validator: DialectValidator) -> None:

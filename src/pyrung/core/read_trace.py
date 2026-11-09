@@ -8,6 +8,7 @@ field and tag reads are recorded (:func:`_traced_call`).
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
@@ -105,11 +106,20 @@ def _names_every_read(condition: Any) -> bool:
     return False
 
 
-# Reads of an opaque stop predicate.  A coast's undeclared predicate is judged on
-# a state whose field and tag reads are recorded: a loop may run on only while the
-# predicate read no value it moves (it then takes the same path and returns the
-# same answer on every scan in between).
-_READ_TRACES: list[set[str]] = []
+class _Traces(threading.local):
+    """The reads of each stop predicate being judged, a stack for each thread.
+
+    A run judges a predicate it can't see into on a state that records each field
+    and tag read.  The run may skip judging it only while nothing the predicate read
+    changes.  Each thread has its own stack, so one thread's predicate never records
+    another thread's reads.
+    """
+
+    def __init__(self) -> None:
+        self.stack: list[set[str]] = []
+
+
+_TRACES = _Traces()
 _READ_ALL = "*"  # iterated, compared, counted or evolved the whole tag map
 _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
 
@@ -118,8 +128,8 @@ def _whole_map_read(name: str) -> Any:
     """A property for what every read of a map goes through: reading it is a read of all of it."""
 
     def get(self: Any) -> Any:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_READ_ALL)
+        if traces := _TRACES.stack:
+            traces[-1].add(_READ_ALL)
         return getattr(self._untraced, name)
 
     return property(get)
@@ -147,13 +157,13 @@ class _TracedTags(PMap):
     _size = _whole_map_read("_size")
 
     def __getitem__(self, key: Any) -> Any:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_key_read(key))
+        if traces := _TRACES.stack:
+            traces[-1].add(_key_read(key))
         return self._untraced[key]
 
     def __contains__(self, key: Any) -> bool:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(_key_read(key))
+        if traces := _TRACES.stack:
+            traces[-1].add(_key_read(key))
         return key in self._untraced
 
 
@@ -165,8 +175,8 @@ def _recorded_field(name: str) -> Any:
     read = _FIELD_READ + name
 
     def get(self: Any) -> Any:
-        if _READ_TRACES:
-            _READ_TRACES[-1].add(read)
+        if traces := _TRACES.stack:
+            traces[-1].add(read)
         return getattr(self._untraced, name)
 
     return property(get)
@@ -241,11 +251,11 @@ def _reads_untraced() -> Iterator[None]:
     really executes (PILOT's opaque ``avoid=`` callables): its reads must not
     bound the windows that skip the others.
     """
-    _READ_TRACES.append(set())
+    _TRACES.stack.append(set())
     try:
         yield
     finally:
-        _READ_TRACES.pop()
+        _TRACES.stack.pop()
 
 
 def _traced_call(
@@ -259,11 +269,11 @@ def _traced_call(
     state = runner._state
     traced = _traced_state(state)
     reads: set[str] = set()
-    _READ_TRACES.append(reads)
+    _TRACES.stack.append(reads)
     runner._state = traced
     try:
         hit = bool(predicate(traced))
     finally:
         runner._state = state
-        _READ_TRACES.pop()
+        _TRACES.stack.pop()
     return hit, frozenset(reads)
