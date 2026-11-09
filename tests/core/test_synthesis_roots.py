@@ -190,7 +190,7 @@ def test_bool_replay_compiled_and_interpreted_agree() -> None:
     assert kernel is not None  # bool feedback ⇒ compilable (no io-gaps)
     assert kernel.pre_step_fn is not None  # the plant is a separate pre-drain pass
     for s in range(1, len(en_seq) + 1):
-        compiled = plc._replay_to_compiled(s, kernel)
+        compiled = plc._replay_to(s, kernel)
         interpreted = plc._replay_to_interpreted(s)
         assert compiled.current_state.tags["Fb"] == live[s - 1]
         assert interpreted.current_state.tags["Fb"] == live[s - 1]

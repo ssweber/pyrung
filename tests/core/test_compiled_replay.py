@@ -910,7 +910,7 @@ def test_both_replay_paths_keep_history_from_the_target(
 
     kernel = source._replay_kernel_from(target - 1)
     assert kernel is not None
-    forks = [source._replay_to_interpreted(target), source._replay_to_compiled(target, kernel)]
+    forks = [source._replay_to_interpreted(target), source._replay_to(target, kernel)]
     assert [fork.history.oldest_scan_id for fork in forks] == [target, target]
     truth = source.rung_firings(target)
     assert truth
@@ -933,7 +933,7 @@ def test_both_replay_paths_keep_history_from_the_target(
 def _replay_both_ways(source: PLC, target: int) -> list[PLC]:
     kernel = source._replay_kernel_from(target - 1)
     assert kernel is not None
-    return [source._replay_to_interpreted(target), source._replay_to_compiled(target, kernel)]
+    return [source._replay_to_interpreted(target), source._replay_to(target, kernel)]
 
 
 def test_a_replay_of_a_checkpoint_keeps_a_stop_made_after_it() -> None:
