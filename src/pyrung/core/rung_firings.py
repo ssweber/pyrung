@@ -503,11 +503,17 @@ class RungFiringTimelines(Generic[K]):
                 ranges = self._varied_ranges.setdefault(key, [])
                 _append_scan_range(ranges, first_scan_id)
                 _extend_scan_range(ranges, last_scan_id)
+        timeline = self._value_timelines.setdefault(key, [])
+        if first_scan_id == last_scan_id and (not delta or type(value) is int):
+            # A loop that changes path every scan writes most of its runs one scan long.  Such
+            # a run is one push of its value.  With a delta, only an int reads back unchanged.
+            self._push(key, timeline, first_scan_id, value)
+            self._done()
+            return
         if value is _UNKNOWN_VALUE:
             payload: ValuePayload = Unknown()
         else:
             payload = Arithmetic(value, delta) if delta else Constant(value)
-        timeline = self._value_timelines.setdefault(key, [])
         self._append_run(key, timeline, ValueRange(first_scan_id, last_scan_id, payload))
         self._done()
 
