@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pyrung.core.storage import BLANK_CHAR
+from pyrung.core.system_points import _DERIVED_TAG_NAMES, HOOK_BOUND_TAG_NAMES
 from pyrung.core.tag import Tag, TagType
 
 _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
@@ -190,6 +191,10 @@ class CompiledKernel:
     _prev_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
     )
+    # The scalars ``compiled_plc.absent_scalars`` may add, at the default the kernel holds.
+    _scalar_defaults: tuple[tuple[str, Any], ...] = field(
+        init=False, repr=False, compare=False, default=()
+    )
 
     def __post_init__(self) -> None:
         tag_template: dict[str, bool | int | float | str] = {
@@ -199,6 +204,15 @@ class CompiledKernel:
             for name in spec.tag_names:
                 tag_template.setdefault(name, spec.default)
         object.__setattr__(self, "_tag_template", tag_template)
+        cells = {name for spec in self.block_specs.values() for name in spec.tag_names}
+        scalar_defaults = tuple(
+            (name, default)
+            for name, default in tag_template.items()
+            if name not in cells
+            and name not in _DERIVED_TAG_NAMES
+            and name not in HOOK_BOUND_TAG_NAMES
+        )
+        object.__setattr__(self, "_scalar_defaults", scalar_defaults)
 
         if self.blockless:
             object.__setattr__(self, "_blocks_template", {})

@@ -29,7 +29,6 @@ from pyrung.core.system_points import (
     _DERIVED_TAG_NAMES,
     _MODE_RUN_KEY,
     _SCAN_START_MEMORY,
-    HOOK_BOUND_TAG_NAMES,
     READ_ONLY_SYSTEM_TAG_NAMES,
     RTC_FIELD_TAG_NAMES,
     SCAN_DERIVED_TAG_NAMES,
@@ -47,15 +46,7 @@ _MISSING: Any = object()
 
 def absent_scalars(compiled: CompiledKernel, tags: Mapping[str, Any]) -> dict[str, Any]:
     """The scalars of *compiled* that *tags* lacks, with the default a kernel holds them at."""
-    cells = {name for spec in compiled.block_specs.values() for name in spec.tag_names}
-    return {
-        name: tag.default
-        for name, tag in compiled.referenced_tags.items()
-        if name not in tags
-        and name not in cells
-        and name not in _DERIVED_TAG_NAMES
-        and name not in HOOK_BOUND_TAG_NAMES
-    }
+    return {name: default for name, default in compiled._scalar_defaults if name not in tags}
 
 
 class _TrackedList(list):
