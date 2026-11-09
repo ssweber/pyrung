@@ -326,6 +326,9 @@ def pilot_how(
     paired input assignments for one scan from the same current source. Only
     confirmed observations return to a fresh Compass read.
     """
+    stopped = _in_stop(plc, conditions)
+    if stopped is not None:
+        return stopped
     clock = _budget.WallClock.starting_now(wall_clock_s)
     plan, setup, outcome = _how_from(
         plc, conditions, max_scans, avoid_pred, unlink, on_event, wall_clock_s
@@ -386,6 +389,30 @@ def pilot_how(
         if blocked is not None:
             return replace(plan, reason=blocked, status=PlanStatus.CANNOT_REACH)
     return _restart.try_restart(plan, plc, setup, avoid_pred, asker(start_had_a_scan=False))
+
+
+def _in_stop(plc: PLC, conditions: tuple[Any, ...]) -> Plan | None:
+    """A Stopped plan for a PLC in STOP, whose next scan is a restart.
+
+    The setup must not step it.  A pending patch or force would have it restart there, and
+    the plan would start from a scan the PLC no longer has.
+    """
+    if plc._running:
+        return None
+    targets = _parse_targets(*conditions)
+    goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
+    return Plan(
+        reachable=False,
+        target_tag=goal.tag,
+        target_value=goal.value,
+        targets=tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else (),
+        target_predicate=goal.predicate,
+        reason=_engine.restart_ahead(f"the PLC is in STOP at scan {plc.state.scan_id}"),
+        status=PlanStatus.STOPPED,
+        anchor_scan=plc.state.scan_id,
+        session_inputs={**plc._pending_patches, **plc._forces},
+        waiting_overrides=_drive_setup._waiting_overrides(plc),
+    )
 
 
 def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool] | None:

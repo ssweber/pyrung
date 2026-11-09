@@ -172,6 +172,10 @@ def try_moves(
         )
 
     idle = start()
+    # The program stopped itself on the scan that applied the waiting overrides.  Any move
+    # from there starts with a restart, and how() does not plan across one.
+    if not idle._running:
+        return None
     tags_at_start = idle.state.tags
     began = _where(idle)
     idle.step()
