@@ -1749,6 +1749,11 @@ class PLC:
         # Every ``(first, last)`` range of scans that ran without causal records, in
         # the compiled kernel or its guarded loop.  A question that reaches one settles it.
         self._unrecorded_scans: list[tuple[int, int]] = []
+        # Once the records hold ``MAX_RECORD_RUNS`` runs, a stepped scan leaves its records
+        # to a settle, as a long run's scans do.  A settle's replay records every scan, since
+        # the window takes all of its records.
+        self._records_bounded = True
+        self._records_full = False
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
@@ -2544,6 +2549,7 @@ class PLC:
         # The window takes the replay's values, and this record counts their changes itself.
         # So the replay trims nothing, or its own memory budget would drop scans the window needs.
         replay._history_retention_scans = None
+        replay._records_bounded = False
         for name in _RECORDS:
             setattr(replay, name, RungFiringTimelines(capped=False))
         for scan_id in range(anchor_scan_id + 1, last + 1):
@@ -4984,8 +4990,9 @@ class PLC:
         # (same_stored_value), so the pending dict says what the state holds.
         pending = ctx._tags_pending
         entry_tags = ctx._state_tags_read if ctx._state is previous_state else previous_state.tags
+        recording = not self._records_full
         for name, after in pending.items():
-            if entry_tags.get(name) != after:
+            if recording and entry_tags.get(name) != after:
                 self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None
@@ -5017,7 +5024,9 @@ class PLC:
                 self._scan_log.record_io_drain(new_scan_id, key, record)
         # Only firing rungs append. Their value columns independently extend
         # stable, alternating, or arithmetic ranges; varied=true is sparse.
-        new_firings = ctx._rung_firings
+        if not recording:
+            self._note_unrecorded_scans(new_scan_id, new_scan_id)
+        new_firings = ctx._rung_firings if recording else {}
         for rung_index, writes in new_firings.items():
             self._rung_firing_timelines.append(
                 rung_index,
@@ -5025,7 +5034,7 @@ class PLC:
                 writes,
                 ctx._rung_firing_varied.get(rung_index, frozenset()),
             )
-        node_firings = ctx._node_firings
+        node_firings = ctx._node_firings if recording else {}
         for rung_id, writes in node_firings.items():
             self._node_firing_timelines.append(
                 rung_id,
@@ -5044,6 +5053,11 @@ class PLC:
 
         if is_checkpoint:
             self._apply_history_retention(new_scan_id)
+            if self._records_bounded:
+                from pyrung.core import coast_run
+
+                held = sum(getattr(self, name).run_count() for name in _RECORDS)
+                self._records_full = held >= coast_run.MAX_RECORD_RUNS
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
@@ -5059,9 +5073,9 @@ class PLC:
     def _apply_history_retention(self, new_scan_id: int) -> None:
         """Trim history to the floor that the tip, ``history=`` and the memory budget set.
 
-        Stepping and a long run checkpoint on different scans and cache different states.  So
-        the floor depends only on the last interval scan, the oldest kept state and the
-        settings.  Over the budget the floor moves one interval more.  The bytes weighed are the
+        Stepping and a long run keep different checkpoints and cache different states.  So the
+        floor depends only on the last scan on the checkpoint interval, the oldest kept state and
+        the settings.  Over the budget the floor moves one interval more.  The budget weighs the
         checkpoints stepping keeps in the window, each the size of the oldest kept state.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval

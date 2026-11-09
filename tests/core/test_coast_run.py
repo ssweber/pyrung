@@ -979,6 +979,25 @@ class TestRecordsPastTheirCap:
             stepped.step()
         return stepped
 
+    def test_stepping_stops_growing_and_settles_to_every_record(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 200)
+        capped = _runner(_fires_every_other_scan, 0.01)
+        every = _runner(_fires_every_other_scan, 0.01)
+        seed_records(every, every)
+        every._records_bounded = False
+        for _ in range(4000):
+            capped.step()
+            every.step()
+        # The runner checks at each checkpoint, so one interval's runs may pass the cap.
+        assert capped._rung_firing_timelines.run_count() < 400
+        assert every._rung_firing_timelines.run_count() > 2000
+        assert capped._unrecorded_scans[-1][1] == capped.state.scan_id
+        assert str(capped.cause(X, 3999)) == str(every.cause(X, 3999))
+        assert capped.rung_firings(2001) == every.rung_firings(2001)
+        compare_records("stepping past the cap", capped, every, 0)
+
     def test_they_stop_growing_and_read_the_same(self, monkeypatch: pytest.MonkeyPatch) -> None:
         plc = self._coasted(monkeypatch, 200)
         held = plc._rung_firing_timelines.run_count()
