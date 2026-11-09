@@ -486,21 +486,28 @@ class RungFiringTimelines(Generic[K]):
         value: Any,
         delta: int | None = None,
         varied: bool = False,
+        odd: Any = _ABSENT,
     ) -> None:
         """One tag's half of :meth:`append`, for each scan of the range.
 
         *value* is what it reads on the first scan, ``_MISSING_WRITE`` if the rung does not write
-        it there, and it moves by *delta* each scan.  A rung's tags ask nothing of each other, so
-        they may go in in any order, and its firings with :meth:`append_fired_run`.
+        it there, and it moves by *delta* each scan.  Give *odd* for a tag that switches between
+        two values every scan, with no *delta*.  The tag then reads *value* on the first scan and
+        *odd* on the next.  Such a run may start on ``_MISSING_WRITE`` only once the rung has
+        written the tag, and is *varied* only if neither value is ``_MISSING_WRITE``.  A rung's
+        tags ask nothing of each other, so they may go in in any order, and its firings with
+        :meth:`append_fired_run`.
         """
         key = (rung_index, tag)
-        if value is _MISSING_WRITE:
+        if first_scan_id == last_scan_id:
+            odd = _ABSENT
+        if value is _MISSING_WRITE and odd is _ABSENT:
             if tag not in self._tags_by_rung.get(rung_index, ()):
                 return  # A tag has no column until the rung first writes it.
         else:
             self._tags_by_rung.setdefault(rung_index, set()).add(tag)
             self._writers_by_tag.setdefault(tag, set()).add(rung_index)
-            if value is _UNKNOWN_VALUE:
+            if value is _UNKNOWN_VALUE or odd is _UNKNOWN_VALUE:
                 self._partly_unknown.add(key)
             if varied:
                 ranges = self._varied_ranges.setdefault(key, [])
@@ -508,13 +515,16 @@ class RungFiringTimelines(Generic[K]):
                 _extend_scan_range(ranges, last_scan_id)
         timeline = self._value_timelines.setdefault(key, [])
         if first_scan_id == last_scan_id and (not delta or type(value) is int):
-            # A loop that changes path every scan writes most of its runs one scan long.  Such
-            # a run is one push of its value.  With a delta, only an int reads back unchanged.
+            # Most runs in a loop that alternates every scan are one scan long, and one scan
+            # needs only `_push`.  A bool with a delta reads back as an int, so it takes the
+            # long way.
             self._push(key, timeline, first_scan_id, value)
             self._done()
             return
-        if value is _UNKNOWN_VALUE:
-            payload: ValuePayload = Unknown()
+        if odd is not _ABSENT:
+            payload: ValuePayload = Alternating(value, odd)
+        elif value is _UNKNOWN_VALUE:
+            payload = Unknown()
         else:
             payload = Arithmetic(value, delta) if delta else Constant(value)
         self._append_run(key, timeline, ValueRange(first_scan_id, last_scan_id, payload))

@@ -10,7 +10,20 @@ Covers:
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Program, Rung, call, latch, out, reset, subroutine
+from pyrung.core import (
+    PLC,
+    And,
+    Bool,
+    Program,
+    Rung,
+    Timer,
+    call,
+    latch,
+    on_delay,
+    out,
+    reset,
+    subroutine,
+)
 from pyrung.core.program import rung
 
 # ---------------------------------------------------------------------------
@@ -336,6 +349,108 @@ class TestSubroutineColdHot:
         runner.step()
 
         assert "Sub:1" in runner.query.hot_rungs()
+
+
+class TestForkColdHot:
+    """A fork answers cold_rungs / hot_rungs as the same scans stepped in one runner do."""
+
+    @staticmethod
+    def _program():
+        Every, Go, Early, Late, Later = (
+            Bool("FkEvery"),
+            Bool("FkGo"),
+            Bool("FkEarly"),
+            Bool("FkLate"),
+            Bool("FkLater"),
+        )
+
+        @subroutine("FkSub")
+        def sub():
+            with rung(Go):
+                latch(Early)
+            with rung():
+                out(Every)
+
+        with Program() as prog:
+            with Rung():
+                out(Every)
+            with Rung(Go):
+                latch(Early)
+            with Rung(Late):
+                latch(Later)
+            with Rung():
+                call(sub)
+        return prog
+
+    @staticmethod
+    def _step(runner: PLC, first: int, last: int) -> None:
+        # Go is on at scan 2 only, before the fork.  Late is on at scan 15 only, after it.
+        for scan in range(first, last + 1):
+            runner.patch({"FkGo": scan == 2, "FkLate": scan == 15})
+            runner.step()
+
+    def _answers(self, runner: PLC) -> tuple[list[str], list[str]]:
+        return runner.query.cold_rungs(), runner.query.hot_rungs()
+
+    def test_a_fork_reads_the_scans_it_inherited(self) -> None:
+        stepped = PLC(self._program())
+        self._step(stepped, 1, 20)
+        parent = PLC(self._program())
+        self._step(parent, 1, 10)
+        fork = parent.fork()
+        self._step(fork, 11, 20)
+        assert self._answers(stepped) == ([], ["1", "4", "FkSub:2"])
+        assert self._answers(fork) == self._answers(stepped)
+
+    def test_a_fork_from_an_earlier_scan_reads_only_that_far(self) -> None:
+        stepped = PLC(self._program())
+        self._step(stepped, 1, 8)
+        parent = PLC(self._program())
+        self._step(parent, 1, 20)
+        fork = parent.fork(scan_id=5)
+        self._step(fork, 6, 8)
+        assert self._answers(stepped) == (["3"], ["1", "4", "FkSub:2"])
+        assert self._answers(fork) == self._answers(stepped)
+
+    def test_a_fork_of_a_fork_reads_both_parents(self) -> None:
+        stepped = PLC(self._program())
+        self._step(stepped, 1, 20)
+        first = PLC(self._program())
+        self._step(first, 1, 7)
+        second = first.fork()
+        self._step(second, 8, 12)
+        third = second.fork()
+        self._step(third, 13, 20)
+        assert self._answers(third) == self._answers(stepped)
+
+    def test_a_fork_of_a_compiled_run_reads_the_scans_the_run_left_unrecorded(self) -> None:
+        Start, Every, Seen = Bool("FcStart"), Bool("FcEvery"), Bool("FcSeen")
+        Wait = Timer.clone("FcWait")
+        with Program() as prog:
+            with Rung():
+                out(Every)
+            with Rung(Start):
+                on_delay(Wait, 15000)
+            with Rung(Wait.Done):
+                latch(Seen)
+
+        def run(*, jit: bool) -> PLC:
+            # Wait is Done from scan 1500 to 2000, inside the part a compiled run leaves unrecorded.
+            runner = PLC(prog, dt=0.01)
+            runner.patch({"FcStart": True})
+            runner.run_for(20.0, jit=jit)
+            runner.patch({"FcStart": False})
+            runner.step()
+            return runner
+
+        stepped, parent = run(jit=False), run(jit=True)
+        assert parent._unrecorded_scans
+        fork = parent.fork()
+        for runner in (stepped, fork):
+            for _ in range(5):
+                runner.step()
+        assert self._answers(stepped) == ([], ["1", "2"])
+        assert self._answers(fork) == self._answers(stepped)
 
 
 # ---------------------------------------------------------------------------

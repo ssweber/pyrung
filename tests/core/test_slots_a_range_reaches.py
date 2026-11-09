@@ -197,6 +197,20 @@ def test_what_a_run_asked_of_a_program_is_not_what_its_rungs_say() -> None:
     assert reach(PLC(program, dt=0.01)) == before
 
 
+def test_a_programs_analysis_caches_add_no_known_tag() -> None:
+    # how() keeps its prover facts on the program.  A tag only they hold is not one the
+    # runner knows.
+    a, b = Bool("A", external=True), Bool("B")
+    with Program(strict=False) as program:
+        with Rung(a):
+            out(b)
+    before = set(PLC(program, dt=0.01)._known_tags_by_name)
+    PLC(program, dt=0.01).how(b)
+    assert program._cached_prover_context is not None
+    program._cached_prover_context = (*program._cached_prover_context, Bool("OnlyCached"))
+    assert set(PLC(program, dt=0.01)._known_tags_by_name) == before == {"A", "B"}
+
+
 def test_a_call_in_bare_rungs_reaches_its_subroutine() -> None:
     a, b = Bool("A", external=True), Bool("B")
     with Program(strict=False) as program:
