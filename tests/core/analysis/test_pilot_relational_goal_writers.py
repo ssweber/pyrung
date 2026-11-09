@@ -73,7 +73,6 @@ def test_a_goal_on_a_tag_the_program_also_reads_still_reaches() -> None:
     assert plan.replay().state.tags["Level"] == 5
 
 
-
 def _counting(step: int) -> tuple[PLC, Int]:
     go, count = Bool("Go", external=True), Int("Count")
     with Program(strict=False) as prog:
@@ -102,7 +101,7 @@ def test_a_threshold_on_a_count_is_reached_by_counting(
 ) -> None:
     plc, count = _counting(step)
     goal = compare(count, bound)
-    # Stepping is the oracle.  Hold Go and the count meets the goal within a few scans.
+    # Stepping gives the expected answer.  Hold Go and the count meets the goal in a few scans.
     stepped = plc.fork()
     stepped.patch({"Go": True})
     stepped.run_until(goal, max_cycles=20)

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 def _relational_target_atom(cond: Any) -> Any | None:
     """Build a simplified inequality ``Atom`` from a ``Compare*`` target, or None.
 
-    Maps the ordered comparisons (``<``, ``<=``, ``>``, ``>=``) to their atom
+    Maps the ordered comparisons (``<``, ``<=``, ``>``, ``>=``) and ``!=`` to their atom
     forms so a relational ``how(A > B)`` target rides the same trace machinery as
     a relational prerequisite (live predicate + reactive levers + coast).  The
     operand is the RHS tag name (a *live* threshold) or a literal.
@@ -75,7 +75,7 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
     Accepts:
     - A Tag object (implies ``tag == True``)
     - A ``tag == value`` comparison (CompareEq)
-    - A relational comparison ``A < / <= / > / >= B`` — returned as a live
+    - A relational comparison ``A < / <= / > / >= / != B`` — returned as a live
       ``predicate`` Atom (the goal is the relation, not a frozen value); the
       ``(tag, value)`` pair is a representative for display/keying only.
     """
@@ -124,7 +124,7 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
 
     raise ValueError(
         f"pilot: cannot extract a target from {cond!r}.  Pass a Tag (Bool target), "
-        "tag == value, or a relational comparison (tag < / <= / > / >= value)."
+        "tag == value, or a relational comparison (tag < / <= / > / >= / != value)."
     )
 
 

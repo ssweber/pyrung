@@ -22,8 +22,8 @@ from pyrung.core.analysis.simplified import Atom
 from pyrung.core.analysis.sp_values import (
     _CMP_OPS,
     _FLIP_FORM,
-    _values_match,
     _satisfying_value,
+    _values_match,
     _written_value_for_tag,
 )
 from pyrung.core.crossing import Affine, AffineCmp, Cmp, Constraint, Eq, Literal
@@ -149,9 +149,9 @@ def _written_value_satisfying(
 ) -> Any | None:
     """The value a writer of this tag writes that satisfies the comparison, if any.
 
-    A writer that adds a constant to the tag itself counts too.  Its value is the first
-    count from the current one that satisfies the comparison, so the trace back reaches
-    the current value one write at a time.
+    A writer that adds a constant to the tag itself counts too.  Its candidate is the first
+    value on the count from the current one that meets the comparison.  Tracing that value
+    back reaches the current one a write at a time.
     """
 
     if program is None:
@@ -182,7 +182,7 @@ def _counted_value_satisfying(
 ) -> Any | None:
     """The first value of ``now + n * step`` (n >= 1) that satisfies *atom*, if one is in range."""
 
-    now = snapshot.get(atom.tag)
+    now: Any = snapshot.get(atom.tag)
     numbers = (now, threshold, step)
     if any(not isinstance(x, (int, float)) or isinstance(x, bool) for x in numbers) or not step:
         return None
