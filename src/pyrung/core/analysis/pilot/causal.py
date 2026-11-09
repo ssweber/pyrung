@@ -131,9 +131,7 @@ def _reference_constants(plc: PLC) -> frozenset[str]:
         try:
             from pyrung.core.analysis.pilot.program_facts import compute_reference_constants
 
-            result = compute_reference_constants(
-                plc._ensure_pdg(), program, plc.tags
-            )
+            result = compute_reference_constants(plc._ensure_pdg(), program, plc.tags)
         except Exception:  # noqa: BLE001
             logger.debug("pilot causal: reference-constant computation failed", exc_info=True)
             result = frozenset()

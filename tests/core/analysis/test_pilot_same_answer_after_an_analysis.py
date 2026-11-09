@@ -1,8 +1,8 @@
 """how() gives the same answer on a PLC built before or after another how() of its program.
 
-A how() asks each Block for the slots a pointer reaches, and the Block keeps those Tags.
-A PLC built after that knows them, and a PLC built before does not, so how() looks a slot
-up among the tags the rungs reach as well as the ones the PLC knows.
+A how() asks each Block for the slots a pointer reaches. The Block keeps those Tags, and a
+PLC built later knows them. A PLC built earlier does not, so how() also looks a slot up
+among the tags the rungs reach.
 """
 
 from __future__ import annotations

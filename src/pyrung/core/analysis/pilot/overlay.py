@@ -136,9 +136,8 @@ def _constraint_condition(
 
     tag = plc._tag_known_or_reached(constraint.tag)
     if tag is None:
-        # Static block ranges are intentionally lazy in the runner's tag
-        # inventory.  An advance profile still owns concrete Tag objects for
-        # its channels, so use that authoritative channel metadata.
+        # An advance profile owns concrete Tag objects for its channels, so a
+        # channel the runner neither knows nor reaches takes its metadata there.
         from pyrung.core.analysis.pilot.advance import build_advance_index
 
         owner = (
@@ -246,11 +245,7 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
 
     form = atom.form
-    operand = (
-        plc.tags.get(atom.operand, atom.operand)
-        if atom.operand_is_tag
-        else atom.operand
-    )
+    operand = plc.tags.get(atom.operand, atom.operand) if atom.operand_is_tag else atom.operand
     if atom.operand_is_tag:
         if atom.operand_scale != 1:
             operand = operand * atom.operand_scale
