@@ -109,7 +109,7 @@ def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) ->
 
     # Each commit records the tags it changed, so the records answer without replaying the
     # window.  A scan that ran without records is not in them, and neither is a tag set
-    # between scans.  So such a window replays.
+    # between scans.  The reader replays such a window.
     history = plc.history
     first = max(start_scan, history.oldest_scan_id) + 1
     last = min(end_scan, history.newest_scan_id)
@@ -132,10 +132,10 @@ def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) ->
 def _set_between_scans(plc: Any, tag: str, first: int, last: int) -> bool:
     """Whether an edit between scans may move *tag* on a scan in *first*..*last*.
 
-    An edit leaves a checkpoint at its scan, and it may have set any tag.  A fork runs on
-    from its own copy of the state it forked from, which an edit may have changed.  History
-    shows the parent's state at that scan, so a tag the copy changed moves on the fork's
-    first scan.
+    An edit leaves a checkpoint at its scan.  The checkpoint does not say which tags the edit
+    set.  A fork runs on from its own copy of the state it forked from, which an edit or a
+    seeded default may have changed.  History shows the parent's state at that scan, so a tag
+    the copy changed moves on the fork's first scan.
     """
     lineage = plc._causal_lineage
     epochs = [
