@@ -80,8 +80,8 @@ from pyrung.core.intrascan_counterfactual import CounterfactualPatch, Occurrence
 def _program_tag(work: Any, name: str) -> Any:
     """The tag named *name* that *work* knows or its rungs reach, or None.
 
-    A slot a pointer reaches is found here whether or not an earlier analysis asked its
-    block for it.
+    A slot a pointer or a range reaches is found here whether or not an earlier analysis
+    asked its block for it.
     """
     lookup = getattr(work, "_tag_known_or_reached", None)
     return None if lookup is None else lookup(name)

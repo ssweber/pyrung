@@ -372,10 +372,11 @@
 - A long `how()` wait keeps its memory bounded. It keeps at most two compiled kernels and 512 checkpoints, and records a long run's scans only when a later `cause()` or a survey such as `cold_rungs()` reaches them.
 - A kernel that fails to compile for a reason pyrung doesn't expect gives a `RuntimeWarning`, and the scans run interpreted, instead of raising out of `run_for()` or `how()`.
 - `how()` no longer plans straight through a stop a rung causes. It ends where the program stopped itself, as stepping does, and says it doesn't plan across the restart.
-- `how()` on a PLC made before another `how()` on the same program gives the same answer as on a PLC made after it. For a block slot the rungs reach only through a pointer or a range, `how()` now:
-  - never sets the slot when it is declared `readonly=True`
-  - returns the slot to its `default=` after a pulse (it returned it to `False`)
-  - names a retentive slot whose value survives a restart (it left the slot out)
+- `how()` reads the settings of a block slot that the rungs reach only through a pointer or a range, on every PLC of the program (a PLC made before any other `how()` of the program ignored them):
+  - it never sets a `readonly=True` slot (it could set the slot)
+  - it returns the slot to its `default=` after a pulse (it returned the slot to `False`)
+  - it tries the slot at a value other than its `default=` (it could try only the default, and say `Stopped`)
+  - its restart note lists a retentive slot that keeps its value (it left the slot out)
 - `how()` and `never()` try only values a tag can hold:
   - `==` and `!=` with a literal the tag can't hold (`"AB"` on a Char, `"x"` on an Int) no longer raise, or report a state no scan reaches
   - a fractional literal compared with an `Int` no longer misses the whole numbers on either side (`In > 2.5, In < 3.5` is met at 3)

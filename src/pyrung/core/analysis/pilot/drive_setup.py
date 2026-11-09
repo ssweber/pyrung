@@ -182,6 +182,7 @@ def prepare_drive(
 
     configured_inputs = _configured_input_names(plc)
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    _seed_reached_slots(work)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
@@ -219,6 +220,24 @@ def prepare_drive(
         session_inputs={**plc._pending_patches, **plc._forces},
         waiting_overrides=waiting,
     )
+
+
+def _seed_reached_slots(work: PLC) -> None:
+    """Give each slot the rungs reach, and the state lacks, its default in the state how() starts from.
+
+    A PLC built after another analysis of the program already holds these, because it knows
+    the slots that analysis made.  Seeding them here gives how() the same snapshot either way.
+    A slot read with no value reads its default, so no scan sees a difference.
+    """
+    reach = work._tags_rungs_reach
+    missing = reach.names() - set(work.state.tags) - reach.refused()
+    seed = {}
+    for name in sorted(missing):
+        tag = reach.get(name)
+        if tag is not None:
+            seed[name] = tag.default
+    if seed:
+        work._edit_tip_tags(seed)
 
 
 def modbus_levers(program: Any) -> frozenset[str] | None:

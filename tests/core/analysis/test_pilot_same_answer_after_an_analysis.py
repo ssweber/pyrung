@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, copy, out
+from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, blockcopy, copy, out
 from pyrung.core.analysis.pilot.coast import value_trigger
 from pyrung.core.analysis.pilot.drive_setup import prepare_drive
+from pyrung.core.analysis.pilot.last_resort import _input_values
 from pyrung.core.analysis.pilot.restart import _restarted, _survivors
 
 
@@ -49,7 +50,7 @@ def test_a_plan_sets_no_readonly_slot_whichever_plc_asks() -> None:
     plan = before.how(done)
 
     assert str(plan) == str(after.how(done))
-    assert "Set Cmd2" not in str(plan)
+    assert not plan.reachable
 
 
 def test_a_slot_looked_up_is_the_tag_a_later_plc_knows() -> None:
@@ -121,3 +122,49 @@ def test_a_wait_on_a_slot_compiles_its_stop_whichever_plc_asks() -> None:
 
     assert trigger.condition is not None
     assert str(trigger.condition) == str(value_trigger(after, "slot", "target", "Ds3", 7).condition)
+
+
+def test_a_slot_copied_through_a_range_is_reached_whichever_plc_asks() -> None:
+    cmd = Block("Cmd", TagType.BOOL, 1, 4)
+    cmd.slot(2, default=True)
+    sink = Block("Sink", TagType.BOOL, 1, 4)
+    ptr = Int("Ptr", min=1, max=4, default=2, readonly=True)
+    done = Bool("Done")
+    with Program(strict=False) as prog:
+        with Rung():
+            blockcopy(cmd.select(1, 4), sink.select(1, 4))
+        with Rung(sink[ptr] == False):  # noqa: E712
+            out(done)
+    before, after = _before_and_after(prog, done)
+
+    plan = before.how(done)
+
+    assert plan.reachable
+    assert str(plan) == str(after.how(done))
+    assert "Set Cmd2=False" in str(plan)
+    assert "Cmd2" not in before.state.tags
+
+
+def test_a_slot_is_tried_at_values_it_does_not_hold_whichever_plc_asks() -> None:
+    cmd = Block("Cmd", TagType.BOOL, 1, 4)
+    cmd.slot(2, default=True)
+    vals = Block("Val", TagType.INT, 1, 4)
+    vals.slot(2, choices={0: "off", 1: "one", 2: "two"})
+    ptr = Int("Ptr", min=1, max=4, default=2, readonly=True)
+    done = Bool("Done")
+    with Program(strict=False) as prog:
+        with Rung(cmd[ptr] == False, vals[ptr] == 2):  # noqa: E712
+            out(done)
+    before, after = _before_and_after(prog, done)
+
+    tried = []
+    for plc in (before, after):
+        setup = prepare_drive(plc, unlink=None)
+        tags = setup.work.state.tags
+        tried.append(
+            {name: _input_values(setup, name, tags.get(name)) for name in ("Cmd2", "Val2")}
+        )
+
+    assert tried[0] == tried[1]
+    assert tried[0]["Cmd2"] == (False,)
+    assert 0 not in tried[0]["Val2"]

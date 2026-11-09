@@ -137,7 +137,7 @@ def _constraint_condition(
     tag = plc._tag_known_or_reached(constraint.tag)
     if tag is None:
         # An advance profile owns concrete Tag objects for its channels, so a
-        # channel the runner neither knows nor reaches takes its metadata there.
+        # channel the runner neither knows nor reaches takes its metadata from the profile.
         from pyrung.core.analysis.pilot.advance import build_advance_index
 
         owner = (
