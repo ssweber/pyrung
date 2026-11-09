@@ -871,20 +871,31 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
 
 
 @pytest.mark.parametrize(
-    ("history", "history_budget", "pad"),
-    [(None, 1 << 30, 0), (1000, 1 << 30, 0), (1000, 1_048_576, 1000)],
+    ("history", "history_budget", "pad", "target", "floor"),
+    [
+        (None, 1 << 30, 0, 2900, 2900),
+        (None, 1 << 30, 0, 2800, 2800),
+        # 1300 scans on, the window of 1000 scans starts at the checkpoint after tip - 1000.
+        (1000, 1 << 30, 0, 2900, 3200),
+        (1000, 1 << 30, 0, 2800, 3000),
+        # Six checkpoints of the padded state pass 1 MiB, so the floor moves one interval more.
+        (1000, 1_048_576, 1000, 2900, 3400),
+    ],
 )
 def test_both_replay_paths_keep_history_from_the_target(
-    history: int | None, history_budget: int, pad: int
+    history: int | None, history_budget: int, pad: int, target: int, floor: int
 ) -> None:
     toggle = Bool("FloorToggle")
     count = Int("FloorCount")
+    seen = Int("FloorSeen")
 
     with Program(strict=False) as program:
         with Rung(~toggle):
             out(toggle)
         with Rung(toggle):
             math(count + 1, count)
+        with Rung(count == 1450):
+            copy(7, seen)
 
     source = PLC(
         program,
@@ -897,17 +908,23 @@ def test_both_replay_paths_keep_history_from_the_target(
     for _ in range(3000):
         source.step()
 
-    kernel = source._replay_kernel_from(2900)
+    kernel = source._replay_kernel_from(target - 1)
     assert kernel is not None
-    forks = [source._replay_to_interpreted(2900), source._replay_to_compiled(2900, kernel)]
-    assert [fork.history.oldest_scan_id for fork in forks] == [2900, 2900]
-    assert [fork._rung_firing_timelines.at(2899) for fork in forks] == [{}, {}]
+    forks = [source._replay_to_interpreted(target), source._replay_to_compiled(target, kernel)]
+    assert [fork.history.oldest_scan_id for fork in forks] == [target, target]
+    truth = source.rung_firings(target)
+    assert truth
+    assert [fork.rung_firings(target) for fork in forks] == [truth, truth]
+    assert [fork._rung_firing_timelines.at(target - 1) for fork in forks] == [{}, {}]
     for scans in (150, 850, 300):
         for fork in forks:
             for _ in range(scans):
                 fork.step()
         floors = [fork.history.oldest_scan_id for fork in forks]
         assert floors[0] == floors[1]
+        if scans == 150:
+            assert forks[0].query.cold_rungs() == forks[1].query.cold_rungs()
+    assert floors == [floor, floor]
     _assert_states_equivalent(*forks)
     tip = forks[0].state.scan_id
     assert forks[0].rung_firings(tip - 1) == forks[1].rung_firings(tip - 1)

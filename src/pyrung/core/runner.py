@@ -3037,7 +3037,7 @@ class PLC:
             # stable replay logic, just like the bare Program. A descendant never
             # reaches this branch with its own overlay for an inherited scan:
             # ``_causal_state_at`` delegates to the historical owner first.
-            positioned = self._replay_to_compiled(slab_start - 1, kernel)
+            positioned = self._compiled_fork_at(slab_start - 1, kernel)
             states = self._replay_range_from_compiled(
                 positioned,
                 slab_start,
@@ -3524,8 +3524,8 @@ class PLC:
     def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
 
-        Anchors at the nearest retained checkpoint ``<= target_scan_id``
-        (falling back to scan 0 when no earlier checkpoint exists) and
+        Anchors at the nearest retained checkpoint ``< target_scan_id``
+        (falling back to the oldest kept scan when no earlier checkpoint exists) and
         walks the scan log forward to ``target_scan_id``, applying
         captured lifecycle events, force-map replacements, RTC base
         changes, patches, and per-scan ``dt`` in REALTIME mode.
@@ -3549,14 +3549,15 @@ class PLC:
                 f"({log_base}); those scans have been trimmed"
             )
 
-        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        # The anchor comes before the target, so the walk steps the target and records it.
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
 
         for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             if scan_id == target_scan_id:
-                # This fork's records start at the target, as a compiled replay's do.  A record
-                # without history= has a limit and cannot be trimmed.
+                # The fork keeps the target's records and none before them.  A record without
+                # history= has a limit and cannot be trimmed, so it starts again here.
                 capped = self._history_retention_scans is None
                 for name in _RECORDS:
                     setattr(replay, name, RungFiringTimelines(capped=capped))
@@ -3566,11 +3567,13 @@ class PLC:
         # scan (e.g. a trailing stop() with no subsequent step).
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
+        return self._keep_replay_from(replay, target_scan_id)
 
-        # The caller keeps this fork and may step it on, so it bounds its memory as its source does.
+    def _keep_replay_from(self, replay: PLC, target_scan_id: int) -> PLC:
+        """Hand back *replay* starting at the target, to keep and step on as its source does."""
         replay._history_retention_scans = self._history_retention_scans
         replay._records_bounded = self._records_bounded
-        # A fork from either replay starts at the target and trims alike.
+        # Both replay paths start their fork at the target, so the two forks trim alike.
         if target_scan_id > replay._initial_scan_id:
             replay._trim_history_before(target_scan_id, trim_records=False)
         return replay
@@ -3613,6 +3616,31 @@ class PLC:
         target_scan_id: int,
         kernel: CompiledKernel,
     ) -> PLC:
+        """``replay_to()`` with the kernel running every scan before the target.
+
+        The target scan steps interpreted, so this fork holds the target's records as the
+        interpreted path's fork does.
+        """
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
+        if anchor is None and target_scan_id == self._initial_scan_id:
+            return self._compiled_fork_at(target_scan_id, kernel)
+        replay = self._compiled_fork_at(target_scan_id - 1, kernel)
+        log = self._scan_log.snapshot()
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+        self._run_on_the_plant_of_the_scan_after(target_scan_id - 1, replay)
+        # As in the interpreted walk, the stepped scan trims nothing and is recorded in full.
+        replay._history_retention_scans = None
+        replay._records_bounded = False
+        self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
+        replay.step()
+        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+            _apply_lifecycle_to_replay(replay, event)
+        return self._keep_replay_from(replay, target_scan_id)
+
+    def _compiled_fork_at(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
+        """A fork at *target_scan_id*, with the kernel running each scan after the checkpoint."""
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
         log = self._scan_log.snapshot()
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
@@ -3656,7 +3684,9 @@ class PLC:
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
-        state = replay._materialize_replay_state()
+        # The kernel's state adds the fault flags, so a fork that ran no scan takes the checkpoint.
+        ran = target_scan_id > anchor_scan_id
+        state = replay._materialize_replay_state() if ran else anchor_state
         fork = self._fork_from_reconstructed_state(
             state,
             rtc_at_state=replay._rtc_at_sim_time(state.timestamp),
@@ -3683,7 +3713,8 @@ class PLC:
                 f"({log_base}); those scans have been trimmed"
             )
 
-        kernel = self._replay_kernel_from(target_scan_id)
+        # Both paths run from the checkpoint before the target.
+        kernel = self._replay_kernel_from(target_scan_id - 1)
         if kernel is None:
             return self._replay_to_interpreted(target_scan_id)
         return self._replay_to_compiled(target_scan_id, kernel)
