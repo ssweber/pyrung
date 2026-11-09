@@ -3029,21 +3029,25 @@ class PLC:
         are separate: the run-up goes through the compiled kernel and leaves nothing
         behind, and only one fixed-size working set is retained.
         """
-        desired_start = max(
-            self._initial_scan_id + 1,
-            scan_id - _REPLAY_SLAB_SCANS + 1,
-        )
+        old = next(reversed(self._replay_slabs.values()), {})
+        ahead = bool(old) and scan_id > max(old)
+        # A backward walk reads the scans before the miss, so the slab ends at the miss. A
+        # miss past the slab's end is a forward walk, so the slab reaches half a slab past it.
+        slab_end = scan_id
+        if ahead:
+            slab_end = min(self._state.scan_id, scan_id + _REPLAY_SLAB_SCANS // 2 - 1)
+        desired_start = max(self._initial_scan_id + 1, slab_end - _REPLAY_SLAB_SCANS + 1)
+        # The old slab's states inside the window stay, so a forward walk replays each scan once.
+        kept = {at: state for at, state in old.items() if at >= desired_start} if ahead else {}
+        if kept:
+            desired_start = max(kept) + 1
         # Anchor the slab's whole desired window, not the individual miss.
         # A causal walk routinely crosses replay checkpoints while moving
         # backward; choosing the checkpoint immediately before each miss would
         # truncate the nominal slab and make the one-slot cache ping-pong.
         anchor = self._nearest_checkpoint_at_or_before(desired_start - 1)
         anchor_scan = anchor if anchor is not None else self._initial_scan_id
-        # Causal walks move backward from the requested point.  End the slab at
-        # the miss and retain one contiguous preceding neighborhood, including
-        # across intermediate replay checkpoints.
         slab_start = max(anchor_scan + 1, desired_start)
-        slab_end = scan_id
 
         kernel = self._replay_kernel_from(anchor_scan)
         # A single kernel run cannot cross an edited checkpoint, so _replay_range splits the
@@ -3066,17 +3070,17 @@ class PLC:
             states = self._replay_range(anchor_scan + 1, slab_end)
             if slab_start > anchor_scan + 1:
                 states = [state for state in states if state.scan_id >= slab_start]
-        slab = {state.scan_id: state for state in states}
+        slab = {**kept, **{state.scan_id: state for state in states}}
         # Store under the anchor, marking it most-recently-used, and evict the
         # oldest anchors past the cap.
-        slab_key = slab_start - 1
+        slab_key = (min(kept) if kept else slab_start) - 1
         self._replay_slabs.pop(slab_key, None)
         self._replay_slabs[slab_key] = slab
         while len(self._replay_slabs) > _REPLAY_SLAB_MAX_ANCHORS:
             self._replay_slabs.pop(next(iter(self._replay_slabs)))
         self._last_replay_slab_stats = {
             "runup_scans": max(0, slab_start - anchor_scan - 1),
-            "materialized_states": len(slab),
+            "materialized_states": len(states),
         }
         if scan_id in slab:
             return slab[scan_id]

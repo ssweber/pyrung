@@ -28,6 +28,7 @@ from pyrung.core.executor import (
     WriteOccurrence,
 )
 from pyrung.core.instruction import Instruction
+from pyrung.core.state import SystemState
 
 
 def test_execution_capture_is_opt_in_and_preserves_zero_net_reassertion() -> None:
@@ -224,6 +225,106 @@ def test_causal_slab_spans_intermediate_checkpoints_as_one_contiguous_window() -
         "materialized_states": 1600,
     }
     assert source._state_at(601) is slab[601]
+
+
+def _cold_history_with_edits() -> tuple[PLC, dict[int, SystemState]]:
+    """Return a PLC with 5,000 scans of history to replay, and each state as it was stepped."""
+    enable = Bool("SlabWalkEnable", external=True)
+    count = Int("SlabWalkCount")
+    held = Int("SlabWalkHeld")
+    timer = Timer.clone("SlabWalkTmr")
+
+    with Program(strict=False) as program:
+        with Rung():
+            math(count + 1, count)
+        with Rung(enable):
+            on_delay(timer, 50_000, "ms")
+            copy(count, held)
+
+    plc = PLC(program, dt=0.01, cache=20)
+    truth: dict[int, SystemState] = {}
+    for scan_id in range(1, 5001):
+        if scan_id == 1500:
+            plc.patch({enable.name: True})
+        if scan_id == 2700:
+            plc.force(enable, False)
+        if scan_id == 3300:
+            plc.unforce(enable)
+        plc.step()
+        if scan_id == 2100:
+            plc._edit_tip_tags({count.name: 10_000})
+        truth[plc.state.scan_id] = plc.state
+    plc._recent_state_cache.clear()
+    plc._recent_state_cache_bytes = 0
+    plc._cache_state(plc.current_state)
+    return plc, truth
+
+
+def _read(
+    plc: PLC, truth: dict[int, SystemState], scans: list[int], monkeypatch: pytest.MonkeyPatch
+) -> list[int]:
+    """Read *scans* through ``history.at()``, check each against stepping, and return the misses."""
+    misses: list[int] = []
+    fill = plc._replay_slab_fill
+
+    def _counted_fill(scan_id: int):
+        misses.append(scan_id)
+        return fill(scan_id)
+
+    monkeypatch.setattr(plc, "_replay_slab_fill", _counted_fill)
+    for scan_id in scans:
+        state = plc.history.at(scan_id)
+        expected = truth[scan_id]
+        assert state.timestamp == expected.timestamp
+        assert dict(state.tags) == dict(expected.tags), scan_id
+        assert dict(state.memory) == dict(expected.memory), scan_id
+        assert all(len(slab) <= 1600 for slab in plc._replay_slabs.values())
+    return misses
+
+
+def test_a_forward_walk_extends_the_slab_instead_of_refilling_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plc, truth = _cold_history_with_edits()
+
+    misses = _read(plc, truth, list(range(1001, 4001)), monkeypatch)
+
+    # The first miss fills the 1,600 scans before it.  Each later miss replays the 800 scans
+    # from it and keeps the old slab's last 800 states.  3,000 scans take 5 fills (they took
+    # one per scan that is not a checkpoint).
+    assert misses == [1001, 1002, 1802, 2602, 3402]
+    slab = next(iter(plc._replay_slabs.values()))
+    assert (min(slab), max(slab), len(slab)) == (2602, 4201, 1600)
+    assert plc._last_replay_slab_stats == {"runup_scans": 1, "materialized_states": 800}
+
+
+def test_ascending_pairs_share_one_slab(monkeypatch: pytest.MonkeyPatch) -> None:
+    plc, truth = _cold_history_with_edits()
+    scans = [at for t in range(1101, 4900, 300) for at in (t - 1, t)]
+
+    misses = _read(plc, truth, scans, monkeypatch)
+
+    # 13 pairs take 6 fills (they took 20, one per read of a scan that is not a checkpoint).
+    assert misses == [1100, 1101, 2001, 2900, 3801, 4700]
+
+
+def test_sparse_ascending_pairs_take_one_fill_each(monkeypatch: pytest.MonkeyPatch) -> None:
+    plc, truth = _cold_history_with_edits()
+    scans = [at for t in range(1101, 4900, 1700) for at in (t - 1, t)]
+
+    misses = _read(plc, truth, scans, monkeypatch)
+
+    # Scan 2800 is a checkpoint.
+    assert misses == [1100, 1101, 2801, 4500]
+
+
+def test_a_backward_walk_fills_once_per_slab(monkeypatch: pytest.MonkeyPatch) -> None:
+    plc, truth = _cold_history_with_edits()
+
+    misses = _read(plc, truth, list(range(4001, 1000, -1)), monkeypatch)
+
+    # The first miss fills scans 2402..4001, and scan 2400 is a checkpoint.
+    assert misses == [4001, 2401]
 
 
 def test_sparse_replay_preserves_clock_edge_memory() -> None:
