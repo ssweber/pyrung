@@ -22,22 +22,24 @@ from pyrsistent import PMap, pmap
 
 K = TypeVar("K")
 
-# Scans a question may step again to get the records of a compiled run, about what the
-# run would have cost stepped.  Past this it is an error rather than a wait nobody asked for.
+# Scans a question may step again to get the records of scans that have none, about what a
+# compiled run would have cost stepped.  Past this it is an error rather than a wait nobody asked for.
 SETTLE_SCAN_LIMIT = 250_000
 
 
 class UnrecordedScansError(ValueError):
-    """A question reaches more compiled scans than it may step again for their records."""
+    """A question reaches more scans without records than it may step again for."""
 
     def __init__(self, first: int, last: int, scans: int) -> None:
         super().__init__(
-            f"scans {first}..{last} include some that ran compiled and have no records yet. "
-            f"Getting their records means stepping {scans} scans again from the nearest "
+            f"scans {first}..{last} include some that have no records yet. A compiled run "
+            "records none, and a stepped run without history= stops recording once its records "
+            f"are full. Getting their records means stepping {scans} scans again from the nearest "
             f"checkpoint, and a question may step at most {SETTLE_SCAN_LIMIT}. "
             "Scans a question has stepped keep their records, so ask first about a scan nearer "
             "the start of that range for cause, or nearer its end for effect, then ask again. "
-            "From Python, cause() also takes since=, and jit=False records a run as it goes."
+            "From Python, cause() also takes since=. A run with jit=False and history= records "
+            "every scan in the window."
         )
         self.first = first
         self.last = last
@@ -133,7 +135,8 @@ class RungFiringTimelines(Generic[K]):
     most two ranges per change.  After the column turns Unknown, it still keeps a range for
     each run of scans that wrote, and one for each run that did not.  A rung's fired ranges
     have no limit.  So without a history window, a rung that fires every few scans gains a
-    range each firing.
+    range each firing.  A runner without a window stops adding to its records once they hold
+    ``MAX_RECORD_RUNS`` runs, and a question steps the later scans again.
 
     A record trimmed to a history window has no limit, since the window bounds its memory.
     After a trim each column holds the kept scans from its first write on.  So what a record
@@ -896,19 +899,6 @@ class RungFiringTimelines(Generic[K]):
                 elif isinstance(payload, (Arithmetic, Unknown)):
                     candidates.add(end)
         return tuple(sorted(candidates, reverse=True))
-
-    def bytes_estimate(self) -> int:
-        """About the bytes the record's ranges take, at a range's measured size.
-
-        A repeat holds its cycle's ranges once, whatever its count.
-        """
-        tables = (self._fired_ranges, self._value_timelines, self._varied_ranges)
-        return 160 * sum(
-            len(element.ranges) if type(element) is Repeat else 1
-            for table in tables
-            for ranges in table.values()
-            for element in ranges
-        )
 
     def value_is_known(self, rung_index: K, tag_name: str) -> bool:
         """Whether retained final values remain exact for this one column."""

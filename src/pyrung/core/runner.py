@@ -1749,6 +1749,11 @@ class PLC:
         # Every ``(first, last)`` range of scans that ran without causal records, in
         # the compiled kernel or its guarded loop.  A question that reaches one settles it.
         self._unrecorded_scans: list[tuple[int, int]] = []
+        # Without ``history=``, a stepped scan records nothing once the records hold
+        # ``coast_run.MAX_RECORD_RUNS`` runs, which bounds their memory.  A question steps those
+        # scans again from a checkpoint, as it does for a compiled run.  Replays record every scan.
+        self._records_bounded = True
+        self._records_full = False
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
@@ -2541,9 +2546,6 @@ class PLC:
         """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
-        # The window takes the replay's values, and this record counts their changes itself.
-        # So the replay trims nothing, or its own memory budget would drop scans the window needs.
-        replay._history_retention_scans = None
         for name in _RECORDS:
             setattr(replay, name, RungFiringTimelines(capped=False))
         for scan_id in range(anchor_scan_id + 1, last + 1):
@@ -3190,10 +3192,6 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
-    def _nearest_checkpoint_at_or_after(self, scan_id: int) -> int | None:
-        """Smallest retained checkpoint scan_id >= ``scan_id``, or None."""
-        return min((c for c in self._checkpoints if c >= scan_id), default=None)
-
     def _trim_history_before(self, scan_id: int) -> None:
         """Advance the replay horizon to *scan_id*.
 
@@ -3451,6 +3449,10 @@ class PLC:
         self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
         replay._reconstructs_history = True
+        # A replay answers a question about scans it steps again, so it trims no history and
+        # records every scan.  A trim or a full record would drop scans the question reads.
+        replay._history_retention_scans = None
+        replay._records_bounded = False
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3558,6 +3560,10 @@ class PLC:
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
+        # The caller keeps this fork and may step it on, so it bounds its memory as its source does.
+        replay._history_retention_scans = self._history_retention_scans
+        replay._records_bounded = self._records_bounded
+        replay._apply_history_retention(replay._state.scan_id)
         return replay
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
@@ -4442,6 +4448,7 @@ class PLC:
         self._committed_tag_timelines.reset()
         self._node_firing_timelines.reset()
         self._unrecorded_scans = []
+        self._records_full = False
         self._causal_initial_tags = dict(self._state.tags)
 
         if self._time_mode == TimeMode.REALTIME:
@@ -4988,8 +4995,9 @@ class PLC:
         # (same_stored_value), so the pending dict says what the state holds.
         pending = ctx._tags_pending
         entry_tags = ctx._state_tags_read if ctx._state is previous_state else previous_state.tags
+        recording = not self._records_full
         for name, after in pending.items():
-            if entry_tags.get(name) != after:
+            if recording and entry_tags.get(name) != after:
                 self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None
@@ -5021,7 +5029,9 @@ class PLC:
                 self._scan_log.record_io_drain(new_scan_id, key, record)
         # Only firing rungs append. Their value columns independently extend
         # stable, alternating, or arithmetic ranges; varied=true is sparse.
-        new_firings = ctx._rung_firings
+        if not recording:
+            self._note_unrecorded_scans(new_scan_id, new_scan_id)
+        new_firings = ctx._rung_firings if recording else {}
         for rung_index, writes in new_firings.items():
             self._rung_firing_timelines.append(
                 rung_index,
@@ -5029,7 +5039,7 @@ class PLC:
                 writes,
                 ctx._rung_firing_varied.get(rung_index, frozenset()),
             )
-        node_firings = ctx._node_firings
+        node_firings = ctx._node_firings if recording else {}
         for rung_id, writes in node_firings.items():
             self._node_firing_timelines.append(
                 rung_id,
@@ -5048,6 +5058,11 @@ class PLC:
 
         if is_checkpoint:
             self._apply_history_retention(new_scan_id)
+            if self._records_bounded and self._history_retention_scans is None:
+                from pyrung.core import coast_run
+
+                held = sum(getattr(self, name).run_count() for name in _RECORDS)
+                self._records_full = held >= coast_run.MAX_RECORD_RUNS
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
@@ -5061,32 +5076,27 @@ class PLC:
         self._sync_runtime_flags_from_state()
 
     def _apply_history_retention(self, new_scan_id: int) -> None:
-        """Trim history to the floor that the tip and ``history=`` set.
+        """Trim history to the floor that the tip, ``history=`` and ``history_budget`` set.
 
-        The floor moves once per checkpoint interval.  Stepping and a long run checkpoint on
-        different scans, so the floor must not depend on where the checkpoints are.  Over the
-        memory budget, a checkpoint scan trims to the checkpoint an interval past the horizon.
-        That checkpoint and the bytes held differ between stepping and a long run.
+        Stepping and a compiled run keep checkpoints and cached states on different scans.  So
+        that both trim to the same scan, the floor depends only on the settings, the oldest kept
+        state and the latest scan that is a multiple of the checkpoint interval.  The budget
+        check counts one checkpoint per interval from the oldest kept scan, each the size of the
+        oldest kept state.  Over the budget the floor moves one interval later.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval
         if retention is None:
             return
-        horizon = new_scan_id - new_scan_id % interval - retention
+        last_checkpoint = new_scan_id - new_scan_id % interval
+        horizon = last_checkpoint - retention
         floor = -(-horizon // interval) * interval
         if floor > self._initial_scan_id:
             self._trim_history_before(floor)
-        if new_scan_id % interval == 0 and horizon > 0:
-            total = (
-                self._recent_state_cache_bytes
-                + sum(_estimate_state_bytes(s) for s in self._checkpoints.values())
-                + self._scan_log.bytes_estimate()
-                + sum(getattr(self, name).bytes_estimate() for name in _RECORDS)
-            )
-            if total > self._recent_state_cache_budget:
-                extra_horizon = horizon + self._checkpoint_interval
-                extra_cp = self._nearest_checkpoint_at_or_after(extra_horizon)
-                if extra_cp is not None:
-                    self._trim_history_before(extra_cp)
+        if horizon > 0 and floor + interval > self._initial_scan_id:
+            checkpoints = (last_checkpoint - self._initial_scan_id) // interval + 1
+            held = checkpoints * _estimate_state_bytes(self._initial_state)
+            if held > self._recent_state_cache_budget:
+                self._trim_history_before(floor + interval)
 
     def _evaluate_monitors(
         self, *, previous_state: SystemState, current_state: SystemState

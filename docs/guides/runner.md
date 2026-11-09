@@ -269,6 +269,7 @@ from an in-memory state cache (byte-bounded, default 100 MB).  Older scans are
 reconstructed on demand from the scan log and checkpoints.
 
 A long `run_until()` or `run_for()` runs compiled and records no rung firings.
+Without `history`, a stepped run also stops recording once its records hold about 140 MB.
 History still serves each of those scans by replaying them on demand.
 The first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
 them again to get their records. The answer is therefore the one stepping gives.  A question
@@ -276,7 +277,7 @@ that would step more than 250,000 scans raises `UnrecordedScansError` and names
 the range. Scans a question has stepped keep their records, so ask first about a scan nearer the
 start of that range for `cause`, or nearer its end for `effect`, then ask again,
 from Python or the debugger. From Python, `cause()` also takes `since=`.
-Passing `jit=False` records a run as it goes.
+A run with `jit=False` and `history` records every scan in the window.
 
 `previous_transition()` returns the latest matching recorded transition, or
 `None`.
@@ -293,7 +294,9 @@ runner = PLC(logic, history_budget=20 * 1024 * 1024)  # 20 MB byte ceiling
 
 `history` keeps whole checkpoint intervals (200 scans unless you set `checkpoint_interval`). A runner keeps between `history` minus one interval and `history` plus one interval, and at least two intervals.
 
-With `history`, the runner keeps every value its rungs wrote in the window. A value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag. Over `history_budget`, each checkpoint trims only one interval more than `history` asks for, so the budget does not cap that memory. Shorten `history` for a program with many such tags.
+With `history`, the runner keeps every value its rungs wrote in the window. A value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag. `history_budget` does not count that memory. Shorten `history` for a program with many such tags.
+
+When the checkpoints in the window pass `history_budget`, the runner keeps one interval less than `history` asks for. Each checkpoint counts as one state snapshot.
 
 ## Time-travel playhead
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
-from contextlib import nullcontext
 from typing import Any
 
 import pytest
@@ -20,8 +19,8 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
+    SystemState,
     coast_run,
-    compiled_run,
     copy,
     math,
     out,
@@ -29,7 +28,6 @@ from pyrung.core import (
 )
 from pyrung.core.coast_run import coast_until
 from pyrung.core.rung_firings import _ENTRY_LIMIT, _UNKNOWN_VALUE, RungFiringTimelines, _expanded
-from tests import fold_check
 from tests.fold_check import compare_records, seed_records
 
 KEY = (0, "a")
@@ -751,28 +749,49 @@ def _forty_counts() -> Program:
     return program
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Over the memory budget each engine trims one interval more on the scans it checks",
+def _padded(tags: int) -> SystemState:
+    """A state with *tags* more tags, which no rung uses, to make each checkpoint bigger."""
+    return SystemState().with_tags({f"Pad{k}": 0 for k in range(tags)})
+
+
+@pytest.mark.parametrize(
+    ("pad", "history", "oldest"), [(0, 3000, 7000), (1000, 3000, 7200), (1000, 6000, 4200)]
 )
-@pytest.mark.parametrize("history", [3000, 6000])
-def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(history: int) -> None:
-    plc = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
-    # Under fold-check its own twin finds the floors differ first, which is what this pins.
-    checked = getattr(compiled_run, "_fold_check_installed", False)
-    with fold_check.deliberate() if checked else nullcontext():
-        plc.run_for(100)
-    twin = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
+def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(
+    pad: int, history: int, oldest: int
+) -> None:
+    # 1,000 more tags make the window's checkpoints pass 1 MB, so the floor moves one interval.
+    plc = PLC(
+        _forty_counts(),
+        dt=0.01,
+        history=history,
+        history_budget=1_048_576,
+        initial_state=_padded(pad),
+    )
+    plc.run_for(100)
+    twin = PLC(
+        _forty_counts(),
+        dt=0.01,
+        history=history,
+        history_budget=1_048_576,
+        initial_state=_padded(pad),
+    )
     while twin.current_state.scan_id < plc.current_state.scan_id:
         twin.step()
-    assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
+    assert plc.history.oldest_scan_id == twin.history.oldest_scan_id == oldest
+    assert len(plc.rung_firings(oldest)) == len(twin.rung_firings(oldest)) == 40
 
 
 def test_a_settles_replay_over_the_memory_budget_keeps_every_scan_it_steps() -> None:
     # A settle hands its replay's records to the runner.  So the replay trims nothing (its own
-    # budget took the oldest interval a long run kept).  A long run would trip the budget trim
-    # the xfail above pins, so this replay steps the scans of a stepped runner.
-    plc = PLC(_forty_counts(), dt=0.01, history=3000, history_budget=1_048_576)
+    # budget would take the oldest interval the runner kept).
+    plc = PLC(
+        _forty_counts(),
+        dt=0.01,
+        history=3000,
+        history_budget=1_048_576,
+        initial_state=_padded(1000),
+    )
     for _ in range(10_000):
         plc.step()
     oldest = plc.history.oldest_scan_id
@@ -802,10 +821,10 @@ def _noise() -> Program:
     return program
 
 
-def test_the_records_count_toward_the_memory_budget() -> None:
-    # A value that changes every scan keeps a range a scan.  Those ranges pass the budget, so
-    # the trim keeps one interval less than history= asks for.
+def test_the_records_do_not_count_toward_the_memory_budget() -> None:
+    # A value that changes every scan keeps a range a scan.  A compiled run records those
+    # ranges only when a question asks.  So the budget leaves them out, and history= sets the floor.
     plc = PLC(_noise(), dt=0.01, history=8000, cache=100, history_budget=1_048_576)
     for _ in range(10_000):
         plc.step()
-    assert plc.history.oldest_scan_id == 10_000 - 8000 + 200
+    assert plc.history.oldest_scan_id == 10_000 - 8000
