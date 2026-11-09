@@ -423,3 +423,31 @@ def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
     runner.step()  # drain
     assert runner.current_state.tags["Success"] is True
     assert runner.replay_to(2).current_state.tags["Success"] is True
+
+
+def test_two_programs_in_one_plc_each_replay_their_own_receive(monkeypatch: pytest.MonkeyPatch):
+    """Two programs' receives with every status bit left off keep apart in one PLC."""
+    futures = _fake_recv_submit(monkeypatch)
+
+    def build(dest: str) -> Program:
+        with Program(strict=False) as logic:
+            with Rung():
+                _sr.receive(target=_TARGET, remote_start="DS1", dest=Int(dest))
+        return logic
+
+    first, second = build("DestA"), build("DestB")
+    runner = PLC([*first.rungs, *second.rungs])
+    a, b = (rung._instructions[0] for rung in (*first.rungs, *second.rungs))
+    assert a.receiving.name != b.receiving.name
+    assert a._io_key != b._io_key
+
+    runner.step()  # submit both
+    futures[0].set_result(_sr._RequestResult(ok=True, exception_code=0, values=(111,)))
+    futures[1].set_result(_sr._RequestResult(ok=True, exception_code=0, values=(222,)))
+    runner.step()  # drain both
+    stepped = runner.current_state.tags
+    assert (stepped["DestA"], stepped["DestB"]) == (111, 222)
+
+    replayed = runner.replay_to(2).current_state.tags
+    assert (replayed["DestA"], replayed["DestB"]) == (111, 222)
+    assert replayed == stepped

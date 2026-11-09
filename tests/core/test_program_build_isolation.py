@@ -5,9 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from pyrung.core import Bool, Int, Program, Rung, out, receive, send
-from pyrung.core.instruction.send_receive import is_modbus_status_tag
-from pyrung.core.tag import Tag
+from pyrung.core import Bool, Program, Rung, out
 
 
 def _targets(program: Program) -> list[str]:
@@ -64,23 +62,3 @@ def test_two_threads_build_two_programs_at_once():
     assert errors == []
     assert _targets(built["a"]) == ["A"]
     assert _targets(built["b"]) == ["B"]
-
-
-def test_a_status_bit_left_off_has_the_same_name_in_every_build():
-    def build() -> list[str]:
-        with Program(strict=False) as program:
-            with Rung():
-                send(target="panel", remote_start="DS1", source=Int("X"))
-            with Rung():
-                receive(target="panel", remote_start="DS2", dest=Int("Y"))
-        return [
-            value.name
-            for rung in program.rungs
-            for instruction in rung._instructions
-            for value in vars(instruction).values()
-            if isinstance(value, Tag) and is_modbus_status_tag(value.name)
-        ]
-
-    first = build()
-    assert first[0] == "_modbus.1.sending"
-    assert build() == first

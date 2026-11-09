@@ -965,8 +965,8 @@ class RandIntExpr(Expression):
         """This scan's draw, from the bounds as the scan starts.
 
         *numbers* is the program's :func:`randint_numbers`.  The draw is seeded by
-        the site's number there, not by ``site``, so a program draws the same
-        values however many draws the process made before it.
+        the site's number in *numbers*, so a program draws the same values whatever
+        ``randint()`` calls came before it.
 
         A site that reads no draw, or a bound that is Inf or NaN, draws the
         tag's default; :meth:`evaluate` decides what the site reads instead.

@@ -138,7 +138,7 @@ def _capture_call_end_line(
 
 def _build_source_ast_index(source_file: str) -> _SourceAstIndex | None:
     # The file's size and modified time are in the key, so a file edited and run
-    # again in the same process (a DAP reload, a notebook) gets a fresh index.
+    # again in the same process (a DAP reload) gets a fresh index.
     try:
         stat = os.stat(source_file)
     except OSError:

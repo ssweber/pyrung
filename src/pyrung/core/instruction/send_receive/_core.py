@@ -194,15 +194,8 @@ def _status_tags(
     error: Tag | None,
     exception_response: Tag | None,
 ) -> tuple[Tag, Tag, Tag, Tag]:
-    """The four status tags, a hidden one for each bit left off (CLICK allows any).
-
-    The hidden tags are numbered within the program being built, so every build
-    of one program names them the same.
-    """
-    from pyrung.core.program.context._program import Program
-
-    program = Program._current()
-    site = next(_status_site_counter if program is None else program._status_sites)
+    """The four status tags, a hidden one for each bit left off (CLICK allows any)."""
+    site = next(_status_site_counter)
 
     def resolve(tag: Tag | None, field_name: str, tag_type: TagType) -> Tag:
         if tag is not None:

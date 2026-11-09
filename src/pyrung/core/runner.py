@@ -3324,6 +3324,9 @@ class PLC:
         bracketed = Program.__new__(Program)
         bracketed.rungs = [*syn.plant, *syn.holds, *self._program.rungs]
         bracketed.subroutines = self._program.subroutines
+        # A CompiledPLC numbers its randint draws from this program's own rungs, as
+        # stepping does, so a bracket rung that reads a draw moves no draw.
+        bracketed._bare_program = self._program
         self._soft_exec_program_cache = bracketed
         return bracketed
 

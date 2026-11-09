@@ -653,15 +653,46 @@ class TestBoundsAsWritten:
 class TestReplay:
     def test_a_rebuilt_program_draws_what_the_first_build_stepped(self):
         """Forks, history, replay and a long run of a second build all draw as the first stepped."""
-        stepped = _draws(PLC(_die_program()[0], dt=0.01), "Die", 40)
+        stepped = _draws(PLC(_die_program()[0], dt=0.01), "Die", 2100)
         randint(1, 6)  # another program's draw, made in between
-        plc = PLC(_die_program()[0], dt=0.01, history=100)
-        plc.run_for(0.2)
-        child = plc.fork()
-        assert _draws(child, "Die", 20) == stepped[20:]
-        assert [plc.history.at(scan).tags["Die"] for scan in range(1, 21)] == stepped[:20]
-        assert plc.replay_to(10).state.tags["Die"] == stepped[9]
-        assert _draws(CompiledPLC(_die_program()[0], dt=0.01), "Die", 40) == stepped
+        plc = PLC(_die_program()[0], dt=0.01, history=3000)
+        plc.run_for(20.0)  # past the interpreted prefix, so the kernel runs it
+        assert plc.state.scan_id == 2000
+        assert _draws(plc.fork(), "Die", 100) == stepped[2000:]
+        assert [plc.history.at(scan).tags["Die"] for scan in range(1990, 2001)] == stepped[
+            1989:2000
+        ]
+        assert plc.replay_to(1500).state.tags["Die"] == stepped[1499]
+        assert _draws(CompiledPLC(_die_program()[0], dt=0.01), "Die", 2100) == stepped
+
+    def test_a_hold_that_reads_a_draw_moves_no_draw(self):
+        """A hold rung ahead of the program's rungs leaves the draws as stepping makes them."""
+        from pyrung.core.analysis.pilot.overlay import _set_synth_holds
+
+        first, second = randint(1, 100000), randint(1, 100000)
+        with Program(strict=False) as logic:
+            with Rung():
+                math(first, Dint("A"))
+            with Rung():
+                math(second, Dint("B"))
+        with Program(strict=False) as side:
+            with Rung(second.tag > 50000):
+                copy(1, Bool("Seen"))
+
+        stepped = PLC(logic, dt=0.01)
+        _set_synth_holds(stepped, [side.rungs[0]])
+        values = [(s.tags["A"], s.tags["B"]) for s in (stepped.step() for _ in range(2500))]
+
+        plc = PLC(logic, dt=0.01, history=3000)
+        _set_synth_holds(plc, [side.rungs[0]])
+        plc.run_for(25.0)  # past the interpreted prefix, so the kernel runs it
+        assert plc.state.scan_id == 2500
+        assert (plc.state.tags["A"], plc.state.tags["B"]) == values[-1]
+        for scan in (1200, 2000, 2400, 2499):
+            at = plc.history.at(scan).tags
+            assert (at["A"], at["B"]) == values[scan - 1]
+        replayed = plc.replay_to(2400).state.tags
+        assert (replayed["A"], replayed["B"]) == values[2399]
 
     def test_fork_draws_what_the_parent_draws(self):
         logic, _draw, _die = _die_program()

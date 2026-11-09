@@ -340,9 +340,9 @@ class TagsRungsReach:
 
         A CLICK draws once per RAND a Math runs, so a site only the written formula of a
         calc names (the uncut one of a cut draw) draws nothing, and its tag holds what was
-        last put there, as the compiled run's does.  Each draw is a pure function of its own
-        number and the scan, and the numbers count every site the rungs name, so leaving a
-        site out moves no other's values.
+        last put there, as the compiled run's does.  Each draw depends only on its site's
+        number and the scan.  A site left out of the draws still has a number (an uncut site
+        takes its cut's), so no other site's values move.
         """
         if self._randint_run is None:
             from pyrung.core.expression import any_randint_sites, is_randint_tag

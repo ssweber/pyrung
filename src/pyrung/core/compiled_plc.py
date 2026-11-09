@@ -256,15 +256,15 @@ class CompiledPLC:
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
         self._randint_sites = randint_sites(self._compiled.referenced_tags)
-        # Numbered from the rungs, as stepping numbers them, so both draw the same.
-        self._randint_numbers = (
-            randint_numbers(
-                (site.tag.name for site in self._randint_sites),
-                self._tags_rungs_reach.randint_numbers(),
+        # Numbered over the user's rungs alone, as stepping numbers them, so both draw
+        # the same.  A runner's soft program puts plant and hold rungs ahead of them.
+        self._randint_numbers: dict[int, int] = {}
+        if self._randint_sites:
+            bare = getattr(program, "_bare_program", None)
+            reach = self._tags_rungs_reach if bare is None else TagsRungsReach(bare.rungs, bare)
+            self._randint_numbers = randint_numbers(
+                (site.tag.name for site in self._randint_sites), reach.randint_numbers()
             )
-            if self._randint_sites
-            else {}
-        )
         self._referenced_system_tags = frozenset(
             name for name in self._compiled.referenced_tags if name in SYSTEM_TAGS_BY_NAME
         )
