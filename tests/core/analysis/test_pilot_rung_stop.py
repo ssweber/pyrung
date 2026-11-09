@@ -11,6 +11,7 @@ import pytest
 
 from pyrung import PLC, Bool, Int, Program, Rung, Timer, latch, math, on_delay, out
 from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.system_points import system
 
 StopTimer = Timer.clone("StopTimer")
@@ -195,3 +196,38 @@ def test_how_says_stopped_when_the_waiting_scan_stops_the_plc(then) -> None:
         "the program stopped itself at scan 52. Its next scan would restart it, "
         "and how() does not plan across a restart."
     )
+
+
+@pytest.mark.parametrize(
+    "stop, then",
+    [
+        (_stop_by_calling_stop, _patch_the_count),
+        (_stop_from_the_program, _keep_a_forced_input_on_run),
+    ],
+    ids=["stop, patch", "program stop, forced input kept on run"],
+)
+def test_pilot_events_on_a_plc_in_stop_stream_only_the_stop(stop, then) -> None:
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    stop(plc)
+    then(plc)
+    scan_id = plc.state.scan_id
+    state = plc.state
+    reason = (
+        f"the PLC is in STOP at scan {scan_id}. Its next scan would restart it, "
+        "and how() does not plan across a restart."
+    )
+
+    events = list(pilot_events(plc, Done, max_scans=500))
+    seen = []
+    plc.how(Done, max_scans=500, on_event=seen.append)
+
+    assert [event.kind for event in events] == ["stuck", "finished"]
+    assert all(event.scan == scan_id for event in events)
+    assert events[0].data["reason"] == reason
+    assert events[1].data["reason"] == reason
+    assert events[1].data["reached"] is False
+    assert events[1].data["work"] is None
+    assert seen == events
+    assert plc.state is state
