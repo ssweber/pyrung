@@ -125,6 +125,40 @@ class TestDraws:
         logic, _draw, _die = _die_program()
         assert _draws(PLC(logic, dt=0.01), "Die", 50) == _draws(PLC(logic, dt=0.01), "Die", 50)
 
+    @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
+    def test_a_program_built_again_draws_the_same(self, factory):
+        def build() -> Program:
+            with Program(strict=False) as logic:
+                with Rung():
+                    math(randint(1, 1000), Int("A"))
+                    math(randint(1, 1000), Int("B"))
+            return logic
+
+        first = build()
+        randint(1, 1000)  # another program's draw, made in between
+        assert _draws(factory(build(), dt=0.01), "A", 20) == _draws(
+            factory(first, dt=0.01), "A", 20
+        )
+
+    def test_draws_follow_the_rungs_not_the_order_the_draws_were_made(self):
+        """A draw made earlier for another program (an imported helper) changes nothing."""
+
+        def build(first: RandIntExpr, second: RandIntExpr) -> Program:
+            with Program(strict=False) as logic:
+                with Rung():
+                    math(first, Int("A"))
+                    math(second, Int("B"))
+            return logic
+
+        made_first, made_second = randint(1, 1000), randint(1, 1000)
+        one = build(made_first, made_second)
+        made_first, made_second = randint(1, 1000), randint(1, 1000)
+        two = build(made_second, made_first)
+        plc_one, plc_two = PLC(one, dt=0.01), PLC(two, dt=0.01)
+        for _ in range(20):
+            a, b = plc_one.step(), plc_two.step()
+            assert (a.tags["A"], a.tags["B"]) == (b.tags["A"], b.tags["B"])
+
     def test_two_sites_draw_independently(self):
         a, b = Int("A"), Int("B")
         with Program(strict=False) as logic:
@@ -428,9 +462,10 @@ class TestBoundsAsCLICKReadsThem:
             with Rung():
                 for index, dest in enumerate(dests):
                     math(roll, dest(f"Die{index}"))
+        # The program's one randint draws as number 1, and its cut as ~1.
         sites = {
-            "uncut": (roll.tag.name, roll.site, 70000, 90000),
-            "cut": (f"{roll.tag.name}.cut", ~roll.site, 4464, 24464),
+            "uncut": (roll.tag.name, 1, 70000, 90000),
+            "cut": (f"{roll.tag.name}.cut", ~1, 4464, 24464),
         }
         plc = factory(logic, dt=0.01)
         for _ in range(20):
@@ -445,7 +480,7 @@ class TestBoundsAsCLICKReadsThem:
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_signed_and_an_unsigned_cut_of_one_draw_both_draw(self, factory):
-        """An Int's cut and a hex Word's share a site number, and each draws over its own cut."""
+        """An Int's cut and a hex Word's share a number, and each draws over its own cut."""
         roll = randint(100000, 110000)
         with Program(strict=False) as logic:
             with Rung():
@@ -460,8 +495,8 @@ class TestBoundsAsCLICKReadsThem:
         for _ in range(20):
             state = plc.step()
             scan = state.scan_id - 1
-            assert state.tags["I"] == randint_draw(~roll.site, scan, -31072, -21072)
-            assert state.tags["W"] == randint_draw(~roll.site, scan, 34464, 44464)
+            assert state.tags["I"] == randint_draw(~1, scan, -31072, -21072)
+            assert state.tags["W"] == randint_draw(~1, scan, 34464, 44464)
 
     @pytest.mark.parametrize("program", sorted(_KERNEL_SITE_PROGRAMS))
     def test_stepping_draws_the_sites_the_kernel_draws(self, program):
@@ -616,6 +651,18 @@ class TestBoundsAsWritten:
 
 
 class TestReplay:
+    def test_a_rebuilt_program_draws_what_the_first_build_stepped(self):
+        """Forks, history, replay and a long run of a second build all draw as the first stepped."""
+        stepped = _draws(PLC(_die_program()[0], dt=0.01), "Die", 40)
+        randint(1, 6)  # another program's draw, made in between
+        plc = PLC(_die_program()[0], dt=0.01, history=100)
+        plc.run_for(0.2)
+        child = plc.fork()
+        assert _draws(child, "Die", 20) == stepped[20:]
+        assert [plc.history.at(scan).tags["Die"] for scan in range(1, 21)] == stepped[:20]
+        assert plc.replay_to(10).state.tags["Die"] == stepped[9]
+        assert _draws(CompiledPLC(_die_program()[0], dt=0.01), "Die", 40) == stepped
+
     def test_fork_draws_what_the_parent_draws(self):
         logic, _draw, _die = _die_program()
         plc = PLC(logic, dt=0.01)

@@ -86,8 +86,11 @@ class _RungsWalked(NamedTuple):
     beyond_rungs: tuple[Tag, ...]
 
 
-def _randint_sites_run(rungs: Iterable[Any]) -> tuple[RandIntExpr, ...]:
+def _randint_sites_run(rungs: Iterable[Any]) -> tuple[tuple[RandIntExpr, ...], dict[int, int]]:
     """The ``randint`` sites the *rungs* run, in site order: the compiled kernel's.
+
+    It also returns the number each site draws by (``randint_numbers``), counted in
+    the order the walk meets them.
 
     Found by name, from the tags the kernel's own walk reaches (``walk_rung_operands``):
     a draw's tag inside a formula, or ``expr.tag`` read straight off a rung.  That walk
@@ -96,7 +99,7 @@ def _randint_sites_run(rungs: Iterable[Any]) -> tuple[RandIntExpr, ...]:
     names runs only where some other rung runs it, as a Dint Math that keeps the
     constants does.
     """
-    from pyrung.core.expression import is_randint_tag, randint_sites
+    from pyrung.core.expression import is_randint_tag, randint_numbers, randint_sites
     from pyrung.core.validation.walker import walk_rung_operands
 
     # In the order the walk meets them, as the kernel's tags are: a ``.cut`` and a
@@ -108,7 +111,7 @@ def _randint_sites_run(rungs: Iterable[Any]) -> tuple[RandIntExpr, ...]:
             names.setdefault(value.name)
 
     walk_rung_operands(rungs, visit)
-    return randint_sites(names)
+    return randint_sites(names), randint_numbers(names)
 
 
 def _addresses_reached(use: Any) -> range | tuple[int, ...]:
@@ -181,6 +184,7 @@ class TagsRungsReach:
         "_slots",
         "_slots_as_of",
         "_randint_run",
+        "_randint_numbers",
     )
 
     def __init__(self, logic: Iterable[Any], program: Any) -> None:
@@ -192,6 +196,7 @@ class TagsRungsReach:
         self._slots: dict[str, tuple[Any, int]] = {}
         self._slots_as_of: int = -1
         self._randint_run: tuple[RandIntExpr, ...] | None = None
+        self._randint_numbers: dict[int, int] = {}
 
     def get(self, name: str) -> Tag | None:
         slot = self._slots_by_name().get(name)
@@ -336,7 +341,8 @@ class TagsRungsReach:
         A CLICK draws once per RAND a Math runs, so a site only the written formula of a
         calc names (the uncut one of a cut draw) draws nothing, and its tag holds what was
         last put there, as the compiled run's does.  Each draw is a pure function of its own
-        site and the scan, so leaving a site out moves no other's values.
+        number and the scan, and the numbers count every site the rungs name, so leaving a
+        site out moves no other's values.
         """
         if self._randint_run is None:
             from pyrung.core.expression import any_randint_sites, is_randint_tag
@@ -352,8 +358,13 @@ class TagsRungsReach:
             if self._program is not None:
                 for name in sorted(self._program.subroutines):
                     rungs.extend(self._program.subroutines[name])
-            self._randint_run = _randint_sites_run(rungs)
+            self._randint_run, self._randint_numbers = _randint_sites_run(rungs)
         return self._randint_run
+
+    def randint_numbers(self) -> dict[int, int]:
+        """Each site's number for its draw (``randint_numbers``), from the rungs alone."""
+        self.randint_sites()
+        return self._randint_numbers
 
     def _named(self) -> dict[str, Tag]:
         if self._named_by_name is None:
@@ -582,6 +593,7 @@ class InputOverrideManager:
         self,
         ctx: ScanContext,
         sites: tuple[RandIntExpr, ...],
+        numbers: Mapping[int, int],
         drained: Mapping[str, object],
     ) -> tuple[str, ...]:
         """Write this scan's ``randint`` draws after the drain.
@@ -591,7 +603,7 @@ class InputOverrideManager:
         are not recorded: replay recomputes them.  Returns the drawn names.
         """
         draws = {
-            site.tag.name: site.draw(ctx)
+            site.tag.name: site.draw(ctx, numbers)
             for site in sites
             if site.tag.name not in drained and site.tag.name not in self._forces
         }

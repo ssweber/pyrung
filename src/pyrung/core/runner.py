@@ -5007,7 +5007,12 @@ class PLC:
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
         sites = self._randint_site_list()
         if sites:
-            self._input_overrides.apply_randint_draws(ctx, sites, self._this_scan_drained_patches)
+            self._input_overrides.apply_randint_draws(
+                ctx,
+                sites,
+                self._tags_rungs_reach.randint_numbers(),
+                self._this_scan_drained_patches,
+            )
         return ctx, dt
 
     def _randint_site_list(self) -> tuple[RandIntExpr, ...]:
