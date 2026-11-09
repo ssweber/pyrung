@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pyrung.core.runner import ScanStep
+from pyrung.core.state import value_changed
 from pyrung.dap.internal_tags import visible_tag_names
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
@@ -219,7 +220,7 @@ def continue_worker(adapter: Any) -> None:
             for tag_name in visible_tag_names(set(prev.keys()) | set(current_tags.keys())):
                 old_val = prev.get(tag_name)
                 new_val = current_tags.get(tag_name)
-                if old_val != new_val:
+                if value_changed(old_val, new_val):
                     changes.append(
                         {
                             "tag": tag_name,

@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_routes import enumerate_trace_choices
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.state import value_changed
 
 ActionPair = tuple[str, Any]
 CorrectionIdentity = tuple[tuple[Any, ...], ...]
@@ -123,7 +124,7 @@ def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) ->
         return None
     last: int | None = None
     for previous, current in zip(states, states[1:], strict=False):
-        if not _values_match(previous.tags.get(tag), current.tags.get(tag)):
+        if value_changed(previous.tags.get(tag), current.tags.get(tag)):
             last = current.scan_id
     return last
 
@@ -151,7 +152,7 @@ def _set_between_scans(plc: Any, tag: str, first: int, last: int) -> bool:
         if epoch_first > oldest and first <= epoch_first <= last:
             if start.scan_id != root:
                 return True
-            if not _values_match(plc.history.at(root).tags.get(tag), start.tags.get(tag)):
+            if value_changed(plc.history.at(root).tags.get(tag), start.tags.get(tag)):
                 return True
     return False
 

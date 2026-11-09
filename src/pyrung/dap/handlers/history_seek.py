@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from pyrung.core.state import value_changed
 from pyrung.dap.handlers import monitor_data_breakpoints
 from pyrung.dap.internal_tags import visible_tag_names
 
@@ -289,7 +290,7 @@ def _window_entry(
     for name in names:
         old_value = start.tags.get(name)
         new_value = end.tags.get(name)
-        if old_value != new_value:
+        if value_changed(old_value, new_value):
             changes[name] = [adapter._format_value(old_value), adapter._format_value(new_value)]
     return {
         "window": True,

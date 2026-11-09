@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pyrung.core.physical import parse_duration
+from pyrung.core.state import value_changed
 from pyrung.dap.capture import CaptureEntry
 
 CommandKind = Literal["mutation", "span", "query", "note", "unknown"]
@@ -511,7 +512,7 @@ def _last_relevant_transition_scan(
         before = history.at(scan_id - 1).tags
         after = history.at(scan_id).tags
         for tag in relevant_tags:
-            if before.get(tag) != after.get(tag):
+            if value_changed(before.get(tag), after.get(tag)):
                 last = scan_id
                 break
     return last

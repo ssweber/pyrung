@@ -11,6 +11,8 @@ compare the two answers on these records:
 - a compiled run
 - a fork
 - a NaN that stays, stepped and run by coast_until()
+- a NaN that history replays from a checkpoint
+- a Real that turns NaN inside the loop
 - tags set between scans by hand, by a harness install, and on a fork before its first scan
 """
 
@@ -23,9 +25,9 @@ import pytest
 from pyrung import PLC, Bool, Int, Program, Real, Rung, Timer, copy, math, on_delay, out
 from pyrung.core import coast_run
 from pyrung.core.analysis.pilot.correction_candidates import _last_transition_scan
-from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
+from pyrung.core.state import value_changed
 
 Go = Bool("Go", external=True)
 Flip = Bool("Flip")
@@ -43,7 +45,8 @@ def _program() -> Program:
         with Rung(Go):
             math(Count + 1, Count)
         with Rung():
-            # This changes on every scan, more often than a column keeps the values of.
+            # It changes on every scan, so the records stop keeping its values after 1,000
+            # changes.
             math((Noisy * 75 + 74) % 30011, Noisy)
         with Rung(Go):
             math(Ramp + 0.1, Ramp)
@@ -57,7 +60,7 @@ def _replayed(plc: PLC, tag: str, start: int, end: int) -> int | None:
     states = plc.history.range(start, end + 1)
     last = None
     for previous, current in zip(states, states[1:], strict=False):
-        if not _values_match(previous.tags.get(tag), current.tags.get(tag)):
+        if value_changed(previous.tags.get(tag), current.tags.get(tag)):
             last = current.scan_id
     return last
 
@@ -147,33 +150,99 @@ NAN_TAGS = ("Source", "Copied", "Scaled", "Steps")
 def _nan_program() -> Program:
     with Program(strict=False) as program:
         with Rung():
-            # copy() keeps the NaN it copies.  math() makes a new one each scan, which
-            # differs from the one before.
+            # copy() keeps the NaN it copies.  math() makes a new one each scan, which is no
+            # change.
             copy(Source, Copied)
             math(Source * 1.0, Scaled)
             math(Steps + 1, Steps)
     return program
 
 
-@pytest.mark.parametrize("first", [1.5, float("nan")], ids=["nan-later", "nan-first"])
+def _run(plc: PLC, scans: int, coast: bool) -> None:
+    end = plc.state.scan_id + scans
+    while plc.state.scan_id < end:
+        if coast:
+            budget = end - plc.state.scan_id
+            coast_run.coast_until(
+                plc, lambda _state: False, budget=budget, predicate_reads=frozenset()
+            )
+        else:
+            plc.step()
+
+
+def _changes(plc: PLC, tag: str) -> list[int]:
+    states = plc.history.range(0, plc.history.newest_scan_id + 1)
+    return [
+        current.scan_id
+        for previous, current in zip(states, states[1:], strict=False)
+        if value_changed(previous.tags.get(tag), current.tags.get(tag))
+    ]
+
+
+@pytest.mark.parametrize(
+    ("first", "copied_changed"), [(1.5, 602), (float("nan"), 1)], ids=["nan-later", "nan-first"]
+)
 @pytest.mark.parametrize("coast", [False, True], ids=["stepped", "coast"])
-def test_a_nan_that_stays_agrees(coast: bool, first: float) -> None:
+def test_a_nan_that_stays_agrees(coast: bool, first: float, copied_changed: int) -> None:
     plc = PLC(_nan_program(), dt=0.01)
     plc.patch({"Source": first})
     plc.step()
-    for _ in range(2):
-        if coast:
-            coast_run.coast_until(
-                plc, lambda _state: False, budget=600, predicate_reads=frozenset()
-            )
-        else:
-            for _ in range(600):
-                plc.step()
-        plc.patch({"Source": float("nan")})
+    _run(plc, 600, coast)
+    # A new NaN reaches Copied on scan 602.  Over a NaN it is no change.
+    plc.patch({"Source": float("nan")})
+    _run(plc, 600, coast)
     assert _recorded_window(plc)
-    # Each patch is a new NaN.  The second one reaches Copied on scan 602, and it stays.
-    assert _last_transition_scan(plc, "Copied", 0, plc.history.newest_scan_id) == 602
+    assert _last_transition_scan(plc, "Copied", 0, plc.history.newest_scan_id) == copied_changed
     _assert_agree(plc, NAN_TAGS)
+
+
+def _assert_agree_against_stepping(runs: dict[bool, PLC], edges: tuple[int, ...]) -> None:
+    for tag in NAN_TAGS:
+        assert _changes(runs[True], tag) == _changes(runs[False], tag), tag
+    for plc in runs.values():
+        for tag in NAN_TAGS:
+            for start in edges:
+                for end in edges:
+                    got = _last_transition_scan(plc, tag, start, end)
+                    assert got == _replayed(plc, tag, start, end), (tag, start, end)
+
+
+def test_a_nan_computed_until_its_rung_stops_agrees() -> None:
+    with Program(strict=False) as program:
+        with Rung():
+            math(Steps + 1, Steps)
+        with Rung(Steps < 300):
+            math(Source * 1.0, Scaled)
+    runs = {}
+    for coast in (False, True):
+        plc = runs[coast] = PLC(program, dt=0.01)
+        plc.patch({"Source": float("nan")})
+        _run(plc, 300, coast)
+        plc.patch({"Source": 1.0})
+        _run(plc, 300, coast)
+    # History serves some scans from its cache and replays others from a checkpoint.  The two
+    # hold different NaN objects, which is no change.
+    assert _changes(runs[True], "Scaled") == [1]
+    edges = (0, 1, 2, 199, 200, 201, 298, 299, 300, 301, 302, 306, 307, 308, 599, 600)
+    _assert_agree_against_stepping(runs, edges)
+
+
+def test_a_real_that_turns_nan_in_the_loop_agrees() -> None:
+    with Program(strict=False) as program:
+        with Rung():
+            math(Steps + 1, Steps)
+            math(Scaled + 0.5, Scaled)
+        with Rung(Scaled > 100.0):
+            math(Scaled + Source, Copied)
+    runs = {}
+    for coast in (False, True):
+        plc = runs[coast] = PLC(program, dt=0.01)
+        plc.patch({"Source": float("nan")})
+        _run(plc, 700, coast)
+    # Copied goes from 0.0 to NaN on scan 201, and stays NaN.
+    assert _changes(runs[True], "Copied") == [201]
+    edges = (0, 1, 199, 200, 201, 202, 203, 299, 300, 301, 699, 700, 701)
+    _assert_agree_against_stepping(runs, edges)
 
 
 def test_an_edit_between_scans_agrees() -> None:

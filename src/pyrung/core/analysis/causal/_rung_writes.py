@@ -13,6 +13,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.state import value_changed
+
 from .models import Transition
 
 if TYPE_CHECKING:
@@ -557,7 +559,7 @@ class ScanRungWriteProjection:
         """Committed transition attributed when a retained final write exists."""
         before = self.entry_tags.get(tag_name)
         after = self.exit_tags.get(tag_name)
-        if before == after:
+        if not value_changed(before, after):
             return None
         winner = self.final_write(tag_name, after)
         return Transition(

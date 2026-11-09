@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.state import value_changed
+
 if TYPE_CHECKING:
     from pyrung.core.time_mode import TimeMode
 
@@ -318,7 +320,7 @@ class ScanLog:
             else:
                 next_value = current
 
-            if next_value != current:
+            if value_changed(current, next_value):
                 changes.append((scan_id, current, next_value))
                 current = next_value
 

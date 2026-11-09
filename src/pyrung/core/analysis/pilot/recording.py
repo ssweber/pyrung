@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.world import _RecoveryOrigin
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.state import value_changed
 from pyrung.core.validation.render import (
     caret_of,
     render_condition,
@@ -208,7 +209,7 @@ def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
     for tag in sorted((set(before_snap) | set(after_snap)) & channel_tags):
         before = before_snap.get(tag)
         after = after_snap.get(tag)
-        if before != after:
+        if value_changed(before, after):
             return f"{tag} {_display_value(before)} -> {_display_value(after)}"
     return ""
 

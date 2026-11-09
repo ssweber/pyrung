@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pyrung.core.state import value_changed
 from pyrung.dap.capture import CaptureEntry
 
 CandidateKind = Literal["edge_correlation", "steady_implication", "value_temporal"]
@@ -415,7 +416,7 @@ def _build_edge_map(
         for tag in relevant:
             old = before.get(tag)
             new = after.get(tag)
-            if old != new:
+            if value_changed(old, new):
                 edges[tag].append((scan_id, old, new))
 
     return edges

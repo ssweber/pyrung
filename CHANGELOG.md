@@ -377,6 +377,9 @@
   - a drum's jump pin
   - hex, Real and text constants such as `FFC0h`, which it could mistake for addresses
 - Comparing a Char tag or slot with another Char (`txt[a] == txt[b]`, `>`, `<=` and the rest) builds a condition instead of raising `TypeError`. CLICK's Compare offers only `=` and `!=` on text, so `<`, `<=`, `>` and `>=` on a Char are a `CLK_TEXT_ORDER_COMPARE` finding, which export refuses unless allowed.
+- A `Real` that holds NaN and stays NaN no longer changes on every scan:
+  - `cause()` and `history.previous_transition()` answer for it (they returned `None`). It last changed on the scan it became NaN, even when `math()` computes the NaN again.
+  - `plc.diff()`, `monitor()` callbacks and the debugger's tag changes no longer report a change for it (they could report one on every scan).
 - `how(avoid=...)` no longer treats an avoid check that raises as clear, which let it plan through the avoided state. When the check raises on the start state, or on a scan of a command `how()` tries, `how()` raises `AvoidCheckError` with the check's exception as its cause.
 - A long `how()` wait keeps its memory bounded. It keeps at most two compiled kernels and 512 checkpoints, and records a long run's scans only when a later `cause()` or a survey such as `cold_rungs()` reaches them.
 - A kernel that fails to compile for a reason pyrung doesn't expect gives a `RuntimeWarning`, and the scans run interpreted, instead of raising out of `run_for()` or `how()`.

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pyrung.core import AvoidCheckError
+from pyrung.core.state import value_changed
 from pyrung.dap import execution_flow
 
 # grammar.py reads this registry, but only from inside command_grammar() — so
@@ -1521,7 +1522,7 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
             for tag in sorted(set(force_snap) | set(last_forces)):
                 old = last_forces.get(tag)
                 new = force_snap.get(tag)
-                if old != new:
+                if value_changed(old, new):
                     if new is not None and old is None:
                         entries.append(f"  force {tag} {new!r}")
                     elif new is None and old is not None:
@@ -1535,7 +1536,7 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
             for key in sorted(set(cur_state.tags.keys()) | set(prev_state.tags.keys())):
                 old_v = prev_state.tags.get(key)
                 new_v = cur_state.tags.get(key)
-                if old_v != new_v:
+                if value_changed(old_v, new_v):
                     entries.append(f"  {key}: {old_v!r} -> {new_v!r}")
         prev_state = cur_state
 

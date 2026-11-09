@@ -17,6 +17,7 @@ from pyrung.core.analysis.sp_values import (
 from pyrung.core.context import ScanContext
 from pyrung.core.crossing import CrossingContext, Eq, eq_target
 from pyrung.core.site_memory import edge_memory_seeding
+from pyrung.core.state import value_changed
 
 from .history import _find_last_transition_scan
 from .models import (
@@ -1081,7 +1082,7 @@ def projected_effect(
 
     # Check trigger reachability
     current_value = base_state.tags.get(tag_name)
-    if current_value != from_value:
+    if value_changed(current_value, from_value):
         trigger_chain = projected_cause(logic, history, tag, from_value, pdg, assume=assume)
         if trigger_chain.mode == "unreachable":
             return CausalChain(

@@ -41,6 +41,7 @@ from pyrung.core.crossing import (
     Quant,
     ReverseResult,
 )
+from pyrung.core.state import value_changed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -141,7 +142,7 @@ def recorded_read_changes(
             after = cur.tags.get(tag)
         if prev is not None:
             before = prev.tags.get(tag)
-            if before != after:
+            if value_changed(before, after):
                 changed.append((tag, before, after))
         if _is_nonzero(after):
             nonzero_now.append(tag)
@@ -197,7 +198,7 @@ def _read_pair(history: History, tag: str, scan_id: int) -> tuple[Any, Any, bool
     after = history.at(scan_id).tags.get(tag)
     prev = _prev_scan_id(history, scan_id)
     before = history.at(prev).tags.get(tag) if prev is not None else None
-    return before, after, before != after
+    return before, after, value_changed(before, after)
 
 
 def resolve_recorded(

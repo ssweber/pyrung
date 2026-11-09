@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.state import value_changed
+
 from .models import Transition
 
 if TYPE_CHECKING:
@@ -44,7 +46,7 @@ def _boundary_transition_at_scan(
         return None
     to_value = history.at(scan_id).tags.get(tag_name)
     from_value = history.at(ids[idx - 1]).tags.get(tag_name) if idx > 0 else None
-    if from_value == to_value:
+    if not value_changed(from_value, to_value):
         return None
     return Transition(tag_name, scan_id, from_value, to_value)
 
@@ -162,7 +164,7 @@ def _find_transition(
         prev_state = history.at(ids[i - 1])
         cur_val = cur_state.tags.get(tag_name)
         prev_val = prev_state.tags.get(tag_name)
-        if cur_val != prev_val:
+        if value_changed(prev_val, cur_val):
             return Transition(tag_name, ids[i], prev_val, cur_val)
     return None
 
@@ -267,7 +269,7 @@ def _find_last_transition_scan(
             continue
         cur_val = history.at(ids[i]).tags.get(tag_name)
         prev_val = history.at(ids[i - 1]).tags.get(tag_name)
-        if cur_val != prev_val:
+        if value_changed(prev_val, cur_val):
             return ids[i]
     return None
 

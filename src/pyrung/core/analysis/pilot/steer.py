@@ -97,6 +97,7 @@ from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.pilot.world_key import ReadIdentity, _pilot_world_key, _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.input_overrides import refuses_value
+from pyrung.core.state import value_changed
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import TransitionCause
@@ -825,7 +826,7 @@ def _compass_observations(
         observed_tags.add(n.tag)
         old_v = before_snap.get(n.tag)
         new_v = after_snap.get(n.tag)
-        if old_v != new_v and new_v is not None:
+        if value_changed(old_v, new_v) and new_v is not None:
             if (
                 action_tag is not None
                 and fork is not None

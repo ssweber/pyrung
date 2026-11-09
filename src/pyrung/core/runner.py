@@ -62,7 +62,7 @@ from pyrung.core.rung_firings import (
 )
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
-from pyrung.core.state import SystemState, snapshot_dict
+from pyrung.core.state import SystemState, snapshot_dict, value_changed
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _MODE_RUN_KEY,
@@ -2248,7 +2248,7 @@ class PLC:
         for key in all_keys:
             old_value = state_a.tags.get(key)
             new_value = state_b.tags.get(key)
-            if old_value != new_value:
+            if value_changed(old_value, new_value):
                 changed[key] = (old_value, new_value)
         return changed
 
@@ -5048,11 +5048,10 @@ class PLC:
         pending = ctx._tags_pending
         entry_tags = ctx._state_tags_read if ctx._state is previous_state else previous_state.tags
         recording = not self._records_full
-        for name, after in pending.items():
-            # A NaN that stays is no change to history's readers, though it differs from itself.
-            before = entry_tags.get(name)
-            if recording and before is not after and before != after:
-                self._committed_tag_timelines.append(name, new_scan_id, {name: after})
+        if recording:
+            for name, after in pending.items():
+                if value_changed(entry_tags.get(name), after):
+                    self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None
             and ctx._state_tags_read is self._state_tags_read_cache
@@ -5162,7 +5161,7 @@ class PLC:
 
             previous_value = previous_state.tags.get(registration.tag_name)
             current_value = current_state.tags.get(registration.tag_name)
-            if current_value != previous_value:
+            if value_changed(previous_value, current_value):
                 registration.callback(current_value, previous_value)
 
     def _evaluate_breakpoints(self, *, state: SystemState) -> None:

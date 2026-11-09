@@ -16,7 +16,10 @@ interprets its source statement by statement on the state at trace time, and
 every value it reads is one of two things:
 
 * A **constant**: a recorded (key, value) pair.  A trace only runs from a state
-  in which every recorded pair still holds, compared by type and value.
+  in which every recorded pair still holds, compared by type and value.  Here and
+  below any NaN is the same value as any other.  The kernel computes the same from
+  each NaN, and no reader tells one NaN from another
+  (:func:`~pyrung.core.state.value_changed`).
 * A **moving** value: read from the loop's locals on every iteration.  These are
   the time-derived system tags (:data:`MOVING_SYSTEM_TAGS`), plus every cell the
   scan changes, found by a fixed point: trace, and any cell whose end-of-scan
@@ -102,6 +105,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
+from pyrung.core.state import value_changed
 from pyrung.core.system_points import (
     _CLOCK_HALF_PERIODS,
     _DERIVED_TAG_NAMES,
@@ -254,14 +258,6 @@ def same(a: Any, b: Any) -> bool:
             return b != b
         return a == b and math.copysign(1.0, a) == math.copysign(1.0, b)
     return a == b
-
-
-def _changes(old: Any, new: Any) -> bool:
-    """Whether storing *new* over *old* is a change that stepping records.
-
-    Stepping records a new NaN over another one, though :func:`same` holds the two equal.
-    """
-    return not same(old, new) or (old is not new and new != new)
 
 
 # --- Source -------------------------------------------------------------------
@@ -1844,7 +1840,7 @@ def build_trace(
             key
             for key, cell in tracer.cells.items()
             if key not in seeds
-            and (cell.local is not None or _changes(tracer.constants[key], cell.concrete))
+            and (cell.local is not None or not same(tracer.constants[key], cell.concrete))
         }
         if not moved:
             if form is not None:
@@ -1983,21 +1979,20 @@ def _coast_guards(
         elif free_to_move and type(after) is float and type(before) is float:
             # Nothing says how far a Real moves, only whether it does, and a scan that holds
             # it is another path: a record of it says "moved" on every scan it runs.
-            if after == before:
-                guards.append(_Guard(f"{new} != {old}", uses, why=f"{name} starts moving"))
+            # A NaN that stays NaN does not move, though it differs from itself.
+            if not value_changed(before, after):
+                guards.append(_Guard(_changed(new, old), uses, why=f"{name} starts moving"))
                 held.append(name)
             else:
-                # A NaN that stays does not move, though it differs from itself.  So the loop
-                # leaves on a NaN.
                 guards.append(
-                    _Guard(f"{new} == {old} or {new} != {new}", uses, why=f"{name} stops moving")
+                    _Guard(f"not ({_changed(new, old)})", uses, why=f"{name} stops moving")
                 )
                 free.append(name)
                 always = True
         elif name in watched or same(after, before) or after == before:
             # Equal across types too: 0 to False on an Int driven by out() is no transition.
             why = f"watched {name} changes" if name in watched else f"{name} changes"
-            guards.append(_Guard(f"{old} != {new}", uses, why=why))
+            guards.append(_Guard(_changed(old, new), uses, why=why))
             if cell.local is not None and same(after, before):
                 held.append(name)
         else:
@@ -2012,6 +2007,14 @@ def _coast_guards(
         if name in seen:
             seen_cells.append((name, key, always))
     return guards, CoastMoves(tuple(moved), tuple(free), tuple(flips), tuple(held)), seen_cells
+
+
+def _changed(old: str, new: str) -> str:
+    """:func:`~pyrung.core.state.value_changed` spelled in the loop, on two atoms.
+
+    It leaves out the identity test, since ``is`` on a literal is a syntax warning.
+    """
+    return f"{old} != {new} and ({old} == {old} or {new} == {new})"
 
 
 # --- Driving the loop through a run --------------------------------------------
