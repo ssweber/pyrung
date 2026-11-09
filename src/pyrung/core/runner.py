@@ -3555,8 +3555,8 @@ class PLC:
         for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             if scan_id == target_scan_id:
-                # A compiled replay holds no scan before the target, so this fork's records
-                # start there too.  A record without history= has a limit and cannot be trimmed.
+                # This fork's records start at the target, as a compiled replay's do.  A record
+                # without history= has a limit and cannot be trimmed.
                 capped = self._history_retention_scans is None
                 for name in _RECORDS:
                     setattr(replay, name, RungFiringTimelines(capped=capped))
@@ -3570,7 +3570,7 @@ class PLC:
         # The caller keeps this fork and may step it on, so it bounds its memory as its source does.
         replay._history_retention_scans = self._history_retention_scans
         replay._records_bounded = self._records_bounded
-        # Both replays start at the target, so a fork trims alike on either.
+        # A fork from either replay starts at the target and trims alike.
         if target_scan_id > replay._initial_scan_id:
             replay._trim_history_before(target_scan_id, trim_records=False)
         return replay
