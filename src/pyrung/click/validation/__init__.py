@@ -257,9 +257,7 @@ def validate_click_program(
     findings.extend(_evaluate_step_limit(program, tag_map, mode))
 
     bounds = _PointerBounds(program)
-    findings.extend(
-        _evaluate_condition_pointer_past_bank(program, tag_map, bounds, mode, resolver)
-    )
+    findings.extend(_evaluate_condition_pointer_past_bank(program, tag_map, bounds, mode, resolver))
     for instruction, base_location in instruction_sites:
         findings.extend(
             _evaluate_pointer_past_bank(instruction, base_location, tag_map, bounds, mode, resolver)

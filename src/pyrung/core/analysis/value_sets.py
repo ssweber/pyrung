@@ -184,7 +184,9 @@ class _ValueSets:
         With *values*, the sets come from that mapping of tag names, not the fixpoint.
         """
         if isinstance(ref, IndirectRef):
-            domain = self.values(ref.pointer.name) if values is None else values.get(ref.pointer.name)
+            domain = (
+                self.values(ref.pointer.name) if values is None else values.get(ref.pointer.name)
+            )
             if domain is None or any(type(v) is not int for v in domain):
                 return None
             return domain
