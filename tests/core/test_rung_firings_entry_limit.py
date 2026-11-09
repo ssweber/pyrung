@@ -705,7 +705,6 @@ def test_a_trim_during_a_run_leaves_the_oldest_kept_scan_answering() -> None:
         assert plc.rung_firings(scan_id) == twin.rung_firings(scan_id), scan_id
 
 
-@pytest.mark.xfail(strict=True, reason="a long run keeps other checkpoints, so it trims elsewhere")
 @pytest.mark.parametrize(("history", "scans"), [(300, 4000), (2000, 12345)])
 def test_a_long_run_trims_history_to_steppings_floor(history: int, scans: int) -> None:
     plc = PLC(_sequencer(), dt=0.01, history=history)

@@ -100,6 +100,8 @@ _REPLAY_SLAB_MAX_ANCHORS = 1
 # alternates among the same source/action/landing scans.
 _REPLAY_CAPTURE_CACHE_SCANS = 16
 
+_RECORDS = ("_rung_firing_timelines", "_committed_tag_timelines", "_node_firing_timelines")
+
 _EPOCH_REFERENCE_VALUES = count(1)
 
 # Byte budget for the recent-state cache (default for ``history_budget``).
@@ -2526,11 +2528,7 @@ class PLC:
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         # The window takes the replay's values, and this record counts their changes itself.
-        for name in (
-            "_rung_firing_timelines",
-            "_committed_tag_timelines",
-            "_node_firing_timelines",
-        ):
+        for name in _RECORDS:
             setattr(replay, name, RungFiringTimelines(capped=False))
         for scan_id in range(anchor_scan_id + 1, last + 1):
             if check_limits is not None:
@@ -2543,9 +2541,8 @@ class PLC:
         self, first: int, last: int, check_limits: Callable[[], None] | None
     ) -> None:
         replay = self._stepped_again(first, last, check_limits)
-        self._rung_firing_timelines.replace_range(replay._rung_firing_timelines, first, last)
-        self._committed_tag_timelines.replace_range(replay._committed_tag_timelines, first, last)
-        self._node_firing_timelines.replace_range(replay._node_firing_timelines, first, last)
+        for name in _RECORDS:
+            getattr(self, name).replace_range(getattr(replay, name), first, last)
         self._causal_lineage.invalidate_current_epoch()
         remaining: list[tuple[int, int]] = []
         for start, end in self._unrecorded_scans:
@@ -3193,9 +3190,8 @@ class PLC:
         below = self._nearest_checkpoint_at_or_before(scan_id - 1)
         horizon = scan_id if below is None else below
         self._scan_log.trim_before(horizon)
-        self._rung_firing_timelines.trim_before(scan_id)
-        self._committed_tag_timelines.trim_before(scan_id)
-        self._node_firing_timelines.trim_before(scan_id)
+        for name in _RECORDS:
+            getattr(self, name).trim_before(scan_id)
         self._unrecorded_scans = [
             (max(first, scan_id), last) for first, last in self._unrecorded_scans if last >= scan_id
         ]
@@ -4769,12 +4765,8 @@ class PLC:
             windows[-1] = (windows[-1][0], last)
         else:
             windows.append((first, last))
-        for timelines in (
-            self._rung_firing_timelines,
-            self._committed_tag_timelines,
-            self._node_firing_timelines,
-        ):
-            timelines.note_gap(first, last)
+        for name in _RECORDS:
+            getattr(self, name).note_gap(first, last)
 
     def _record_landing(self, first_scan_id: int | None = None) -> None:
         """Cache the state a compiled run landed on, and checkpoint it if one is due.
@@ -5043,17 +5035,19 @@ class PLC:
         self._sync_runtime_flags_from_state()
 
     def _apply_history_retention(self, new_scan_id: int) -> None:
-        """Retention-policy auto-trim, piggybacked on checkpoint cadence."""
-        if new_scan_id % self._checkpoint_interval != 0 or new_scan_id <= 0:
+        """Trim history to the floor that the tip and ``history=`` set.
+
+        The floor moves once per checkpoint interval.  Stepping and a long run checkpoint on
+        different scans, so the floor must not depend on where the checkpoints are.
+        """
+        retention, interval = self._history_retention_scans, self._checkpoint_interval
+        if retention is None:
             return
-        if (
-            self._history_retention_scans is not None
-            and new_scan_id > self._history_retention_scans
-        ):
-            horizon = new_scan_id - self._history_retention_scans
-            surviving_cp = self._nearest_checkpoint_at_or_after(horizon)
-            if surviving_cp is not None:
-                self._trim_history_before(surviving_cp)
+        horizon = new_scan_id - new_scan_id % interval - retention
+        floor = -(-horizon // interval) * interval
+        if floor > self._initial_scan_id:
+            self._trim_history_before(floor)
+        if new_scan_id % interval == 0 and horizon > 0:
             total = (
                 self._recent_state_cache_bytes
                 + sum(_estimate_state_bytes(s) for s in self._checkpoints.values())

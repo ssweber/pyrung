@@ -61,21 +61,25 @@ def _run(draw: Any, most: int = 12) -> list[dict[str, Any] | None]:
     return [{"a": value} if b is None else {"a": value, "b": b} for value in values]
 
 
-def _changes(column: dict[int, Any], scan: int) -> int:
-    """1 when a scan's value does not go on from the two scans before it, else 0."""
-    value = column[scan]
-    one, two = column.get(scan - 1, _ABSENT), column.get(scan - 2, _ABSENT)
+def _kind(value: Any, one: Any, two: Any) -> str | None:
     if one is _ABSENT:
-        return 1
+        return None
     if _equal(value, one):
-        return 0
+        return "held"
     if two is _ABSENT:
-        return 1
-    if _equal(value, two) and not _equal(one, two):
-        return 0
-    if all(map(_is_arithmetic_value, (value, one, two))) and value - one == one - two != 0:
-        return 0
-    return 1
+        return None
+    if _equal(value, two):
+        return "flip"
+    if all(map(_is_arithmetic_value, (value, one, two))) and value - one == one - two:
+        return "count"
+    return None
+
+
+def _changes(column: dict[int, Any], scan: int) -> int:
+    """1 unless a scan holds the value before it, or flips or counts as the scan before it did."""
+    one, two, three = (column.get(scan - k, _ABSENT) for k in (1, 2, 3))
+    kind = _kind(column[scan], one, two)
+    return int(kind != "held" and (kind is None or _kind(one, two, three) != kind))
 
 
 class Model:
