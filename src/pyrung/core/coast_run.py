@@ -271,7 +271,8 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
     synthesis = plc._synthesis
     plant = () if synthesis is None else tuple(synthesis.plant)
     holds = () if synthesis is None else tuple(synthesis.holds)
-    key = (id(plc._program), tuple(map(id, plant)), tuple(map(id, holds)))
+    # A how() fork may run a kernel its session is refused (a live send() or receive()).
+    key = (id(plc._program), tuple(map(id, plant)), tuple(map(id, holds)), plc._modbus_stubbed)
     entry = memo.kernels.pop(key, None)
     if entry is not None:
         memo.kernels[key] = entry

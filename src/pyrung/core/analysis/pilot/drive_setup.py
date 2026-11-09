@@ -191,7 +191,9 @@ def prepare_drive(
     if waiting:
         work.step()
     ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
-    steerable = compute_steerable(pdg, work._known_tags_by_name, program) - harness_fb - ref_consts
+    steerable = compute_steerable(pdg, work._known_tags_by_name, program)
+    steerable |= {name for name in modbus_levers(program) or () if pdg.readers_of.get(name)}
+    steerable -= harness_fb | ref_consts
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
     diag_snapshot = dict(work.state.tags)
@@ -217,6 +219,30 @@ def prepare_drive(
         session_inputs={**plc._pending_patches, **plc._forces},
         waiting_overrides=waiting,
     )
+
+
+def modbus_levers(program: Any) -> frozenset[str] | None:
+    """The tags a Modbus device supplies, or None when *program* has no send() or receive().
+
+    how() does no Modbus I/O, so it sets these like inputs.  A receive() reads its
+    destination from the device, and the device's answer sets success or error.
+    """
+    from pyrung.core.instruction.send_receive._core import (
+        ModbusReceiveInstruction,
+        ModbusSendInstruction,
+    )
+    from pyrung.core.validation._common import walk_instructions
+
+    levers: set[str] = set()
+    found = False
+    for instr in walk_instructions(program):
+        if isinstance(instr, ModbusReceiveInstruction):
+            levers.update(instr.external_payload_names)
+        elif not isinstance(instr, ModbusSendInstruction):
+            continue
+        found = True
+        levers.update((instr.success.name, instr.error.name))
+    return frozenset(levers) if found else None
 
 
 def _waiting_overrides(plc: PLC) -> tuple[str, ...]:
@@ -332,23 +358,23 @@ def build_prover_context(program: Any) -> ProverContext:
     pivot-tag state keys, and local static evidence.
 
     The answer comes from the program and its tags' settings.
-    A Program keeps the answer until its graph cache is dropped or a tag's settings change,
-    so each how() on an unchanged program skips the prover's passes.
+    A Program keeps the answer until its graph cache is dropped.
+    A change to a tag's settings drops that cache too, so each how() on an unchanged program skips the prover's passes.
     """
     from pyrung.core.tag import metadata_edits
 
     edits = metadata_edits()
     cached = getattr(program, "_cached_prover_context", None)
     if cached is not None:
-        graph, cached_edits, context = cached
-        if graph is getattr(program, "_cached_graph", None) and cached_edits == edits:
+        graph, context = cached
+        if graph is getattr(program, "_cached_graph", None):
             return _copy_prover_context(context)
     context = _compute_prover_context(program)
     if context is None:
         return ProverContext()
     graph = getattr(program, "_cached_graph", None)
     if graph is not None and metadata_edits() == edits:
-        program._cached_prover_context = (graph, edits, context)
+        program._cached_prover_context = (graph, context)
     return _copy_prover_context(context)
 
 

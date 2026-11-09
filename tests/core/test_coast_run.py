@@ -774,12 +774,13 @@ def test_the_kernel_held_longest_unused_goes_first() -> None:
     memo = coast_run.CoastMemo()
     program = object()
 
-    def runner_of(hold: object) -> Any:
+    def runner_of(hold: object, *, stubbed: bool = False) -> Any:
         return SimpleNamespace(
             _compiled_replay_kernel=None,
             _synthesis=SimpleNamespace(plant=(), holds=(hold,)),
             _program=program,
             _compiled_replay_supported_kernel=object,
+            _modbus_stubbed=stubbed,
         )
 
     first, second, third = object(), object(), object()
@@ -790,6 +791,9 @@ def test_the_kernel_held_longest_unused_goes_first() -> None:
     assert coast_run._kernel_for(runner_of(first), memo) is kept
     assert memo.compiles == 3
     assert len(memo.kernels) == coast_run.MAX_KERNELS == 2
+    # A how() fork may compile a kernel its session is refused, so the two don't share one.
+    assert coast_run._kernel_for(runner_of(first, stubbed=True), memo) is not kept
+    assert memo.compiles == 4
 
 
 class TestCheckpointsInAStretch:

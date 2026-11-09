@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -390,6 +390,14 @@ def _format_plan_step(
     return _with_notes(line)
 
 
+MODBUS_NOT_SIMULATED = (
+    "how() does not simulate Modbus send()/receive(). Their status bits and destinations"
+    " keep their values unless a step sets them."
+)
+# A step's note on a tag a Modbus device would supply.
+MODBUS_STEP_NOTE = "This value stands for the Modbus device's answer."
+
+
 class PlanStatus(Enum):
     """What ``how()`` established about the requested target."""
 
@@ -458,6 +466,9 @@ class Plan:
     session_inputs: dict[str, Any] = field(default_factory=dict)
     # Those of them no scan had applied, so the plan's first scan is theirs.
     waiting_overrides: tuple[str, ...] = ()
+    # The tags a Modbus device would supply, which how() may set.  None means the program
+    # has no send() or receive().  Otherwise the text ends by saying how() did no Modbus I/O.
+    modbus_levers: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         status = self.status
@@ -558,6 +569,13 @@ class Plan:
         return getattr(self.fork, "_dt", None) if self.fork is not None else None
 
     def __str__(self) -> str:
+        text = self._text()
+        return text if self.modbus_levers is None else f"{text}\n\n{MODBUS_NOT_SIMULATED}"
+
+    def _sets_a_modbus_lever(self, inputs: Any) -> bool:
+        return any(name in (self.modbus_levers or ()) for name, _value in inputs)
+
+    def _text(self) -> str:
         if self.target_predicate is not None:
             from pyrung.core.analysis.simplified import And, render
 
@@ -671,7 +689,9 @@ class Plan:
                 lines.append(
                     _format_plan_step(
                         i,
-                        step,
+                        replace(step, notes=(*step.notes, MODBUS_STEP_NOTE))
+                        if self._sets_a_modbus_lever(step.inputs)
+                        else step,
                         dt=dt,
                         same_holds=same_holds,
                         control_steps=control,
@@ -700,7 +720,10 @@ class Plan:
                 f" {names} takes effect."
             )
         if self.last_resort is not None:
-            steps.append(self.last_resort.step_line(len(steps) + 1))
+            line = self.last_resort.step_line(len(steps) + 1)
+            if self._sets_a_modbus_lever(((self.last_resort.tag, self.last_resort.value),)):
+                line += f"\n   {MODBUS_STEP_NOTE}"
+            steps.append(line)
         return steps
 
     def __repr__(self) -> str:
