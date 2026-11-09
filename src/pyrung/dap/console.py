@@ -972,7 +972,7 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         except ExpressionParseError as exc:
             raise adapter.DAPAdapterError(f"how {label}: {exc}") from exc
         try:
-            conds = to_conditions(parsed, runner._known_tags_by_name)
+            conds = to_conditions(parsed, runner.tags)
         except KeyError as exc:
             raise adapter.DAPAdapterError(f"how {label}: unknown tag {exc}") from exc
         return conds
@@ -1062,7 +1062,7 @@ def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError(f"prove: {exc}") from exc
 
     scope = sorted(referenced_tags(expr))
-    predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
+    predicate = compile_for_dict(expr, tags=runner.tags)
 
     adapter._send_event("output", {"category": "console", "output": "Verifying...\n"})
 

@@ -378,6 +378,9 @@ def _iter_tags_and_edge_names(
     *block_uses*, when given, also collects each range and pointer into a block.
     *beyond_rungs*, when given, also collects the tags found in those blocks
     once the rungs are done.  A tag a rung names wins over another of the same name.
+    Of a block's cache it takes only the slots the user's code indexed (``block[n]``).
+    The rest are what scans and analyses asked for, and a runner built later must not
+    know more than one built first.
     """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.memory_block import (
@@ -444,6 +447,11 @@ def _iter_tags_and_edge_names(
             ):
                 block_uses.append(current)
 
+            if isinstance(current, Block):
+                cache = current._tag_cache
+                queue.extend(cache[addr] for addr in current._indexed if addr in cache)
+                queue.extend(value for key, value in vars(current).items() if key != "_tag_cache")
+                continue
             if isinstance(current, Mapping):
                 queue.extend(current.keys())
                 queue.extend(current.values())

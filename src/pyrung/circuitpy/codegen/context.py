@@ -912,10 +912,11 @@ class CodegenContext:
         """The tag already known to hold each slot, by address, without indexing any.
 
         A name the program references wins: the engines seed the name, and a pointer
-        reads the same cell.  Otherwise what `Block._get_tag` has cached or would
-        return for a mapped tag.
+        reads the same cell.  Otherwise the tag mapped onto the slot.  Not
+        `Block._tag_cache`, which holds whatever ran before the export asked for: a slot
+        tag there holds what the block's configuration gives it anyway.
         """
-        holders: dict[int, Tag] = {**binding.block._mapped_tags, **binding.block._tag_cache}
+        holders: dict[int, Tag] = dict(binding.block._mapped_tags)
         for name, (block_id, addr) in self.tag_block_addresses.items():
             if block_id == binding.block_id and name in self.referenced_tags:
                 holders[addr] = self.referenced_tags[name]
@@ -924,30 +925,22 @@ class CodegenContext:
     def _factory_power_on_values(self, binding: BlockBinding, answered: set[int]) -> dict[int, Any]:
         """What a block's ``default_factory`` gives the slots nothing else answers for.
 
-        The interpreter asks the factory once, when a scan first reaches a slot, and
-        the cache keeps the answer.  Generated code has to know sooner, so the answer
-        is only taken here from a factory that repeats it.  One that does not (a
-        counter) has no power-on value to copy for a slot not reached yet: those stay
-        at zero, and a slot already reached is in the cache and is not asked about.  A
-        slot the factory raises for stays at zero too; the interpreter cannot read it.
+        Asked through the block (`Block._factory_default`), which asks the factory once
+        per slot in address order and keeps the answer.  So a factory that counts gives
+        each slot what stepping reads there, and an export moves no later read.  A slot
+        the factory raises for stays at zero; the interpreter cannot read it.
         """
-        factory = binding.block.default_factory
-        if factory is None:
+        block = binding.block
+        if block.default_factory is None:
             return {}
         values: dict[int, Any] = {}
         for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
             if addr in answered:
                 continue
             try:
-                value = factory(addr)
+                values[addr] = block._factory_default(addr)
             except Exception:
                 continue
-            try:
-                if factory(addr) != value:
-                    return {}
-            except Exception:
-                return {}
-            values[addr] = value
         return values
 
     def block_power_on_literals(self, binding: BlockBinding) -> dict[int, str]:

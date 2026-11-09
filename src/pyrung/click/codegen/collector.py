@@ -248,9 +248,9 @@ def _enrich_with_ownership(
         for logical_addr, hardware_addr in zip(
             entry.logical_addresses, entry.hardware_addresses, strict=True
         ):
-            choices = entry.logical[logical_addr].choices
+            choices = entry.logical._tag_at(logical_addr).choices
             if choices is not None:
-                hardware = entry.hardware.block[hardware_addr]
+                hardware = entry.hardware.block._tag_at(hardware_addr)
                 collection.choice_maps[_hw_address_name(hardware)] = choices
 
     seen_structures: dict[str, _StructureDecl] = {}
@@ -409,8 +409,8 @@ def _enrich_with_ownership(
         per_field_hw: dict[str, _FieldHw] = {}
         for fn in field_names:
             fblock = runtime._blocks[fn]
-            first_hw = _resolve_hw_tag(fblock[1])
-            last_hw = _resolve_hw_tag(fblock[si.count])
+            first_hw = _resolve_hw_tag(fblock._tag_at(1))
+            last_hw = _resolve_hw_tag(fblock._tag_at(si.count))
             if first_hw is not None and last_hw is not None:
                 mem_type, fstart = parse_address(_hw_address_name(first_hw))
                 _, fend = parse_address(_hw_address_name(last_hw))
@@ -419,7 +419,7 @@ def _enrich_with_ownership(
                 collection.used_blocks.add(bvar)
 
         first_field_block = runtime._blocks[field_names[0]]
-        first_slot = first_field_block[1]
+        first_slot = first_field_block._tag_at(1)
         hw_tag = _resolve_hw_tag(first_slot)
         if hw_tag is not None:
             mem_type, addr = parse_address(_hw_address_name(hw_tag))
@@ -434,7 +434,7 @@ def _enrich_with_ownership(
             _, hw_end = runtime.hardware_span(hw_start)
         else:
             last_field_block = runtime._blocks[field_names[-1]]
-            last_slot = last_field_block[si.count]
+            last_slot = last_field_block._tag_at(si.count)
             last_hw_tag = _resolve_hw_tag(last_slot)
             if last_hw_tag is not None:
                 _, hw_end = parse_address(_hw_address_name(last_hw_tag))
@@ -484,8 +484,8 @@ def _enrich_with_ownership(
         if getattr(logical_block, "_pyrung_structure_kind", None) in ("named_array", "udt"):
             return None
 
-        first_hw = entry.hardware.block[entry.hardware_addresses[0]]
-        last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
+        first_hw = entry.hardware.block._tag_at(entry.hardware_addresses[0])
+        last_hw = entry.hardware.block._tag_at(entry.hardware_addresses[-1])
         mem_type, hw_start = parse_address(_hw_address_name(first_hw))
         _, hw_end = parse_address(_hw_address_name(last_hw))
         var_name = _make_safe_identifier(
