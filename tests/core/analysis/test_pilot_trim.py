@@ -77,7 +77,7 @@ def test_a_set_that_meets_a_state_to_avoid_leaves_the_temporary_logic_in(monkeyp
 
 
 def test_a_goal_on_a_tag_no_scan_has_written_keeps_what_writes_it():
-    """No scan has rtc.new_second until the copy writes it, so the wait alone doesn't reach."""
+    """No scan has rtc.new_second until the copy writes it, so the wait alone does not reach the goal."""
     enable = Bool("En", external=True)
     wait = Timer.clone("W")
     with Program(strict=False) as logic:

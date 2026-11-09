@@ -346,7 +346,7 @@ def test_an_input_that_reaches_the_goal_through_the_plant_is_in_its_cone() -> No
 
 
 def test_a_wait_for_a_goal_on_a_tag_no_scan_has_written_runs_until_the_program_writes_it() -> None:
-    """No scan has rtc.new_second until the copy writes it, so it doesn't hold before then."""
+    """No scan has rtc.new_second until the copy writes it, so the goal does not hold before then."""
     from pyrung.core.analysis.pilot import api, last_resort
 
     count = Int("Count")

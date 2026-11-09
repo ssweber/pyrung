@@ -267,6 +267,42 @@ class TestAnOperandNoRungHasGiven:
         assert plan.status is PlanStatus.REACHED, plan.reason
         assert plan.replay().state.tags["Count"] > 5
 
+    @pytest.mark.parametrize("given", ["patch", "force"])
+    def test_a_restart_drops_a_tag_only_a_patch_or_force_by_name_gives(self, given: str) -> None:
+        """A latch blocks the goal until STOP -> RUN, and the restart drops Lim."""
+        go, trip = Bool("Go", external=True), Bool("Trip", external=True)
+        stuck, count, limit = Bool("Stuck"), Int("Count"), Int("Lim")
+        with Program(strict=False) as program:
+            with Rung(trip):
+                latch(stuck)
+            with Rung(go, ~stuck):
+                math(count + 1, count)
+        plc = PLC(program, dt=0.01)
+        plc.patch({"Trip": True})
+        plc.step()
+        plc.patch({"Trip": False})
+        plc.step()
+        if given == "patch":
+            plc.patch({"Lim": 5})
+        else:
+            plc.force("Lim", 5)
+        plc.step()
+
+        by_hand = plc.fork()
+        by_hand.stop()
+        by_hand.start()
+        by_hand.patch({"Go": True})
+        by_hand.step()
+        assert "Lim" not in by_hand.state.tags
+        scans = by_hand.state.scan_id
+        by_hand.run_until(count > limit, max_cycles=5)
+        assert by_hand.state.scan_id - scans < 5  # Stepping reads the goal as holding.
+
+        plan = plc.how(count > limit, **BOUND)
+
+        assert plan.status is PlanStatus.REACHED, plan.reason
+        assert plan.restart is not None
+
 
 class TestOpaqueAvoids:
     def _program(self) -> tuple[Program, Any, Any]:

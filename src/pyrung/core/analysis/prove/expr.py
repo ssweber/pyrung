@@ -71,8 +71,8 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
 
     eval_atom = atom
     if atom.operand_is_tag:
-        # A tag operand with no value leaves the atom undecided, as a missing tag does.  Its
-        # name is not its value.
+        # An operand tag the state lacks leaves the atom undecided, as a missing left-hand tag
+        # does.  Comparing with the operand's name would give a wrong answer or raise TypeError.
         if atom.operand not in state:
             return None
         try:
