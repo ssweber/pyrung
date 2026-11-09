@@ -488,20 +488,16 @@ class RungFiringTimelines(Generic[K]):
         """One tag's half of :meth:`append`, for each scan of the range.
 
         *value* is what it reads on the first scan, ``_MISSING_WRITE`` if the rung does not write
-        it there, and it moves by *delta* each scan.  A tag that takes turns between two values
-        reads *odd* on the second scan and every other scan after it, with no *delta*.  Then
-        *varied* covers every scan, so neither value may be ``_MISSING_WRITE`` with it.  A rung's
+        it there, and it moves by *delta* each scan.  Give *odd* for a tag that switches between
+        two values every scan, with no *delta*.  The tag then reads *value* on the first scan and
+        *odd* on the next.  Such a run may start on ``_MISSING_WRITE`` only once the rung has
+        written the tag, and is *varied* only if neither value is ``_MISSING_WRITE``.  A rung's
         tags ask nothing of each other, so they may go in in any order, and its firings with
         :meth:`append_fired_run`.
         """
         key = (rung_index, tag)
-        if odd is not _ABSENT:
-            if first_scan_id == last_scan_id:
-                odd = _ABSENT
-            elif value is _MISSING_WRITE and tag not in self._tags_by_rung.get(rung_index, ()):
-                # The first scan adds nothing, so the run starts a scan later.
-                first_scan_id += 1
-                value, odd = odd, value
+        if first_scan_id == last_scan_id:
+            odd = _ABSENT
         if value is _MISSING_WRITE and odd is _ABSENT:
             if tag not in self._tags_by_rung.get(rung_index, ()):
                 return  # A tag has no column until the rung first writes it.

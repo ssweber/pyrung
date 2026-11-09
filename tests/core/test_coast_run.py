@@ -376,10 +376,7 @@ class _FakePath:
         self.capture = SimpleNamespace(recordings=(recordings,))
 
 
-_VALUES = [0, 1, 1.0, True, False, "x", pymath.nan]
-
-
-def _random_recording(rng: random.Random, values: list[Any] = _VALUES) -> _Recording:
+def _random_recording(rng: random.Random) -> _Recording:
     tags = rng.sample(["A", "B", "C", "D", "E"], rng.randint(0, 5))
     settled: dict[str, Any] = {}
     from_ends: list[tuple[str, int | None, bool]] = []
@@ -391,7 +388,7 @@ def _random_recording(rng: random.Random, values: list[Any] = _VALUES) -> _Recor
         elif kind < 0.4:
             settled[tag] = _UNKNOWN_VALUE
         else:
-            settled[tag] = rng.choice(values)
+            settled[tag] = rng.choice([0, 1, 1.0, True, False, "x", pymath.nan])
     return _Recording(settled, tuple(from_ends), varied)
 
 
@@ -513,13 +510,11 @@ class TestRecordedRuns:
 
     @pytest.mark.parametrize("seed", range(60))
     def test_paths_that_take_turns_record_as_appending_each_scan(self, seed: int) -> None:
-        # Recordings in a fixed order, mostly one scan each, so tags take turns between values.
-        # Values equal across types (1, 1.0, True) are left out.  Stepping keeps the first of
-        # them that a range sees, and a batch may see another first.
+        # Recordings in a fixed order, mostly one scan each, so tags switch between values.
+        # Equal values of other types (1, 1.0, True) must still record as stepping does.
         rng = random.Random(seed)
-        values = [0, 1, "x", pymath.nan]
         paths = [
-            _FakePath({key: _random_recording(rng, values) for key in ("rung0", "rung1")})
+            _FakePath({key: _random_recording(rng) for key in ("rung0", "rung1")})
             for _ in range(rng.randint(2, 3))
         ]
         runs: RungFiringTimelines[str] = RungFiringTimelines()
@@ -556,6 +551,17 @@ class TestRecordedRuns:
         assert runs._writers_by_tag == scans._writers_by_tag
         assert runs._partly_unknown == scans._partly_unknown
 
+    @pytest.mark.parametrize("values", [(5, _UNKNOWN_VALUE), (_UNKNOWN_VALUE, 5)])
+    def test_a_run_switching_to_unknown_marks_the_column(self, values: tuple[Any, Any]) -> None:
+        runs: RungFiringTimelines[str] = RungFiringTimelines()
+        scans: RungFiringTimelines[str] = RungFiringTimelines()
+        runs.append_fired_run("rung", 1, 6)
+        runs.append_tag_run("rung", "A", 1, 6, values[0], None, False, values[1])
+        for scan in range(1, 7):
+            scans.append("rung", scan, {"A": values[(scan - 1) % 2]})
+        assert runs._partly_unknown == scans._partly_unknown == {("rung", "A")}
+        assert _columns(runs) == _columns(scans)
+
     def test_a_tag_that_takes_turns_costs_a_run_not_a_scan(self) -> None:
         on = _FakePath({"rung": _Recording({"Out": 1, "Still": 3}, (), frozenset())})
         off = _FakePath({"rung": _Recording({"Out": 0, "Still": 3}, (), frozenset())})
@@ -580,7 +586,7 @@ class TestRecordedRuns:
         for scan, out_value in ((3999, 1), (4000, 0), (4001, 0), (4002, 1), (4003, 0)):
             assert dict(runs.rung_writes_at("rung", scan)) == {"Out": out_value, "Still": 3}
 
-    def test_flips_that_take_turns_commit_as_appending_each_scan(self) -> None:
+    def test_flips_that_switch_every_scan_commit_as_one_run(self) -> None:
         calls = {"n": 0}
 
         class Counting(RungFiringTimelines[str]):
@@ -595,28 +601,48 @@ class TestRecordedRuns:
                 super().append_tag_run(*args, **kwargs)
 
         runs = Counting()
+        segments = [_flip(scan, scan % 2 == 1) for scan in range(1, 601)]
+        coast_run._record_committed(runs, segments)
+        assert calls["n"] == 1
+        assert dict(runs.rung_writes_at("Q", 599)) == {"Q": True}
+        assert dict(runs.rung_writes_at("Q", 600)) == {"Q": False}
+
+    @pytest.mark.parametrize("seed", range(60))
+    def test_flips_commit_as_appending_each_scan(self, seed: int) -> None:
+        # Mostly two values by turns, with a third value, a gap, a count, and equal values of
+        # other types (1, 1.0, True) now and then.
+        rng = random.Random(seed)
+        pair = rng.choice([(True, False), (1, 0), (1.0, 0.0), (5, 7)])
+        others = [2, 1, 1.0, True, 0, False, -0.0, pymath.nan]
+        runs: RungFiringTimelines[str] = RungFiringTimelines()
         scans: RungFiringTimelines[str] = RungFiringTimelines()
-        on = SimpleNamespace(moves=CoastMoves((), (), (("Q", False, True),), ()))
-        off = SimpleNamespace(moves=CoastMoves((), (), (("Q", True, False),), ()))
-        counting = SimpleNamespace(moves=CoastMoves((("Q", 1),), (), (), ()))
         segments = []
         scan = 1
-        for path in [on, off] * 300 + [counting, on, off, on]:
-            count = 3 if path is counting else 1
-            ends = {"Q": 4 + count - 1} if path is counting else {}
-            segments.append(SimpleNamespace(path=path, first=scan, count=count, ends=ends))
-            for offset in range(count):
-                if path is counting:
-                    value = 4 + offset
-                else:
-                    value = path.moves.flips[0][2]
-                scans.append("Q", scan + offset, {"Q": value})
-            scan += count
+        for index in range(rng.randint(1, 120)):
+            kind = rng.random()
+            if kind < 0.05:
+                count = rng.randint(2, 4)
+                path = SimpleNamespace(moves=CoastMoves((("Q", 1),), (), (), ()))
+                segments.append(
+                    SimpleNamespace(path=path, first=scan, count=count, ends={"Q": count})
+                )
+                for offset in range(count):
+                    scans.append("Q", scan + offset, {"Q": 1 + offset})
+                scan += count
+                continue
+            value = pair[index % 2] if kind < 0.8 else rng.choice(others)
+            segments.append(_flip(scan, value))
+            scans.append("Q", scan, {"Q": value})
+            scan += 1 + (rng.random() < 0.05)
         coast_run._record_committed(runs, segments)
-        assert calls["n"] == 3  # the turns, the count, and the turns again
         assert runs._fired_ranges == scans._fired_ranges
         assert _columns(runs) == _columns(scans)
         assert runs._counts == scans._counts
+
+
+def _flip(scan: int, after: Any) -> SimpleNamespace:
+    path = SimpleNamespace(moves=CoastMoves((), (), (("Q", None, after),), ()))
+    return SimpleNamespace(path=path, first=scan, count=1, ends={})
 
 
 class TestARungThatFiresInsideARange:
