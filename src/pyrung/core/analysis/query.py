@@ -862,9 +862,10 @@ class QueryNamespace:
         return [_rung_label(sub, idx) for sub, idx in idents]
 
     def _firing_records(self, first: int) -> list[tuple[Any, Any, int, int]]:
-        """Each epoch's main and subroutine firing records, with its scans from *first* on.
+        """The firing records of this runner and each parent, each with its scans from *first* on.
 
-        A fork records only the scans it ran, so each inherited scan is read from its parent.
+        A fork records only the scans it ran itself.  A scan it took from its parent is read
+        from the parent's records.
         """
         plc = self._plc
         plc._settle_compiled_ranges()

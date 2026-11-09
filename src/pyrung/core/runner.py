@@ -2367,7 +2367,7 @@ class PLC:
                 _validate_assume(self._logic, assume)
             from pyrung.core.analysis.causal import projected_cause
 
-            # An enabler's held_since reads the last change before the tip, which may be any scan.
+            # Each enabler's held_since reads its last change, which may be on any earlier scan.
             self._settle_compiled_ranges()
             return projected_cause(
                 logic=self._logic,
