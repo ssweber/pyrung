@@ -1,6 +1,6 @@
-"""A column turns Unknown at its last entry, on the same scan however its scans went in.
+"""A column turns Unknown on its last change, on the same scan however its scans went in.
 
-Stepping keeps ``_ENTRY_LIMIT`` ranges a column, to bound its memory.  A jump, a bulk record
+Stepping counts ``_ENTRY_LIMIT`` changes a column, to bound its memory.  A jump, a bulk record
 and a settle must each turn the column Unknown on the scan stepping does.  So how() ranks the
 same candidate scans whether the jit ran or not.
 """
@@ -32,8 +32,8 @@ def _held(scan_id: int) -> int:
     return (scan_id - 1) // 3
 
 
-# Each shape adds one range every three scans.  So the column holds its last entry on the
-# first scan of the thousandth range.
+# Each shape changes the column once every three scans.  So the column turns Unknown on the
+# first scan of its thousandth value.
 SHAPES = [pytest.param(_flasher, 6, id="flasher"), pytest.param(_held, 3, id="held count")]
 CROSSING = 3 * (_ENTRY_LIMIT - 1) + 1
 LAST = CROSSING + 300
@@ -684,7 +684,7 @@ def test_a_run_notes_its_unrecorded_scans_before_it_trims_history() -> None:
     oldest = plc.history.oldest_scan_id
     assert oldest > 1
     assert plc._unrecorded_scans and plc._unrecorded_scans[0][0] >= oldest
-    # The record keeps the two scans before the floor, which the floor's scan looks back at.
+    # The record keeps the three scans before the floor, which the floor's scans look back at.
     gaps = [
         (max(first, oldest), last)
         for first, last in plc._rung_firing_timelines._gaps
@@ -711,6 +711,28 @@ def test_a_long_run_trims_history_to_steppings_floor(history: int, scans: int) -
     plc.step()
     coast_until(plc, lambda _s: False, budget=scans, predicate_reads=frozenset())
     twin = PLC(_sequencer(), dt=0.01, history=history)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
+
+
+def _forty_counts() -> Program:
+    with Program(strict=False) as program:
+        for k in range(40):
+            with Rung():
+                math(Int(f"Count{k}") + 1, Int(f"Count{k}"))
+    return program
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Over the memory budget each engine trims one interval more on the scans it checks",
+)
+@pytest.mark.parametrize("history", [3000, 6000])
+def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(history: int) -> None:
+    plc = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
+    plc.run_for(100)
+    twin = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
     while twin.current_state.scan_id < plc.current_state.scan_id:
         twin.step()
     assert plc.history.oldest_scan_id == twin.history.oldest_scan_id

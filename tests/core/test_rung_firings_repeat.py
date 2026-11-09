@@ -149,7 +149,7 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
 
 @pytest.fixture
 def small_limit(monkeypatch: pytest.MonkeyPatch) -> int:
-    """A column turns Unknown after a hundred entries, so a short run reaches the limit."""
+    """A column turns Unknown on its hundredth change, so a short run reaches the limit."""
     monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
     return 100
 
@@ -783,7 +783,8 @@ def test_a_settle_that_sends_a_column_unknown_keeps_a_later_repeat() -> None:
     scan_id = 1101 + 6 * 4
     plan = ours.plan_repeat(scan_id - 1, 6)
     assert plan is not None
-    assert 6 * plan.limit > 1000  # The repeat runs on past the scan stepping went unknown on.
+    # Each cycle changes the column five times, and the plan stops short of the limit.
+    assert plan.limit == (rung_firings._ENTRY_LIMIT - 1 - ours._counts[(0, "a")]) // 5
     plan.apply(plan.limit)
     scan_id += 6 * plan.limit
     for _ in range(3):
@@ -856,8 +857,8 @@ def _squares_then_a_ramp(record: RungFiringTimelines, scans: Any) -> None:
 
 
 def test_a_gap_settled_back_half_first_knows_only_values_written(small_limit: int) -> None:
-    # Settling the back half first counts values from the gap's end, so the column may go
-    # unknown early.  Whatever it still knows is the value written.
+    # While the front half is a gap, the back half's first scans count no change.  So the
+    # count may stay low, and whatever the column still knows is the value written.
     live: RungFiringTimelines = RungFiringTimelines()
     _squares_then_a_ramp(live, [*range(1, 150), *range(251, 301)])
     for first, last in ((201, 250), (150, 200)):

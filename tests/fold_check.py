@@ -1700,8 +1700,7 @@ def _checked(
         _depth += 1
         try:
             compare_runners(kind, plc, twin, start)
-            if kind == "coast":
-                compare_records(kind, plc, twin, start)
+            compare_records(kind, plc, twin, start)
             compare_history(kind, plc, twin, start, truth)
             compare_continuation(kind, plc, twin)
         finally:

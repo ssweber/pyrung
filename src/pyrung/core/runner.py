@@ -5038,7 +5038,9 @@ class PLC:
         """Trim history to the floor that the tip and ``history=`` set.
 
         The floor moves once per checkpoint interval.  Stepping and a long run checkpoint on
-        different scans, so the floor must not depend on where the checkpoints are.
+        different scans, so the floor must not depend on where the checkpoints are.  Over the
+        memory budget, a checkpoint scan trims to the checkpoint an interval past the horizon.
+        That checkpoint and the bytes held differ between stepping and a long run.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval
         if retention is None:
