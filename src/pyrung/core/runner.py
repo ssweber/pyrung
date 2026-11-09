@@ -5042,7 +5042,8 @@ class PLC:
         That checkpoint and the bytes held differ between stepping and a long run.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval
-        if retention is None:
+        # A replay's records go back into its parent, so its own budget must not trim them.
+        if retention is None or self._replay_mode:
             return
         horizon = new_scan_id - new_scan_id % interval - retention
         floor = -(-horizon // interval) * interval

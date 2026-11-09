@@ -757,6 +757,15 @@ def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(history: int
     assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
 
 
+def test_a_settle_over_the_memory_budget_keeps_every_firing_it_replays() -> None:
+    plc = PLC(_forty_counts(), dt=0.01, history=3000, history_budget=1_048_576)
+    plc.run_for(100)
+    # hot_rungs settles every kept scan.  The replay that settles them keeps all it records (its
+    # own budget trim took the oldest kept interval).
+    assert len(plc.query.hot_rungs()) == 40
+    assert len(plc.rung_firings(plc.history.oldest_scan_id)) == 40
+
+
 Noise = Int("EntryNoise")
 
 
