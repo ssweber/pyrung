@@ -109,6 +109,16 @@ def _rung_sort_key(ident: tuple[str | None, int]) -> tuple[int, str, int]:
     return (0 if subroutine is None else 1, subroutine or "", rung_index)
 
 
+def _fired_within(timelines: Any, rungs: set[Any], first: int, last: int) -> set[Any]:
+    """The rungs in *rungs* that fired on some scan in *first*..*last*."""
+    fired = set()
+    for rung in rungs:
+        scan = timelines.latest_firing_scan_at_or_before(frozenset({rung}), last)
+        if scan is not None and scan >= first:
+            fired.add(rung)
+    return fired
+
+
 # ---------------------------------------------------------------------------
 # Hang-forever survey — wait-shaped steps with no fireable escape
 # ---------------------------------------------------------------------------
@@ -832,28 +842,53 @@ class QueryNamespace:
     def cold_rungs(self) -> list[str]:
         """Rung labels that never fired across retained history.
 
-        Backed by :class:`RungFiringTimelines` — a rung with no timeline
-        (or an empty timeline) is cold.  Covers main rungs (the int firing
-        log) and subroutine rungs (the node firing log), so a subroutine
-        that was never called is reported as cold.
+        A rung is cold when no firing record has it on a retained scan.  A fork
+        reads its parent's records for the scans it took from the parent.
+        Covers main rungs and subroutine rungs, so a subroutine that was never
+        called is reported as cold.
 
         Labels are **1-indexed** to match ``why()``/``cause()`` and the
         debugger: ``"3"`` for a main rung, ``"MySub:3"`` for a subroutine
         rung.
         """
-        plc = self._plc
-        plc._settle_compiled_ranges()
-        idents: list[tuple[str | None, int]] = []
-        ever_main = plc._rung_firing_timelines.ever_fired()
-        idents.extend((None, i) for i in range(len(plc._logic)) if i not in ever_main)
-        sub_universe = self._subroutine_rung_ids()
-        if sub_universe:
-            ever_sub = plc._node_firing_timelines.ever_fired()
-            idents.extend(
-                (rid.subroutine, rid.rung_index) for rid in sub_universe if rid not in ever_sub
-            )
+        cold_main: set[int] = set(range(len(self._plc._logic)))
+        cold_sub = self._subroutine_rung_ids()
+        for main, nodes, first, last in self._firing_records(self._plc._causal_oldest_scan_id()):
+            cold_main -= _fired_within(main, cold_main, first, last)
+            cold_sub -= _fired_within(nodes, cold_sub, first, last)
+        idents: list[tuple[str | None, int]] = [(None, i) for i in cold_main]
+        idents.extend((rid.subroutine, rid.rung_index) for rid in cold_sub)
         idents.sort(key=_rung_sort_key)
         return [_rung_label(sub, idx) for sub, idx in idents]
+
+    def _firing_records(self, first: int) -> list[tuple[Any, Any, int, int]]:
+        """The firing records of this runner and each parent, each with its scans from *first* on.
+
+        A fork records only the scans it ran itself.  A scan it took from its parent is read
+        from the parent's records.
+        """
+        plc = self._plc
+        plc._settle_compiled_ranges()
+        sealed = plc._causal_lineage.sealed_epochs
+        spans = [
+            (
+                epoch.rung_firing_timelines,
+                epoch.node_firing_timelines,
+                epoch.first_scan,
+                epoch.last_scan,
+            )
+            for epoch in sealed
+        ]
+        # This runner's records are read in place.  Sealing them copies them on every new scan.
+        own_first = plc._initial_scan_id + 1 if sealed else plc._initial_scan_id
+        spans.append(
+            (plc._rung_firing_timelines, plc._node_firing_timelines, own_first, plc._state.scan_id)
+        )
+        return [
+            (main, nodes, max(lo, first), hi)
+            for main, nodes, lo, hi in spans
+            if max(lo, first) <= hi
+        ]
 
     def hot_rungs(self) -> list[str]:
         """Rung labels that fired every scan across retained history.
@@ -865,22 +900,16 @@ class QueryNamespace:
         Labels are **1-indexed**: ``"3"`` for a main rung, ``"MySub:3"``
         for a subroutine rung.
         """
-        plc = self._plc
-        plc._settle_compiled_ranges()
-        initial_scan_id = plc._initial_scan_id
-        scans = plc._history.scan_ids()
-        first = scans[0] if scans else initial_scan_id
-        if first == initial_scan_id:
-            first += 1
-        last = scans[-1] if scans else initial_scan_id
-        if first > last:
+        # The oldest scan is the starting state, which no rung ran on.
+        records = self._firing_records(self._plc._causal_oldest_scan_id() + 1)
+        if not records:
             return []
-        hot_main = set(range(len(plc._logic)))
+        hot_main: set[int] = set(range(len(self._plc._logic)))
         hot_sub = self._subroutine_rung_ids()
-        if hot_main:
-            hot_main &= plc._rung_firing_timelines.fired_throughout(first, last)
-        if hot_sub:
-            hot_sub &= plc._node_firing_timelines.fired_throughout(first, last)
+        for main, nodes, first, last in records:
+            hot_main &= main.fired_throughout(first, last)
+            if hot_sub:
+                hot_sub &= nodes.fired_throughout(first, last)
         idents: list[tuple[str | None, int]] = [(None, i) for i in hot_main]
         idents.extend((rid.subroutine, rid.rung_index) for rid in hot_sub)
         idents.sort(key=_rung_sort_key)

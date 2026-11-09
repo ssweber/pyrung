@@ -342,6 +342,7 @@
 - `history.at()`, `replay_to()`, `cause()` and `effect()` no longer send Modbus requests (a replayed `send()` could write to the device again). A replayed scan writes the answer the device gave on that scan.
 - `replay_to()` and `plan.replay()` return a fork whose history starts at the scan replayed to (on some programs the fork also kept the scans from the checkpoint before).
 - `rung_firings()`, `cause()` and `cold_rungs()` on a fork from `replay_to()` or `plan.replay()` now see the scan replayed to (they said no rung fired on it).
+- `cold_rungs()` and `hot_rungs()` on a `fork()` now read the scans the fork took from its parent (`hot_rungs()` found no rung, and `cold_rungs()` listed a rung that fired only before the fork).
 - A `fork()` of a PLC with a live `send()` or `receive()` sends its own requests (it could collect the answer to its parent's request). A fork made while a request is in flight never gets that request's answer.
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
   - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
