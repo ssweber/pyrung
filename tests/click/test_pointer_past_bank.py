@@ -47,13 +47,13 @@ def test_choices_past_the_bank_warn():
     (finding,) = _found(*_copy_through(ptr))
     assert finding.severity == "warning"
     assert finding.message == (
-        f"DD[Ptr] {_AT} can reach DD1001, past DD1000 at the end of the bank: "
-        "pyrung reads zero there and drops a write."
+        f"DD[Ptr] {_AT} can reach DD1001. DD ends at DD1000. "
+        "pyrung reads 0 there and drops a write."
     )
     assert finding.message.isascii() and finding.suggestion.isascii()
 
 
-def test_a_write_through_it_says_what_a_click_does():
+def test_a_copy_write_through_a_dd_pointer_says_what_a_click_does():
     ptr = Int("Ptr", choices={1: "v1", 1531: "v1531"})
     src = Int("Src")
     with Program(strict=False) as prog:
@@ -63,7 +63,7 @@ def test_a_write_through_it_says_what_a_click_does():
     (finding,) = _found(prog, mapping)
     assert finding.message == (
         "DD[Ptr] at main.rung[0].instruction[0](CopyInstruction).instruction.dest can "
-        "reach DD1531, past DD1000 at the end of the bank: a CLICK writes there and "
+        "reach DD1531. DD ends at DD1000. A CLICK Copy writes there and raises no flag. "
         "pyrung drops the write."
     )
 
@@ -122,7 +122,7 @@ def test_a_mapped_block_counts_in_hardware_addresses():
     assert report(Int("Ptr", choices={1: "a", 100: "b"})) == []
     (finding,) = report(Int("Ptr", choices={1: "a", 150: "b"}))
     assert "Table[Ptr]" in finding.message
-    assert "can reach DS4550, past DS4500 at the end of the bank" in finding.message
+    assert "can reach DS4550. DS ends at DS4500." in finding.message
 
 
 def test_a_range_whose_end_passes_the_bank_warns_though_its_start_does_not():
@@ -138,8 +138,7 @@ def test_a_range_whose_end_passes_the_bank_warns_though_its_start_does_not():
     assert [f.message for f in found if "indirect range" in f.message] == [
         "The indirect range on DD at "
         "main.rung[0].instruction[1](CopyInstruction).instruction.source "
-        "ends at DD1005, past DD1000 at the end of the bank: pyrung reads zero there "
-        "and drops a write."
+        "ends at DD1005. DD ends at DD1000. pyrung reads 0 there and drops a write."
     ]
 
 
@@ -167,3 +166,48 @@ def test_export_of_a_pointer_inside_the_bank_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         pyrung_to_ladder(prog, mapping)
+
+
+def test_a_pointer_read_in_a_rung_condition_warns():
+    ptr = Int("Ptr", choices={1: "v1", 1500: "v1500"})
+    out = Int("Out")
+    with Program(strict=False) as prog:
+        with rung(dd[ptr] > 0):
+            copy(1, out)
+    mapping = TagMap({ptr: ds[1], out: ds[2]}, include_system=False)
+    (finding,) = _found(prog, mapping)
+    assert finding.message == (
+        "DD[Ptr] at main.rung[0].condition can reach DD1500. DD ends at DD1000. "
+        "pyrung reads 0 there and drops a write."
+    )
+
+
+def test_a_for_loop_index_with_a_constant_count_is_bounded_by_the_count():
+    from pyrung.core import forloop
+
+    out = Int("Out")
+
+    def report(count):
+        with Program(strict=False) as prog:
+            with rung():
+                with forloop(count) as loop:
+                    copy(dd[loop.idx], out)
+        return _found(prog, TagMap({out: ds[2]}, include_system=False))
+
+    assert report(1000) == []
+    (finding,) = report(1100)
+    assert "can reach DD1001" in finding.message
+
+
+def test_a_program_with_no_pointer_builds_no_value_sets(monkeypatch):
+    from pyrung.click.validation import pointer_range
+
+    def refuse(self):
+        raise AssertionError("value sets built")
+
+    monkeypatch.setattr(pointer_range._PointerBounds, "_build", refuse)
+    out = Int("Out")
+    with Program(strict=False) as prog:
+        with rung():
+            copy(ds[1], out)
+    assert _found(prog, TagMap({out: ds[2]}, include_system=False)) == []
