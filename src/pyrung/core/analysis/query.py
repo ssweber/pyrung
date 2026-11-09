@@ -871,7 +871,12 @@ class QueryNamespace:
         plc._settle_compiled_ranges()
         sealed = plc._causal_lineage.sealed_epochs
         spans = [
-            (epoch.rung_firing_timelines, epoch.node_firing_timelines, epoch.first_scan, epoch.last_scan)
+            (
+                epoch.rung_firing_timelines,
+                epoch.node_firing_timelines,
+                epoch.first_scan,
+                epoch.last_scan,
+            )
             for epoch in sealed
         ]
         # This runner's records are read in place.  Sealing them copies them on every new scan.
