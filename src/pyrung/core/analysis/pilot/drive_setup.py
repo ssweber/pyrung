@@ -224,15 +224,16 @@ def prepare_drive(
 def start_fork(plc: PLC) -> PLC:
     """The unstepped fork how() starts from, with the defaults of the slots the rungs reach."""
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    # Before the fork's first scan: an edit after a scan would add a checkpoint to every how().
     _seed_reached_slots(work)
     return work
 
 
 def _seed_reached_slots(work: PLC) -> None:
-    """Put in the state how() starts from the default of each slot the rungs reach that it lacks.
+    """Give each slot the rungs reach that the start state lacks its default.
 
-    A PLC built after another analysis of the program already holds these defaults, because it
-    knows the slots that analysis made.  Seeding them here gives how() the same snapshot either way.
+    A state holds a slot once a scan wrote it or the user's code indexed it, and not before.
+    Seeding them here gives how() the same snapshot either way.
     A slot read with no value reads its default, so no scan sees a difference.
     """
     reach = work._tags_rungs_reach

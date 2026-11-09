@@ -282,7 +282,7 @@ def test_a_tag_no_rung_uses_is_not_reached_in_stop(goal_is_not: bool) -> None:
 
     plan = plc.how(~absent if goal_is_not else absent, max_scans=100)
 
-    assert plan.status is not PlanStatus.REACHED
+    assert plan.status is PlanStatus.STOPPED
 
 
 def _raises_at_once(snapshot: dict) -> bool:
