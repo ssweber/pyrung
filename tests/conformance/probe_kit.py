@@ -109,6 +109,48 @@ def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str)
     return keys
 
 
+def _toml(value: Any) -> str:
+    """*value* as a TOML inline value: str, int, bool, list and dict only."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml(v) for v in value) + "]"
+    if isinstance(value, dict):
+        items = ", ".join(f"{json.dumps(str(k))} = {_toml(v)}" for k, v in value.items())
+        return "{ " + items + " }" if items else "{}"
+    raise TypeError(f"no TOML form for {value!r}")
+
+
+def record_raw_readings(
+    path: str | Path,
+    readings: dict[str, dict[str, Any]],
+    *,
+    group: str,
+    case_hash: str,
+    on: str,
+    header: str = _READINGS_HEADER,
+) -> list[str]:
+    """Append one entry per probe of a harness that reads outside the slots (``modbus_raw``).
+
+    A sibling of :func:`record_readings` for readings that are not slot fields.  *header* starts
+    a new file.  Returns the keys written.
+    """
+    path = Path(path)
+    entries = [
+        f'[[reading]]\ncase = "{group}/{name}"\nhash = "{case_hash}"\non = "{on}"\n'
+        f"read = {_toml(read)}\n"
+        for name, read in readings.items()
+    ]
+    if entries:
+        text = path.read_text(encoding="utf-8") if path.exists() else header
+        path.write_text(text + "\n" + "\n".join(entries), encoding="utf-8")
+    return [f"{group}/{name}" for name in readings]
+
+
 def record_run(
     confirmed: str | Path, readings: str | Path, results: Iterable[CaseResult], *, on: str
 ) -> tuple[list[str], list[str], list[str]]:

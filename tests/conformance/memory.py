@@ -521,6 +521,15 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(141, 148),
         "CT": range(6, 7),
     },
+    # DS4500 is the last DS, for a Modbus write that runs past it.
+    "modbus_raw": {
+        "C": range(1999, 2001),
+        "DS": (range(4061, 4076), range(4500, 4501)),
+        "DD": range(201, 207),
+        "DF": range(101, 116),
+        "DH": range(101, 127),
+        "TXT": range(401, 407),
+    },
 }
 
 
