@@ -444,7 +444,14 @@ A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_lad
 
 ### Pointers past a bank
 
-Validation warns with `CLK_PTR_PAST_BANK` when the values pyrung knows for a pointer can address memory past the end of its bank. Those values are the tag's `choices`, its `min` and `max`, and what the program writes into it. A CLICK writes into that memory, and pyrung drops the write. A pointer with no known bound is not reported. Export still writes the program, with the finding as a `UserWarning`.
+```python
+ptr = Int("Ptr", max=1010)
+copy(dd[ptr], out)  # CLK_PTR_PAST_BANK: DD ends at DD1000
+```
+
+Validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank. The values a pointer can take are its `choices`, its `min` and `max`, and every value a `copy()` or `math()` in the program can store in it. A `For` loop index with a constant count takes 0 to count - 1. A pointer built from a value the program cannot bound is not reported.
+
+A CLICK `copy()` through a `DD` pointer past `DD1000` writes into the memory there and sets no flag. pyrung drops that write and reads 0 there. Keep the pointer inside the bank, or give the tag `min`/`max` or `choices`.
 
 ## Ladder CSV export
 
