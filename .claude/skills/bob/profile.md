@@ -118,6 +118,13 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
 
 ## Machine budget
 
+- Time base and branch on the same interpreter. The main checkout's venv is Python 3.13 and the
+  worktrees' are 3.14, and a base timed in one against a branch timed in the other is skewed
+  (2026-11-08: "dev 95 s" was 75 s on 3.14).
+- Read a gating pytest's exit code directly. Piping it through `tail` without `pipefail` hides a
+  fold-check session failure behind "N passed" (train14, 2026-11-08: an undeclared mismatch from a
+  strict xfail). A strict xfail whose run fold-check compares wraps that run in
+  `fold_check.deliberate()` when fold-check is installed.
 - One heavy job machine-wide (the queue's lock); up to ~5 builders iterating on targeted tests in
   parallel. `test` and `fold` take 6 of the 8 cores (`PYTEST_WORKERS`, peak 2.4 GB). Pilot-heavy suites
   (`tumbler`, `prove`, `pilot`, `soundness`) stay in one process: user, 2026-11-03, pilot is intensive.
