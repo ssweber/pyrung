@@ -548,3 +548,105 @@ case = "drum_branch/drum_in_loop"
 hash = "b8eaae081f30"
 on = "2026-11-09"
 read = { Result2 = 30, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "flag_boxes/boxes_by_pointer"
+hash = "4581e8852792"
+on = "2026-11-09"
+read = { Result1 = 31, Result2 = 0, Result3 = 0, Result4 = 7 }
+
+[[reading]]
+case = "flag_boxes/ton_ctu_by_pointer"
+hash = "2d5b7aea4626"
+on = "2026-11-09"
+read = { Result1 = 1, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/bulk_ops_settle_sc43"
+hash = "e0212f018121"
+on = "2026-11-09"
+read = { Result1 = 127, Result2 = 1 }
+
+[[reading]]
+case = "flag_halves/oneshot_settles_sc43"
+hash = "628531fc6aae"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/source_sc43"
+hash = "6210bddfeeda"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/df_into_dd"
+hash = "0cc3cee5e95f"
+on = "2026-11-09"
+read = { Result1 = 1, Result2 = 21474, Result3 = 0 }
+
+[[reading]]
+case = "real_text/one_and_a_half_first"
+hash = "31729bcf8c0f"
+on = "2026-11-09"
+read = { Result1 = 6318, Result2 = 6832, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/one_and_a_half_past"
+hash = "e4f7ffe032fe"
+on = "2026-11-09"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/minus_quarter_first"
+hash = "14197c1b118f"
+on = "2026-11-09"
+read = { Result1 = 5808, Result2 = 5938, Result3 = 6832, Result4 = 6192, ErrorCode = 6192 }
+
+[[reading]]
+case = "real_text/minus_quarter_past"
+hash = "614570fe0435"
+on = "2026-11-09"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/zero_first"
+hash = "9c88b0f5449e"
+on = "2026-11-09"
+read = { Result1 = 6190, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/six_digits_first"
+hash = "c8312e830713"
+on = "2026-11-09"
+read = { Result1 = 6322, Result2 = 6580, Result3 = 6838, Result4 = 5943, ErrorCode = 6195 }
+
+[[reading]]
+case = "real_text/six_digits_past"
+hash = "6f764024e7b0"
+on = "2026-11-09"
+read = { Result1 = 6322, Result2 = 6832, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/ten_billion_first"
+hash = "b8f0aaf85f1c"
+on = "2026-11-09"
+read = { Result1 = 6320, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6192 }
+
+[[reading]]
+case = "real_text/ten_billion_past"
+hash = "0e978b9961ad"
+on = "2026-11-09"
+read = { Result1 = 6190, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/round_value_past"
+hash = "28e0058f3e60"
+on = "2026-11-09"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "past_clean/clear_then_write"
+hash = "52e6caa4e8a6"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 1234, Result3 = 0, Result4 = 0, ErrorCode = 0 }

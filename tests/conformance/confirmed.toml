@@ -131,6 +131,7 @@
 "flag_probe/source_flag_in_a_math" = { hash = "2fae14eccb78", on = "2026-11-09" }
 "flag_probe/source_flag_is_read_before_the_copy_settles" = { hash = "c2c9101394fa", on = "2026-11-09" }
 "flag_scan/math_flags_over_a_scan" = { hash = "3ebb134b9fe5", on = "2026-11-07" }
+"for_dd_minus/minus_one_count" = { hash = "9d228b3b5bdc", on = "2026-11-09" }
 "for_more/clock_edges_in_a_body" = { hash = "c08350dd4748", on = "2026-11-09" }
 "for_more/oneshot_and_edges" = { hash = "a4c1e11033f3", on = "2026-11-09" }
 "for_more/timers_at_limits" = { hash = "30c1ce3bc455", on = "2026-11-09" }
@@ -175,6 +176,9 @@
 "math_more/power_edges" = { hash = "5246643663cc", on = "2026-11-09" }
 "math_more/real_past_int" = { hash = "ada74849b318", on = "2026-11-09" }
 "math_more/wide_constant_into_dint" = { hash = "021bd2deb153", on = "2026-11-09" }
+"math_terms/error_terms" = { hash = "019312a0d414", on = "2026-11-09" }
+"math_terms/error_terms_real" = { hash = "aaa806ff4d96", on = "2026-11-09" }
+"math_terms/wide_values" = { hash = "d1b9f8555991", on = "2026-11-09" }
 "numeric/copy_clamps_calc_wraps" = { hash = "b58406ac7737", on = "2026-11-09" }
 "numeric/copy_source_to_dest" = { hash = "3a43843761cb", on = "2026-11-09" }
 "numeric/dint_calc_wraps" = { hash = "e280219d1273", on = "2026-11-09" }
@@ -240,6 +244,7 @@
 "search/plain_search_ignores_result" = { hash = "d00b332a0555", on = "2026-11-09" }
 "search/range_ends_inclusive" = { hash = "94e7ce07efab", on = "2026-11-09" }
 "search/text_windows" = { hash = "fdddcf68a361", on = "2026-11-09" }
+"search_more/oneshot_against_dd_result" = { hash = "2b05f7038c96", on = "2026-11-09" }
 "shift/bit_leaves_the_end" = { hash = "c3460b7dfd97", on = "2026-11-09" }
 "shift/clock_is_a_rising_edge" = { hash = "f5586892395d", on = "2026-11-09" }
 "shift/data_is_the_rung_at_the_edge" = { hash = "de4f41037038", on = "2026-11-09" }

@@ -18,7 +18,7 @@ lint = { cmd = ["make", "lint"], timeout = 600, light = true }   # light: agents
 fold-new = { cmd = ["make", "test-fold-new"], timeout = 900 }   # only the test files the branch adds; instant when it adds none
 prove = { cmd = ["make", "test-prove"], timeout = 300 }
 pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
-test = { cmd = ["make", "test"], timeout = 900 }
+test = { cmd = ["make", "test"], timeout = 1200 }   # a loaded machine reached 99% at 900 s (2026-11-09)
 soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
 fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # about 1,450-1,600 s alone; a loaded machine took it past 1,800 at 99% (2026-11-09)
 tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
