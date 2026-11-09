@@ -144,14 +144,22 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
     for key in theirs:
         assert ours[key] == theirs[key], key
     assert repeated._unknown_keys == stepped._unknown_keys
-    assert repeated._entries == stepped._entries
+    assert repeated._counts == stepped._counts
 
 
 @pytest.fixture
 def small_limit(monkeypatch: pytest.MonkeyPatch) -> int:
-    """A column turns Unknown after a hundred entries, so a short run reaches the limit."""
+    """A column turns Unknown on its hundredth change, so a short run reaches the limit."""
     monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
     return 100
+
+
+def _trimmed(record: RungFiringTimelines, cut: int) -> RungFiringTimelines:
+    """*record* trimmed to scan *cut*, as a record with a history window and no limit is."""
+    windowed = record.snapshot()
+    windowed._limit = None
+    windowed.trim_before(cut)
+    return windowed
 
 
 class _Uncapped(RungFiringTimelines):
@@ -246,10 +254,7 @@ def test_scans_after_a_repeat_and_a_trim_read_back_as_scan_by_scan() -> None:
     _assert_same(stepped, repeated, last)
     for cut in (1, 6, 7, 30, 61, last - 2):
         _assert_same(stepped.snapshot(up_to=cut), repeated.snapshot(up_to=cut), last)
-        early, later = stepped.snapshot(), repeated.snapshot()
-        early.trim_before(cut)
-        later.trim_before(cut)
-        _assert_same(early, later, last)
+        _assert_same(_trimmed(stepped, cut), _trimmed(repeated, cut), last)
 
 
 def test_a_range_taken_from_another_record_reads_back_as_scan_by_scan() -> None:
@@ -341,10 +346,7 @@ def test_random_stepping_cycles_read_back_as_scan_by_scan(seed: int) -> None:
     _assert_same(stepped, repeated, last)
     cut = rng.randrange(1, last + 1)
     _assert_same(stepped.snapshot(up_to=cut), repeated.snapshot(up_to=cut), last)
-    early, later = stepped.snapshot(), repeated.snapshot()
-    early.trim_before(cut)
-    later.trim_before(cut)
-    _assert_same(early, later, last)
+    _assert_same(_trimmed(stepped, cut), _trimmed(repeated, cut), last)
 
 
 def test_most_random_stepping_cycles_go_in_with_steps() -> None:
@@ -687,7 +689,7 @@ def test_a_settle_counts_on_from_the_count_before_the_gap(
         assert _loose(ours.value_at(0, "a", scan_id)) == _loose(stepped.value_at(0, "a", scan_id))
     _assert_true_to(stepped, truth, ours, 3 * cycles)
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     assert not ours._partly_unknown
     for scan_id in range(3 * cycles + 2):
         assert ours.value_at(0, "a", scan_id) is stepped.value_at(0, "a", scan_id) or _loose(
@@ -783,14 +785,15 @@ def test_a_settle_that_sends_a_column_unknown_keeps_a_later_repeat() -> None:
     scan_id = 1101 + 6 * 4
     plan = ours.plan_repeat(scan_id - 1, 6)
     assert plan is not None
-    assert plan.limit > 300
+    # Each cycle changes the column five times, and the plan stops short of the limit.
+    assert plan.limit == (rung_firings._ENTRY_LIMIT - 1 - ours._counts[(0, "a")]) // 5
     plan.apply(plan.limit)
     scan_id += 6 * plan.limit
     for _ in range(3):
         ours.append(0, scan_id, _many_then_six(scan_id))
         scan_id += 1
     before = ours.run_count()
-    settled: RungFiringTimelines = RungFiringTimelines()
+    settled: RungFiringTimelines = RungFiringTimelines(capped=False)
     for settled_scan in range(1, 1101):
         settled.append(0, settled_scan, _many_then_six(settled_scan))
     tracemalloc.start()
@@ -846,8 +849,8 @@ def test_scans_after_a_gap_not_yet_settled_keep_the_value_written(small_limit: i
 
 
 def _square_or_ramp(scan_id: int) -> int:
-    """97 values, then a ramp that stepping keeps as one range, so it never counts 100."""
-    return (scan_id * scan_id) % 1009 if scan_id < 98 else 5000 + scan_id
+    """96 values, then a ramp that counts three changes, so stepping never counts 100."""
+    return (scan_id * scan_id) % 1009 if scan_id < 97 else 5000 + scan_id
 
 
 def _squares_then_a_ramp(record: RungFiringTimelines, scans: Any) -> None:
@@ -856,8 +859,8 @@ def _squares_then_a_ramp(record: RungFiringTimelines, scans: Any) -> None:
 
 
 def test_a_gap_settled_back_half_first_knows_only_values_written(small_limit: int) -> None:
-    # Settling the back half first counts values from the gap's end, so the column may go
-    # unknown early.  Whatever it still knows is the value written.
+    # While the front half is a gap, the back half's first scans count no change.  So the
+    # count may stay low, and whatever the column still knows is the value written.
     live: RungFiringTimelines = RungFiringTimelines()
     _squares_then_a_ramp(live, [*range(1, 150), *range(251, 301)])
     for first, last in ((201, 250), (150, 200)):

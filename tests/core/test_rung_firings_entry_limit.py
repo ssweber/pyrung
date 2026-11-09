@@ -1,7 +1,7 @@
-"""A column turns Unknown at its last entry, on the same scan however its scans went in.
+"""A column turns Unknown on the same scan however its scans went in.
 
-Stepping keeps ``_ENTRY_LIMIT`` ranges a column, to bound its memory.  A jump, a bulk record
-and a settle must each turn the column Unknown on the scan stepping does.  So how() ranks the
+Without a history window, stepping turns a column Unknown on its ``_ENTRY_LIMIT``-th change.  A
+jump, a bulk record and a settle must each turn it Unknown on that scan too.  So how() ranks the
 same candidate scans whether the jit ran or not.
 """
 
@@ -9,13 +9,27 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, coast_run, copy, math, out, rung_firings
+from pyrung.core import (
+    PLC,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    coast_run,
+    compiled_run,
+    copy,
+    math,
+    out,
+    rung_firings,
+)
 from pyrung.core.coast_run import coast_until
-from pyrung.core.rung_firings import _ENTRY_LIMIT, _UNKNOWN_VALUE, RungFiringTimelines
+from pyrung.core.rung_firings import _ENTRY_LIMIT, _UNKNOWN_VALUE, RungFiringTimelines, _expanded
+from tests import fold_check
 from tests.fold_check import compare_records, seed_records
 
 KEY = (0, "a")
@@ -32,8 +46,8 @@ def _held(scan_id: int) -> int:
     return (scan_id - 1) // 3
 
 
-# Each shape adds one range every three scans.  So the column holds its last entry on the
-# first scan of the thousandth range.
+# Each shape changes the column once every three scans.  So the column turns Unknown on the
+# first scan of its thousandth value.
 SHAPES = [pytest.param(_flasher, 6, id="flasher"), pytest.param(_held, 3, id="held count")]
 CROSSING = 3 * (_ENTRY_LIMIT - 1) + 1
 LAST = CROSSING + 300
@@ -51,7 +65,7 @@ def _assert_same(ours: RungFiringTimelines, stepped: RungFiringTimelines, last: 
         mine, theirs = ours.value_at(0, "a", scan_id), stepped.value_at(0, "a", scan_id)
         assert mine is theirs or (_UNKNOWN_VALUE not in (mine, theirs) and mine == theirs), scan_id
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     for before in (last // 2, CROSSING, CROSSING + 1, CROSSING + 7, last + 1):
         assert ours.tag_transition_candidate_scans_before(
             ONE, "a", before
@@ -116,7 +130,7 @@ def test_a_settle_turns_the_column_unknown_on_steppings_scan(writes, period) -> 
                 ours: RungFiringTimelines = RungFiringTimelines()
                 for scan_id in range(1, first):
                     ours.append(0, scan_id, {"a": writes(scan_id)})
-                replay = ours.carried_to(anchor)
+                replay = RungFiringTimelines(capped=False)
                 for scan_id in range(anchor + 1, last + 1):
                     replay.append(0, scan_id, {"a": writes(scan_id)})
                 ours.replace_range(replay, first, last)
@@ -131,6 +145,7 @@ def test_a_settle_after_a_jump_past_the_crossing_turns_it_unknown_there(writes, 
     # the column Unknown from that scan, and its repeat stays one entry.
     gap = (CROSSING - 100, CROSSING - 41)
     ours: RungFiringTimelines = RungFiringTimelines()
+    ours.note_gap(*gap)
     scan_id = 1
     while scan_id <= LAST:
         if gap[0] <= scan_id <= gap[1]:
@@ -145,7 +160,7 @@ def test_a_settle_after_a_jump_past_the_crossing_turns_it_unknown_there(writes, 
                 scan_id += cycles * period
         scan_id += 1
     assert KEY not in ours._unknown_keys or ours._unknown_keys[KEY] > CROSSING
-    replay = ours.carried_to(gap[0] - 6)
+    replay = RungFiringTimelines(capped=False)
     for replayed in range(gap[0] - 5, gap[1] + 1):
         replay.append(0, replayed, {"a": writes(replayed)})
     ours.replace_range(replay, *gap)
@@ -246,7 +261,7 @@ def test_the_shapes_the_last_review_found_settle_as_stepping_does(
     ours: RungFiringTimelines = RungFiringTimelines()
     for scan_id in range(1, anchor + 1):
         put(ours, scan_id)
-    replay = ours.carried_to(anchor)
+    replay = RungFiringTimelines(capped=False)
     count = len(writes)
     for scan_id in range(1, count + 1):
         put(stepped, scan_id)
@@ -260,33 +275,40 @@ def test_the_shapes_the_last_review_found_settle_as_stepping_does(
         mine, theirs = ours.value_at(0, "a", scan_id), stepped.value_at(0, "a", scan_id)
         assert mine is theirs or mine == theirs, scan_id
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     for before in range(1, count + 2, 7):
         assert ours.tag_transition_candidate_scans_before(
             ONE, "a", before
         ) == stepped.tag_transition_candidate_scans_before(ONE, "a", before), before
 
 
-def test_a_trim_from_the_front_keeps_the_count() -> None:
-    # Stepping trims at each checkpoint.  A long run trims only on the scan it ends on.  Both
-    # must turn the column Unknown on the same scan.
-    trimmed: RungFiringTimelines = RungFiringTimelines()
-    for scan_id in range(1, LAST + 1):
-        trimmed.append(0, scan_id, {"a": _held(scan_id)})
-        if scan_id % 500 == 0:
-            trimmed.trim_before(scan_id - 100)
+def test_a_back_cut_takes_the_changes_after_it() -> None:
     stepped = _stepped(_held)
-    assert trimmed._unknown_keys == stepped._unknown_keys == {KEY: CROSSING}
     cut = stepped.snapshot(up_to=CROSSING - 5)
-    assert cut._unknown_keys == {} and cut._entries == {KEY: _ENTRY_LIMIT - 2}
-    later = trimmed.snapshot()
-    later.trim_before(LAST - 10)
-    assert later._unknown_keys == {KEY: CROSSING}
+    assert cut._unknown_keys == {} and cut._counts == {KEY: _ENTRY_LIMIT - 2}
+
+
+def test_a_column_begun_in_a_trimmed_gap_holds_what_stepping_holds() -> None:
+    # Rung 0 writes a on scan 7 only, inside the gap.  After the trim each record begins the
+    # column on its first write from the floor on, so neither depends on the gap.
+    stepped: RungFiringTimelines = RungFiringTimelines(capped=False)
+    ours: RungFiringTimelines = RungFiringTimelines(capped=False)
+    for scan_id in range(1, 31):
+        writes = {"a": scan_id} if scan_id in (7, 25) else {}
+        stepped.append(0, scan_id, writes)
+        if scan_id == 5:
+            ours.note_gap(5, 10)
+        if not 5 <= scan_id <= 10:
+            ours.append(0, scan_id, writes)
+    for record in (stepped, ours):
+        record.trim_before(15)
+    assert ours._gaps == []
+    assert ours._value_timelines == stepped._value_timelines
+    assert stepped._value_timelines[KEY][0].start_scan_id == 25
 
 
 # Each seed writes random scans and leaves gaps as the jit does.  It settles the gaps in any
-# order.  These seeds reach the limit while a gap stepping joins to its edges is unsettled.
-_EDGE_JOINS = frozenset({9, 14, 26})
+# order.
 POOL = (0, 1, 2, 7)
 
 
@@ -327,6 +349,9 @@ def _gap_fuzz(seed: int) -> tuple[RungFiringTimelines, RungFiringTimelines, int]
     stepped: RungFiringTimelines = RungFiringTimelines()
     ours: RungFiringTimelines = RungFiringTimelines()
     for scan_id, scan in enumerate(scans, start=1):
+        for first, last in gaps:
+            if scan_id == first:
+                ours.note_gap(first, last)
         for rung, writes in scan.items():
             stepped.append(rung, scan_id, writes)
             if not any(start <= scan_id <= end for start, end in gaps):
@@ -334,7 +359,7 @@ def _gap_fuzz(seed: int) -> tuple[RungFiringTimelines, RungFiringTimelines, int]
     rng.shuffle(gaps)
     for first, last in gaps:
         anchor = rng.randrange(0, first)
-        replay = ours.carried_to(anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
             for rung, writes in scans[scan_id - 1].items():
                 replay.append(rung, scan_id, writes)
@@ -361,41 +386,15 @@ def _assert_alike(seed: int) -> None:
                     one, tag, before
                 ) == stepped.tag_transition_candidate_scans_before(one, tag, before)
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
 
 
-@pytest.mark.parametrize("seed", [seed for seed in range(400) if seed not in _EDGE_JOINS])
+@pytest.mark.parametrize("seed", range(400))
 def test_gaps_settled_in_any_order_leave_the_records_stepping_leaves(
     seed: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 40)
     _assert_alike(seed)
-
-
-@pytest.mark.xfail(strict=True, reason="a column reaches its limit before a gap settles")
-@pytest.mark.parametrize("seed", sorted(_EDGE_JOINS))
-def test_a_column_that_reaches_its_limit_before_a_joined_gap_settles(
-    seed: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Stepping joins the gap to the ranges on both sides.  So the records after a gap count a
-    # range or two more than stepping.  A column that reaches its limit before the gap settles
-    # turns Unknown early, by up to about 1,000 scans.  The settle cannot take that back.
-    monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 40)
-    _assert_alike(seed)
-
-
-@pytest.mark.parametrize("seed", sorted(_EDGE_JOINS))
-def test_a_column_that_turns_unknown_early_still_knows_only_values_written(
-    seed: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 40)
-    ours, stepped, count = _gap_fuzz(seed)
-    for rung in (0, 1, 2):
-        for tag in ("a", "b"):
-            for scan_id in range(count + 2):
-                mine = ours.value_at(rung, tag, scan_id)
-                if mine is not _UNKNOWN_VALUE:
-                    assert mine == stepped.value_at(rung, tag, scan_id), (rung, tag, scan_id)
 
 
 def _review_scans(rng: random.Random, count: int) -> list[tuple[str, Any]]:
@@ -490,8 +489,9 @@ def _review_trial(seed: int, mode: str, jumps: str, trims: str) -> tuple[Any, ..
         trim_at = rng.randint(10, count) if trims == "1" else None
     floor = trim_at // 2 if trim_at is not None else 0
     gaps = [(max(first, floor + 1), last) for first, last in gaps if max(first, floor + 1) <= last]
-    stepped: RungFiringTimelines = RungFiringTimelines()
-    ours: RungFiringTimelines = RungFiringTimelines()
+    # A record with a history window has no limit.
+    stepped: RungFiringTimelines = RungFiringTimelines(capped=trim_at is None)
+    ours: RungFiringTimelines = RungFiringTimelines(capped=trim_at is None)
     for scan_id in range(1, count + 1):
         _review_put(stepped, scan_id, events[scan_id - 1])
         if scan_id == trim_at:
@@ -499,6 +499,9 @@ def _review_trial(seed: int, mode: str, jumps: str, trims: str) -> tuple[Any, ..
     scan_id, trimmed = 1, trim_at is None
     while scan_id <= count:
         if any(first <= scan_id <= last for first, last in gaps):
+            for first, last in gaps:
+                if scan_id == first:
+                    ours.note_gap(first, last)
             scan_id += 1
             continue
         _review_put(ours, scan_id, events[scan_id - 1])
@@ -516,7 +519,7 @@ def _review_trial(seed: int, mode: str, jumps: str, trims: str) -> tuple[Any, ..
     rng.shuffle(order)
     for first, last in order:
         anchor = rng.randrange(floor, first)
-        replay = ours.carried_to(anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
             _review_put(replay, scan_id, events[scan_id - 1])
         ours.replace_range(replay, first, last)
@@ -536,15 +539,18 @@ def _review_trial(seed: int, mode: str, jumps: str, trims: str) -> tuple[Any, ..
 def test_a_trimmed_column_settles_as_stepping_left_it(
     seed: int, limit: int, mode: str, jumps: str, trims: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A settle once took the count a trim left from the scan the column turned Unknown on.
-    # Another joined the cut range at the trim's floor to the scans of the gap.
+    # A settle once joined the cut range at the trim's floor to the scans of the gap.
     monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", limit)
     ours, stepped, count, floor = _review_trial(seed, mode, jumps, trims)
+    if floor:
+        for key, ranges in stepped._value_timelines.items():
+            mine = ours._value_timelines.get(key, [])
+            assert list(_expanded(mine, None, None)) == list(_expanded(ranges, None, None)), key
     for scan_id in range(floor + 1, count + 2):
         mine, theirs = ours.value_at(0, "a", scan_id), stepped.value_at(0, "a", scan_id)
         assert mine is theirs or (_UNKNOWN_VALUE not in (mine, theirs) and mine == theirs), scan_id
     assert ours._unknown_keys == stepped._unknown_keys
-    assert ours._entries == stepped._entries
+    assert ours._counts == stepped._counts
     for before in sorted({count + 1, count // 2, count // 3, count - 5}):
         if before > floor + 1:
             assert ours.tag_transition_candidate_scans_before(
@@ -552,24 +558,28 @@ def test_a_trimmed_column_settles_as_stepping_left_it(
             ) == stepped.tag_transition_candidate_scans_before(ONE, "a", before), before
 
 
-def test_settles_in_a_row_keep_the_scan_a_column_turned_unknown_on() -> None:
-    # A flip-flop with a gap of seven scans before each stepped scan.  The records hold each
-    # stepped scan as a range of its own.  So the column turns Unknown before stepping's does.
-    # Settling the gaps in scan order must not move that scan earlier still.
+def test_settles_in_a_row_leave_the_records_stepping_leaves() -> None:
+    # A flip-flop with a gap of seven scans before each stepped scan.  A scan after a gap
+    # counts no change, so the column stays known until the gaps settle, as stepping's does.
     count, gaps = 9000, [(first, first + 6) for first in range(2, 8995, 8)]
     ours: RungFiringTimelines = RungFiringTimelines()
+    stepped: RungFiringTimelines = RungFiringTimelines()
     for scan_id in range(1, count + 1):
+        stepped.append(0, scan_id, {"a": scan_id % 2 == 0})
+        if gaps[0][0] <= scan_id <= gaps[-1][1] and (scan_id - 2) % 8 == 0:
+            ours.note_gap(scan_id, scan_id + 6)
         if (scan_id - 2) % 8 == 7 or scan_id == 1:
             ours.append(0, scan_id, {"a": scan_id % 2 == 0})
-    crossing = ours._unknown_keys[KEY]
+    assert not ours._unknown_keys
     for first, last in gaps:
         anchor = (first - 1) // 100 * 100
-        replay = ours.carried_to(anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
             replay.append(0, scan_id, {"a": scan_id % 2 == 0})
         ours.replace_range(replay, first, last)
-    assert ours._unknown_keys == {KEY: crossing}
-    assert all(ours.value_at(0, "a", s) == (s % 2 == 0) for s in range(1, crossing))
+    assert ours._unknown_keys == stepped._unknown_keys == {}
+    assert ours._counts == stepped._counts
+    assert ours._value_timelines == stepped._value_timelines
 
 
 Phase = Int("EntryPhase")
@@ -656,3 +666,146 @@ def test_runs_with_gaps_settle_to_the_records_stepping_keeps() -> None:
                 assert mine is theirs or (
                     _UNKNOWN_VALUE not in (mine, theirs) and mine == theirs
                 ), where
+
+
+def _sequencer() -> Program:
+    with Program(strict=False) as program:
+        with Rung():
+            math((Phase + 1) % 4, Phase)
+    return program
+
+
+@pytest.mark.parametrize(("history", "scans"), [(300, 5001), (2000, 8001)])
+def test_a_column_with_a_window_stays_known_to_the_oldest_kept_scan(
+    history: int, scans: int
+) -> None:
+    plc = PLC(_sequencer(), dt=0.01, history=history)
+    for _ in range(scans):
+        plc.step()
+    assert not plc._rung_firing_timelines._unknown_keys
+    oldest = plc.history.oldest_scan_id
+    for scan_id in (oldest, oldest + 1):
+        assert {rung: dict(tags) for rung, tags in plc.rung_firings(scan_id).items()} == {
+            0: {Phase.name: scan_id % 4}
+        }
+
+
+def test_a_long_run_with_a_window_settles_to_steppings_records() -> None:
+    # The trims take gaps the run never settled.  The kept scans still settle to stepping's.
+    plc = PLC(_sequencer(), dt=0.01, history=2000)
+    plc.run_for(100)
+    twin = PLC(_sequencer(), dt=0.01, history=2000)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    plc._settle_compiled_ranges(None, None, at_any_cost=True)
+    for name in ("_rung_firing_timelines", "_committed_tag_timelines"):
+        ours, stepped = getattr(plc, name), getattr(twin, name)
+        assert ours._unknown_keys == stepped._unknown_keys == {}
+        assert ours._value_timelines == stepped._value_timelines, name
+
+
+def _toggle() -> Program:
+    with Program(strict=False) as program:
+        with Rung():
+            math((Phase + 1) % 2, Phase)
+    return program
+
+
+def test_a_run_notes_its_unrecorded_scans_before_it_trims_history() -> None:
+    plc = PLC(_toggle(), dt=0.01, history=2000)
+    plc.run_for(50)
+    oldest = plc.history.oldest_scan_id
+    assert oldest > 1
+    assert plc._unrecorded_scans and plc._unrecorded_scans[0][0] >= oldest
+    assert plc._rung_firing_timelines._gaps == plc._unrecorded_scans
+
+
+def test_a_trim_during_a_run_leaves_the_oldest_kept_scan_answering() -> None:
+    plc = PLC(_toggle(), dt=0.01, history=2000)
+    plc.run_for(50)
+    twin = PLC(_toggle(), dt=0.01, history=2000)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    oldest = plc.history.oldest_scan_id
+    assert oldest == twin.history.oldest_scan_id
+    for scan_id in (oldest, oldest + 1, oldest + 2):
+        assert plc.rung_firings(scan_id) == twin.rung_firings(scan_id), scan_id
+
+
+@pytest.mark.parametrize(("history", "scans"), [(300, 4000), (2000, 12345)])
+def test_a_long_run_trims_history_to_steppings_floor(history: int, scans: int) -> None:
+    plc = PLC(_sequencer(), dt=0.01, history=history)
+    plc.step()
+    coast_until(plc, lambda _s: False, budget=scans, predicate_reads=frozenset())
+    twin = PLC(_sequencer(), dt=0.01, history=history)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
+
+
+def _forty_counts() -> Program:
+    with Program(strict=False) as program:
+        for k in range(40):
+            with Rung():
+                math(Int(f"Count{k}") + 1, Int(f"Count{k}"))
+    return program
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Over the memory budget each engine trims one interval more on the scans it checks",
+)
+@pytest.mark.parametrize("history", [3000, 6000])
+def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(history: int) -> None:
+    plc = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
+    # Under fold-check its own twin finds the floors differ first, which is what this pins.
+    checked = getattr(compiled_run, "_fold_check_installed", False)
+    with fold_check.deliberate() if checked else nullcontext():
+        plc.run_for(100)
+    twin = PLC(_forty_counts(), dt=0.01, history=history, history_budget=1_048_576)
+    while twin.current_state.scan_id < plc.current_state.scan_id:
+        twin.step()
+    assert plc.history.oldest_scan_id == twin.history.oldest_scan_id
+
+
+def test_a_settles_replay_over_the_memory_budget_keeps_every_scan_it_steps() -> None:
+    # A settle hands its replay's records to the runner.  So the replay trims nothing (its own
+    # budget took the oldest interval a long run kept).  A long run would trip the budget trim
+    # the xfail above pins, so this replay steps the scans of a stepped runner.
+    plc = PLC(_forty_counts(), dt=0.01, history=3000, history_budget=1_048_576)
+    for _ in range(10_000):
+        plc.step()
+    oldest = plc.history.oldest_scan_id
+    replay = plc._stepped_again(oldest, 10_000, None)
+    anchor = plc._nearest_checkpoint_at_or_before(oldest - 1)
+    assert anchor is not None and replay.history.oldest_scan_id == anchor < oldest
+    assert len(replay.rung_firings(oldest)) == 40
+
+
+def test_a_replay_handed_to_the_user_trims_as_its_runner_does() -> None:
+    plc = PLC(_noise(), dt=0.01, history=400)
+    for _ in range(1000):
+        plc.step()
+    fork = plc.replay_to(900)
+    for _ in range(8000):
+        fork.step()
+    assert fork.history.oldest_scan_id >= 8900 - 400 - 200
+
+
+Noise = Int("EntryNoise")
+
+
+def _noise() -> Program:
+    with Program(strict=False) as program:
+        with Rung():
+            math((Noise * 31 + 7) % 1009, Noise)
+    return program
+
+
+def test_the_records_count_toward_the_memory_budget() -> None:
+    # A value that changes every scan keeps a range a scan.  Those ranges pass the budget, so
+    # the trim keeps one interval less than history= asks for.
+    plc = PLC(_noise(), dt=0.01, history=8000, cache=100, history_budget=1_048_576)
+    for _ in range(10_000):
+        plc.step()
+    assert plc.history.oldest_scan_id == 10_000 - 8000 + 200

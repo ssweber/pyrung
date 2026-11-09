@@ -245,7 +245,8 @@ def _run_compiled(
                 settled = replay._materialize_replay_state()
                 unsettled = [0, 0]
                 if checkpoint:
-                    _install(plc, replay, settled)
+                    _install(plc, replay, settled, first_scan_id)
+                    first_scan_id = settled.scan_id + 1
                 for observer in LOOP_OBSERVERS:
                     observer(plc, settled)
             continue
@@ -270,7 +271,8 @@ def _run_compiled(
         settled = state
         unsettled = [0, 0]
         if checkpoint:
-            _install(plc, replay, state)
+            _install(plc, replay, state, first_scan_id)
+            first_scan_id = state.scan_id + 1
         if predicate is not None and predicate(state):
             loop.stop_held()
             break
@@ -287,9 +289,8 @@ def _run_compiled(
     elif settled.scan_id != replay._kernel.scan_id:
         settled = replay._materialize_replay_state()
     if settled.scan_id != plc._state.scan_id:
-        _install(plc, replay, settled)
-    if settled.scan_id >= first_scan_id:
-        plc._record_landing(first_scan_id)
+        _install(plc, replay, settled, first_scan_id)
+    if settled.scan_id > start.scan_id:
         plc._bounds_violations = {}
     return budget - used if undone else 0
 
@@ -341,12 +342,16 @@ class _BoundsWatch:
         return bool(check_bounds(values, self._constrained))
 
 
-def _install(plc: PLC, replay: CompiledPLC, state: SystemState) -> None:
+def _install(
+    plc: PLC, replay: CompiledPLC, state: SystemState, first_scan_id: int | None = None
+) -> None:
     """Make *state* the tip, with all a commit leaves on the runner.
 
     Its RTC applies are recorded under their own scans, it is cached, checkpointed
     on its interval, history is trimmed, and the run flags read from it.  Applies of
     scans past *state* wait: if those scans are undone, the replay's goes with them.
+    The scans from *first_scan_id* ran with no records.  They are noted before the trim,
+    so the trim takes the ones before the oldest kept scan.
     """
     previous_tip = plc._state.scan_id
     applied = replay.rtc_applied or []
@@ -354,7 +359,7 @@ def _install(plc: PLC, replay: CompiledPLC, state: SystemState) -> None:
         scan_id, base, base_sim_time = applied.pop(0)
         plc._set_rtc_and_record(base, base_sim_time, scan_id=scan_id)
     _replace_tip_state(plc, state)
-    plc._record_landing()
+    plc._record_landing(first_scan_id)
     plc._apply_history_retention(state.scan_id)
     plc._sync_runtime_flags_from_state()
     if plc._playhead == previous_tip:

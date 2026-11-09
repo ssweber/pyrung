@@ -561,7 +561,7 @@ def test_checkpoints_cleared_on_fork() -> None:
 
 def test_trim_history_before_rejects_replay_below_horizon() -> None:
     """After trimming, replay_to for scans below the horizon must raise."""
-    plc = PLC(dt=0.01, checkpoint_interval=5)
+    plc = PLC(dt=0.01, checkpoint_interval=5, history=1000)
     for _ in range(10):  # scans 1–10; checkpoints at 5, 10
         plc.step()
 
@@ -575,7 +575,7 @@ def test_trim_history_before_rejects_replay_below_horizon() -> None:
 def test_trim_history_before_allows_replay_at_horizon() -> None:
     """replay_to at exactly the horizon scan must succeed when a checkpoint
     at that scan survived the trim."""
-    plc = PLC(dt=0.01, checkpoint_interval=5)
+    plc = PLC(dt=0.01, checkpoint_interval=5, history=1000)
     for _ in range(10):  # scans 1–10; checkpoints at 5, 10
         plc.step()
 
@@ -588,12 +588,13 @@ def test_trim_history_before_allows_replay_at_horizon() -> None:
 
 
 def test_trim_history_before_prunes_checkpoints() -> None:
-    plc = PLC(dt=0.01, checkpoint_interval=5)
+    plc = PLC(dt=0.01, checkpoint_interval=5, history=1000)
     for _ in range(15):  # checkpoints at 5, 10, 15
         plc.step()
 
-    plc._trim_history_before(10)
+    plc._trim_history_before(15)
 
+    # The checkpoint before the oldest kept scan stays, so a replay of that scan starts on it.
     assert 5 not in plc._checkpoints
     assert 10 in plc._checkpoints
     assert 15 in plc._checkpoints
@@ -601,7 +602,7 @@ def test_trim_history_before_prunes_checkpoints() -> None:
 
 def test_trim_history_before_trims_firings_in_lockstep() -> None:
     """The rung-firing timelines must trim alongside the log."""
-    plc = PLC(logic=[], dt=0.01, checkpoint_interval=20)
+    plc = PLC(logic=[], dt=0.01, checkpoint_interval=20, history=1000)
     for _ in range(10):
         plc.step()
 

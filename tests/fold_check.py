@@ -547,11 +547,18 @@ def compare_runners(
     # Retention trims the older ones, and each runner counts from its own start.
     ours = _in_range(plc._checkpoints, start, end)
     theirs = _in_range(twin._checkpoints, start, end)
+    if plc._history_retention_scans is not None:
+        # The tip and history= set the oldest kept scan, so both runners trim to it.  Each
+        # keeps a checkpoint below it to replay from, and the loop's may be older.
+        floor = max(plc._initial_scan_id, start)
+        a["oldest kept scan"], b["oldest kept scan"] = floor, max(twin._initial_scan_id, start)
+        ours, theirs = ({s: v for s, v in held.items() if s >= floor} for held in (ours, theirs))
+        for image in (a, b):
+            forces = image["log: forces at checkpoints"]
+            image["log: forces at checkpoints"] = {s: f for s, f in forces.items() if s >= floor}
     if kind in _KEEPS_FEWER_CHECKPOINTS:
         _hold_to_a_subset(kind, end, ours, theirs, a, b)
     else:
-        if ours and plc._history_retention_scans is not None:
-            theirs = {scan: state for scan, state in theirs.items() if scan >= min(ours)}
         a["checkpoints"], b["checkpoints"] = sorted(ours), sorted(theirs)
     if a != b:
         keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))
@@ -585,15 +592,12 @@ def _column_at(ranges: Any, scan: int) -> Any:
     return rung_firings._MISSING_WRITE
 
 
-def _column_differs(
-    ours: Any, theirs: Any, first: int, last: int, partly: bool, full: int | None = None
-) -> int | None:
+def _column_differs(ours: Any, theirs: Any, first: int, last: int, partly: bool) -> int | None:
     """Scan where ours holds another value than stepping's, or None.
 
-    A column the loop wrote Unknown into holds other ranges than stepping's.  So ours may
-    turn Unknown first, and only their known values must agree.  A scan with a write must
-    still be one in both.  The loop counts each run it wrote Unknown as one range.  So such a
-    column may stay known after stepping's column reached its limit on scan *full*.
+    A column the loop wrote Unknown into counts other changes than stepping's.  So either
+    may turn Unknown first, and only their known values must agree.  A scan with a write must
+    still be one in both.
 
     Between range boundaries each side is constant, alternating or arithmetic, so the
     two scans at each end of a run of scans with no boundary settle the whole of it.
@@ -609,11 +613,8 @@ def _column_differs(
         high = stop - 1
         for scan in sorted({low, min(low + 1, high), max(high - 1, low), high}):
             mine, stepped = _column_at(ours, scan), _column_at(theirs, scan)
-            if partly and mine is unknown:
-                if stepped is missing:
-                    return scan
-            elif partly and full is not None and scan >= full and stepped is unknown:
-                if mine is missing:
+            if partly and unknown in (mine, stepped):
+                if missing in (mine, stepped):
                     return scan
             elif _exact(mine) != _exact(stepped):
                 return scan
@@ -697,19 +698,18 @@ def _compare_records_over(kind: str, plc: Any, twin: Any, first: int, end: int) 
         for key in ours._value_timelines.keys() | theirs._value_timelines.keys():
             a = ours._value_timelines.get(key, ())
             b = theirs._value_timelines.get(key, ())
-            # A column the loop wrote Unknown into counts fewer ranges than stepping's.  Every
+            # A column the loop wrote Unknown into counts other changes than stepping's.  Every
             # other column holds stepping's ranges, so it turns Unknown on stepping's scan.
             partly = key in ours._partly_unknown
             if not partly:
-                for counts in ("_entries", "_unknown_keys"):
+                for counts in ("_counts", "_unknown_keys"):
                     held, stepped = getattr(ours, counts).get(key), getattr(theirs, counts).get(key)
                     if held != stepped:
                         raise _mismatch(
                             f"fold-check ({kind}): {name} {key!r} {counts} {held!r}, "
                             f"stepped {stepped!r}"
                         )
-            full = theirs._unknown_keys.get(key)
-            scan = _column_differs(a, b, first, end, partly, full)
+            scan = _column_differs(a, b, first, end, partly)
             if scan is not None:
                 raise _mismatch(
                     f"fold-check ({kind}): {name} {key!r} at scan {scan}: "
@@ -1836,8 +1836,7 @@ def _checked(
         _depth += 1
         try:
             compare_runners(kind, plc, twin, start)
-            if kind == "coast":
-                compare_records(kind, plc, twin, start)
+            compare_records(kind, plc, twin, start)
             compare_history(kind, plc, twin, start, truth)
             compare_continuation(kind, plc, twin)
         finally:
