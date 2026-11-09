@@ -930,6 +930,51 @@ def test_both_replay_paths_keep_history_from_the_target(
     assert forks[0].rung_firings(tip - 1) == forks[1].rung_firings(tip - 1)
 
 
+def _replay_both_ways(source: PLC, target: int) -> list[PLC]:
+    kernel = source._replay_kernel_from(target - 1)
+    assert kernel is not None
+    return [source._replay_to_interpreted(target), source._replay_to_compiled(target, kernel)]
+
+
+def test_a_replay_of_a_checkpoint_keeps_a_stop_made_after_it() -> None:
+    toggle = Bool("StopToggle")
+    with Program(strict=False) as program:
+        with Rung(~toggle):
+            out(toggle)
+    source = PLC(program, dt=0.01, checkpoint_interval=100)
+    for _ in range(200):
+        source.step()
+    source.stop()
+
+    for fork in _replay_both_ways(source, 200):
+        assert not fork._running
+        assert dict(fork.state.memory) == dict(source.state.memory)
+
+
+def test_a_replay_of_a_checkpoint_steps_on_with_a_battery_change_made_after_it() -> None:
+    toggle, seen = Bool("BatteryToggle"), Bool("BatterySeen")
+    with Program(strict=False) as program:
+        with Rung(~toggle):
+            out(toggle)
+        with Rung(system.sys.battery_present):
+            out(seen)
+    source = PLC(program, dt=0.01, checkpoint_interval=100)
+    for _ in range(200):
+        source.step()
+    source.battery_present = False
+    live = {}
+    for _ in range(50):
+        source.step()
+        live[source.state.scan_id] = source.state
+
+    for fork in _replay_both_ways(source, 200):
+        assert not fork._battery_present
+        for scan in range(201, 251):
+            fork.step()
+            assert dict(fork.state.tags) == dict(live[scan].tags), scan
+            assert dict(fork.state.memory) == dict(live[scan].memory), scan
+
+
 def test_interpreted_replay_preserves_active_pilot_holds() -> None:
     from pyrung.core.analysis.pilot.overlay import PilotRung, _set_pilot_rungs
 

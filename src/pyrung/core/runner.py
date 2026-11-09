@@ -3563,15 +3563,15 @@ class PLC:
                 for name in _RECORDS:
                     setattr(replay, name, RungFiringTimelines(capped=capped))
             replay.step()
-
-        # Trailing lifecycle events that fired after the last committed
-        # scan (e.g. a trailing stop() with no subsequent step).
-        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-            _apply_lifecycle_to_replay(replay, event)
-        return self._keep_replay_from(replay, target_scan_id, with_harness=True)
+        return self._keep_replay_from(replay, target_scan_id, lifecycle_by_scan, with_harness=True)
 
     def _keep_replay_from(
-        self, replay: PLC, target_scan_id: int, *, with_harness: bool = False
+        self,
+        replay: PLC,
+        target_scan_id: int,
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]],
+        *,
+        with_harness: bool = False,
     ) -> PLC:
         """Start *replay* at the target, with its source's limits.  The caller may step it on."""
         replay._history_retention_scans = self._history_retention_scans
@@ -3590,6 +3590,10 @@ class PLC:
         current_plant = self._earlier_plant_at(target_scan_id) is None
         if with_harness and current_plant and self._harness is not None and replay._harness is None:
             self._harness.fork_onto(replay, as_recorded=True)
+        # A stop() or a battery change after the target scan changes the state but not its
+        # checkpoint, so these events go on after the checkpoint.
+        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+            _apply_lifecycle_to_replay(replay, event)
         return replay
 
     def _start_from_state(self, state: SystemState) -> None:
@@ -3664,9 +3668,7 @@ class PLC:
         replay._records_bounded = False
         self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
         replay.step()
-        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-            _apply_lifecycle_to_replay(replay, event)
-        return self._keep_replay_from(replay, target_scan_id)
+        return self._keep_replay_from(replay, target_scan_id, lifecycle_by_scan)
 
     def _compiled_fork_at(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
         """A fork at *target_scan_id*, with the kernel running each scan after the checkpoint."""
@@ -3710,9 +3712,6 @@ class PLC:
                 for tag_name, value in record.tag_writes:
                     replay.apply_replay_io_write(tag_name, value)
 
-        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-            _apply_lifecycle_to_replay(replay, event)
-
         # A fork that ran no scan takes the checkpoint's state, since the kernel's state would
         # add the fault flags.
         ran = target_scan_id > anchor_scan_id
@@ -3724,6 +3723,9 @@ class PLC:
             replay_mode=True,
         )
         fork._records_bounded = self._records_bounded
+        # On the fork, not the kernel, so that a fork built from the checkpoint gets them too.
+        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+            _apply_lifecycle_to_replay(fork, event)
         return fork
 
     def replay_to(self, target_scan_id: int) -> PLC:
