@@ -61,7 +61,21 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction), `MATH` Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results), `SC43` which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer; not a Math or a Copy of NaN). `F32` REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`), `PASTBANK` a Copy through a pointer past a bank lands in memory pyrung does not have (no case reads the bank's flag, which `SYS` covers). `PRESET` when a drum reads a DS preset (pyrung reads it on the first scan its step times; a CLICK does not). `DRUM`, `MATH`, `SC43`, `SYS` and the `faults` `TEXT` case are met: no case carries the first four now.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`).
+
+- `S2`: counters count edges.
+- `S3`: per-contact edge memory.
+- `DRUM`: drum ordering.
+- `INF`: REAL overflow stores +/-Inf.
+- `TEXT`: text, pack, NUL and search-cursor fixes.
+- `SYS`: the fault-flag model (SC40 follows the last Math, SC43 and SC44 the last instruction).
+- `MATH`: Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results).
+- `SC43`: which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer, not a Math or a Copy of NaN).
+- `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`).
+- `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). No case reads the bank's flag (the flag side is `SYS`).
+- `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times, a CLICK does not).
+
+`DRUM`, `MATH`, `SC43`, `SYS` and the `faults` `TEXT` case are met: no case carries the first four now.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).

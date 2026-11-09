@@ -46,8 +46,8 @@ PENDING_STEPS: Mapping[str, str] = {
     ),
     "F32": "REAL stores and compares at float32",
     "PASTBANK": (
-        "a Copy through a pointer past a bank lands in memory pyrung does not have"
-        " (the write is kept, with no flag)"
+        "a Copy through a pointer past a bank writes to memory (pyrung has none and"
+        " drops the write), and raises no flag"
     ),
     "PRESET": (
         "when a drum reads a DS preset (pyrung reads it on the first scan its step times;"
