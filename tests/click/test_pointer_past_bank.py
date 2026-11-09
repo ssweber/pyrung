@@ -47,8 +47,7 @@ def test_choices_past_the_bank_warn():
     (finding,) = _found(*_copy_through(ptr))
     assert finding.severity == "warning"
     assert finding.message == (
-        f"DD[Ptr] {_AT} can reach DD1001. DD ends at DD1000. "
-        "pyrung reads 0 there and drops a write."
+        f"DD[Ptr] {_AT} can reach DD1001. DD ends at DD1000. pyrung reads 0 there."
     )
     assert finding.message.isascii() and finding.suggestion.isascii()
 
@@ -138,7 +137,7 @@ def test_a_range_whose_end_passes_the_bank_warns_though_its_start_does_not():
     assert [f.message for f in found if "indirect range" in f.message] == [
         "The indirect range on DD at "
         "main.rung[0].instruction[1](CopyInstruction).instruction.source "
-        "ends at DD1005. DD ends at DD1000. pyrung reads 0 there and drops a write."
+        "ends at DD1005. DD ends at DD1000. pyrung reads 0 there."
     ]
 
 
@@ -178,7 +177,7 @@ def test_a_pointer_read_in_a_rung_condition_warns():
     (finding,) = _found(prog, mapping)
     assert finding.message == (
         "DD[Ptr] at main.rung[0].condition can reach DD1500. DD ends at DD1000. "
-        "pyrung reads 0 there and drops a write."
+        "pyrung reads 0 there."
     )
 
 
@@ -211,3 +210,25 @@ def test_a_program_with_no_pointer_builds_no_value_sets(monkeypatch):
         with rung():
             copy(ds[1], out)
     assert _found(prog, TagMap({out: ds[2]}, include_system=False)) == []
+
+
+def test_the_docs_example_with_a_lone_max_warns():
+    ptr = Int("Ptr", max=1010)
+    (finding,) = _found(*_copy_through(ptr))
+    assert "can reach DD1010" in finding.message
+
+
+def test_a_lone_min_is_no_finding():
+    assert _found(*_copy_through(Int("Ptr", min=1))) == []
+
+
+def test_a_range_wider_than_the_value_cap_still_reports_its_end():
+    start = Int("Start", choices={1: "v1"})
+    end = Int("End", choices={20: "v20", 4200: "v4200"})
+    dest = Block("Dest", TagType.INT, 1, 2000)
+    with Program(strict=False) as prog:
+        with rung():
+            copy(dd.select(start, end), dest.select(1, 1000))
+    mapping = TagMap({start: ds[1], end: ds[2], dest: ds.select(2001, 4000)}, include_system=False)
+    (finding,) = _found(prog, mapping)
+    assert "ends at DD4200" in finding.message

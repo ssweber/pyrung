@@ -191,13 +191,13 @@ class _ValueSets:
                 return None
             return domain
         if isinstance(ref, IndirectExprRef):
-            return self._integers(ref.expr, values)
+            return self.integers(ref.expr, values)
         return None
 
     def window(self, ref: IndirectBlockRange, values=None) -> frozenset[int] | None:
         """Every address ``block.select(start, end)`` can cover: lowest start to highest end."""
-        starts = self._integers(ref.start_expr, values)
-        ends = self._integers(ref.end_expr, values)
+        starts = self.integers(ref.start_expr, values)
+        ends = self.integers(ref.end_expr, values)
         if not starts or not ends:
             return None
         lo, hi = min(starts), max(ends)
@@ -205,7 +205,7 @@ class _ValueSets:
             return None
         return frozenset(range(lo, hi + 1))
 
-    def _integers(self, expr: Any, values=None) -> frozenset[int] | None:
+    def integers(self, expr: Any, values=None) -> frozenset[int] | None:
         """The integer values *expr* takes, or None when unbounded."""
         if values is None and self._values is None:
             self._values = self._fixpoint()

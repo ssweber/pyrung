@@ -190,7 +190,7 @@
 ### Features
 
 - CLICK validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank.
-  - Keep the pointer inside the bank, or give the tag `min`/`max` or `choices`.
+  - Keep the pointer inside the bank, or give the tag `choices`, or `min` and `max`. A `max` alone counts as an upper bound.
 - `pyrung.core` exports the table of physical kinds, the keys each `Physical(...)` kind takes. The names are `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
 - A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`:
   - it is a `ValueError`, so existing `except ValueError` clauses still catch it

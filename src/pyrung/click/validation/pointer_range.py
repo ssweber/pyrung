@@ -61,7 +61,12 @@ class _PointerBounds:
         )
         for name, tag in graph.tags.items():
             known = sets.values(name)
-            self._lookup[name] = known if known is not None else sets.declared(tag)
+            if known is None:
+                known = sets.declared(tag)
+            if known is None and type(tag.max) is int and tag.choices is None:
+                # Only the past-the-end side is reported, so a lone max is a bound.
+                known = frozenset({tag.max, tag.default})
+            self._lookup[name] = known
         for instruction in instructions:
             count = getattr(instruction, "count", None)
             if isinstance(instruction, ForLoopInstruction) and type(count) is int and count > 0:
@@ -73,7 +78,12 @@ class _PointerBounds:
         if self._sets is None:
             self._sets = self._build()
         if isinstance(ref, IndirectBlockRange):
-            return self._sets.window(ref, self._lookup)
+            window = self._sets.window(ref, self._lookup)
+            if window is None:
+                # A span over the cap has no window, but its highest end still shows.
+                ends = self._sets.integers(ref.end_expr, self._lookup)
+                return frozenset({max(ends)}) if ends else None
+            return window
         return self._sets.addresses(ref, self._lookup) or None
 
 
@@ -102,6 +112,7 @@ def _is_write(instruction: Any, ref: Any) -> bool:
 def _check_use(
     ref: Any,
     write: bool,
+    copy_write: bool,
     location_text: str,
     tag_map: TagMap,
     bounds: _PointerBounds,
@@ -132,8 +143,8 @@ def _check_use(
         index = ref.pointer.name if isinstance(ref, IndirectRef) else format_expr(ref.expr)
         used = f"{block.name}[{index}]"
         reaches = f"can reach {memory_type}{past[0] + offset}"
-    outcome = "pyrung reads 0 there and drops a write."
-    if write and memory_type == "DD":
+    outcome = "pyrung drops the write." if write else "pyrung reads 0 there."
+    if copy_write and memory_type == "DD":
         outcome = "A CLICK Copy writes there and raises no flag. pyrung drops the write."
     return ClickFinding(
         code=CLK_PTR_PAST_BANK,
@@ -166,11 +177,12 @@ def _evaluate_pointer_past_bank(
     """
     findings: list[ClickFinding] = []
     for field, ref in _uses(instruction):
-        write = type(instruction).__name__ == "CopyInstruction" and _is_write(instruction, ref)
+        write = _is_write(instruction, ref)
+        copy_write = write and type(instruction).__name__ == "CopyInstruction"
         location_text = _format_location(
             _instruction_location(base_location, f"instruction.{field}")
         )
-        finding = _check_use(ref, write, location_text, tag_map, bounds, mode, resolver)
+        finding = _check_use(ref, write, copy_write, location_text, tag_map, bounds, mode, resolver)
         if finding is not None:
             findings.append(finding)
     return findings
@@ -196,7 +208,7 @@ def _evaluate_condition_pointer_past_bank(
                 where = _format_location(
                     ProgramLocation(scope, subroutine, index, path, None, None, "condition")
                 )
-                finding = _check_use(ref, False, where, tag_map, bounds, mode, resolver)
+                finding = _check_use(ref, False, False, where, tag_map, bounds, mode, resolver)
                 if finding is not None:
                     findings.append(finding)
         for branch_index, branch in enumerate(rung._branches):
