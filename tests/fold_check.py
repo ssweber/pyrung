@@ -1534,14 +1534,15 @@ def _hold_to_the_stepped_price(
     loop_scans = scan_trace.TOTALS["loop scans"]
     executed: set[int] = set()
     stepped: dict[str, int] = {}
-    setattr(coast_module, "TRACE_ROOM", 10**9)  # noqa: B010
-    # The stats a caller collects are of its own run.
     collecting = list(jit_stats.ACTIVE)
-    jit_stats.ACTIVE.clear()
     global _depth
-    _depth += 1
+    depth = _depth
     went_on = False
     try:
+        setattr(coast_module, "TRACE_ROOM", 10**9)  # noqa: B010
+        # The stats a caller collects are of its own run.
+        jit_stats.ACTIVE.clear()
+        _depth += 1
         coast(
             twin, stepped_ask, budget=budget, stats=stepped, on_kernel_scan=executed.add, **kwargs
         )
@@ -1554,7 +1555,7 @@ def _hold_to_the_stepped_price(
         _note_skip("price not judged: stepping raised")
         return
     finally:
-        _depth -= 1
+        _depth = depth
         jit_stats.ACTIVE[:] = collecting
         setattr(coast_module, "TRACE_ROOM", room)  # noqa: B010
     assert scan_trace.TOTALS["loop scans"] == loop_scans, "the stepped twin ran the loop"
