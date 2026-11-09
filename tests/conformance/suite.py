@@ -19,8 +19,8 @@ Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
 
 The parts ``units``, ``fixed_scan``, ``text_flasher``, ``follow_flags``, ``follow_values``,
-``follow_timing``, ``follow_extra``, the ``follow2_*`` parts and ``modbus_raw`` have memory of their own
-(``APART_PARTS``), apart from the whole suite;
+``follow_timing``, ``follow_extra``, the ``follow2_*`` parts and ``modbus_raw`` have memory of
+their own (``APART_PARTS``), apart from the whole suite;
 ``fixed_scan`` is run with CLICK's fixed scan on, and its export says how.
 
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
