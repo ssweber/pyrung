@@ -211,10 +211,12 @@ def test_absent_scalars_stay_at_the_kernel_default_after_a_later_slot_default() 
     from pyrung.core.compiled_plc import absent_scalars
 
     bank = Block("KsLate", TagType.INT, 1, 5)
-    late = bank.slot(1, name="KsLateN")
+    late = bank[1]
     with Program(strict=False) as program:
         with Rung(Go):
             copy(late, N)
     kernel = compile_kernel(program)
+    assert late.name in dict(kernel._scalar_defaults)
     bank.slot(1, default=9)
-    assert absent_scalars(kernel, {}) == dict(kernel._scalar_defaults)
+    assert late.default == 9
+    assert absent_scalars(kernel, {})[late.name] == 0

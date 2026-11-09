@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung import PLC, Bool, Int, Program, Rung, Timer, latch, math, on_delay, out
+from pyrung.core import AvoidCheckError
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.system_points import system
@@ -250,9 +251,67 @@ def test_a_goal_that_already_holds_is_reached_in_stop() -> None:
     assert plan.reachable
     assert plan.fork is not None
     assert plan.journey == ()
-    assert [event.kind for event in events] == ["finished"]
-    assert events[0].data["reached"] is True
+    assert [event.kind for event in events] == ["started", "finished"]
+    assert events[1].data["reached"] is True
+    assert events[1].data["reason"] == "target reached"
+    assert events[1].data["work"] is not None
     assert plc.state is state
+
+
+def test_reached_in_stop_applies_nothing_that_is_waiting() -> None:
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    _stop_by_calling_stop(plc)
+    _patch_the_count(plc)
+
+    plan = plc.how(Count > 10, max_scans=500)
+
+    assert str(plan) == "Reached Count > 10 in 0 scans."
+    assert plan.session_inputs == {}
+    assert plan.waiting_overrides == ()
+
+
+@pytest.mark.parametrize("goal_is_not", [False, True], ids=["tag", "not tag"])
+def test_a_tag_no_rung_uses_is_not_reached_in_stop(goal_is_not: bool) -> None:
+    absent = Bool("StopAbsentGoal")
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    _stop_by_calling_stop(plc)
+
+    plan = plc.how(~absent if goal_is_not else absent, max_scans=100)
+
+    assert plan.status is not PlanStatus.REACHED
+
+
+def _raises_at_once(snapshot: dict) -> bool:
+    raise ZeroDivisionError("boom")
+
+
+@pytest.mark.parametrize("goal", [Count > 10, Done], ids=["holds", "does not hold"])
+def test_a_raising_avoid_raises_in_stop_as_it_does_running(goal) -> None:
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    _stop_by_calling_stop(plc)
+
+    with pytest.raises(AvoidCheckError):
+        plc.how(goal, avoid=_raises_at_once, max_scans=100)
+
+
+def test_an_operand_a_waiting_force_names_is_known_in_stop() -> None:
+    other = Int("StopForcedOperand")
+    plc = PLC(_counting_program(), dt=0.01)
+    for _ in range(50):
+        plc.step()
+    plc.keep_forces_on_run = True
+    plc.force("StopForcedOperand", 5)
+    _stop_by_calling_stop(plc)
+
+    plan = plc.how(Count > other, max_scans=100)
+
+    assert plan.status is PlanStatus.STOPPED
 
 
 @pytest.mark.parametrize("stopped", [False, True], ids=["running", "stopped"])

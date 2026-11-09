@@ -181,8 +181,7 @@ def prepare_drive(
     from pyrung.core.analysis.pdg import build_program_graph
 
     configured_inputs = _configured_input_names(plc)
-    work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
-    _seed_reached_slots(work)
+    work = start_fork(plc)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
@@ -220,6 +219,13 @@ def prepare_drive(
         session_inputs={**plc._pending_patches, **plc._forces},
         waiting_overrides=waiting,
     )
+
+
+def start_fork(plc: PLC) -> PLC:
+    """The unstepped fork how() starts from, with the defaults of the slots the rungs reach."""
+    work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    _seed_reached_slots(work)
+    return work
 
 
 def _seed_reached_slots(work: PLC) -> None:

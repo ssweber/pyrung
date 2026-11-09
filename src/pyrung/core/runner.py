@@ -1758,7 +1758,7 @@ class PLC:
         self._records_full = False
         self._replay_mode: bool = False
         # Set while a replay steps the scans of its recording.  A restart would end the
-        # recording, so the walk never restarts.  The fork a replay returns restarts on its
+        # recording, so the replay never restarts.  The fork a replay returns restarts on its
         # next scan, as a live PLC does.
         self._walks_a_recording = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
