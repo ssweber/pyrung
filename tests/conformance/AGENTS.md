@@ -177,7 +177,8 @@ Conf_Rungs:     copy(<group hash>, DS101)        every scan, first rung
 | Registers | Holds |
 |---|---|
 | `DS1` | Layout hash (1..32767): the group table (subroutine names and bases) and `LAYOUT_VERSION`. Changes only when a group is added, removed, renamed, or moved. |
-| `DS2`..`DS10` | Spare program header. |
+| `DS2`..`DS9` | Spare program header. |
+| `DS10` | Part `modbus_raw`'s pointer, which no other group writes. |
 | `DS<base>` | Group hash (1..32767): SHA-256 of the CLICK export of the group's case rungs, folded into a register. Changes whenever that subroutine's exported ladder would. |
 | `DS<base+1>`..`DS<base+9>` | Spare group header. |
 | `DS<base+10N>`..`DS<base+10N+8>` | Slot N of the group; the last register of each 10 is spare. Each spare is mapped as a tag named after its address (`DS120`), which exports with no nickname, so a target that serves only mapped registers (the P1AM code) serves the whole slot while the CLICK project stays as it was. |
@@ -330,7 +331,7 @@ To add a case: a slot in `fixed_scan` in `manifest_apart.toml` and raw memory in
 
 ### Raw Modbus part
 
-Part `modbus_raw` asks what a CLICK answers to Modbus requests that pyclickplc never sends or refuses to send. Examples are a NaN into a DF, a read past a bank and FC03 of 126 registers. Its ladder stages DF, DD and TXT values and echoes into DH and DS what each write left. `test_raw_requests` (`test_modbus_raw.py`, marker `conformance`) sends the requests with `pymodbus`. It reads each value raw and through pyclickplc's `ClickClient`. Each probe records what came back, or the exception code, or `timeout`. The entry `modbus_raw/disagree` lists each read where pyclickplc's value is not the raw bits read as CLICK stores the bank. The module docstring lists the probes. Nothing is asserted against an answer. A run fails only on a crash, a hang, or an echo that never comes. A probe restores what it wrote even if it fails, and the readings are recorded even if the run dies.
+Part `modbus_raw` asks what a CLICK answers to Modbus requests that pyclickplc never sends or refuses to send. Examples are a NaN into a DF, a read past a bank and FC03 of 126 registers. Its ladder stages DF, DD and TXT values and echoes into DH and DS what each write left. `test_raw_requests` (`test_modbus_raw.py`, marker `conformance`) sends the requests with `pymodbus`. It reads each value raw and through pyclickplc's `ClickClient`. Each probe records what came back, or the exception code, or `timeout`. The entry `modbus_raw/disagree` lists each read where pyclickplc's value is not the raw bits read with CLICK's documented word and byte order. It can't catch a word-order or byte-order error, since both sides would share it. The `staged_*` entries answer that. The module docstring lists the probes. Nothing is asserted against an answer. A run fails only on a crash, a hang, or an echo that never comes. A probe restores what it wrote even if it fails, and the readings are recorded even if the run dies.
 
 To run it on a CLICK:
 

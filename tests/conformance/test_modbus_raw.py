@@ -24,8 +24,8 @@ it then holds, so a reading tells "the write was stored" apart from "the server 
 ``test_raw_requests`` sends the requests with ``pymodbus`` and records every answer.  An
 answer is the registers or bits, an exception code, or ``timeout``.  It reads each value twice,
 raw and through pyclickplc's ``ClickClient``, which decodes it or raises.  The entry
-``modbus_raw/disagree`` lists each read where pyclickplc's value is not the raw bits read as
-CLICK stores the bank (``_as_click_stores``).  Nothing here is asserted against an answer.  On a
+``modbus_raw/disagree`` lists each read where pyclickplc's value is not the raw bits read with
+CLICK's documented word and byte order (``_as_click_stores``).  Nothing here is asserted against an answer.  On a
 CLICK each probe goes into ``readings.toml``.  On a local target it goes into
 ``build/modbus_raw-readings/<target>.toml``, for setting the two side by side.
 
@@ -502,7 +502,7 @@ class _Wire:
         return response
 
     async def registers(self, fc: int, address: int, count: int) -> Any:
-        """FC03 or FC04, with no check on *count*: pymodbus refuses more than 125."""
+        """FC03 or FC04, with no check on *count*.  pymodbus refuses more than 125."""
         from pymodbus.pdu.register_message import (
             ReadHoldingRegistersRequest,
             ReadInputRegistersRequest,
@@ -625,8 +625,12 @@ class _Session:
     ) -> dict[str, Any]:
         """:meth:`pair` for a long read, compared in full and kept as a count."""
         both = await self.pair(bank, raw, decoded)
-        kept = {"raw": _count(both["raw"]), "decoded": _count(both["decoded"])}
-        if _disagreement(bank, both["raw"], both["decoded"]):
+        return self.keep_long(name, bank, both["raw"], both["decoded"])
+
+    def keep_long(self, name: str, bank: str, raw: Any, decoded: Any) -> dict[str, Any]:
+        """A long read compared in full, then kept as a count and its first value."""
+        kept = {"raw": _count(raw), "decoded": _count(decoded)}
+        if _disagreement(bank, raw, decoded):
             self.disagree.append(f"{name}: raw {kept['raw']}, pyclickplc {kept['decoded']}")
         return kept
 
@@ -986,10 +990,8 @@ async def _limits(s: _Session) -> None:
     )
     r = s.entry("fc15_x1969")
     bits = await w.bits(1, _c(1), 1969)
-    r["read"] = {
-        "raw": _count(bits),
-        "decoded": _count(await w.decoded(lambda cl: cl.c.read(1, 1969))),
-    }
+    decoded = await w.decoded(lambda cl: cl.c.read(1, 1969))
+    r["read"] = s.keep_long("fc15_x1969.read", "C", bits, decoded)
     if isinstance(bits, list) and len(bits) == 1969:
         values, r["values"] = [bool(b) for b in bits], "C1..C1969 as read"
     elif s.local:
