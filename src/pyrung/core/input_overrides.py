@@ -81,8 +81,8 @@ class _RungsWalked(NamedTuple):
     named: tuple[Tag, ...]
     edge_names: frozenset[str]
     block_uses: list[Any]
-    # What the walk found going on from the rungs into a block's cache or a program's
-    # own attributes: what has been asked of them so far, not what the rungs say.
+    # What the walk found in a block's cache once the rungs were done: what has been asked
+    # of the block so far, not what the rungs say.
     beyond_rungs: tuple[Tag, ...]
 
 
