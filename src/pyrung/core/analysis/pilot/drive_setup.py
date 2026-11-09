@@ -332,23 +332,23 @@ def build_prover_context(program: Any) -> ProverContext:
     pivot-tag state keys, and local static evidence.
 
     The answer comes from the program and its tags' settings.
-    A Program keeps the answer until its graph cache is dropped or a tag's settings change,
-    so each how() on an unchanged program skips the prover's passes.
+    A Program keeps the answer until its graph cache is dropped.
+    A change to a tag's settings drops that cache too, so each how() on an unchanged program skips the prover's passes.
     """
     from pyrung.core.tag import metadata_edits
 
     edits = metadata_edits()
     cached = getattr(program, "_cached_prover_context", None)
     if cached is not None:
-        graph, cached_edits, context = cached
-        if graph is getattr(program, "_cached_graph", None) and cached_edits == edits:
+        graph, context = cached
+        if graph is getattr(program, "_cached_graph", None):
             return _copy_prover_context(context)
     context = _compute_prover_context(program)
     if context is None:
         return ProverContext()
     graph = getattr(program, "_cached_graph", None)
     if graph is not None and metadata_edits() == edits:
-        program._cached_prover_context = (graph, edits, context)
+        program._cached_prover_context = (graph, context)
     return _copy_prover_context(context)
 
 

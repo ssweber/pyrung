@@ -48,8 +48,9 @@ class Program:
         self.subroutines: dict[str, list[RungLogic]] = {}
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
-        self._cached_graph: ProgramGraph | None = None
-        # how()'s prover facts, with the graph and the tag-settings count they were built from.
+        self._graph: ProgramGraph | None = None
+        self._graph_edits = 0
+        # how()'s prover facts, with the graph they were built from.
         self._cached_prover_context: Any = None
         self._site_table: SiteTable | None = None
 
@@ -73,6 +74,25 @@ class Program:
             from pyrung.core.validation.owned_bit_coil import check_owned_bit_coils
 
             check_owned_bit_coils(self)
+
+    @property
+    def _cached_graph(self) -> ProgramGraph | None:
+        """The built graph, or None once a tag's settings changed since it was built.
+
+        The graph reads tags' settings, so an edit to one makes it stale.
+        """
+        from pyrung.core.tag import metadata_edits
+
+        if self._graph is not None and self._graph_edits != metadata_edits():
+            self._graph = None
+        return self._graph
+
+    @_cached_graph.setter
+    def _cached_graph(self, graph: ProgramGraph | None) -> None:
+        from pyrung.core.tag import metadata_edits
+
+        self._graph = graph
+        self._graph_edits = metadata_edits()
 
     def _invalidate_graph_cache(self) -> None:
         self._cached_graph = None
@@ -246,13 +266,14 @@ class Program:
 
         The graph is built lazily on first call and cached.
         """
-        if self._cached_graph is None:
+        graph = self._cached_graph
+        if graph is None:
             from pyrung.core.analysis import build_program_graph
 
-            self._cached_graph = build_program_graph(self)
+            graph = self._cached_graph = build_program_graph(self)
         from pyrung.core.analysis.dataview import DataView
 
-        return DataView.from_graph(self._cached_graph)
+        return DataView.from_graph(graph)
 
     def simplified(self) -> dict[str, TerminalForm]:
         """Compute the simplified Boolean form for every terminal tag."""
