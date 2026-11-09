@@ -3580,7 +3580,7 @@ class PLC:
         if target_scan_id > replay._initial_scan_id:
             replay._trim_history_before(target_scan_id, trim_records=False)
         # A harness install or a reload edits the checkpoint between scans.  History serves
-        # the edited state, so the fork starts from it and not from the scan as stepped.
+        # the edited state.  The fork starts from it, not from the scan as stepped.
         edited = self._checkpoints.get(target_scan_id)
         if edited is not None:
             replay._start_from_state(edited)
