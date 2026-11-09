@@ -159,7 +159,7 @@ class ClickDataProvider:
             return self._read_mirrored_word(bank, index)
         value = self._read_mapped_or_fallback(normalized)
         if isinstance(value, float) and value != value:
-            # A CLICK serves every NaN as 0xFFFF:0xFFFF, whichever NaN it holds.
+            # pyrung serves every NaN it holds as a CLICK serves its NaN, 0xFFFF:0xFFFF.
             return _CLICK_NAN
         return value
 
