@@ -3254,9 +3254,9 @@ class PLC:
         """Drop every other checkpoint once more than *keep* are held.
 
         A checkpoint only shortens a replay, since the scan log says the rest: one
-        dropped costs run-up and never a value.  A checkpoint at a plant change stays,
-        because no replay crosses one.  Its force record goes with it unless the forces
-        changed on that scan.
+        dropped costs run-up and never a value.  A checkpoint at a plant change or an
+        edit stays, because no replay crosses one.  Its force record goes with it unless
+        the forces changed on that scan.
         """
         if len(self._checkpoints) <= keep:
             return
@@ -3597,8 +3597,8 @@ class PLC:
         """A fork at *target_scan_id* from the checkpoint before it, for inspection.
 
         *kernel*, if given, runs the scans up to the target.  The fork steps the target
-        scan, so it holds the target's records.  It never talks to a Modbus device, even
-        with ``_replay_mode`` cleared.
+        scan, so it holds the target's records.  The fork never talks to a Modbus device,
+        even with ``_replay_mode`` cleared.
         """
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
         replay, log, at, lifecycle_by_scan = self._build_replay_fork(
@@ -3743,7 +3743,8 @@ class PLC:
         if cached is not None and cached[0] == target_scan_id:
             return dict(cached[1])
 
-        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        # A checkpoint at the target holds the state after it, so the walk starts before.
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
 
         for scan_id in range(anchor_scan_id + 1, target_scan_id):
