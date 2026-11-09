@@ -294,8 +294,8 @@ class TestFeedbackStaysInTheLoop:
         assert counter["n"] < 50
         assert plc.state.tags["Temp"] == pytest.approx(100.0)
 
-    def test_a_replay_runs_a_plant_with_no_harness(self) -> None:
-        """A replay keeps the plant and not the harness, and every scan of it runs.
+    def test_a_replay_steps_on_as_its_source_did(self) -> None:
+        """A replay runs its plant on every scan, as the source's harness ran it.
 
         A single scan's step is under half an ulp here, so Temp has stopped, and must stay.
         """
@@ -305,17 +305,22 @@ class TestFeedbackStaysInTheLoop:
             plc.step()
             ran[plc.state.scan_id] = plc.state
         replay = plc.replay_to(1_000)
-        assert replay._harness is None
-        assert replay._synthesis is not None and replay._synthesis.plant
+        assert replay._harness is not None
+        assert replay._synthesis is not None
+        assert plc._synthesis is not None
+        assert len(replay._synthesis.plant) == len(plc._synthesis.plant), "one plant, not two"
         counter = _kernel_scans(replay)
         replay.run_for(30.0)
         assert replay.state.scan_id == 4_000
         assert counter["n"] == 3_000, "every scan of the seek ran"
+        assert replay.state.tags == ran[4_000].tags
+        assert replay.state.memory == ran[4_000].memory
 
         replay._recent_state_cache.clear()
         replay._replay_slabs.clear()
         for scan in (2_000, 3_000, 3_999, 4_000):
             assert replay.history.at(scan).tags["Temp"].hex() == ran[scan].tags["Temp"].hex(), scan
+            assert replay.history.at(scan).tags == ran[scan].tags, scan
 
     def test_a_plant_at_rest_folds_under_a_copy_reader(self) -> None:
         def enable() -> None:

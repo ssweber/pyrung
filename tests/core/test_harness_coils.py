@@ -635,7 +635,7 @@ class TestEveryEngineAgrees:
         kernel = plc._compiled_replay_supported_kernel()
         assert kernel is not None
         for scan in range(1, len(pattern) + 1):
-            assert plc._replay_to_compiled(scan, kernel).current_state.tags == live[scan - 1]
+            assert plc._replay_to(scan, kernel).current_state.tags == live[scan - 1]
             assert plc._replay_to_interpreted(scan).current_state.tags == live[scan - 1]
 
     @pytest.mark.parametrize(

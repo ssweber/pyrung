@@ -505,6 +505,11 @@ def _stopped_events(
     )
 
 
+def restart_ahead(stopped: str) -> str:
+    """The reason how() stops when *stopped* says why the next scan is a restart."""
+    return f"{stopped}. Its next scan would restart it, and how() does not plan across a restart."
+
+
 def _pilot_loop_events(
     plc: PLC,
     ctx: _PilotContext,
@@ -533,10 +538,7 @@ def _pilot_loop_events(
     _no_longer_searching(state)
     if isinstance(stop, SearchStopped):
         termination = TheoryTermination.STUCK
-        reason = (
-            f"the program stopped itself at scan {stop.scan_id} and its next scan would "
-            "restart it; how() does not plan across a restart"
-        )
+        reason = restart_ahead(f"the program stopped itself at scan {stop.scan_id}")
     elif isinstance(stop, SearchOutOfTime):
         termination = TheoryTermination.WALL_CLOCK
         assert clock is not None
