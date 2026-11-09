@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -135,8 +136,26 @@ def _capture_call_end_line(
     return best.end_line
 
 
-@lru_cache(maxsize=256)
 def _build_source_ast_index(source_file: str) -> _SourceAstIndex | None:
+    # The file's size and modified time are in the key, so a file edited and run
+    # again in the same process (a DAP reload, a notebook) gets a fresh index.
+    try:
+        stat = os.stat(source_file)
+    except OSError:
+        return None
+    return _source_ast_index(source_file, stat.st_mtime_ns, stat.st_size)
+
+
+def clear_source_index() -> None:
+    """Forget every indexed file.
+
+    A reload calls this because an edit can keep both the size and the modified time.
+    """
+    _source_ast_index.cache_clear()
+
+
+@lru_cache(maxsize=256)
+def _source_ast_index(source_file: str, _mtime_ns: int, _size: int) -> _SourceAstIndex | None:
     try:
         source = Path(source_file).read_text(encoding="utf-8")
     except OSError:
