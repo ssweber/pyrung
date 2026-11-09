@@ -3323,6 +3323,9 @@ class PLC:
         bracketed = Program.__new__(Program)
         bracketed.rungs = [*syn.plant, *syn.holds, *self._program.rungs]
         bracketed.subroutines = self._program.subroutines
+        # A CompiledPLC numbers its randint draws from this program's own rungs, as
+        # stepping does, so a bracket rung that reads a draw moves no draw.
+        bracketed._bare_program = self._program
         self._soft_exec_program_cache = bracketed
         return bracketed
 
@@ -4961,7 +4964,12 @@ class PLC:
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
         sites = self._randint_site_list()
         if sites:
-            self._input_overrides.apply_randint_draws(ctx, sites, self._this_scan_drained_patches)
+            self._input_overrides.apply_randint_draws(
+                ctx,
+                sites,
+                self._tags_rungs_reach.randint_numbers(),
+                self._this_scan_drained_patches,
+            )
         return ctx, dt
 
     def _randint_site_list(self) -> tuple[RandIntExpr, ...]:

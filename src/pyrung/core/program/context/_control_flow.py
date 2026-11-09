@@ -100,15 +100,15 @@ class SubroutineFunc:
         # call() may register a subroutine from inside a rung, a forloop body
         # or another subroutine; its rungs must not join any of them.
         saved_subroutine = prog._current_subroutine
-        saved_loops = _state._forloop_stack[:]
-        _state._forloop_stack.clear()
+        saved_loops = _state._building.forloops[:]
+        _state._building.forloops.clear()
         prog._start_subroutine(self._name)
         try:
             self._fn()
         finally:
             prog._end_subroutine()
             prog._current_subroutine = saved_subroutine
-            _state._forloop_stack[:] = saved_loops
+            _state._building.forloops[:] = saved_loops
 
 
 def subroutine(name: str, *, strict: bool = True) -> Subroutine:
@@ -145,7 +145,7 @@ class ForLoop:
         self.oneshot = oneshot
         # Nested loops each need their own index; the outermost keeps the
         # historical name.
-        depth = len(_state._forloop_stack) + 1
+        depth = len(_state._building.forloops) + 1
         idx_name = "_forloop_idx" if depth == 1 else f"_forloop_idx{depth}"
         self.idx = Tag(idx_name, TagType.DINT)
         self._parent_ctx: Rung | None = None
@@ -157,7 +157,7 @@ class ForLoop:
         self._source_line = source_line
 
     def __enter__(self) -> ForLoop:
-        if len(_state._forloop_stack) >= _state._MAX_FORLOOP_DEPTH:
+        if len(_state._building.forloops) >= _state._MAX_FORLOOP_DEPTH:
             raise RuntimeError(f"forloop nesting is limited to {_state._MAX_FORLOOP_DEPTH} levels")
 
         self._parent_ctx = _require_rung_context("forloop")
@@ -177,7 +177,7 @@ class ForLoop:
         self._capture_rung._loop_capture = True
         self._capture_ctx = _new_capture_context(self._capture_rung)
         _push_rung_context(self._capture_ctx)
-        _state._forloop_stack.append(self)
+        _state._building.forloops.append(self)
 
         return self
 
@@ -200,7 +200,7 @@ class ForLoop:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         _pop_rung_context()
-        _state._forloop_stack.pop()
+        _state._building.forloops.pop()
 
         if exc_type is None and self._capture_ctx is not None:
             self._capture_ctx._assert_required_builders_resolved("forloop")
@@ -320,7 +320,7 @@ class Branch:
         self._source_line = source_line
 
     def __enter__(self) -> Branch:
-        if _state._forloop_stack:
+        if _state._building.forloops:
             raise RuntimeError("branch() is not permitted inside forloop()")
 
         # Get parent rung context

@@ -18,7 +18,7 @@ from typing import Any, Literal, cast
 from pyrsistent import PMap
 
 from pyrung.core.context import ScanContext, refused_inside_its_own_scan, same_stored_value
-from pyrung.core.expression import randint_sites
+from pyrung.core.expression import randint_numbers, randint_sites
 from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.site_memory import migrate_legacy_edge_memory, site_table_of
@@ -256,6 +256,15 @@ class CompiledPLC:
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
         self._randint_sites = randint_sites(self._compiled.referenced_tags)
+        # Numbered over the user's rungs alone, as stepping numbers them, so both draw
+        # the same.  A runner's soft program puts plant and hold rungs ahead of them.
+        self._randint_numbers: dict[int, int] = {}
+        if self._randint_sites:
+            bare = getattr(program, "_bare_program", None)
+            reach = self._tags_rungs_reach if bare is None else TagsRungsReach(bare.rungs, bare)
+            self._randint_numbers = randint_numbers(
+                (site.tag.name for site in self._randint_sites), reach.randint_numbers()
+            )
         self._referenced_system_tags = frozenset(
             name for name in self._compiled.referenced_tags if name in SYSTEM_TAGS_BY_NAME
         )
@@ -357,7 +366,7 @@ class CompiledPLC:
             self._mark_override_name_live(name)
         if self._randint_sites:
             for name in self._input_overrides.apply_randint_draws(
-                scan_ctx, self._randint_sites, drained
+                scan_ctx, self._randint_sites, self._randint_numbers, drained
             ):
                 self._mark_override_name_live(name)
         for name in force_names:

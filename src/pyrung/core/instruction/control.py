@@ -321,7 +321,6 @@ class ForLoopInstruction(OneShotMixin, Instruction):
 
     def _reset_oneshot_state(self, ctx: ScanContext) -> None:
         """Re-arm the For's own one-shot (the rung is false); children keep theirs."""
-        self.reset_oneshot()
         if self._oneshot:
             ctx.set_memory(self.memory_key("_oneshot"), False)
 

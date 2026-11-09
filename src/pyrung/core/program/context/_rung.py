@@ -48,7 +48,7 @@ class Rung:
     def __init__(self, *conditions: ConditionTerm) -> None:
         # Inside forloop() a Rung is a body rung of the innermost loop.
         self._loop = _current_forloop_body()
-        if self._loop is None and _state._forloop_stack:
+        if self._loop is None and _state._building.forloops:
             raise RuntimeError(
                 "Rung() inside forloop() must sit directly in the loop body, "
                 "not inside another body rung"

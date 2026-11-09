@@ -18,6 +18,7 @@ from typing import Any
 from pyrsistent import pmap
 
 from pyrung.core import PLC
+from pyrung.core._source import clear_source_index
 from pyrung.core.site_memory import (
     PLANT_FEEDBACK_SITE,
     instruction_memory,
@@ -69,6 +70,7 @@ def _reload_locked(
     for name in stale:
         del sys.modules[name]
     importlib.invalidate_caches()
+    clear_source_index()
 
     previous_dap_flag = os.environ.get("PYRUNG_DAP_ACTIVE")
     os.environ["PYRUNG_DAP_ACTIVE"] = "1"

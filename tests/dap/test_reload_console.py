@@ -559,6 +559,22 @@ class TestReload:
         assert adapter._runner.forces["Button"] is True
         assert "Extra" in adapter._runner._known_tags_by_name
 
+    def test_a_reload_reads_the_edited_rung_lines(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path)
+        assert [r.end_line for r in adapter._runner.program.rungs] == [9, 11]
+
+        # The edit keeps the first rung on its first line and grows both bodies.
+        script_path.write_text(
+            BASIC_SCRIPT.replace("out(light)\n", "out(light)\n        out(light)\n").replace(
+                "copy(0, counter)\n", "copy(0, counter)\n        copy(1, counter)\n"
+            ),
+            encoding="utf-8",
+        )
+
+        resp, _ = _repl(adapter, out, "reload", seq=12)
+        assert resp["success"] is True
+        assert [r.end_line for r in adapter._runner.program.rungs] == [10, 13]
+
 
 ONESHOT_SCRIPT = (
     "from pyrung.core import Bool, PLC, Program, Rung, out\n"

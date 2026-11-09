@@ -202,7 +202,7 @@ def test_an_opaque_avoid_lets_no_other_member_off(
     monkeypatch.setattr(
         read_trace._TracedTags,
         "__getitem__",
-        lambda self, key: False if read_trace._READ_TRACES else self._untraced[key],
+        lambda self, key: False if read_trace._TRACES.stack else self._untraced[key],
     )
     monkeypatch.setattr(
         read_trace._TracedTags, "__contains__", lambda self, key: key in self._untraced
