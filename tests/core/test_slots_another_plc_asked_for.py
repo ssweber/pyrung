@@ -157,7 +157,7 @@ def test_a_counting_factory_gives_a_slot_one_default_whichever_slot_is_read_firs
     later = PLC(program, dt=0.01)
     later.step()
 
-    # The factory is asked in address order: slot 4 gets its fourth answer.
+    # The factory is asked in address order, so slot 4 gets its fourth answer.
     assert later.current_state.tags[seen.name] == first.current_state.tags[seen.name] == 104
 
 
