@@ -149,9 +149,8 @@ def _written_value_satisfying(
 ) -> Any | None:
     """The value a writer of this tag writes that satisfies the comparison, if any.
 
-    A writer that adds a constant to the tag itself counts too.  Its candidate is the first
-    value on the count from the current one that meets the comparison.  Tracing that value
-    back reaches the current one a write at a time.
+    A writer that adds a constant to the tag itself also qualifies.  Its candidate is the first
+    value that repeated adds from the current value reach and that meets the comparison.
     """
 
     if program is None:
@@ -189,12 +188,20 @@ def _counted_value_satisfying(
     holds = _HOLDS.get(atom.form)
     if holds is None:
         return None
+    # A Real at inf or NaN gives no count to step through, and math.ceil() would raise on it.
+    try:
+        ratio = (threshold - now) / step
+        finite = all(math.isfinite(x) for x in (*numbers, ratio))
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if not finite:
+        return None
     if atom.form == "ne":
         n = 1
     elif (step > 0) != (atom.form in ("gt", "ge")):
         return None
     else:
-        n = max(1, math.ceil((threshold - now) / step))
+        n = max(1, math.ceil(ratio))
     # Float rounding can leave the first guess one step short.
     for count in (n, n + 1, n + 2):
         value = now + count * step

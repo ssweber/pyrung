@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Rung, copy, latch, math
+from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, latch, math
 from pyrung.core.analysis.graph import PlanStatus
 
 
@@ -153,3 +153,109 @@ def test_a_goal_no_write_meets_is_not_reached(
     plan = plc.how(compare(level, bound), max_scans=600)
 
     assert plan.status is not PlanStatus.REACHED
+
+
+def test_a_real_count_at_inf_takes_the_reset_writer() -> None:
+    go, rst, count = Bool("Go", external=True), Bool("Rst", external=True), Real("Count")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            math(count - 1, count)
+        with Rung(rst):
+            copy(0, count)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    plc.patch({"Count": float("inf")})
+    plc.step()
+    stepped = plc.fork()
+    stepped.patch({"Rst": True})
+    stepped.step()
+    assert stepped.state.tags["Count"] < 3
+
+    plan = plc.how(count < 3, max_scans=600)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.replay().state.tags["Count"] < 3
+
+
+def test_a_count_against_a_limit_at_inf_still_reaches() -> None:
+    go, low, n, lim = Bool("Go", external=True), Bool("Low", external=True), Int("N"), Real("Lim")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            math(n + 1, n)
+        with Rung(low):
+            copy(2.0, lim)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    plc.patch({"Lim": float("inf")})
+    plc.step()
+    stepped = plc.fork()
+    stepped.patch({"Low": True, "Go": True})
+    stepped.run_until(n > lim, max_cycles=20)
+    assert stepped.state.tags["N"] > stepped.state.tags["Lim"]
+
+    plan = plc.how(n > lim, max_scans=600)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    replayed = plan.replay().state.tags
+    assert replayed["N"] > replayed["Lim"]
+
+
+def test_a_real_count_at_nan_is_not_reached() -> None:
+    go, count = Bool("Go", external=True), Real("Count")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            math(count - 1, count)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    plc.patch({"Count": float("nan")})
+    plc.step()
+    stepped = plc.fork()
+    stepped.patch({"Go": True})
+    stepped.run(cycles=10)
+    assert not stepped.state.tags["Count"] < 3
+
+    plan = plc.how(count < 3, max_scans=600)
+
+    assert plan.status is not PlanStatus.REACHED
+
+
+def test_a_count_stops_at_the_top_of_its_type() -> None:
+    go, count = Bool("Go", external=True), Int("Count")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            math(count + 1, count)
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"Count": 32760})
+    plc.step()
+    # An Int holds 32767 at most, so the next add wraps to -32768 and never passes it.
+    stepped = plc.fork()
+    stepped.patch({"Go": True})
+    stepped.run(cycles=20)
+    assert stepped.state.tags["Count"] < 0
+
+    top = plc.how(count >= 32767, max_scans=600)
+    past = plc.how(count > 32767, max_scans=600)
+
+    assert top.status is PlanStatus.REACHED, top.reason
+    assert top.last_resort is None
+    assert top.replay().state.tags["Count"] == 32767
+    assert past.status is not PlanStatus.REACHED
+
+
+def test_a_real_count_with_a_fractional_step_is_reached() -> None:
+    go, level = Bool("Go", external=True), Real("Level")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            math(level + 0.5, level)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    stepped = plc.fork()
+    stepped.patch({"Go": True})
+    stepped.run_until(level > 2.2, max_cycles=20)
+    assert stepped.state.tags["Level"] == 2.5
+
+    plan = plc.how(level > 2.2, max_scans=600)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
+    assert plan.replay().state.tags["Level"] > 2.2
