@@ -9,9 +9,9 @@ import pytest
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.click import ModbusTcpTarget, nop, raw, receive, send
-from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.context import ScanContext
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 from pyrung.core.instruction.send_receive import _core as _sr
 from pyrung.core.runner import PLC, EpochQuery
 
