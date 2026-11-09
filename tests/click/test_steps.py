@@ -208,3 +208,8 @@ def test_export_over_the_step_limit_warns_and_still_writes():
     with pytest.warns(UserWarning, match=r"CLK_STEP_LIMIT: Estimated 8503 program steps exceeds"):
         bundle = pyrung_to_ladder(_rungs_of_copies(1700), TagMap([]))
     assert estimate_steps(bundle).total == 8503
+
+
+def test_the_step_limit_warns_even_when_allowed():
+    with pytest.warns(UserWarning, match="CLK_STEP_LIMIT"):
+        pyrung_to_ladder(_rungs_of_copies(1700), TagMap([]), allow=[CLK_STEP_LIMIT])

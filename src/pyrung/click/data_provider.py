@@ -185,7 +185,7 @@ class ClickDataProvider:
         slot: _MappedRuntimeSlot | None = None
         if bank is not None:
             try:
-                tag = bank[index]
+                tag = bank._tag_at(index)
             except IndexError:
                 tag = None
             if tag is not None:

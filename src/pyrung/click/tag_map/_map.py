@@ -185,14 +185,14 @@ class TagMap:
                 self._validate_block_mapping(block_entry)
 
                 for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
-                    logical_slot = source[logical_addr]
+                    logical_slot = source._tag_at(logical_addr)
                     self._reject_reserved_system_name(logical_slot.name)
                     self._register_user_logical_name(
                         logical_slot.name,
                         owner=f"block slot {source.name}[{logical_addr}]",
                     )
                     memory_type, _ = self._parse_hardware_tag(
-                        block_entry.hardware.block[hardware_addr]
+                        block_entry.hardware.block._tag_at(hardware_addr)
                     )
                     self._claim_hardware_address(
                         get_addr_key(memory_type, hardware_addr),
@@ -207,8 +207,8 @@ class TagMap:
                 self._block_lookup[block_id] = block_entry
                 self._block_by_name[source.name] = block_entry
                 for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
-                    logical_slot = source[logical_addr]
-                    hardware_slot = block_entry.hardware.block[hardware_addr]
+                    logical_slot = source._tag_at(logical_addr)
+                    hardware_slot = block_entry.hardware.block._tag_at(hardware_addr)
                     self._block_slot_forward_by_id[id(logical_slot)] = hardware_slot
                     self._block_slot_forward_by_name[logical_slot.name] = hardware_slot
                 continue
@@ -307,7 +307,7 @@ class TagMap:
             hardware_addr = entry.logical_to_hardware.get(index)
             if hardware_addr is None:
                 raise IndexError(f"Logical index {index} out of range for block {source.name!r}.")
-            return self._hardware_address_name(entry.hardware.block[hardware_addr])
+            return self._hardware_address_name(entry.hardware.block._tag_at(hardware_addr))
 
         raise TypeError("resolve source must be Tag, Block, or str.")
 
@@ -376,8 +376,8 @@ class TagMap:
             for logical_addr, hardware_addr in zip(
                 entry.logical_addresses, entry.hardware_addresses, strict=True
             ):
-                logical_slot = entry.logical[logical_addr]
-                hardware_slot = entry.hardware.block[hardware_addr]
+                logical_slot = entry.logical._tag_at(logical_addr)
+                hardware_slot = entry.hardware.block._tag_at(hardware_addr)
                 slots.append(
                     self._mapped_slot(logical_slot, hardware_slot, read_only=False, source="user")
                 )
@@ -453,7 +453,7 @@ class TagMap:
             if bank is None:
                 continue
             try:
-                tags[bank[index].name] = value
+                tags[bank._tag_at(index).name] = value
             except IndexError:
                 continue
         return tags
@@ -546,7 +546,7 @@ class TagMap:
                 block_entry.hardware_addresses,
                 strict=True,
             ):
-                hw_tag = block_entry.hardware.block[hardware_addr]
+                hw_tag = block_entry.hardware.block._tag_at(hardware_addr)
                 memory_type, address = self._parse_hardware_tag(hw_tag)
                 display = format_address_display(memory_type, address)
                 index[display] = OwnerInfo(
@@ -562,7 +562,7 @@ class TagMap:
             for field_name in runtime.field_names:
                 block = runtime._blocks[field_name]
                 for i in range(1, structure.count + 1):
-                    logical_slot = block[i]
+                    logical_slot = block._tag_at(i)
                     # Try block slot forward (Block→BlockRange entries)
                     hw_tag = self._block_slot_forward_by_name.get(logical_slot.name)
                     if hw_tag is None:
@@ -698,7 +698,7 @@ class TagMap:
             raise ValueError(
                 f"Block size mismatch: hardware range for {entry.logical.name!r} has no valid addresses."
             )
-        sample_tag = entry.hardware.block[entry.hardware_addresses[0]]
+        sample_tag = entry.hardware.block._tag_at(entry.hardware_addresses[0])
         memory_type, _ = cls._parse_hardware_tag(sample_tag)
         expected_type = _tag_type_for_memory_type(memory_type)
         if entry.logical.type != expected_type:
@@ -751,7 +751,7 @@ class TagMap:
         for entry in self._block_entries:
             if isinstance(entry.hardware.block, InputBlock):
                 for addr in entry.logical_addresses:
-                    tag = entry.logical[addr]
+                    tag = entry.logical._tag_at(addr)
                     if not tag.external and not tag.readonly:
                         object.__setattr__(tag, "external", True)
 
@@ -766,7 +766,7 @@ class TagMap:
         for entry in self._block_entries:
             if isinstance(entry.hardware.block, OutputBlock):
                 for addr in entry.logical_addresses:
-                    tag = entry.logical[addr]
+                    tag = entry.logical._tag_at(addr)
                     if not tag.lock:
                         object.__setattr__(tag, "lock", True)
 
@@ -840,7 +840,7 @@ class TagMap:
                 continue
             if not entry.hardware_addresses:
                 continue
-            sample_tag = entry.hardware.block[entry.hardware_addresses[0]]
+            sample_tag = entry.hardware.block._tag_at(entry.hardware_addresses[0])
             memory_type, address = self._parse_hardware_tag(sample_tag)
             record_named_array_span(entry.logical, memory_type, address)
 
@@ -929,7 +929,7 @@ class TagMap:
             yield entry.logical
         for entry in self._block_entries_tuple:
             for logical_addr in entry.logical_addresses:
-                yield entry.logical[logical_addr]
+                yield entry.logical._tag_at(logical_addr)
 
     def _refresh_nickname_validation(self) -> None:
         warnings: list[str] = []

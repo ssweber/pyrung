@@ -170,15 +170,24 @@ def _check_operands(
 
 
 def _carry_goal_tags(setup: _drive_setup.DriveSetup, conditions: tuple[Any, ...]) -> None:
-    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed."""
+    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed.
+
+    An operand tag that only a patch or force by name gave a value is registered too, so a rung
+    the search adds compares with the tag and not with its name.
+    """
     from pyrung.core.tag import Tag
 
     known = setup.work._known_tags_by_name
     for condition in conditions:
         for member in _members(condition):
-            tag = member if isinstance(member, Tag) else getattr(member, "tag", None)
-            if isinstance(tag, Tag) and tag.name not in known:
-                setup.work._register_tag_no_rung_gave(tag)
+            named = (
+                (member,)
+                if isinstance(member, Tag)
+                else (member.tag, getattr(member, "value", None))
+            )
+            for tag in named:
+                if isinstance(tag, Tag) and tag.name not in known:
+                    setup.work._register_tag_no_rung_gave(tag)
 
 
 def _plan_from_outcome(
@@ -367,6 +376,7 @@ def pilot_how(
                 None,
                 wall_s if clock is None else min(wall_s, clock.left()),
                 start_had_a_scan=start_had_a_scan,
+                check_operands=False,
             )
             return answer, asked is not None and asked.cut_short
 
@@ -492,15 +502,16 @@ def _stopped_events(plan: Plan) -> Iterator[PilotEvent]:
     )
 
 
-def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool] | None:
-    """The goal as a check on a state's tags, or None if a condition does not compile to one."""
-    from pyrung.core.analysis.prove import _compile_property
+def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool]:
+    """The goal as a check on a state's tags, judged as the search judges it.
 
-    try:
-        checks = [_compile_property(condition)[0] for condition in conditions]
-    except Exception:
-        return None
-    return lambda tags: all(check(tags) for check in checks)
+    A goal whose tag the state lacks does not hold.  The prover's check reads such a goal as
+    holding.  A trimmed run that never wrote the goal's tag would then pass.
+    """
+    goal = TargetSpec.conjunction(
+        tuple(TargetSpec(*target) for target in _parse_targets(*conditions))
+    )
+    return lambda tags: target_reached(tags, goal.tag, goal.value, goal.predicate)
 
 
 def _how_from(
@@ -513,12 +524,19 @@ def _how_from(
     wall_clock_s: float | None,
     *,
     start_had_a_scan: bool = True,
+    check_operands: bool = True,
 ) -> tuple[Plan, _drive_setup.DriveSetup, _engine._DriveOutcome | None]:
-    """One how() from where *plc* stands, with what the caller needs to decide what comes next."""
+    """One how() from where *plc* stands, with what the caller needs to decide what comes next.
+
+    A try after the first ask skips the operand check, which the first ask passed.  A restart
+    drops a tag that only a patch or force by name gave, and the try reads that tag at its
+    default, as stepping does.
+    """
     clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    _check_operands(targets, setup.pdg, setup.diag_snapshot)
+    if check_operands:
+        _check_operands(targets, setup.pdg, setup.diag_snapshot)
     _carry_goal_tags(setup, conditions)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()

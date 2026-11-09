@@ -13,6 +13,7 @@ from pyrung import (
     Rung,
     Timer,
     call,
+    copy,
     forloop,
     latch,
     math,
@@ -20,6 +21,7 @@ from pyrung import (
     out,
     reset,
     subroutine,
+    system,
 )
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
@@ -341,3 +343,22 @@ def test_an_input_that_reaches_the_goal_through_the_plant_is_in_its_cone() -> No
     assert "Go" not in pdg.upstream_slice("Hit", follow_calls=True)
     assert {"Fb", "En", "Go"} <= upstream_through_plant(pdg, work._harness, ("Hit",))
     assert "Go" not in upstream_through_plant(pdg, None, ("Hit",))
+
+
+def test_a_wait_for_a_goal_on_a_tag_no_scan_has_written_runs_until_the_program_writes_it() -> None:
+    """No scan has rtc.new_second until the copy writes it, so the goal does not hold before then."""
+    from pyrung.core.analysis.pilot import api, last_resort
+
+    count = Int("Count")
+    with Program(strict=False) as logic:
+        with Rung():
+            math(count + 1, count)
+        with Rung(count == 50):
+            copy(30, system.rtc.new_second)
+    plc = PLC(logic, dt=0.01)
+    goal = api._goal_check((system.rtc.new_second == 30,))
+
+    assert last_resort._waited(plc, goal, None, lambda: 5.0, 1000)
+
+    assert plc.state.tags[system.rtc.new_second.name] == 30
+    assert plc.state.tags["Count"] == 50

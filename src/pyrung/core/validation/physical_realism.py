@@ -166,7 +166,7 @@ def _linked_command_name(feedback: Tag, tag_map: dict[str, Tag]) -> str | None:
         if block is None:
             return None
         try:
-            return block[index].name
+            return block._tag_at(index).name
         except Exception:
             return None
 

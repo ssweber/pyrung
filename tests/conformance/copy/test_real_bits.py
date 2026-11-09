@@ -2,9 +2,10 @@
 
 Part ``copy`` (``suite.PARTS``).  The harness reads slots, so the raw IEEE bits a CLICK
 keeps in a DF, which is what two Modbus registers would show, come through an
-Unpack Copy into two DH and a compare on each.  Expectations are what pyrung reads
-today (the float64 it keeps packed to a float32), so a CLICK that reads otherwise
-is an answer.
+Unpack Copy into two DH and a compare on each.  ``underflow`` and ``float32_equality``
+expect what a CLICK read (2026-11-07) and are ``pending="F32"``.  The other cases still
+expect what pyrung reads (a float64 packed to a float32), so a CLICK that reads
+otherwise is an answer.
 
 - ``minus_zero_math``: DF 0.0 * -1.0.  IEEE keeps the sign: high word 0x8000
   (Result1 = 1; 2 is 0x0000, any other 0), low word 0 (ErrorCode = 1).  A store that
@@ -22,15 +23,15 @@ is an answer.
   its low word, 1 for zero, 2 for 0xFFFF.  A CLICK's NaN reads 0xFFFF:0xFFFF, and so
   does pyrung's, whichever NaN it holds.  The word is compared after an XOR with 0x0080, each bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these
   registers; a client (ClickNick, the sim) shows what these bits decode to.
-- ``underflow``: pyrung keeps a Real at 64 bits, so 1.0E-20 * 1.0E-20 and 1.0E-30 *
-  1.0E-30 are not 0 in a compare (Result1, Result2 = 0).  A float32 CLICK reads 1E-40
-  as a denormal (Result1 = 0) or flushes it (Result1 = 1), and 1E-60 is 0 either way
-  (Result2 = 1).  Result3 is SC43 after the second, off in pyrung; the raw low word
-  of the first (Result4): 1 when nonzero (a denormal, 0x16C2), 0 when flushed.
-- ``float32_equality``: DF 0.1 + DF 0.2 compared with 0.3 (Result1).  pyrung reads 0 at
-  64 bits; a float32 store reads 1.  Result2 is DD 16777217 compared with DF
-  16777216.0: 0 in pyrung, 1 where a Dint is compared as a float32.  Controls: DF 0.1
-  == 0.1 (Result3 = 1), DF 0.5 + DF 0.25 == 0.75 (Result4 = 1), exact in both widths.
+- ``underflow``: 1.0E-20 * 1.0E-20 and 1.0E-30 * 1.0E-30 compared with 0.  A CLICK (2026-11-07)
+  keeps the first as a float32 denormal (Result1 = 0, Result4 = 1) and stores the second as
+  0 (Result2 = 1), with no SC43 (Result3 = 0).  The other candidate flushed the first to 0.
+  pyrung keeps a Real at 64 bits, so 1E-60 is not 0 (Result2 = 0): ``pending="F32"``.
+- ``float32_equality``: DF 0.1 + DF 0.2 compared with 0.3 (Result1), and DD 16777217 with DF
+  16777216.0 (Result2).  A CLICK (2026-11-07) compares the sum at float32, so it is equal
+  (Result1 = 1), and does not compare the Dint as a float32 (Result2 = 0).  pyrung reads
+  Result1 = 0 at 64 bits: ``pending="F32"``.  Controls: DF 0.1 == 0.1 (Result3 = 1), DF 0.5 +
+  DF 0.25 == 0.75 (Result4 = 1), exact in both widths.
 
 The cases own DF20..DF66, DH470..DH491, DD850 and TXT546..TXT557.
 """
@@ -217,22 +218,22 @@ group = Group(
             probe="what a DF holding Inf or NaN reads over Modbus, which NaN",
         ),
         case(
-            "A Real product past float32's small end is not 0 in pyrung: 1.0E-20 ^ 2 and "
-            "1.0E-30 ^ 2 compare unequal to 0 (Result1, Result2 = 0), no SC43 (Result3 = 0), "
+            "A Real product past float32's small end: 1.0E-20 ^ 2 is kept as a denormal, not "
+            "0 (Result1 = 0), 1.0E-30 ^ 2 is stored as 0 (Result2 = 1), no SC43 (Result3 = 0), "
             "and the first's raw low word is nonzero (Result4 = 1)",
             ladder=prove_underflow,
             init=init_underflow,
-            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 1},
-            probe="denormal or flushed; is underflow SC43",
+            expect={"Result1": 0, "Result2": 1, "Result3": 0, "Result4": 1},
+            pending="F32",
         ),
         case(
-            "A Real compares at pyrung's 64 bits: DF 0.1 + DF 0.2 does not equal 0.3 (Result1 "
-            "= 0), and DD 16777217 does not equal DF 16777216.0 (Result2 = 0); DF 0.1 == 0.1 "
-            "and 0.5 + 0.25 == 0.75 hold in any width (Result3, Result4 = 1)",
+            "A Real compares at float32: DF 0.1 + DF 0.2 equals 0.3 (Result1 = 1), and DD "
+            "16777217 does not equal DF 16777216.0 (Result2 = 0); DF 0.1 == 0.1 and 0.5 + 0.25 "
+            "== 0.75 hold in any width (Result3, Result4 = 1)",
             ladder=prove_float32_equality,
             init=init_float32_equality,
-            expect={"Result1": 0, "Result2": 0, "Result3": 1, "Result4": 1},
-            probe="a compare at float32 where pyrung compares at 64 bits; a Dint against a Real",
+            expect={"Result1": 1, "Result2": 0, "Result3": 1, "Result4": 1},
+            pending="F32",
         ),
     ],
 )

@@ -44,6 +44,11 @@ PENDING_STEPS: Mapping[str, str] = {
         "which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer;"
         " not a Math or a Copy of NaN)"
     ),
+    "F32": "REAL stores and compares at float32",
+    "PASTBANK": (
+        "a Copy through a pointer past a bank writes to memory (pyrung has none and"
+        " drops the write), and raises no flag"
+    ),
     "PRESET": (
         "when a drum reads a DS preset (pyrung reads it on the first scan its step times;"
         " a CLICK does not)"

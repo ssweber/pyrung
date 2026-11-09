@@ -53,6 +53,7 @@ from .findings import (
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
+    CLK_PTR_PAST_BANK,
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_RAND_BOUND_TYPE,
     CLK_RAND_EQUAL_BOUNDS,
@@ -95,6 +96,11 @@ from .hardware import (
 )
 from .identity import _evaluate_address_identity_conflicts
 from .nicknames import _evaluate_nickname_lengths
+from .pointer_range import (
+    _evaluate_condition_pointer_past_bank,
+    _evaluate_pointer_past_bank,
+    _PointerBounds,
+)
 from .portability import (
     _evaluate_fact,
     _evaluate_forloop_count,
@@ -250,7 +256,12 @@ def validate_click_program(
     findings.extend(_evaluate_nested_calls(program, mode))
     findings.extend(_evaluate_step_limit(program, tag_map, mode))
 
+    bounds = _PointerBounds(program)
+    findings.extend(_evaluate_condition_pointer_past_bank(program, tag_map, bounds, mode, resolver))
     for instruction, base_location in instruction_sites:
+        findings.extend(
+            _evaluate_pointer_past_bank(instruction, base_location, tag_map, bounds, mode, resolver)
+        )
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
         findings.extend(_evaluate_range_aggregates(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
@@ -383,6 +394,7 @@ __all__ = [
     "CLK_SEARCH_RANGE_BANK",
     "CLK_SEARCH_RESULT_NOT_DS",
     "CLK_TIMER_PRESET_TOO_LOW",
+    "CLK_PTR_PAST_BANK",
     "ClickFinding",
     "ClickValidationReport",
 ]

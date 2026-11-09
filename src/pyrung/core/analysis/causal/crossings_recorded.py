@@ -133,15 +133,25 @@ def recorded_read_changes(
 
     cur = history.at(scan_id)
     prev = history.at(prev_scan_id) if prev_scan_id is not None else None
+    plc = getattr(history, "_plc", None)
+    lookup = getattr(plc, "_tag_known_or_reached", None)
+
+    def value_in(state: Any, name: str) -> Any:
+        # A slot no scan has written is not in the state and holds its default.
+        if name in state.tags or lookup is None:
+            return state.tags.get(name)
+        known = lookup(name)
+        return None if known is None else known.default
+
     changed: list[tuple[str, Any, Any]] = []
     nonzero_now: list[str] = []
     for tag in sorted(footprint):
         if read_values is not None and tag in read_values:
             after = read_values[tag]
         else:
-            after = cur.tags.get(tag)
+            after = value_in(cur, tag)
         if prev is not None:
-            before = prev.tags.get(tag)
+            before = value_in(prev, tag)
             if value_changed(before, after):
                 changed.append((tag, before, after))
         if _is_nonzero(after):

@@ -105,7 +105,7 @@ def generate_circuitpy(
                 continue
             ctx._ensure_block_binding(logical)
             for addr in getattr(entry, "logical_addresses", ()):
-                ctx.ensure_tag_referenced(logical[addr])
+                ctx.ensure_tag_referenced(logical._tag_at(addr))
         for slot in tag_map.mapped_slots():
             if slot.source != "system":
                 continue

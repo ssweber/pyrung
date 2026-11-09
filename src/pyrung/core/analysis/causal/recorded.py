@@ -1313,18 +1313,20 @@ def _replayed_writers_from_pdg(
 
 
 def _tag_in_block(block: Any, tag_name: str) -> bool:
-    """Check whether *tag_name* is a tag inside *block*."""
+    """Check whether *tag_name* is a tag inside *block*.
+
+    The answer comes from the slot names, not the block's cache.  The cache holds whichever
+    slots something has asked for, so a fresh runner's answer would differ from a later one's.
+    """
     mapped = getattr(block, "_mapped_tags", None)
     if mapped is not None:
         for tag in mapped.values():
             if getattr(tag, "name", None) == tag_name:
                 return True
-    cache = getattr(block, "_tag_cache", None)
-    if cache is not None:
-        for tag in cache.values():
-            if getattr(tag, "name", None) == tag_name:
-                return True
-    return False
+    return any(
+        block._effective_slot_name(addr) == tag_name
+        for addr in block._window_addresses(block.start, block.end)
+    )
 
 
 def _resolve_indirect_writers(
@@ -1768,7 +1770,8 @@ def _executed_writers_from_pdg(
 
 
 def _same_value(written: Any, to_value: Any) -> bool:
-    """Whether the value a rung's write is written to give stores *to_value*.  A NaN matches a NaN.
+    """Whether the value a rung's write states, read from the program, equals *to_value*.
+    A NaN matches a NaN.
 
     A deferred value (an ``IndirectRef`` from static extraction) raises on ``==``.
     It cannot match a stored value, so it is a non-match.

@@ -61,7 +61,21 @@ def test_rungs():
 
 ## Pending and probes
 
-**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`): `S2` counters count edges, `S3` per-contact edge memory, `DRUM` drum ordering, `INF` REAL overflow stores +/-Inf, `TEXT` text/pack/NUL/search-cursor/MDN fixes, `SYS` the fault-flag model (SC40 follows the last Math, SC43/SC44 the last instruction), `MATH` Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results), `SC43` which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer; not a Math or a Copy of NaN). `PRESET` when a drum reads a DS preset (pyrung reads it on the first scan its step times; a CLICK does not). `DRUM`, `MATH`, `SC43`, `SYS` and the `faults` `TEXT` case are met: no case carries the first four now.
+**`pending="S2"`** marks a case whose expectation (CLICK's) pyrung does not meet yet. The tag names the fix step that will close the gap (`PENDING_STEPS` in `src/pyrung/conformance/_case.py`).
+
+- `S2`: counters count edges.
+- `S3`: per-contact edge memory.
+- `DRUM`: drum ordering.
+- `INF`: REAL overflow stores +/-Inf.
+- `TEXT`: text, pack, NUL and search-cursor fixes.
+- `SYS`: the fault-flag model (SC40 follows the last Math, SC43 and SC44 the last instruction).
+- `MATH`: Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results).
+- `SC43`: which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer, not a Math or a Copy of NaN).
+- `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`).
+- `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). No case reads the bank's flag (the flag side is `SYS`).
+- `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times). A CLICK does not.
+
+`DRUM`, `MATH`, `SC43`, `SYS` and the `faults` `TEXT` case are met: no case carries `DRUM`, `MATH`, `SC43` or `SYS` now.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
@@ -474,7 +488,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] pack_text on numeric with leading whitespace faults unless allow_whitespace (`text/pack_text_whitespace`)
 - [x] pack_text into INT/DINT clamps with the out-of-range fault, stops at a point and refuses any other non-digit with the fault (`text/pack_text_int`, `text/pack_text_dint`, `text/pack_text_int_fraction`, answered on hardware round 2); TXT is 8-bit (`text/to_binary`)
 - [x] copy/fill executes every scan while rung true (not edge-triggered) (`block/every_scan`)
-- [ ] a Copy of 5 into a pointer past the DD bank (`past_write/past_bank_write`; WRITES PAST THE BANK, one address, DD1531, read before the write and written only if it reads 0)
+- [x] a Copy of 5 into a pointer past the DD bank lands, with no flag (answered on hardware 2026-11-07, pending PASTBANK; `past_write/past_bank_write`; WRITES PAST THE BANK, one address, DD1531, read before the write and written only if it reads 0, then cleared)
 
 #### Math
 - [ ] S6 store probes (part `math`, expectation = pyrung's reading; `store_probe`): RAND bounds cut into an Int, equal after the cut, and into a Dint, Word and Real (`store_probe/rand_int_cuts`, `store_probe/rand_other_stores`); RAND of equal integer tags, a DF bound in a larger calc, equal constants in one (`store_probe/rand_tag_bounds`); a float literal, a division and ABS as RAND bounds (`store_probe/rand_bound_forms`, retired: the editor takes only an integer constant or a DS/DD address, 2026-11-05); -Inf and NaN copied as text (`store_probe/inf_and_nan_to_text`); a Math of NaN into a Dint and a Copy of +/-Inf into a Word (`store_probe/non_finite_into_word`); a finite Real copied into a TXT and a Copy that clamps (`store_probe/real_into_text_and_fill`). Not expressible, so not probed: a Copy of an expression (CLK_EXPR_ONLY_IN_MATH), a Math of NaN or an infinity into a Word (CLK_MATH_MODE_MIXED), run_function and Modbus receive stores

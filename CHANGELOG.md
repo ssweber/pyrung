@@ -189,6 +189,8 @@
 
 ### Features
 
+- CLICK validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank.
+  - Keep the pointer inside the bank, or give the tag `choices`, or `min` and `max`. A `max` alone counts as an upper bound.
 - `pyrung.core` exports the table of physical kinds, the keys each `Physical(...)` kind takes. The names are `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
 - A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`:
   - it is a `ValueError`, so existing `except ValueError` clauses still catch it
@@ -363,6 +365,8 @@
   - a comparison with arithmetic in a rung (`T.Acc + 1 >= N`), or an internal error in its search, gives a `Stopped` plan with a reason
   - a callable `avoid=` that is true at the start of a wait gives a `Stopped` plan naming the avoid (it raised `ValueError`)
   - some targets behind a harness link get an answer (it raised `TheoryInvariantError`)
+  - a target compared with a system tag before the rung that writes it has run gives a plan (it raised `TypeError`)
+  - a target compared with a tag that only a `patch()` or `force()` by name gave a value gives a plan (it raised `TypeError`)
 
   `avoid=Bank[Idx] >= 9000` now reads the slot `Idx` points to (it counted as violated everywhere), and ends the plan on any scan where the condition becomes true.
 - `how(And(A, B))` is the same as `how(A, B)`. `how(Or(...))`, `how(T.Acc >= Sp + 1)`, and `how(T.Acc >= Tag)` where no rung uses `Tag`, raise a `ValueError` saying what to pass.
@@ -445,6 +449,12 @@
   - an interpreted `rng.sum()` reads its declared default (it read 0)
   - a harness plant on it uses the slot and its default (a stand-in tag ran from 0)
   - generated CircuitPython starts it at its `default=`, and resets a non-retentive one to it at STOP->RUN
+- A PLC answers the same whichever block slots another PLC or an analysis read before it was built:
+  - a PLC built later knows and holds the same tags as one built first (it also knew each slot a pointer scan, `how()`, a coverage report or the prover had read)
+  - `slot(n).reset()` and a range's `reset()` work on a slot a scan or an analysis has read (they raised `ValueError`)
+  - a `default_factory` is asked once for each slot, lowest address first (it was asked in the order scans read the slots)
+  - generated CircuitPython starts each slot at its factory answer (a factory that counted its calls left every slot at 0)
+  - the debugger's `prove` and `how` read a slot that only a range reaches, with its `choices=` labels (`how` said `unknown tag`, and `prove` could say `Proven`)
 - A `copy(..., convert=to_text())` of an Inf or NaN `Real` writes it as lowercase text (`inf`, `-inf`, `nan`) with no flag (it left the text unchanged and set `out_of_range`).
 - A `copy()`, `blockcopy()` or `fill()` that clamps at an `Int` limit sets `out_of_range`. A `Real` into a `Dint` clamps with no flag.
 - A `copy()` of an integer or a `fill()` of a number into a `Char` no longer stops the scan in compiled runs or generated CircuitPython, and a `fill()` into a `Char` no longer stops it in `PLC`. `convert=to_binary` of Inf sets `out_of_range` and leaves the text unchanged (`PLC` raised `OverflowError`).
@@ -529,6 +539,8 @@
 - `how()` starts faster.
   - A second `how()` on an unchanged program skips several seconds of setup.
   - The first `how()` takes about half as long to set up.
+- `effect()`, and `history.at()` reading one scan after another, run much faster on scans older than `cache=`.
+  - An `effect()` over 1,000 such scans runs about 40 times faster.
 
 ## v0.15.2 (2026-10-11)
 

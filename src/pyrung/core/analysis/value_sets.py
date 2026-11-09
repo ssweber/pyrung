@@ -178,20 +178,26 @@ class _ValueSets:
             return None
         return found.get(name, frozenset())
 
-    def addresses(self, ref: Any) -> frozenset[int] | None:
+    def addresses(self, ref: Any, values=None) -> frozenset[int] | None:
+        """Every address a pointer or index expression can use, or None when unbounded.
+
+        With *values*, the sets come from that mapping of tag names, not the fixpoint.
+        """
         if isinstance(ref, IndirectRef):
-            values = self.values(ref.pointer.name)
-            if values is None or any(type(v) is not int for v in values):
+            domain = (
+                self.values(ref.pointer.name) if values is None else values.get(ref.pointer.name)
+            )
+            if domain is None or any(type(v) is not int for v in domain):
                 return None
-            return values
+            return domain
         if isinstance(ref, IndirectExprRef):
-            return self._integers(ref.expr)
+            return self.integers(ref.expr, values)
         return None
 
     def window(self, ref: IndirectBlockRange, values=None) -> frozenset[int] | None:
         """Every address ``block.select(start, end)`` can cover: lowest start to highest end."""
-        starts = self._integers(ref.start_expr, values)
-        ends = self._integers(ref.end_expr, values)
+        starts = self.integers(ref.start_expr, values)
+        ends = self.integers(ref.end_expr, values)
         if not starts or not ends:
             return None
         lo, hi = min(starts), max(ends)
@@ -199,7 +205,7 @@ class _ValueSets:
             return None
         return frozenset(range(lo, hi + 1))
 
-    def _integers(self, expr: Any, values=None) -> frozenset[int] | None:
+    def integers(self, expr: Any, values=None) -> frozenset[int] | None:
         """The integer values *expr* takes, or None when unbounded."""
         if values is None and self._values is None:
             self._values = self._fixpoint()
@@ -248,7 +254,7 @@ class _ValueSets:
 
     def _indexed_values(self, ref: Any, lookup: Mapping[str, frozenset[Any] | None]):
         """Every value an indexed read can return, from its elements' sets."""
-        addresses = self._addresses_with(ref, lookup)
+        addresses = self.addresses(ref, lookup)
         if addresses is None:
             return None
         block = ref.block
@@ -315,7 +321,7 @@ class _ValueSets:
         if tag is None:
             return None
         if name in self._unbounded or tag.external or isinstance(tag, InputTag):
-            return self._declared(tag) if self._declared_inputs else None
+            return self.declared(tag) if self._declared_inputs else None
         if name in self._written_first:
             return frozenset()
         return self._initial_values(tag)
@@ -327,7 +333,7 @@ class _ValueSets:
         return frozenset({tag.default})
 
     @staticmethod
-    def _declared(tag: Tag) -> frozenset[Any] | None:
+    def declared(tag: Tag) -> frozenset[Any] | None:
         """An input's declared values and its default, or None when undeclared."""
         if tag.choices is not None:
             return frozenset({*tag.choices, tag.default})
@@ -384,7 +390,7 @@ class _ValueSets:
                 if window is not None and not (window & slots):
                     continue
                 return None
-            addresses = self._addresses_with(ref, values)
+            addresses = self.addresses(ref, values)
             if addresses is not None and not (addresses & slots):
                 continue
             stored = self._store(instr, tag, values)
@@ -392,16 +398,6 @@ class _ValueSets:
                 return None
             out |= stored
         return frozenset(out)
-
-    def _addresses_with(self, ref: Any, values) -> frozenset[int] | None:
-        if isinstance(ref, IndirectRef):
-            domain = values.get(ref.pointer.name)
-            if domain is None or any(type(v) is not int for v in domain):
-                return None
-            return domain
-        if isinstance(ref, IndirectExprRef):
-            return self._integers(ref.expr, values)
-        return None
 
 
 class _Probe:

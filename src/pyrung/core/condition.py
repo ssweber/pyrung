@@ -561,7 +561,7 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
         return None
     try:
         if mapped:
-            tags = [block[addr + offset] for offset in range(len(value))]
+            tags = [block._tag_at(addr + offset) for offset in range(len(value))]
         else:
             tags = _text_window_tags(block, addr, len(value))
     except (IndexError, KeyError, ValueError):
@@ -583,7 +583,7 @@ def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
     """The *length* Chars from ``block[addr]`` on, in the order they map to TXT."""
     runtime = getattr(block, "_pyrung_structure_runtime", None)
     if getattr(block, "_pyrung_structure_kind", None) != "named_array" or runtime is None:
-        return [block[addr + offset] for offset in range(length)]
+        return [block._tag_at(addr + offset) for offset in range(length)]
     # Instance-major: each instance takes ``stride`` slots, its fields first in order.
     fields: tuple[str, ...] = runtime._field_order
     stride: int = runtime.stride
@@ -593,7 +593,7 @@ def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
         instance, offset = divmod(position, stride)
         if instance >= runtime.count or offset >= len(fields):
             return None  # past the last instance, or a slot no field holds
-        tags.append(runtime._blocks[fields[offset]][instance + 1])
+        tags.append(runtime._blocks[fields[offset]]._tag_at(instance + 1))
     return tags
 
 

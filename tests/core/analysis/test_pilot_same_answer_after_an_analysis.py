@@ -1,8 +1,7 @@
 """how() gives the same answer on a PLC built before or after another how() of its program.
 
-A how() asks each Block for the slots a pointer reaches. The Block keeps those Tags, and a
-PLC built later knows them. A PLC built earlier does not, so how() also looks a slot up
-among the tags the rungs reach.
+A how() asks each Block for the slots a pointer reaches, and the Block keeps those Tags.
+A PLC built later must not know them, so how() looks a slot up among the tags the rungs reach.
 """
 
 from __future__ import annotations
@@ -53,15 +52,14 @@ def test_a_plan_sets_no_readonly_slot_whichever_plc_asks() -> None:
     assert not plan.reachable
 
 
-def test_a_slot_looked_up_is_the_tag_a_later_plc_knows() -> None:
+def test_a_slot_looked_up_is_the_same_tag_on_a_later_plc() -> None:
     prog, done = _readonly_slots()
     before, after = _before_and_after(prog, done)
-    slots = {f"Cmd{addr}" for addr in range(1, 5)}
 
-    assert slots <= after._known_tags_by_name.keys()
-    assert not slots & before._known_tags_by_name.keys()
-    for name in slots:
-        assert before._tag_known_or_reached(name) is after._known_tags_by_name[name]
+    assert after._known_tags_by_name.keys() == before._known_tags_by_name.keys()
+    for addr in range(1, 5):
+        name = f"Cmd{addr}"
+        assert before._tag_known_or_reached(name) is after._tag_known_or_reached(name)
 
 
 def test_the_levers_and_their_resting_values_do_not_depend_on_an_earlier_how() -> None:

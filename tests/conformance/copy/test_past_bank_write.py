@@ -6,13 +6,19 @@ not load its subroutine, or run its group, on a CLICK whose memory matters; dele
 the ``Conf_PastWrite`` call rung in main to leave it out.  The simulator and
 the P1AM code have no memory there.
 
-``past_bank_write`` (probe): ``copy(5, dd[ptr])`` with ptr 1531, then the DD read
-back through the pointer, and the flags.  Result1 is the read before the write:
-the write happens only if it is 0 (memory that reads 0 looks unused), so a CLICK
-whose DD1531 holds anything is left alone (the case then reads Result1 as that
-value, and the write, flags and read after are not what it asks).  Result2 is the read after.  Result3 has bit 1 for SC43
-on after the write and bit 2 for SC44.  pyrung drops the write: 0, 0, 0.  A CLICK
-that stores it reads Result2 = 5; one that raises a flag reads Result3.
+``past_bank_write``: ``copy(5, dd[ptr])`` with ptr 1531, then the DD read back through
+the pointer, and the flags.  Result1 is the read before the write: the write happens
+only if it is 0 (memory that reads 0 looks unused), so a CLICK whose DD1531 holds
+anything is left alone (the case then reads Result1 as that value, and the write,
+flags and read after are not what it asks).  Result2 is the read after.  Result3 has
+bit 1 for SC43 on after the write and bit 2 for SC44.  A last Copy writes 0 back,
+under the same guard, so the 5 does not outlive the case: it once outlived two
+project loads and broke ``faults/pointer_past_bank_lands``.  A nonzero DD1531 is left
+alone, and ``past_clean`` clears it.
+
+A CLICK (2026-11-07) answered that the write lands and raises no flag: 0, 5, 0.
+pyrung drops the write and reads 0, 0, 0, so the case is ``pending="PASTBANK"``.
+The other candidates were a dropped write (pyrung's) and a flag (Result3).
 
 Why DD1531, and one address: ``faults/pointer_past_bank`` and
 ``faults/pointer_past_bank_lands`` read past the bank on a CLICK as 1 at DD1001 and
@@ -60,6 +66,8 @@ def prove_past_bank_write(slot):
         latch(c[1382])
     with Rung(slot.Scratch == 5):
         copy(dd[pointer], slot.Result2)
+    with Rung(slot.Scratch == 6, slot.Result1 == 0):
+        copy(0, dd[pointer])
     with Rung(slot.Scratch == 6, c[1381]):
         math(slot.Result3 + 1, slot.Result3)
     with Rung(slot.Scratch == 6, c[1382]):
@@ -77,13 +85,13 @@ group = Group(
     [
         case(
             "WRITES PAST THE DD BANK on a CLICK.  A Copy of 5 into DD1531 through a pointer "
-            "drops the write: DD1531 reads 0 before (Result1) and after (Result2), and "
-            "neither SC43 nor SC44 is on after the write (Result3 = 0)",
+            "lands: DD1531 reads 0 before (Result1) and 5 after (Result2), neither SC43 nor SC44 "
+            "is on after the write (Result3 = 0), and a last Copy writes 0 back",
             ladder=prove_past_bank_write,
             init=init_past_bank_write,
-            expect={"Result1": 0, "Result2": 0, "Result3": 0},
+            expect={"Result1": 0, "Result2": 5, "Result3": 0},
             scans=SCANS,
-            probe="a Copy into a pointer past the DD bank: does it land, which flag",
+            pending="PASTBANK",
         ),
     ],
 )
