@@ -5038,7 +5038,9 @@ class PLC:
         entry_tags = ctx._state_tags_read if ctx._state is previous_state else previous_state.tags
         recording = not self._records_full
         for name, after in pending.items():
-            if recording and entry_tags.get(name) != after:
+            # A NaN that stays is no change to history's readers, though it differs from itself.
+            before = entry_tags.get(name)
+            if recording and before is not after and before != after:
                 self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None

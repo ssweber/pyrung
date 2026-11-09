@@ -106,6 +106,17 @@ def correction_identity(pilot_rungs: Iterable[PilotRung]) -> CorrectionIdentity:
 def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) -> int | None:
     """Return the latest recorded scan in the bounded window where *tag* changed."""
 
+    # Each commit records the tags it changed, so the records answer without replaying the
+    # window.  A scan that ran without records is not in them, and neither is a tag set
+    # between scans.  So such a window replays.
+    history = plc.history
+    first = max(start_scan, history.oldest_scan_id) + 1
+    last = min(end_scan, history.newest_scan_id)
+    if first > last:
+        return None
+    if not plc._unrecorded_in(first, last) and not _set_between_scans(plc, tag, first, last):
+        latest = plc._causal_raw_committed_transition_before(tag, last + 1)
+        return latest[0] if latest is not None and latest[0] >= first else None
     try:
         states = plc.history.range(start_scan, end_scan + 1)
     except Exception:  # noqa: BLE001
@@ -115,6 +126,34 @@ def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) ->
         if not _values_match(previous.tags.get(tag), current.tags.get(tag)):
             last = current.scan_id
     return last
+
+
+def _set_between_scans(plc: Any, tag: str, first: int, last: int) -> bool:
+    """Whether an edit between scans may move *tag* on a scan in *first*..*last*.
+
+    An edit leaves a checkpoint at its scan, and it may have set any tag.  A fork runs on
+    from its own copy of the state it forked from, which an edit may have changed.  History
+    shows the parent's state at that scan, so a tag the copy changed moves on the fork's
+    first scan.
+    """
+    lineage = plc._causal_lineage
+    epochs = [
+        (epoch.plant_changes, epoch.first_scan, epoch.last_scan, epoch.initial_state)
+        for epoch in lineage.sealed_epochs
+    ]
+    own_first = plc._initial_scan_id + 1 if epochs else plc._initial_scan_id
+    epochs.append((plc._plant_changes, own_first, plc._state.scan_id, plc._initial_state))
+    oldest = lineage.oldest_scan_id
+    for edits, epoch_first, epoch_last, start in epochs:
+        if any(first - 1 <= at <= min(last, epoch_last) for at, _plant in edits):
+            return True
+        root = epoch_first - 1
+        if epoch_first > oldest and first <= epoch_first <= last:
+            if start.scan_id != root:
+                return True
+            if not _values_match(plc.history.at(root).tags.get(tag), start.tags.get(tag)):
+                return True
+    return False
 
 
 def _rank_hypotheses(

@@ -256,6 +256,14 @@ def same(a: Any, b: Any) -> bool:
     return a == b
 
 
+def _changes(old: Any, new: Any) -> bool:
+    """Whether storing *new* over *old* is a change that stepping records.
+
+    Stepping records a new NaN over another one, though :func:`same` holds the two equal.
+    """
+    return not same(old, new) or (old is not new and new != new)
+
+
 # --- Source -------------------------------------------------------------------
 
 
@@ -1836,7 +1844,7 @@ def build_trace(
             key
             for key, cell in tracer.cells.items()
             if key not in seeds
-            and (cell.local is not None or not same(tracer.constants[key], cell.concrete))
+            and (cell.local is not None or _changes(tracer.constants[key], cell.concrete))
         }
         if not moved:
             if form is not None:
@@ -1979,7 +1987,11 @@ def _coast_guards(
                 guards.append(_Guard(f"{new} != {old}", uses, why=f"{name} starts moving"))
                 held.append(name)
             else:
-                guards.append(_Guard(f"{new} == {old}", uses, why=f"{name} stops moving"))
+                # A NaN that stays does not move, though it differs from itself.  So the loop
+                # leaves on a NaN.
+                guards.append(
+                    _Guard(f"{new} == {old} or {new} != {new}", uses, why=f"{name} stops moving")
+                )
                 free.append(name)
                 always = True
         elif name in watched or same(after, before) or after == before:
