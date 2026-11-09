@@ -2998,10 +2998,9 @@ class PLC:
         Used by ``fork()`` and ``History.at()`` to avoid the
         ``replay_to → fork → history.at → replay_to`` loop.  Direct
         lookups (current tip, recent-state window, checkpoint dict,
-        the pinned initial state) terminate immediately; the slab cache
-        covers a bounded window behind a miss so that
-        consecutive ``history.at()`` calls in causal backward walks
-        resolve as dict lookups instead of independent replays.
+        the pinned initial state) terminate immediately.  The slab cache
+        covers a bounded window around a miss, so a walk in either direction
+        reads dict lookups instead of separate replays.
         """
         if scan_id == self._state.scan_id:
             return self._state
@@ -3030,9 +3029,10 @@ class PLC:
         behind, and only one fixed-size working set is retained.
         """
         old = next(reversed(self._replay_slabs.values()), {})
-        ahead = bool(old) and scan_id > max(old)
-        # A backward walk reads the scans before the miss, so the slab ends at the miss. A
-        # miss past the slab's end is a forward walk, so the slab reaches half a slab past it.
+        ahead = bool(old) and max(old) < scan_id <= max(old) + _REPLAY_SLAB_SCANS // 2
+        # A backward walk reads the scans before the miss, so the slab ends at the miss.
+        # A miss past the old slab's end is a forward walk, so the new slab runs half a slab
+        # past the miss.  A miss further ahead starts a new walk and gets the backward shape.
         slab_end = scan_id
         if ahead:
             slab_end = min(self._state.scan_id, scan_id + _REPLAY_SLAB_SCANS // 2 - 1)

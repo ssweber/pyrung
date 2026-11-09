@@ -525,7 +525,8 @@
 - `how()` starts faster.
   - A second `how()` on an unchanged program skips several seconds of setup.
   - The first `how()` takes about half as long to set up.
-- `effect()`, and `history.at()` read forward one scan at a time, are much faster on history rebuilt by replay. An `effect()` over 1,000 such scans runs about 40 times faster.
+- `effect()`, and `history.at()` reading one scan after another, run much faster on scans older than `cache=`.
+  - An `effect()` over 1,000 such scans runs about 40 times faster.
 
 ## v0.15.2 (2026-10-11)
 

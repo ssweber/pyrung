@@ -289,7 +289,7 @@ def test_a_forward_walk_extends_the_slab_instead_of_refilling_it(
 
     misses = _read(plc, truth, list(range(1001, 4001)), monkeypatch)
 
-    # The first miss fills the 1,600 scans before it.  Each later miss replays the 800 scans
+    # The first miss fills the scans up to it.  Each later miss replays the 800 scans
     # from it and keeps the old slab's last 800 states.  3,000 scans take 5 fills (they took
     # one per scan that is not a checkpoint).
     assert misses == [1001, 1002, 1802, 2602, 3402]
@@ -308,14 +308,15 @@ def test_ascending_pairs_share_one_slab(monkeypatch: pytest.MonkeyPatch) -> None
     assert misses == [1100, 1101, 2001, 2900, 3801, 4700]
 
 
-def test_sparse_ascending_pairs_take_one_fill_each(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_far_apart_ascending_pairs_fill_twice_per_pair(monkeypatch: pytest.MonkeyPatch) -> None:
     plc, truth = _cold_history_with_edits()
     scans = [at for t in range(1101, 4900, 1700) for at in (t - 1, t)]
 
     misses = _read(plc, truth, scans, monkeypatch)
 
-    # Scan 2800 is a checkpoint.
-    assert misses == [1100, 1101, 2801, 4500]
+    # A pair more than 800 scans past the slab fills the scans up to its first read, then
+    # 800 scans from its second.  Scan 2800 is a checkpoint.
+    assert misses == [1100, 1101, 2801, 4500, 4501]
 
 
 def test_a_backward_walk_fills_once_per_slab(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -325,6 +326,17 @@ def test_a_backward_walk_fills_once_per_slab(monkeypatch: pytest.MonkeyPatch) ->
 
     # The first miss fills scans 2402..4001, and scan 2400 is a checkpoint.
     assert misses == [4001, 2401]
+
+
+def test_a_backward_walk_above_an_old_slab_fills_once_per_slab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plc, truth = _cold_history_with_edits()
+
+    misses = _read(plc, truth, [1001, *range(4001, 2401, -1)], monkeypatch)
+
+    # Scan 4001 is far past the old slab, so its fill holds scans 2402..4001.
+    assert misses == [1001, 4001]
 
 
 def test_sparse_replay_preserves_clock_edge_memory() -> None:
