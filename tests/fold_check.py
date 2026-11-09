@@ -815,19 +815,19 @@ class _OpaqueAvoid:
     on_twin = False
     answered_true = False
     alone = False
-    # Whether one was asked at all since a coast began.
-    asked = False
+    # Whether one answered true since a coast began, on the coast or on a twin.
+    was_true = False
 
 
 def _judged_apart(trigger: Any) -> Any:
     """*trigger*, an opaque ``avoid=`` member, answering a twin through :class:`_OpaqueAvoid`."""
 
     def predicate(state: Any, _member: Any = trigger.predicate) -> bool:
-        _OpaqueAvoid.asked = True
+        hit = bool(_member(state))
+        _OpaqueAvoid.was_true = _OpaqueAvoid.was_true or hit
         if not _OpaqueAvoid.on_twin:
-            return _member(state)
-        if _member(state):
-            _OpaqueAvoid.answered_true = True
+            return hit
+        _OpaqueAvoid.answered_true = _OpaqueAvoid.answered_true or hit
         return False
 
     return replace(trigger, predicate=predicate)
@@ -1455,7 +1455,7 @@ def _a_pricing_twin(plc: Any, predicate: Any) -> tuple[Any, Any] | None:
     """A twin of *plc* and a private copy of *predicate*, made before a coast, to price it."""
     if _depth or _skip_reason(plc) is not None:
         return None
-    _OpaqueAvoid.asked = False
+    _OpaqueAvoid.was_true = False
     ask = _isolated(predicate, plc)
     return None if ask is None else (_twin(plc, records=False), ask)
 
@@ -1479,10 +1479,6 @@ def _hold_to_the_stepped_price(
     twin, ask = pricing
     start = twin._state.scan_id
     end = plc._state.scan_id
-    if _OpaqueAvoid.asked:
-        # Its contract judges it only on the scans a coast runs interpreted.
-        _note_skip("price not judged: an opaque avoid= depends on the scans the loop ran")
-        return
     if end - start > MAX_SCANS:
         _note_skip("price not judged: too long to step")
         return
@@ -1518,30 +1514,40 @@ def _hold_to_the_stepped_price(
     setattr(coast_module, "TRACE_ROOM", 10**9)  # noqa: B010
     global _depth
     _depth += 1
+    went_on = False
     try:
         coast(
             twin, stepped_ask, budget=budget, stats=stepped, on_kernel_scan=executed.add, **kwargs
         )
     except _PastTheLanding:
-        raise _mismatch(f"fold-check (coast): landed at scan {end}, stepping went on") from None
-    except (Exception, _NotTheTwin):
+        went_on = True
+    except _NotTheTwin:
+        _note_skip("price not judged: the predicate reads the real runner")
+        return
+    except Exception:
         _note_skip("price not judged: stepping raised")
         return
     finally:
         _depth -= 1
         setattr(coast_module, "TRACE_ROOM", room)  # noqa: B010
     assert scan_trace.TOTALS["loop scans"] == loop_scans, "the stepped twin ran the loop"
+    if _OpaqueAvoid.was_true:
+        # Its contract judges it only on the scans a coast runs interpreted.
+        _note_skip("price not judged: an opaque avoid= answered true")
+        return
     if _fingerprint(ask, plc) != before:
         _note_skip("price not judged: the predicate carries state between calls")
         return
+    if went_on:
+        raise _mismatch(f"fold-check (coast): landed at scan {end}, stepping went on")
     units = frozenset(executed - twin._loop_priced_scans)
-    ours = (end, said.get("out_of_work"), said.get("unit_scans"), unit_scans)
-    theirs = (twin._state.scan_id, stepped.get("out_of_work"), stepped.get("unit_scans"), units)
-    if ours != theirs:
+    ours = (end, said.get("out_of_work"), said.get("unit_scans"))
+    theirs = (twin._state.scan_id, stepped.get("out_of_work"), stepped.get("unit_scans"))
+    if (ours, unit_scans) != (theirs, units):
         raise _mismatch(
-            f"fold-check (coast): landed at {end} out of work {ours[1]} charging "
-            f"{ours[2]} scans a unit each ({sorted(unit_scans)[:8]}), stepping landed at "
-            f"{theirs[0]} out of work {theirs[1]} charging {theirs[2]} ({sorted(units)[:8]})"
+            f"fold-check (coast): landed at {end} out of work {ours[1]}, stepping landed at "
+            f"{theirs[0]} out of work {theirs[1]}.  Charged a unit only here: "
+            f"{sorted(unit_scans - units)[:8]}, only stepping: {sorted(units - unit_scans)[:8]}"
         )
     STATS["coasts priced against stepping"] += 1
 
@@ -1876,6 +1882,7 @@ def install() -> None:
         pricing = _a_pricing_twin(plc, predicate)
         # This coast's priced scans alone, so that an earlier timeline's cannot mix in.
         earlier, plc._loop_priced_scans = plc._loop_priced_scans, set()
+        initial = plc._initial_scan_id
         try:
             result = _checked(
                 "coast",
@@ -1897,8 +1904,10 @@ def install() -> None:
             )
         finally:
             priced = plc._loop_priced_scans
-            earlier.update(priced)
-            plc._loop_priced_scans = earlier
+            # A restart numbers scans from 0 again, and the earlier ids would price new scans.
+            if plc._initial_scan_id == initial:
+                earlier.update(priced)
+                plc._loop_priced_scans = earlier
         _hold_to_the_ledger("coast", left, said)
         # A coast the loop ran no scan of was stepped already.
         if pricing is not None and said.get("stretched_scans"):

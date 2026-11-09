@@ -1752,7 +1752,7 @@ def _coast_until(
     def charged() -> int:
         return work_charged(plc.state.scan_id - start_scan, unit_scans(), loop_scans_per_unit)
 
-    # A raise ends the wait too.  Its scans are priced all the same, as stepping's would be.
+    # A wait that raises still prices its scans, as stepping would.
     try:
         while charged() < budget:
             if work is not None and unit_scans() >= work:
