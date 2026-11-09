@@ -479,6 +479,20 @@ def test_two_copied_functions_of_a_module_share_its_names() -> None:
     assert _BUMPS == 0
 
 
+def test_a_copied_predicate_keeps_reads_untraced_from_the_real_trace() -> None:
+    plc = _plc()
+    untraced = read_trace._reads_untraced
+
+    def ask(state: Any) -> bool:
+        with untraced():
+            return dict(state.tags).get("Never") is True
+
+    copied = fold_check._isolated(ask, plc)
+    assert copied is not None
+    _hit, traced = read_trace._traced_call(copied, plc)
+    assert traced == frozenset()
+
+
 class _CopiesItsOwnWay:
     """Copies itself through copy.deepcopy(), which hands back the function it holds."""
 
