@@ -188,7 +188,7 @@ def _counted_value_satisfying(
     holds = _HOLDS.get(atom.form)
     if holds is None:
         return None
-    # A Real at inf or NaN gives no count to step through, and math.ceil() would raise on it.
+    # A Real at inf or NaN has no next value to count to. math.ceil() would raise on it.
     try:
         ratio = (threshold - now) / step
         finite = all(math.isfinite(x) for x in (*numbers, ratio))
