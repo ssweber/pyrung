@@ -293,6 +293,8 @@ runner = PLC(logic, history_budget=20 * 1024 * 1024)  # 20 MB byte ceiling
 
 `history` keeps whole checkpoint intervals (200 scans unless you set `checkpoint_interval`). So a runner can keep up to one interval more than you asked for.
 
+With `history`, the runner keeps every value its rungs wrote in the window. A value that changes on every scan takes about 200 bytes a scan, so `history="1h"` at 10 ms holds about 70 MB for each such tag. Over `history_budget`, each checkpoint trims only one interval more than `history` asks for, so the budget does not cap that memory. Shorten `history` for a program with many such tags.
+
 ## Time-travel playhead
 
 The playhead is a read-only cursor into history. It doesn't affect execution. `step()` always appends at the history tip.

@@ -443,7 +443,8 @@ class RungFiringTimelines(Generic[K]):
             return _Cycle(cycle, steps, step, trailing)
         if not values or key is None or self._limit is None:  # A join counts nothing.
             return _Cycle(cycle, steps, step, trailing)
-        # Each later cycle changes the column as the next one does, which looks back at this.
+        # The cycle after this one looks back at a whole cycle.  So each later cycle changes the
+        # column as often as that cycle does.
         # The plan stops short of the limit, and the cycle that reaches it goes in scan by scan.
         later = _repetition(Repeat(0, 0, period, cycle, 2, steps), 1)
         probe = [*_trim_value_ranges(ranges, edge - 2 * period - 1, edge), *later]
@@ -545,8 +546,8 @@ class RungFiringTimelines(Generic[K]):
                 and not touched
                 and not (begun and next(_expanded(fired, first, last), None))
             ):
-                # Nothing to add.  The three scans after the window look back into it, and a
-                # column after it may have begun in it.
+                # Nothing to add, but a count may still look back into the window.  The three
+                # scans after the window do, and so does a column that starts after it.
                 after = next(_expanded(mine, last + 1, last + 3), None) is not None
                 if after or mine and mine[0].start_scan_id > last:
                     self._recount(key, mine, mine, first, gaps)
