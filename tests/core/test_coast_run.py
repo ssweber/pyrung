@@ -998,6 +998,52 @@ class TestRecordsPastTheirCap:
         assert capped.rung_firings(2001) == every.rung_firings(2001)
         compare_records("stepping past the cap", capped, every, 0)
 
+    def test_a_question_that_steps_again_records_its_scan_past_the_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # X's column turns Unknown, so rung_firings() steps again from the start.  Its replay
+        # passes the cap long before the scan it was asked about.
+        plc = _runner(_fires_every_other_scan, 0.01)
+        for _ in range(3000):
+            plc.step()
+        truth = plc.rung_firings(2501)
+        assert truth
+        plc._checkpoints.clear()
+        monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 200)
+        assert plc.rung_firings(2501) == truth
+
+    def test_a_reboot_records_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 200)
+        plc = _runner(_fires_every_other_scan, 0.01)
+        for _ in range(1000):
+            plc.step()
+        assert plc._records_full
+        plc.reboot()
+        for _ in range(10):
+            plc.step()
+        assert not plc._unrecorded_scans
+        assert plc._rung_firing_timelines.at(plc.state.scan_id)
+
+    def test_with_history_stepping_records_every_scan(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 200)
+        plc = PLC(_program(_fires_every_other_scan), dt=0.01, history=3000)
+        for _ in range(2000):
+            plc.step()
+        assert not plc._unrecorded_scans
+        assert plc._rung_firing_timelines.run_count() > 1000
+
+    def test_a_fork_from_replay_to_bounds_its_memory_as_its_source_does(self) -> None:
+        plc = PLC(_program(_fires_every_other_scan), dt=0.01, history=1000)
+        for _ in range(3000):
+            plc.step()
+        fork = plc._replay_to_interpreted(2900)
+        assert fork._records_bounded
+        for _ in range(1600):
+            fork.step()
+        assert fork._initial_scan_id == 3400
+
     def test_they_stop_growing_and_read_the_same(self, monkeypatch: pytest.MonkeyPatch) -> None:
         plc = self._coasted(monkeypatch, 200)
         held = plc._rung_firing_timelines.run_count()

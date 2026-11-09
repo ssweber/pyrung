@@ -1749,9 +1749,9 @@ class PLC:
         # Every ``(first, last)`` range of scans that ran without causal records, in
         # the compiled kernel or its guarded loop.  A question that reaches one settles it.
         self._unrecorded_scans: list[tuple[int, int]] = []
-        # Once the records hold ``coast_run.MAX_RECORD_RUNS`` runs, a stepped scan leaves its
-        # records to a settle, as a long run's scans do.  A settle's replay records every scan, since
-        # the window takes all of its records.
+        # Without ``history=``, a stepped scan records nothing once the records hold
+        # ``coast_run.MAX_RECORD_RUNS`` runs, which bounds their memory.  A question steps those
+        # scans again from a checkpoint, as it does for a compiled run.  Replays record every scan.
         self._records_bounded = True
         self._records_full = False
         self._replay_mode: bool = False
@@ -2546,10 +2546,6 @@ class PLC:
         """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
-        # The window takes the replay's values, and this record counts their changes itself.
-        # So the replay trims nothing, or its own memory budget would drop scans the window needs.
-        replay._history_retention_scans = None
-        replay._records_bounded = False
         for name in _RECORDS:
             setattr(replay, name, RungFiringTimelines(capped=False))
         for scan_id in range(anchor_scan_id + 1, last + 1):
@@ -3453,6 +3449,10 @@ class PLC:
         self._run_on_the_plant_of_the_scan_after(anchor_scan_id, replay)
         replay._replay_mode = True
         replay._reconstructs_history = True
+        # A replay answers a question about scans it steps again, so it trims no history and
+        # records every scan.  A trim or a full record would drop scans the question reads.
+        replay._history_retention_scans = None
+        replay._records_bounded = False
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3560,6 +3560,10 @@ class PLC:
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
+        # The caller keeps this fork and may step it on, so it bounds its memory as its source does.
+        replay._history_retention_scans = self._history_retention_scans
+        replay._records_bounded = self._records_bounded
+        replay._apply_history_retention(replay._state.scan_id)
         return replay
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
@@ -5054,7 +5058,7 @@ class PLC:
 
         if is_checkpoint:
             self._apply_history_retention(new_scan_id)
-            if self._records_bounded:
+            if self._records_bounded and self._history_retention_scans is None:
                 from pyrung.core import coast_run
 
                 held = sum(getattr(self, name).run_count() for name in _RECORDS)
@@ -5072,12 +5076,13 @@ class PLC:
         self._sync_runtime_flags_from_state()
 
     def _apply_history_retention(self, new_scan_id: int) -> None:
-        """Trim history to the floor that the tip, ``history=`` and the memory budget set.
+        """Trim history to the floor that the tip, ``history=`` and ``history_budget`` set.
 
-        Stepping and a long run keep different checkpoints and cache different states.  So the
-        floor depends only on the last scan on the checkpoint interval, the oldest kept state and
-        the settings.  Over the budget the floor moves one interval more.  The budget weighs the
-        checkpoints stepping keeps in the window, each the size of the oldest kept state.
+        Stepping and a compiled run keep checkpoints and cached states on different scans.  So
+        that both trim to the same scan, the floor depends only on the settings, the oldest kept
+        state and the latest scan that is a multiple of the checkpoint interval.  The budget
+        check counts one checkpoint per interval from the oldest kept scan, each the size of the
+        oldest kept state.  Over the budget the floor moves one interval later.
         """
         retention, interval = self._history_retention_scans, self._checkpoint_interval
         if retention is None:
