@@ -224,7 +224,7 @@ def prepare_drive(
 def start_fork(plc: PLC) -> PLC:
     """The unstepped fork how() starts from, with the defaults of the slots the rungs reach."""
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
-    # Before the fork's first scan: an edit after a scan would add a checkpoint to every how().
+    # Seed before the fork scans, so its first scan starts from these defaults.
     _seed_reached_slots(work)
     return work
 
@@ -232,8 +232,8 @@ def start_fork(plc: PLC) -> PLC:
 def _seed_reached_slots(work: PLC) -> None:
     """Give each slot the rungs reach that the start state lacks its default.
 
-    A state holds a slot once a scan wrote it or the user's code indexed it, and not before.
-    Seeding them here gives how() the same snapshot either way.
+    A state holds a slot only once a scan writes it or the user's code indexes it.
+    Seeding the rest here gives how() the same snapshot on every PLC of the program.
     A slot read with no value reads its default, so no scan sees a difference.
     """
     reach = work._tags_rungs_reach

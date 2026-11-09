@@ -1312,8 +1312,8 @@ def _replayed_writers_from_pdg(
 def _tag_in_block(block: Any, tag_name: str) -> bool:
     """Check whether *tag_name* is a tag inside *block*.
 
-    Read off the slot names, not the block's cache: the cache holds whichever slots
-    something has asked for, so a fresh runner's answer would differ from a later one's.
+    The answer comes from the slot names, not the block's cache.  The cache holds whichever
+    slots something has asked for, so a fresh runner's answer would differ from a later one's.
     """
     mapped = getattr(block, "_mapped_tags", None)
     if mapped is not None:

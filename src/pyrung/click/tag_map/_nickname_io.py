@@ -1004,7 +1004,9 @@ def nickname_records(
             if kind in {"udt", "named_array"}:
                 field_name = cast(str, entry.logical._pyrung_structure_field)
                 structure_owner_name = f"{name}.{field_name}"
-        memory_type, _ = self._parse_hardware_tag(entry.hardware.block._tag_at(entry.hardware_addresses[0]))
+        memory_type, _ = self._parse_hardware_tag(
+            entry.hardware.block._tag_at(entry.hardware_addresses[0])
+        )
         block_len = len(entry.hardware_addresses)
 
         for i, (logical_addr, hardware_addr) in enumerate(

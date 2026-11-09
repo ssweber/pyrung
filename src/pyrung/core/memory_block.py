@@ -525,7 +525,7 @@ class Block:
             )
 
     def _tag_at(self, addr: int) -> LiveTag:
-        """``block[addr]`` for pyrung's own code: a runner built later does not learn of it."""
+        """``block[addr]`` for pyrung's own code, which a runner built later does not learn of."""
         self._validate_address(addr)
         return self._get_tag(addr)
 
@@ -654,9 +654,9 @@ class Block:
     def _factory_default(self, addr: int) -> Any:
         """What the factory gives a slot, asked once however often the answer is wanted.
 
-        The factory is asked in address order, every lower slot that takes its default
-        first.  So a factory that counts gives each slot the same answer whichever slot a
-        scan or an analysis asks about first.  A lower slot the factory refuses is skipped.
+        The factory answers each lower slot that takes its default first, in address order.
+        So a factory that counts gives each slot the same answer whichever slot a scan or an
+        analysis asks about first.  A lower slot the factory raises for is skipped.
         """
         if addr not in self._factory_given:
             factory = self.default_factory

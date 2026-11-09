@@ -912,9 +912,9 @@ class CodegenContext:
         """The tag already known to hold each slot, by address, without indexing any.
 
         A name the program references wins: the engines seed the name, and a pointer
-        reads the same cell.  Otherwise the tag mapped onto the slot.  Not
-        `Block._tag_cache`, which holds whatever ran before the export asked for: a slot
-        tag there holds what the block's configuration gives it anyway.
+        reads the same cell.  Otherwise the tag mapped onto the slot.
+        `Block._tag_cache` is left out because it holds whatever ran before the export asked
+        for.  A tag there holds only what the block's configuration gives it anyway.
         """
         holders: dict[int, Tag] = dict(binding.block._mapped_tags)
         for name, (block_id, addr) in self.tag_block_addresses.items():
@@ -928,7 +928,7 @@ class CodegenContext:
         Asked through the block (`Block._factory_default`), which asks the factory once
         per slot in address order and keeps the answer.  So a factory that counts gives
         each slot what stepping reads there, and an export moves no later read.  A slot
-        the factory raises for stays at zero; the interpreter cannot read it.
+        the factory raises for stays at zero, because the interpreter cannot read it.
         """
         block = binding.block
         if block.default_factory is None:
