@@ -44,6 +44,7 @@ from pyrung.conformance import (
     load_manifest,
     read_program_hash,
 )
+from tests.conformance import test_modbus_raw
 from tests.conformance.coils import (
     test_coil_phase,
     test_coil_range,
@@ -60,7 +61,6 @@ from tests.conformance.conditions import (
     test_compare,
     test_text_compare,
 )
-from tests.conformance import test_modbus_raw
 from tests.conformance.copy import (
     test_block,
     test_copy_more,

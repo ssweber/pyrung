@@ -165,8 +165,8 @@ class SimServer:
 
         # Bounded history: the run is short, but a stuck harness must not grow memory.
         self._plc = PLC(self.build.program, realtime=True, history=2000)
-        # The banks serve a case's raw memory (DF101, C1999), which the TagMap does not map,
-        # from the PLC rather than from a store of the server's own.
+        # The TagMap maps no raw memory (DF101, C1999).  The banks serve it from the PLC, not
+        # from a store of the server's own.
         provider = _LockedProvider(
             ClickDataProvider(self._plc, tag_map=self.build.tag_map, blocks=ClickBlocks()),
             self._lock,

@@ -110,7 +110,7 @@ def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str)
 
 
 def _toml(value: Any) -> str:
-    """*value* as a TOML inline value: str, int, bool, list and dict only."""
+    """*value* as a TOML inline value.  It takes str, int, bool, list and dict only."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):

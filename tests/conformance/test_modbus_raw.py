@@ -9,8 +9,8 @@ The rest of the suite reads and writes slot DS only, through pyclickplc's client
 asks what a CLICK answers to the requests that client never sends or refuses to send.  Its
 ladder stages values for the harness to read raw.  After each raw write the ladder echoes what
 it then holds, so a reading tells "the write was stored" apart from "the server answered OK".
-``test_raw_requests`` sends the requests with ``pymodbus`` and records every answer: the
-registers or bits, the exception code, or ``timeout``.  It reads each value twice, raw and
+``test_raw_requests`` sends the requests with ``pymodbus`` and records every answer.  An
+answer is the registers or bits, an exception code, or ``timeout``.  It reads each value twice, raw and
 through pyclickplc's ``ClickClient``, which decodes it or raises.  Nothing here is asserted
 against an answer.  On a CLICK each probe goes into ``readings.toml``.  On a local target it goes
 into ``build/modbus_raw-readings/<target>.toml``, for setting the two side by side.
@@ -22,14 +22,14 @@ The ladder (case ``raw_values``), on the scan ``Cmd`` arrives:
 - The write targets: DF111..DF113 = 2.5, DF114 and DF115 = NaN, DD203 and DD205 = 0x00010002,
   DD206 = 0x00030004, TXT405 = 'Y' and TXT406 = 'Z'.
 
-On the staging scan, and on every scan while ``Cmd`` is above 1, the ladder echoes:
+The ladder echoes three things on the staging scan, and on every scan while ``Cmd`` is above 1.
 
-- each DF and DD above into two DH (an Unpack Copy, low word first);
-- each TXT into a DS (a Copy to ASCII);
-- a score of each write-target DF into DS4071..DS4075.  The score is 1 if the DF equals itself
+- It unpacks each DF and DD above into two DH, low word first (an Unpack Copy).
+- It copies each TXT into a DS (a Copy to ASCII).
+- It scores each write-target DF into DS4071..DS4075.  The score is 1 if the DF equals itself
   (not NaN), plus 2 if it is above 3.0E38, plus 4 if it equals 2.5.
 
-Last, on every scan, it copies ``Cmd`` into ``Scratch``.  The harness writes, then writes a new
+On every scan, the last rung copies ``Cmd`` into ``Scratch``.  The harness writes, then writes a new
 ``Cmd``, and reads the echo once ``Scratch`` holds it.
 
 The probes, each one entry (``modbus_raw/<probe>``):
@@ -123,8 +123,8 @@ SCORE_DS = 4071
 #: The DS that holds 200 for the Copy Binary into TXT403.
 BYTE_DS = 4067
 LAST_DS = 4500
-#: ``past_bank_alias``: the step the harness asks of the ladder, DD1531 as the ladder found it,
-#: and DD1531 as the ladder reads it back.
+#: The DS of ``past_bank_alias``.  They hold the step the harness asks of the ladder, DD1531 as
+#: the ladder found it, and DD1531 as the ladder reads it back.
 PAST_OP_DS, PAST_FOUND_DS, PAST_BACK_DS = 4068, 4069, 4070
 #: What the ladder writes through the pointer, and what the harness writes over Modbus.
 LADDER_VALUE, MODBUS_VALUE = 1234, 4321
@@ -136,9 +136,7 @@ AFTER_INTO = dd[207]
 # The pointer's choices bound it, or the build would take a write through it for a write to the
 # whole DD bank.  ``past_write`` owns DS4226, its pointer, so this part has its own.
 POINTER = ds[4064]
-ds.slot(
-    4064, choices={0: "unset", AFTER_DD: "DH127 if DH follows DD", ADDRESS: "past the DD bank"}
-)
+ds.slot(4064, choices={0: "unset", AFTER_DD: "DH127 if DH follows DD", ADDRESS: "past the DD bank"})
 
 
 def _word_source(name: str) -> Any:
@@ -243,7 +241,7 @@ group = Group(
     GROUP,
     [
         case(
-            "WRITES PAST THE DD BANK on a CLICK, at DD1531, when the harness asks, and clears "
+            "WRITES PAST THE DD BANK on a CLICK at DD1531 when the harness asks, and clears "
             "it last.  Stages values for raw Modbus reads and echoes what each raw write left: TXT401 "
             "'A' as ASCII (Result1), TXT403's byte 200 (Result2), DD201's high word in the "
             "second DH (Result3 = 1) and DF 2.5's high word 0x4020 there too (Result4 = 1)",
@@ -321,7 +319,7 @@ def _hex(words: list[int]) -> list[str]:
 
 
 def _plain(value: Any) -> Any:
-    """A decoded value as TOML can hold it: text as ``ascii()``, floats as ``repr()``."""
+    """A decoded value in a form TOML holds.  Text goes through ``ascii()`` and a float through ``repr()``."""
     if isinstance(value, Mapping):
         return {str(k): _plain(v) for k, v in value.items()}
     if isinstance(value, bool):
@@ -392,9 +390,9 @@ class _Wire:
             ReadInputRegistersRequest,
         )
 
-        base = ReadHoldingRegistersRequest if fc == 3 else ReadInputRegistersRequest
+        base: type[Any] = ReadHoldingRegistersRequest if fc == 3 else ReadInputRegistersRequest
 
-        class Unchecked(base):  # type: ignore[valid-type,misc]
+        class Unchecked(base):
             def encode(self) -> bytes:
                 return struct.pack(">HH", self.address, self.count)
 
@@ -836,12 +834,12 @@ async def _limits(s: _Session) -> None:
     answer = await w.write_coils(_c(1), values) if values else "not sent"
     await s.settle("fc15_x1969")
     s.readings["fc15_x1969"] = {"read": _count(bits), "values": note, "answer": answer}
-    # Last before the reset: a server may never answer it.
+    # Last before the reset, since a server may never answer it.
     s.readings["fc03_x200"] = {"raw": _count(await w.registers(3, _ds(1), 200))}
 
 
 async def _stop_probes(s: _Session) -> None:
-    """SC51 (watchdog reset), then SC50 (STOP): the exception, then SC11."""
+    """SC51 (watchdog reset), then SC50 (STOP).  Each records the exception, then SC11."""
     w = s.w
     answer = await w.write_coil(_sc(51), True)
     s.readings["sc51_watchdog_reset"] = {
@@ -906,7 +904,7 @@ def test_raw_requests(
     conformance_groups: list[str] | None,
     conformance_sim: type,
 ) -> None:
-    # Imported here: suite imports this module for its group.
+    # Imported here, since suite imports this module for its group.
     from tests.conformance import suite
 
     if conformance_groups is not None and GROUP not in conformance_groups:
