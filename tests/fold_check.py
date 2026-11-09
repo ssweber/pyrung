@@ -320,7 +320,7 @@ def _twin(plc: Any, *, records: bool = True) -> Any:
     twin._forces_last_recorded = {}
     if records:
         seed_records(twin, plc)
-        # Past the runs a runner records, the twin still writes what stepping writes.
+        # The twin records every scan past ``MAX_RECORD_RUNS`` too, so it holds every record.
         twin._records_bounded = False
     return twin
 

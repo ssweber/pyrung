@@ -1749,8 +1749,8 @@ class PLC:
         # Every ``(first, last)`` range of scans that ran without causal records, in
         # the compiled kernel or its guarded loop.  A question that reaches one settles it.
         self._unrecorded_scans: list[tuple[int, int]] = []
-        # Once the records hold ``MAX_RECORD_RUNS`` runs, a stepped scan leaves its records
-        # to a settle, as a long run's scans do.  A settle's replay records every scan, since
+        # Once the records hold ``coast_run.MAX_RECORD_RUNS`` runs, a stepped scan leaves its
+        # records to a settle, as a long run's scans do.  A settle's replay records every scan, since
         # the window takes all of its records.
         self._records_bounded = True
         self._records_full = False
@@ -4444,6 +4444,7 @@ class PLC:
         self._committed_tag_timelines.reset()
         self._node_firing_timelines.reset()
         self._unrecorded_scans = []
+        self._records_full = False
         self._causal_initial_tags = dict(self._state.tags)
 
         if self._time_mode == TimeMode.REALTIME:

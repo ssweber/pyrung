@@ -309,6 +309,7 @@
   - the forks `how()` returns, such as `plan.fork`, don't talk to the device either
   - `step()`, `run_for()` and the debugger still talk to the device
 - Without `history=`, `rung_firings()` and `cause()` read a tag's later writes by stepping again, once one rung's writes to it have changed 1,000 times (they read every write from the record).
+- A stepped run stops recording rung firings once the records reach about 100 MB, as a compiled `run_for()` already did (a stepped run's records had no limit). `cause()` and `rung_firings()` step a later scan again from the nearest checkpoint.
 - With `history=`, the runner keeps every write in the window. A value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag. `history_budget` does not count these writes. Shorten `history=` for a program with many such tags.
 - `history_budget` counts only the checkpoints in the window, so a compiled `run_for()` keeps the same scans as stepping (it also counted the recent-state cache and the recorded writes). When the checkpoints pass the budget, the runner keeps one interval less than `history=` asks for.
 - `how()` has a time limit, `wall_clock_s=300.0` by default (`None` turns it off). When it runs out, the plan ends with `wall-clock budget exhausted (300 s); still waiting on ...`. A search that grows to about 1 GB ends with `memory budget exhausted`.
