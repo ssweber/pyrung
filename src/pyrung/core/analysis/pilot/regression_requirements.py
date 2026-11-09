@@ -550,7 +550,7 @@ def _exact_correction_requirement_from_regression(
         if not constraints:
             refined_holds.append(candidate)
             continue
-        tag = source_checkpoint.world.work._known_tags_by_name.get(candidate.dest)
+        tag = source_checkpoint.world.work._tag_known_or_reached(candidate.dest)
         values = (
             satisfying_values(
                 tag,
@@ -881,7 +881,7 @@ def _delayed_requirement_from_regression(
     )
     source_work = source_checkpoint.world.work
     source_tags = source_work.state.tags
-    known = source_work._known_tags_by_name
+    known = source_work.tags
     configured = getattr(source_checkpoint, "configured_inputs", None)
     if configured is None:
         # Lightweight unit-test checkpoints predate the immutable provenance

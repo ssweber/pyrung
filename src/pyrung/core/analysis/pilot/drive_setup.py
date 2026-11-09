@@ -143,7 +143,7 @@ def _make_pilot_context(
     # kept off prerequisite holds and off preferred init/reset writer selection.
     clear_only = compute_clear_only(
         setup.pdg,
-        work._known_tags_by_name,
+        work.tags,
         setup.program,
     )
     return _PilotContext(
@@ -190,12 +190,12 @@ def prepare_drive(
     waiting = _waiting_overrides(plc)
     if waiting:
         work.step()
-    ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
-    steerable = compute_steerable(pdg, work._known_tags_by_name, program)
+    ref_consts = compute_reference_constants(pdg, program, work.tags)
+    steerable = compute_steerable(pdg, work.tags, program)
     steerable |= {name for name in modbus_levers(program) or () if pdg.readers_of.get(name)}
     steerable -= harness_fb | ref_consts
     edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
+    resting = compute_resting_values(steerable, work.tags, pdg, program)
     diag_snapshot = dict(work.state.tags)
     prover = build_prover_context(program)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
@@ -248,10 +248,9 @@ def modbus_levers(program: Any) -> frozenset[str] | None:
 def _waiting_overrides(plc: PLC) -> tuple[str, ...]:
     """Tags whose pending patch or force no scan has applied, in the order a person set them."""
     tags = plc.state.tags
-    known = plc._known_tags_by_name
     names = dict.fromkeys(plc._pending_patches)
     for name, value in plc._forces.items():
-        tag = known.get(name)
+        tag = plc._tag_known_or_reached(name)
         current = tags.get(name, None if tag is None else tag.default)
         if current != value:
             names[name] = None

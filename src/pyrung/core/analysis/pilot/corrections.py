@@ -1057,7 +1057,7 @@ def _accumulator_corrections(
         from pyrung.core.condition import AllCondition, CompareEq
 
         done_name = profile.done.name
-        done = plc._known_tags_by_name[done_name]
+        done = plc.tags[done_name]
         scope = CompareEq(done, incident.before_snap.get(done_name, False))
         operation_holds: list[PilotRung] = []
         for action in reset_actions:

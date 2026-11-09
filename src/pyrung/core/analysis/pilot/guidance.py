@@ -47,7 +47,7 @@ def survey_current_inputs(world: Any, *, max_evaluations: int = 64) -> SurveyRes
     )
     changes = []
     for name in sorted(ctx.steerable & cone):
-        ref = work._known_tags_by_name.get(name)
+        ref = work._tag_known_or_reached(name)
         domain = (
             (False, True) if ref is not None and ref.type is TagType.BOOL else _declared_domain(ref)
         )
@@ -92,7 +92,7 @@ def survey_current_inputs(world: Any, *, max_evaluations: int = 64) -> SurveyRes
     baseline = preview(())
     if baseline is None:
         return SurveyResult(evaluations=evaluations, reason="survey budget exhausted")
-    allowed = frozenset(work.state.tags) | frozenset(work._known_tags_by_name)
+    allowed = frozenset(work.state.tags) | frozenset(work.tags)
     control = None
     # Width is bounded before evaluation, and cardinality is breadth-first.
     # Even a pair is one simultaneous assignment, never two future steps.

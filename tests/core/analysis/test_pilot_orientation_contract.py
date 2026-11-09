@@ -1111,7 +1111,7 @@ def test_program_owned_setup_requests_exact_branch_traceback_from_fresh_bearing(
     )
     world = _world(compass)
     world.snapshot.update({step.name: 20, "Link": False})
-    world.state.work = SimpleNamespace(_known_tags_by_name={step.name: step})
+    world.state.work = SimpleNamespace(_tag_known_or_reached={step.name: step}.get)
     world = replace(
         world,
         context=replace(
@@ -1663,7 +1663,9 @@ def test_rejected_frontier_bearing_requests_one_program_owned_traceback_hop() ->
         state=SimpleNamespace(
             **{
                 **vars(world.state),
-                "work": SimpleNamespace(_known_tags_by_name={program_value.name: program_value}),
+                "work": SimpleNamespace(
+                    _tag_known_or_reached={program_value.name: program_value}.get
+                ),
             }
         ),
         context=replace(

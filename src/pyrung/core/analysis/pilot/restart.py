@@ -191,10 +191,11 @@ def _survivors(plc: Any, steerable: frozenset[str]) -> dict[str, tuple[Any, Any]
     """Program tags a restart leaves at something other than their default."""
     tags = plc.state.tags
     found: dict[str, tuple[Any, Any]] = {}
-    for name, tag in sorted(plc._known_tags_by_name.items()):
-        if name in SYSTEM_TAGS_BY_NAME or name in steerable or name not in tags:
+    for name in sorted(tags):
+        if name in SYSTEM_TAGS_BY_NAME or name in steerable:
             continue
-        if tags[name] != tag.default:
+        tag = plc._tag_known_or_reached(name)
+        if tag is not None and tags[name] != tag.default:
             found[name] = (tags[name], tag.default)
     return found
 

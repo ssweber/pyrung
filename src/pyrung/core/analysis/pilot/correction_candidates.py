@@ -337,7 +337,7 @@ def _retained_scoped_rungs(
             result.append(proposal)
             continue
         tag, value = _proposal_pair(proposal)
-        destination = plc._known_tags_by_name.get(tag)
+        destination = plc._tag_known_or_reached(tag)
         if destination is None:
             raise KeyError(f"retained correction tag {tag!r} is not a program tag")
         continuation = CompareEq(destination, value)
@@ -368,12 +368,12 @@ def _exploratory_correction_rungs(
     source_scope = None
     channel_name = incident.channel_tag
     if channel_name is not None:
-        channel = plc._known_tags_by_name.get(channel_name)
+        channel = plc._tag_known_or_reached(channel_name)
         if channel is None:
             raise KeyError(f"incident channel {channel_name!r} is not a program tag")
         source_scope = CompareEq(channel, incident.before_snap.get(channel_name))
     for tag_name, value in progress_mark:
-        tag = plc._known_tags_by_name.get(tag_name)
+        tag = plc._tag_known_or_reached(tag_name)
         if tag is None:
             raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
         progress_coordinates.append(CompareEq(tag, value))
