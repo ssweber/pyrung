@@ -782,7 +782,7 @@ class _PilotProgressFormatter:
             if self._target is not None and snapshot.get(self._target[0]) == self._target[1]:
                 tag, value = self._target
                 outcome = f"{tag}={_pilot_value(value)}{elapsed}"
-            elif channel is not None and before != after:
+            elif channel is not None and value_changed(before, after):
                 tag = "" if channel == wait_channel and not resuming else f"{channel} "
                 if isinstance(before, bool) and isinstance(after, bool):
                     outcome = f"{tag}-> {_pilot_value(after)}{elapsed}"

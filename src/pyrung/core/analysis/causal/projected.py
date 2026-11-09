@@ -384,7 +384,7 @@ def _rung_produces_value(
             # rest of the subroutine, not this rung's earlier instructions).
             pass
     writes = ctx._rung_firings.get(rung_idx, {})
-    if writes.get(tag_name) == value:
+    if not value_changed(writes.get(tag_name), value):
         return True
     # Timer/counter done_bit is temporal: the single-scan simulation may
     # write False (accumulator below preset) but the rung WILL produce True
@@ -734,7 +734,7 @@ def projected_cause(
         to_value=to_value,
     )
 
-    if current_value == to_value:
+    if not value_changed(current_value, to_value):
         # Already at desired value — projected with empty steps
         return CausalChain(effect=effect_transition, mode="projected")
 
@@ -890,7 +890,7 @@ def projected_cause(
             src_tag, src_needed = source_req
             seen_tags.add(src_tag)
             src_value = cand_state.tags.get(src_tag)
-            if src_value == src_needed:
+            if not value_changed(src_value, src_needed):
                 held_since = None
                 if not structural:
                     held_since = _find_last_transition_scan(history, src_tag, latest_scan + 1)
@@ -1135,13 +1135,13 @@ def projected_effect(
                 hyp_val = hyp_writes.get(written_tag)
                 cf_val = cf_writes.get(written_tag)
 
-                if hyp_val == cf_val:
+                if not value_changed(hyp_val, cf_val):
                     continue
 
                 original_value = base_state.tags.get(written_tag)
                 written_value = hyp_val if hyp_val is not None else original_value
 
-                if written_value == original_value:
+                if not value_changed(written_value, original_value):
                     continue
 
                 seen_effects.add(written_tag)

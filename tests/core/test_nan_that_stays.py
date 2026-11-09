@@ -2,6 +2,8 @@
 
 ``copy()`` keeps the NaN it copies, ``math()`` computes a new NaN object each scan, and each
 patch is a new one too.  Every reader of history must count none of them as a change.
+``cause()`` and ``effect()`` follow a NaN that one rung writes and a later rung reads as they
+follow a number.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Int, Program, Real, Rung, copy, math
+from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, math
 from pyrung.core import scan_trace
 from pyrung.core.coast_run import coast_until
 from pyrung.core.state import value_changed
@@ -74,7 +76,7 @@ def test_diff_monitors_and_the_dap_window_see_no_change() -> None:
     for _ in range(20):
         plc.step()
     # A second patch is a new NaN over the old one.
-    plc.patch({"Source": NAN})
+    plc.patch({"Source": float("nan")})
     plc.step()
     assert calls == [(tag, 1) for tag in TAGS]
     assert set(plc.diff(5, 21)) == {"Steps"}
@@ -91,3 +93,55 @@ def test_the_loop_runs_a_nan_that_stays() -> None:
     assert scan_trace.TOTALS["loop scans"] > before
     for tag in TAGS:
         assert plc.history.previous_transition(tag).scan_id == 1, tag
+
+
+Mid = Real("Mid")
+En = Bool("En", external=True)
+
+
+def _same_scan_plc(value: float) -> PLC:
+    # Rung 2 copies Mid into Copied, and rung 3 overwrites it in the same scan.
+    with Program(strict=False) as program:
+        with Rung(En):
+            math(Source * 1.0, Mid)
+        with Rung(En):
+            copy(Mid, Copied)
+        with Rung(Mid != 5.0):
+            copy(Mid, Copied)
+        with Rung():
+            math(Steps + 1, Steps)
+    plc = PLC(program, dt=0.01)
+    plc.patch({"Source": value})
+    plc.step()
+    plc.step()
+    plc.patch({"En": True})
+    for _ in range(5):
+        plc.step()
+    return plc
+
+
+def _as_number(chain: Any) -> str:
+    return str(chain).replace("nan", "2.0")
+
+
+@pytest.mark.parametrize("tag", ["Mid", "Copied"])
+def test_effect_follows_a_nan_as_it_follows_a_number(tag: str) -> None:
+    expected = _same_scan_plc(2.0).effect(tag, 3)
+    chain = _same_scan_plc(NAN).effect(tag, 3)
+    assert expected is not None and chain is not None
+    assert _as_number(chain) == str(expected)
+
+
+def test_cause_lists_the_rungs_it_lists_for_a_number() -> None:
+    expected = _same_scan_plc(2.0).cause("Copied")
+    chain = _same_scan_plc(NAN).cause("Copied")
+    assert _as_number(chain) == str(expected)
+
+
+@pytest.mark.parametrize("tag", ["Mid", "Copied"])
+def test_cause_names_the_write_that_stored_the_nan(tag: str) -> None:
+    expected = _same_scan_plc(2.0).cause(tag)
+    chain = _same_scan_plc(NAN).cause(tag)
+    assert expected is not None and chain is not None
+    assert expected.effect.occurrence_ordinal is not None
+    assert chain.effect.occurrence_ordinal == expected.effect.occurrence_ordinal

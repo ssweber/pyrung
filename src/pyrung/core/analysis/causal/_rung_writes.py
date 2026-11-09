@@ -259,7 +259,8 @@ class ScanRungWriteProjection:
         appeared = tuple(
             write
             for write in self._writes_by_tag.get(tag_name, ())
-            if write.run.rung is producer_rung and write.transition.to_value == expected_value
+            if write.run.rung is producer_rung
+            and not value_changed(write.transition.to_value, expected_value)
         )
         return tuple(
             self._observe_exact_handoff(
@@ -361,7 +362,7 @@ class ScanRungWriteProjection:
         if effect_read is None:
             incomplete_source = any(
                 read.occurrence.name == tag_name
-                and read.occurrence.value == effect_write.transition.to_value
+                and not value_changed(read.occurrence.value, effect_write.transition.to_value)
                 and self.transition_observed_by_read(read) is None
                 for read in consumer_reads
             )
@@ -381,7 +382,7 @@ class ScanRungWriteProjection:
         for required_tag, required_value in required_shape:
             if (
                 required_tag == tag_name
-                and required_value == effect_write.transition.to_value
+                and not value_changed(required_value, effect_write.transition.to_value)
                 and effect_read.ordinal > next_ordinal
             ):
                 observed = effect_read
@@ -404,7 +405,7 @@ class ScanRungWriteProjection:
                 )
             next_ordinal = observed.ordinal
             matched_shape.append(observed)
-            if observed.occurrence.value == required_value:
+            if not value_changed(observed.occurrence.value, required_value):
                 continue
             transition = self.transition_observed_by_read(observed)
             displaced_by = (
@@ -551,7 +552,7 @@ class ScanRungWriteProjection:
         candidates = self._writes_by_tag.get(tag_name, ())
         exit_value = self.exit_tags.get(tag_name) if value is _UNSET else value
         for candidate in reversed(candidates):
-            if candidate.transition.to_value == exit_value:
+            if not value_changed(candidate.transition.to_value, exit_value):
                 return candidate
         return None
 
@@ -583,7 +584,7 @@ class ScanRungWriteProjection:
                 candidate
                 for candidate in self.reads_for_run(run)
                 if candidate.occurrence.name == tag_name
-                and candidate.occurrence.value == observed_value
+                and not value_changed(candidate.occurrence.value, observed_value)
             ),
             None,
         )
@@ -599,7 +600,11 @@ class ScanRungWriteProjection:
         observed_value = read.occurrence.value
         source = read.occurrence.source
         if isinstance(source, WriteOccurrence):
-            if source.domain != "tag" or source.name != tag_name or source.after != observed_value:
+            if (
+                source.domain != "tag"
+                or source.name != tag_name
+                or value_changed(source.after, observed_value)
+            ):
                 raise RuntimeError("observed read carries an inconsistent write definition")
             return Transition(
                 tag_name,
@@ -614,7 +619,7 @@ class ScanRungWriteProjection:
             # pending value was established. Selected historical replay
             # attaches before all observable scan phases and never lands here.
             entry = self.entry_tags.get(tag_name)
-            if entry != observed_value:
+            if value_changed(entry, observed_value):
                 return Transition(tag_name, self.scan_id, entry, observed_value)
         return None
 
@@ -785,12 +790,10 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
             previous = definitions.get(address)
             if previous is not None:
                 previous_origin, previous_value, previous_source = previous
-                same_value = previous_value is occurrence.value
-                if not same_value:
-                    try:
-                        same_value = previous_value == occurrence.value
-                    except (TypeError, ValueError):
-                        same_value = False
+                try:
+                    same_value = not value_changed(previous_value, occurrence.value)
+                except (TypeError, ValueError):
+                    same_value = False
                 same_source = (
                     previous_source is definition_source
                     if isinstance(definition_source, WriteOccurrence)

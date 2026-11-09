@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.state import value_changed
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal.models import Transition
     from pyrung.core.runner import PLC
@@ -260,7 +262,7 @@ class History:
                 initial_tags=initial_tags,
             )
             if transition is not None and (
-                to is _ANY_TRANSITION_VALUE or transition.to_value == to
+                to is _ANY_TRANSITION_VALUE or not value_changed(transition.to_value, to)
             ):
                 return transition
             cursor = scan_id

@@ -8,6 +8,7 @@ from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_nod
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
+from pyrung.core.state import value_changed
 
 from ._rung_writes import RungWrite, ScanRungWriteProjection, build_scan_rung_write_projection
 from .crossings_recorded import recorded_read_changes, resolve_recorded_branches
@@ -835,7 +836,7 @@ def _walk_frame(
                 scan_log=scan_log,
                 initial_tags=initial_tags,
             )
-            if transition is None or transition.to_value != value:
+            if transition is None or value_changed(transition.to_value, value):
                 continue
             prior_writers = _replayed_writers_from_pdg(
                 pdg=pdg,
@@ -1194,7 +1195,9 @@ def _walk_frame(
                 dr_triggers = tuple(
                     trigger
                     for trigger in crossed.triggers
-                    if trigger not in steps[step_idx].triggers
+                    if not any(
+                        _same_transition(trigger, known) for known in steps[step_idx].triggers
+                    )
                 )
                 dr_enablers = crossed.enablers
                 steps[step_idx] = replace(
@@ -1449,7 +1452,7 @@ def _recorded_writers_from_firings(
     main_matching = {
         rung_idx
         for rung_idx, writes in firings.items()
-        if tag_name in writes and writes[tag_name] == to_value
+        if tag_name in writes and not value_changed(writes[tag_name], to_value)
     }
 
     # 1. Node writers — precise subroutine nodes plus synthesis namespaces.
@@ -1465,7 +1468,7 @@ def _recorded_writers_from_firings(
             if rung_id.subroutine is None:
                 continue
             writes = node_firings[rung_id]
-            if tag_name not in writes or writes[tag_name] != to_value:
+            if tag_name not in writes or value_changed(writes[tag_name], to_value):
                 continue
             if rung_id.subroutine in (
                 PLANT_RUNG_NAMESPACE,
@@ -1764,6 +1767,18 @@ def _executed_writers_from_pdg(
     return writers
 
 
+def _same_value(written: Any, to_value: Any) -> bool:
+    """Whether a statically known write stores *to_value*, a NaN over a NaN included.
+
+    A deferred value (an ``IndirectRef`` from static extraction) raises on ``==``.
+    It cannot match a stored value, so it is a non-match.
+    """
+    try:
+        return not value_changed(written, to_value)
+    except TypeError:
+        return False
+
+
 def _replayed_writer_proves_value(
     rung: Rung,
     tag_name: str,
@@ -1771,11 +1786,7 @@ def _replayed_writer_proves_value(
     fire_view: Any,
 ) -> bool:
     """Whether a conductive replayed rung must write ``tag_name=to_value``."""
-    from pyrung.core.analysis.sp_values import (
-        _values_match,
-        _writer_for_tag,
-        _written_value_for_tag,
-    )
+    from pyrung.core.analysis.sp_values import _writer_for_tag, _written_value_for_tag
     from pyrung.core.crossing import UNKNOWN, Affine, Literal, evaluate_forward
     from pyrung.core.instruction.coils import LatchInstruction, OutInstruction
     from pyrung.core.instruction.data_transfer import (
@@ -1786,12 +1797,12 @@ def _replayed_writer_proves_value(
 
     written = _written_value_for_tag(rung, tag_name)
     if isinstance(written, Literal):
-        return _values_match(written.value, to_value)
+        return _same_value(written.value, to_value)
     if isinstance(written, Affine):
         try:
             source = fire_view.get_tag(written.source)
             produced = evaluate_forward(written, {written.source: source})
-            return produced is not UNKNOWN and _values_match(produced, to_value)
+            return produced is not UNKNOWN and _same_value(produced, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
     # A named slot inside a block can evade the generic forward crossing even
@@ -1807,10 +1818,10 @@ def _replayed_writer_proves_value(
         try:
             source = fire_view.get_tag(instr.source.name)
             stored = _store_copy_value_to_tag_type(source, instr.dest, instr.source.type)
-            return _values_match(stored, to_value)
+            return _same_value(stored, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
-    return isinstance(instr, (OutInstruction, LatchInstruction)) and _values_match(
+    return isinstance(instr, (OutInstruction, LatchInstruction)) and _same_value(
         to_value,
         True,
     )
@@ -2137,8 +2148,8 @@ def _same_transition(left: Transition, right: Transition) -> bool:
     return (
         left.tag_name == right.tag_name
         and left.scan_id == right.scan_id
-        and left.from_value == right.from_value
-        and left.to_value == right.to_value
+        and not value_changed(left.from_value, right.from_value)
+        and not value_changed(left.to_value, right.to_value)
         and left.occurrence_ordinal == right.occurrence_ordinal
     )
 
@@ -2165,8 +2176,8 @@ def _causal_source_for_exact_read(
                 and candidate.occurrence_ordinal is None
                 and candidate.tag_name == observed.tag_name
                 and candidate.scan_id == observed.scan_id
-                and candidate.from_value == observed.from_value
-                and candidate.to_value == observed.to_value
+                and not value_changed(candidate.from_value, observed.from_value)
+                and not value_changed(candidate.to_value, observed.to_value)
             ):
                 return observed
             return None
@@ -2181,7 +2192,7 @@ def _causal_source_for_exact_read(
         read.occurrence.source == "entry"
         and candidate is not None
         and candidate.scan_id < rung_writes.scan_id
-        and candidate.to_value == read.occurrence.value
+        and not value_changed(candidate.to_value, read.occurrence.value)
     ):
         return candidate
     return None
@@ -2231,7 +2242,7 @@ def _recorded_effect_from_rung_writes(
         # value remains the one produced by the frontier rung write.
         if current_scan != transition.scan_id:
             for name, source in tuple(frontier.items()):
-                if projection.entry_tags.get(name) != source.to_value:
+                if value_changed(projection.entry_tags.get(name), source.to_value):
                     del frontier[name]
 
         new_effects = False
@@ -2315,7 +2326,7 @@ def _recorded_effect_from_rung_writes(
                 and write.ordinal <= transition.occurrence_ordinal
             ):
                 continue
-            if written.from_value == written.to_value:
+            if not value_changed(written.from_value, written.to_value):
                 continue
 
             run = write.run

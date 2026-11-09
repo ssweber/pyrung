@@ -18,6 +18,7 @@ from pyrung.conformance._confirm import Confirmation, is_confirmed
 from pyrung.conformance._ladder import case_label, check_disjoint, emit_case
 from pyrung.conformance._slot import SLOT_FIELDS, make_slot
 from pyrung.core import PLC, Program, Rung, call, subroutine
+from pyrung.core.state import value_changed
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 if TYPE_CHECKING:
@@ -216,7 +217,7 @@ def _diff(
         if name in kept or name in SYSTEM_TAGS_BY_NAME or name.startswith("_"):
             continue
         before, after = fresh.tags.get(name, 0), now.tags.get(name, 0)
-        if before != after:
+        if value_changed(before, after):
             out[name] = (after, before)
     for key in set(fresh.memory) | set(now.memory):
         if key == "_dt" or key.startswith("_sys."):
@@ -225,7 +226,7 @@ def _diff(
         if keyed_by in kept or keyed_by in SYSTEM_TAGS_BY_NAME:
             continue
         before, after = fresh.memory.get(key), now.memory.get(key)
-        if before != after and (before or after):
+        if value_changed(before, after) and (before or after):
             out[key] = (after, before)
     return out
 

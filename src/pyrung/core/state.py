@@ -35,7 +35,7 @@ def snapshot_dict(mapping: Mapping[str, Any]) -> dict[str, Any]:
 def value_changed(old: Any, new: Any) -> bool:
     """Whether a tag that held *old* changed when it came to hold *new*.
 
-    Every reader that says a tag changed asks this, so stepping, history and the DAP agree.
+    Readers that report whether a tag changed ask this, so stepping, history and the DAP agree.
     A NaN differs from itself, but a Real that stays NaN has not changed.  ``-0.0`` over
     ``0.0`` and ``0`` over ``False`` are no change either.
     """

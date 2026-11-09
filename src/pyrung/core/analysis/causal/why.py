@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
+from pyrung.core.state import value_changed
 
 from .models import CausalChain, ChainStep, Transition
 from .support import _collect_sp_leaves, _condition_tag_name, _HistoricalView
@@ -197,7 +198,7 @@ def why_cause(
         current = state.tags.get(name)
         if current is None and name in pdg.tags:
             current = pdg.tags[name].default
-        held = chain.forced if current == forces[name] else chain.force_pending
+        held = chain.force_pending if value_changed(current, forces[name]) else chain.forced
         held[name] = forces[name]
     return chain
 

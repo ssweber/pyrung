@@ -42,6 +42,8 @@ An Inf or NaN operand follows IEEE 754:
 - `Inf > 1.0E+38` is true.
 - NaN compares false with everything (`R == R` is false for a NaN).
 
+A `Real` that stays NaN counts as no change for `monitor()`, `plc.diff()` and `cause()`.
+
 A `math()` whose result is ±Inf sets `out_of_range`. A `math()` whose result is NaN sets no flag.
 
 Where Inf or NaN meets an integer:

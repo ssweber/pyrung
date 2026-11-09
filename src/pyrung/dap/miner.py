@@ -796,12 +796,14 @@ def _mine_value_temporals(
                         b_val = history.at(sid).tags.get(b_tag)
 
                         if observed_b_val is None:
-                            if sid > t_scan and b_val != history.at(t_scan).tags.get(b_tag):
+                            if sid > t_scan and value_changed(
+                                history.at(t_scan).tags.get(b_tag), b_val
+                            ):
                                 observed_b_val = b_val
                                 found = True
                                 max_delay = max(max_delay, sid - t_scan)
                                 break
-                        elif b_val == observed_b_val:
+                        elif not value_changed(observed_b_val, b_val):
                             found = True
                             max_delay = max(max_delay, sid - t_scan)
                             break

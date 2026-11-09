@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from pyrung import PLC, Bool, Int, Program, Real, Rung, Timer, copy, math, on_delay, out
-from pyrung.core import coast_run
+from pyrung.core import coast_run, scan_trace
 from pyrung.core.analysis.pilot.correction_candidates import _last_transition_scan
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
@@ -238,7 +238,10 @@ def test_a_real_that_turns_nan_in_the_loop_agrees() -> None:
     for coast in (False, True):
         plc = runs[coast] = PLC(program, dt=0.01)
         plc.patch({"Source": float("nan")})
+        before = scan_trace.TOTALS["loop scans"]
         _run(plc, 700, coast)
+    # The loop keeps running once Copied holds a NaN that math() computes again each scan.
+    assert scan_trace.TOTALS["loop scans"] - before > 600
     # Copied goes from 0.0 to NaN on scan 201, and stays NaN.
     assert _changes(runs[True], "Copied") == [201]
     edges = (0, 1, 199, 200, 201, 202, 203, 299, 300, 301, 699, 700, 701)
