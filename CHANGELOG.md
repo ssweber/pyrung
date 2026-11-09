@@ -363,6 +363,7 @@
   - a comparison with arithmetic in a rung (`T.Acc + 1 >= N`), or an internal error in its search, gives a `Stopped` plan with a reason
   - a callable `avoid=` that is true at the start of a wait gives a `Stopped` plan naming the avoid (it raised `ValueError`)
   - some targets behind a harness link get an answer (it raised `TheoryInvariantError`)
+  - a target compared with a system tag no rung has written yet, or with a tag only a `patch()` or `force()` by name gave, gets an answer (it raised `TypeError`)
 
   `avoid=Bank[Idx] >= 9000` now reads the slot `Idx` points to (it counted as violated everywhere), and ends the plan on any scan where the condition becomes true.
 - `how(And(A, B))` is the same as `how(A, B)`. `how(Or(...))`, `how(T.Acc >= Sp + 1)`, and `how(T.Acc >= Tag)` where no rung uses `Tag`, raise a `ValueError` saying what to pass.

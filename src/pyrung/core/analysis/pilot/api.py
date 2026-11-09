@@ -170,15 +170,24 @@ def _check_operands(
 
 
 def _carry_goal_tags(setup: _drive_setup.DriveSetup, conditions: tuple[Any, ...]) -> None:
-    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed."""
+    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed.
+
+    An operand only a patch or force by name gave is named too, so logic the search adds can
+    read it and a restart keeps it.
+    """
     from pyrung.core.tag import Tag
 
     known = setup.work._known_tags_by_name
     for condition in conditions:
         for member in _members(condition):
-            tag = member if isinstance(member, Tag) else getattr(member, "tag", None)
-            if isinstance(tag, Tag) and tag.name not in known:
-                setup.work._register_tag_no_rung_gave(tag)
+            named = (
+                (member,)
+                if isinstance(member, Tag)
+                else (member.tag, getattr(member, "value", None))
+            )
+            for tag in named:
+                if isinstance(tag, Tag) and tag.name not in known:
+                    setup.work._register_tag_no_rung_gave(tag)
 
 
 def _plan_from_outcome(
@@ -492,15 +501,16 @@ def _stopped_events(plan: Plan) -> Iterator[PilotEvent]:
     )
 
 
-def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool] | None:
-    """The goal as a check on a state's tags, or None if a condition does not compile to one."""
-    from pyrung.core.analysis.prove import _compile_property
+def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool]:
+    """The goal as a check on a state's tags, judged as the search judges it.
 
-    try:
-        checks = [_compile_property(condition)[0] for condition in conditions]
-    except Exception:
-        return None
-    return lambda tags: all(check(tags) for check in checks)
+    A tag the state lacks doesn't hold.  The prover's check reads one as holding, and a trimmed
+    run that never wrote the goal's tag would pass.
+    """
+    goal = TargetSpec.conjunction(
+        tuple(TargetSpec(*target) for target in _parse_targets(*conditions))
+    )
+    return lambda tags: target_reached(tags, goal.tag, goal.value, goal.predicate)
 
 
 def _how_from(

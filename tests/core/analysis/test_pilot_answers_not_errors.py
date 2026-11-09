@@ -24,6 +24,7 @@ from pyrung import (
     copy,
     fill,
     latch,
+    math,
     on_delay,
     system,
 )
@@ -225,6 +226,46 @@ class TestGoalsOnSlotsARangeWrites:
                 latch(done)
         plan = PLC(program, dt=0.01).how(bank[3] >= 5, **BOUND)
         assert "no rung uses" not in (plan.reason or "")
+
+
+class TestAnOperandNoRungHasGiven:
+    """A goal compared with a tag no rung has given a value gets an answer, not a TypeError."""
+
+    def test_a_system_tag_no_scan_has_written(self) -> None:
+        go, count = Bool("Go", external=True), Int("Count")
+        with Program(strict=False) as program:
+            with Rung(go):
+                math(count + 1, count)
+            with Rung(go):
+                copy(7, system.rtc.new_second)
+        plc = PLC(program, dt=0.01)
+        plc.step()
+        assert system.rtc.new_second.name not in plc.state.tags
+
+        plan = plc.how(count > system.rtc.new_second, **BOUND)
+
+        assert plan.status is PlanStatus.REACHED, plan.reason
+        tags = plan.replay().state.tags
+        assert tags["Count"] > tags[system.rtc.new_second.name] == 7
+
+    @pytest.mark.parametrize("given", ["patch", "force"])
+    def test_a_tag_only_a_patch_or_force_by_name_gives(self, given: str) -> None:
+        go, count = Bool("Go", external=True), Int("Count")
+        with Program(strict=False) as program:
+            with Rung(go):
+                math(count + 1, count)
+        plc = PLC(program, dt=0.01)
+        plc.step()
+        if given == "patch":
+            plc.patch({"Lim": 5})
+        else:
+            plc.force("Lim", 5)
+        plc.step()
+
+        plan = plc.how(count > Int("Lim"), **BOUND)
+
+        assert plan.status is PlanStatus.REACHED, plan.reason
+        assert plan.replay().state.tags["Count"] > 5
 
 
 class TestOpaqueAvoids:

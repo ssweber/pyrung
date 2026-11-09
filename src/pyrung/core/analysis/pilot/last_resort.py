@@ -99,7 +99,7 @@ def _where(fork: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 def _waited(
     fork: Any,
-    goal: Callable[[Any], bool] | None,
+    goal: Callable[[Any], bool],
     avoid: Any,
     left: Callable[[], float],
     scans: int,
@@ -117,7 +117,7 @@ def _waited(
         if _avoid_scan_names(avoid, tags):
             tripped = True
             return True
-        if goal is not None and goal(tags):
+        if goal(tags):
             return True
         return bits is not None and any(tags.get(name) is not bit for name, bit in bits.items())
 
@@ -138,7 +138,7 @@ def _waited(
 def try_moves(
     stopped: Any,
     setup: Any,
-    goal: Callable[[Any], bool] | None,
+    goal: Callable[[Any], bool],
     avoid_pred: Any,
     ask: Callable[[Any, float], tuple[Any, bool]],
     max_scans: int,
