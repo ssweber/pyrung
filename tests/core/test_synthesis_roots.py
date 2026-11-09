@@ -450,12 +450,54 @@ def _late_ramp_recording() -> tuple[PLC, dict[int, Any]]:
     return plc, ran
 
 
-@pytest.mark.parametrize("scan_id", [5, 199, 201, 401, 650, 699, 701, 900, 1099])
+@pytest.mark.parametrize("scan_id", [5, 199, 201, 401, 650, 699, 700, 701, 900, 1099])
 def test_replay_runs_each_scan_under_the_plant_that_ran_it(scan_id: int) -> None:
     plc, ran = _late_ramp_recording()
 
-    assert _exact(plc.history.at(scan_id).tags) == _exact(ran[scan_id].tags)
-    assert _exact(plc.replay_to(scan_id).state.tags) == _exact(ran[scan_id].tags)
+    if scan_id != 700:  # The install edited this one.
+        assert _exact(plc.history.at(scan_id).tags) == _exact(ran[scan_id].tags)
+    assert _exact(plc.replay_to(scan_id).state.tags) == _exact(plc.history.at(scan_id).tags)
+
+
+@pytest.mark.parametrize("path", ["replay_to", "interpreted"])
+def test_a_replay_of_the_install_scan_steps_on_as_the_run_did(path: str) -> None:
+    plc, ran = _late_ramp_recording()
+
+    replay = plc.replay_to(700) if path == "replay_to" else plc._replay_to_interpreted(700)
+
+    assert replay._harness is not None
+    assert replay.rung_firings(700) == plc.rung_firings(700)
+    for scan in range(701, 801):
+        replay.step()
+        assert _exact(replay.state.tags) == _exact(ran[scan].tags), scan
+
+
+def test_a_replay_of_a_scan_a_reload_edited_starts_from_the_edit() -> None:
+    """A reload drops coil memory no coupling keeps, in place, from the scan it reloads at."""
+    fb = Bool("ReloadFb", physical=Physical("S", on_delay="300ms"), link="ReloadEn")
+    enable, lamp, toggle = Bool("ReloadEn"), Bool("ReloadLamp"), Bool("ReloadTog")
+    with Program(strict=False) as prog:
+        with Rung(~toggle):
+            out(toggle)
+        with Rung(toggle):
+            out(enable)
+        with Rung(fb):
+            out(lamp)
+    plc = PLC(prog, dt=0.01, checkpoint_interval=100)
+    Harness(plc).install()
+    plc.run(600)
+    dropped = [name for name in plc.state.memory if ":plant:fb." in name]
+    assert dropped
+    plc._edit_tip_tags({}, drop_memory=dropped)
+    ran = _run_recording(plc, 100)
+    plc._reset_cache(plc.state)
+
+    for replay in (plc.replay_to(600), plc._replay_to_interpreted(600)):
+        assert dict(replay.state.memory) == dict(plc.history.at(600).memory)
+        for scan in range(601, 701):
+            replay.step()
+            assert _exact(replay.state.tags) == _exact(ran[scan].tags), scan
+            assert dict(replay.state.memory) == dict(ran[scan].memory), scan
 
 
 def test_a_replayed_range_across_a_late_install_keeps_each_side() -> None:

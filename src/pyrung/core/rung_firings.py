@@ -33,7 +33,7 @@ class UnrecordedScansError(ValueError):
     def __init__(self, first: int, last: int, scans: int) -> None:
         super().__init__(
             f"scans {first}..{last} include some that have no records yet. A compiled run "
-            "records none, and a stepped run without history= stops recording once its records "
+            "records none. A stepped run without history= stops recording once its records "
             f"are full. Getting their records means stepping {scans} scans again from the nearest "
             f"checkpoint, and a question may step at most {SETTLE_SCAN_LIMIT}. "
             "Scans a question has stepped keep their records, so ask first about a scan nearer "

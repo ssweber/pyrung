@@ -168,7 +168,8 @@ def test_compiled_replay_of_live_io_matches_stepping(monkeypatch: pytest.MonkeyP
     plc.patch({Enable.name: True})
     plc.step()
     assert plc.state.tags[Lamp.name] is True
-    replayed = plc._replay_to_compiled(1, compile_kernel(program))
+    # replay_to() steps its last scan interpreted, so this runs the kernel itself.
+    replayed = plc._compiled_fork_at(1, compile_kernel(program))
     assert replayed.state.tags[Lamp.name] is True
 
 
