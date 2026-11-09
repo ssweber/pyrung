@@ -255,6 +255,20 @@ def test_a_replay_sends_nothing_and_writes_the_recorded_answer(
     assert plc.state.tags[RxBusy.name] is False and plc.state.tags[RxOk.name] is True
 
 
+def test_a_replayed_range_has_the_recorded_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A compiled replay of a range writes no recorded answers.  Each runner here, the how()
+    # fork too, reads the session's scans under the session, which has no replay kernel.
+    futures = _held(monkeypatch)
+    plc, recorded = _session_after_one_answer(futures)
+    fork = fork_with_pilot_rungs(plc, (), history_budget=float("inf"))
+    assert fork._compiled_replay_supported_kernel() is not None
+    assert plc._compiled_replay_supported_kernel() is None
+    for runner in (plc, fork):
+        states = runner.history.range(1, 7)
+        assert {state.scan_id: dict(state.tags) for state in states} == recorded
+    assert len(futures) == 1
+
+
 def test_cause_and_effect_send_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     futures = _held(monkeypatch)
     plc, _recorded = _session_after_one_answer(futures)

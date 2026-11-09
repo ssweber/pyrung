@@ -22,15 +22,19 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
+    Timer,
     copy,
     latch,
     math,
+    on_delay,
     out,
     reset,
     rise,
 )
+from pyrung.core import runner as runner_module
 from pyrung.core.analysis.causal.projected import projected_cause
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.rung_firings import UnrecordedScansError
 
 # ---------------------------------------------------------------------------
 # Worked example from spec (projected cause)
@@ -2000,3 +2004,54 @@ class TestProjectedEffectCopyCalc:
 
         chain = runner.effect("Src", from_=0, to_value=42)
         assert chain.mode == "projected"
+
+
+# ---------------------------------------------------------------------------
+# After a compiled run: the answer is the stepped run's
+# ---------------------------------------------------------------------------
+
+
+class TestProjectedAfterACompiledRun:
+    """A compiled run leaves its scans without records.  A projected chain records them first."""
+
+    @staticmethod
+    def _run(*, jit: bool) -> PLC:
+        Start, Gate, Lamp, Horn = Bool("PcStart"), Bool("PcGate"), Bool("PcLamp"), Bool("PcHorn")
+        Wait = Timer.clone("PcWait")
+        with Program() as logic:
+            with Rung(Start):
+                on_delay(Wait, 15000)
+            with Rung(Wait.Done, Gate):
+                out(Lamp)
+            with Rung(Lamp):
+                out(Horn)
+        runner = PLC(logic, dt=0.01)
+        runner.patch({Start.name: True})
+        # PcWait_Done turns on at scan 1500, inside the part a compiled run leaves unrecorded.
+        runner.run_for(20.0, jit=jit)
+        return runner
+
+    def test_cause_says_since_when_an_enabler_held(self) -> None:
+        compiled, stepped = self._run(jit=True), self._run(jit=False)
+        assert compiled._unrecorded_scans
+        chain = compiled.cause("PcLamp", to=True)
+        assert chain.steps == stepped.cause("PcLamp", to=True).steps
+        assert chain.steps[0].enablers[0].held_since_scan == 1500
+
+    def test_effect_says_since_when_an_enabler_held(self) -> None:
+        compiled, stepped = self._run(jit=True), self._run(jit=False)
+        chain = compiled.effect("PcGate", from_=False)
+        assert chain.steps == stepped.effect("PcGate", from_=False).steps
+        assert chain.steps[0].enablers[0].held_since_scan == 1500
+
+    def test_too_many_scans_to_record_refuses_as_a_recorded_chain_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        compiled = self._run(jit=True)
+        monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 10)
+        with pytest.raises(UnrecordedScansError):
+            compiled.cause("PcLamp")
+        with pytest.raises(UnrecordedScansError):
+            compiled.cause("PcLamp", to=True)
+        with pytest.raises(UnrecordedScansError):
+            compiled.effect("PcGate", from_=False)

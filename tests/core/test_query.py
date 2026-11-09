@@ -338,6 +338,68 @@ class TestSubroutineColdHot:
         assert "Sub:1" in runner.query.hot_rungs()
 
 
+class TestForkColdHot:
+    """A fork answers cold_rungs / hot_rungs as the same scans stepped in one runner do."""
+
+    @staticmethod
+    def _program():
+        Every, Go, Early, Late, Later = (
+            Bool("FkEvery"),
+            Bool("FkGo"),
+            Bool("FkEarly"),
+            Bool("FkLate"),
+            Bool("FkLater"),
+        )
+
+        @subroutine("FkSub")
+        def sub():
+            with rung(Go):
+                latch(Early)
+            with rung():
+                out(Every)
+
+        with Program() as prog:
+            with Rung():
+                out(Every)
+            with Rung(Go):
+                latch(Early)
+            with Rung(Late):
+                latch(Later)
+            with Rung():
+                call(sub)
+        return prog
+
+    @staticmethod
+    def _step(runner: PLC, first: int, last: int) -> None:
+        # Go is on at scan 2 only, before the fork.  Late is on at scan 15 only, after it.
+        for scan in range(first, last + 1):
+            runner.patch({"FkGo": scan == 2, "FkLate": scan == 15})
+            runner.step()
+
+    def _answers(self, runner: PLC) -> tuple[list[str], list[str]]:
+        return runner.query.cold_rungs(), runner.query.hot_rungs()
+
+    def test_a_fork_reads_the_scans_it_inherited(self) -> None:
+        stepped = PLC(self._program())
+        self._step(stepped, 1, 20)
+        parent = PLC(self._program())
+        self._step(parent, 1, 10)
+        fork = parent.fork()
+        self._step(fork, 11, 20)
+        assert self._answers(stepped) == ([], ["1", "4", "FkSub:2"])
+        assert self._answers(fork) == self._answers(stepped)
+
+    def test_a_fork_from_an_earlier_scan_reads_only_that_far(self) -> None:
+        stepped = PLC(self._program())
+        self._step(stepped, 1, 8)
+        parent = PLC(self._program())
+        self._step(parent, 1, 20)
+        fork = parent.fork(scan_id=5)
+        self._step(fork, 6, 8)
+        assert self._answers(stepped) == (["3"], ["1", "4", "FkSub:2"])
+        assert self._answers(fork) == self._answers(stepped)
+
+
 # ---------------------------------------------------------------------------
 # G3: stranded_bits
 # ---------------------------------------------------------------------------

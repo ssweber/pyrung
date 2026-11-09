@@ -2367,6 +2367,8 @@ class PLC:
                 _validate_assume(self._logic, assume)
             from pyrung.core.analysis.causal import projected_cause
 
+            # An enabler's held_since reads the last change before the tip, which may be any scan.
+            self._settle_compiled_ranges()
             return projected_cause(
                 logic=self._logic,
                 history=self._history,
@@ -2464,6 +2466,7 @@ class PLC:
             if to_value is not _SENTINEL:
                 kwargs["to_value"] = to_value
 
+            self._settle_compiled_ranges()  # as in cause(to=)
             return projected_effect(
                 logic=self._logic,
                 history=self._history,
