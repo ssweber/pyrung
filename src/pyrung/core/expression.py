@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core._source import _capture_source
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.memory_block import BlockRange
@@ -961,8 +961,12 @@ class RandIntExpr(Expression):
 
         return calc_form(self, "hex", TagType.WORD).tag
 
-    def draw(self, ctx: ScanContext) -> int:
+    def draw(self, ctx: ScanContext, numbers: Mapping[int, int]) -> int:
         """This scan's draw, from the bounds as the scan starts.
+
+        *numbers* is the program's :func:`randint_numbers`.  The draw is seeded by
+        the site's number in *numbers*, so a program draws the same values whatever
+        ``randint()`` calls came before it.
 
         A site that reads no draw, or a bound that is Inf or NaN, draws the
         tag's default; :meth:`evaluate` decides what the site reads instead.
@@ -973,7 +977,9 @@ class RandIntExpr(Expression):
         hi = self.hi.evaluate(ctx)
         if not (_finite(lo) and _finite(hi)):
             return self.tag.default
-        return randint_draw(self.site, ctx.scan_id, int(lo), int(hi))
+        number = numbers[_base_site(self.site)]
+        seed = number if self.site >= 0 else ~number
+        return randint_draw(seed, ctx.scan_id, int(lo), int(hi))
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         if self.real_bounds:
@@ -1036,6 +1042,29 @@ def randint_sites(tag_names: Iterable[str]) -> tuple[RandIntExpr, ...]:
     """The live ``randint`` sites among *tag_names*, in site order."""
     sites = [_randint_sites.get(name) for name in tag_names if is_randint_tag(name)]
     return tuple(sorted((s for s in sites if s is not None), key=lambda s: s.site))
+
+
+def _base_site(site: int) -> int:
+    """The site a cut draw (``~site``) was cut from, or *site* itself."""
+    return site if site >= 0 else ~site
+
+
+def randint_numbers(
+    tag_names: Iterable[str], numbered: Mapping[int, int] | None = None
+) -> dict[int, int]:
+    """Number each ``randint`` among *tag_names* 1, 2, ... in the order given,
+    after those already *numbered*.
+
+    The keys are ``site`` numbers, and a cut draw takes the number of the site it
+    was cut from.  Given the tags in the order the rungs reach them, the numbers
+    come from the program alone.
+    """
+    numbers = dict(numbered or {})
+    for name in tag_names:
+        site = _randint_sites.get(name) if is_randint_tag(name) else None
+        if site is not None:
+            numbers.setdefault(_base_site(site.site), len(numbers) + 1)
+    return numbers
 
 
 # =============================================================================

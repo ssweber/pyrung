@@ -148,7 +148,7 @@ def prepare_target_route(
         and not _values_match(snapshot.get(target_tag), target_value)
     ):
         return None
-    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
+    clear_only = compute_clear_only(pdg, plc.tags, program)
     choices, traced = rank_trace_choices(
         target_tag,
         target_value,

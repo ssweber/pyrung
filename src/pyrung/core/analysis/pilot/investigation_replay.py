@@ -492,7 +492,7 @@ def investigate_excursion(
     from pyrung.core.condition import CompareEq
 
     preserved_tag = reverted[0]
-    preserved = replay_fork._known_tags_by_name[preserved_tag]
+    preserved = replay_fork.tags[preserved_tag]
     scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
     confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(candidate_holds, scope))
     replay_pilot_rungs.extend(confirmed_pilot_rungs)

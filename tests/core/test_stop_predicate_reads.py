@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import pickle
+import threading
 from typing import Any
 
 import pytest
@@ -157,6 +158,36 @@ def test_a_read_of_plc_state_instead_of_the_argument_is_recorded() -> None:
     plc = _plc()
     _hit, reads = _traced_call(lambda _s: plc.state.tags["Lamp"], plc)
     assert reads == {"Lamp"}
+
+
+def test_two_threads_each_record_only_their_own_reads() -> None:
+    first, second = _plc(), _plc()
+    second_started, first_read = threading.Event(), threading.Event()
+    reads: dict[str, frozenset[str]] = {}
+
+    def judged_first(state: Any) -> bool:
+        assert second_started.wait(5)
+        value = state.tags["Lamp"]
+        first_read.set()
+        return value
+
+    def judged_second(state: Any) -> bool:
+        second_started.set()
+        assert first_read.wait(5)
+        return state.tags["Run"]
+
+    def run(name: str, predicate: Any, plc: PLC) -> None:
+        reads[name] = _traced_call(predicate, plc)[1]
+
+    threads = [
+        threading.Thread(target=run, args=("first", judged_first, first)),
+        threading.Thread(target=run, args=("second", judged_second, second)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert reads == {"first": {"Lamp"}, "second": {"Run"}}
 
 
 def test_the_tip_comes_back_when_the_predicate_raises() -> None:

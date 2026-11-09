@@ -205,3 +205,18 @@ def test_a_compiled_replay_from_a_runner_state_steps_as_the_runner(graph_first: 
     assert state.scan_id == plc.state.scan_id
     assert dict(state.tags) == dict(plc.state.tags)
     assert dict(state.memory) == dict(plc.state.memory)
+
+
+def test_absent_scalars_stay_at_the_kernel_default_after_a_later_slot_default() -> None:
+    from pyrung.core.compiled_plc import absent_scalars
+
+    bank = Block("KsLate", TagType.INT, 1, 5)
+    late = bank[1]
+    with Program(strict=False) as program:
+        with Rung(Go):
+            copy(late, N)
+    kernel = compile_kernel(program)
+    assert late.name in dict(kernel._scalar_defaults)
+    bank.slot(1, default=9)
+    assert late.default == 9
+    assert absent_scalars(kernel, {})[late.name] == 0
