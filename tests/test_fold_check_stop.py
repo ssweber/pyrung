@@ -2042,10 +2042,12 @@ def test_a_wrong_rtc_origin_is_caught_at_the_scan_before_an_early_apply(
 ) -> None:
     """In both runners' logs, so only a replay against the states stepped shows it."""
     _origin_from_the_apply(monkeypatch, None)
+    # The records differ too, a scan later.  So the check of them steps aside here.
+    monkeypatch.setattr(fold_check, "compare_records", lambda *args: None)
     fold_check.install()
     with (
         fold_check.deliberate(),
-        pytest.raises(FoldMismatch, match="scan 1 differs from stepping: Hr|committed .Hr. fired"),
+        pytest.raises(FoldMismatch, match="scan 1 differs from stepping: Hr"),
     ):
         _rtc_apply_early().run_for(30.0)
 

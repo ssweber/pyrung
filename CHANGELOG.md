@@ -294,8 +294,8 @@
   - the VS Code History panel shows the same scans, one-scan pulses included, and **Load older** reads further back
 
   A question that would step more than 250,000 scans raises `UnrecordedScansError` naming the range, instead of running for minutes.
-- With `history=`, a runner keeps every value its rungs wrote in the window, and `history_budget` counts them:
-  - a value that changes on every scan takes about 200 bytes a scan, so `history="1h"` at 10 ms holds about 70 MB for each such tag
+- With `history=`, a runner keeps every value its rungs wrote in the window (a tag that changed often read Unknown after 1,000 changes), and `history_budget` counts them:
+  - a value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag
   - over `history_budget`, each checkpoint trims one interval more than `history=` asks for. Shorten `history=` for a program with many such tags
 - `how()` has a time limit, `wall_clock_s=300.0` by default (`None` turns it off). When it runs out, the plan ends with `wall-clock budget exhausted (300 s); still waiting on ...`. A search that grows to about 1 GB ends with `memory budget exhausted`.
 - A reached `how()` plan uses temporary logic only where the plan needs it, so `Rung(En): on_delay(W, 3000)` plans "Set En=True, wait ~3s" (it latched `En` with temporary logic until `W.Done`):

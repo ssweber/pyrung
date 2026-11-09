@@ -1,7 +1,7 @@
-"""A column turns Unknown on its last change, on the same scan however its scans went in.
+"""A column turns Unknown on the same scan however its scans went in.
 
-Stepping counts ``_ENTRY_LIMIT`` changes a column, to bound its memory.  A jump, a bulk record
-and a settle must each turn the column Unknown on the scan stepping does.  So how() ranks the
+Without a history window, stepping turns a column Unknown on its ``_ENTRY_LIMIT``-th change.  A
+jump, a bulk record and a settle must each turn it Unknown on that scan too.  So how() ranks the
 same candidate scans whether the jit ran or not.
 """
 
@@ -703,13 +703,7 @@ def test_a_run_notes_its_unrecorded_scans_before_it_trims_history() -> None:
     oldest = plc.history.oldest_scan_id
     assert oldest > 1
     assert plc._unrecorded_scans and plc._unrecorded_scans[0][0] >= oldest
-    # The record keeps the three scans before the floor, which the floor's scans look back at.
-    gaps = [
-        (max(first, oldest), last)
-        for first, last in plc._rung_firing_timelines._gaps
-        if last >= oldest
-    ]
-    assert gaps == plc._unrecorded_scans
+    assert plc._rung_firing_timelines._gaps == plc._unrecorded_scans
 
 
 def test_a_trim_during_a_run_leaves_the_oldest_kept_scan_answering() -> None:

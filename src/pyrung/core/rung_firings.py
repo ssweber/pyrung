@@ -129,8 +129,10 @@ class RungFiringTimelines(Generic[K]):
     A column turns Unknown on the scan of its 1,000th change (``_ENTRY_LIMIT``).  A scan
     changes its column unless it holds the value before it, or flips or counts as the scan
     before it did.  A scan's change depends only on the scan and the three before it.  So
-    each way of recording scans counts the same, in any order.  A column holds at most two
-    ranges per change, so the limit bounds its memory too.
+    each way of recording scans counts the same, in any order.  Until then a column holds at
+    most two ranges per change.  After it the column still keeps a range for each run of scans
+    that wrote, and one for each run that did not.  A rung's fired ranges have no limit.  So
+    without a history window, a rung that fires every few scans gains a range each firing.
 
     A record trimmed to a history window has no limit, since the window bounds its memory.
     After a trim each column holds the kept scans from its first write on.  So what a record
@@ -163,7 +165,7 @@ class RungFiringTimelines(Generic[K]):
         self._limit: int | None = _ENTRY_LIMIT if capped else None
         # The changes each column has had, until it turns Unknown.
         self._counts: dict[tuple[K, str], int] = {}
-        # Each column that turned Unknown, and the scan whose entry reached the limit.
+        # Each column that turned Unknown, and the scan of the change that reached the limit.
         self._unknown_keys: dict[tuple[K, str], int] = {}
         # Columns with a range a stretch could not speak for.  Later scans still say.
         self._partly_unknown: set[tuple[K, str]] = set()
@@ -889,9 +891,17 @@ class RungFiringTimelines(Generic[K]):
         return tuple(sorted(candidates, reverse=True))
 
     def bytes_estimate(self) -> int:
-        """About the bytes the record's ranges take, a little over a range's measured size."""
+        """About the bytes the record's ranges take, at a range's measured size.
+
+        A repeat holds its cycle's ranges once, whatever its count.
+        """
         tables = (self._fired_ranges, self._value_timelines, self._varied_ranges)
-        return 160 * sum(len(ranges) for table in tables for ranges in table.values())
+        return 160 * sum(
+            len(element.ranges) if type(element) is Repeat else 1
+            for table in tables
+            for ranges in table.values()
+            for element in ranges
+        )
 
     def value_is_known(self, rung_index: K, tag_name: str) -> bool:
         """Whether retained final values remain exact for this one column."""
