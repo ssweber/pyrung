@@ -3568,16 +3568,45 @@ class PLC:
         # scan (e.g. a trailing stop() with no subsequent step).
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
-        return self._keep_replay_from(replay, target_scan_id)
+        return self._keep_replay_from(replay, target_scan_id, with_harness=True)
 
-    def _keep_replay_from(self, replay: PLC, target_scan_id: int) -> PLC:
+    def _keep_replay_from(
+        self, replay: PLC, target_scan_id: int, *, with_harness: bool = False
+    ) -> PLC:
         """Start *replay* at the target, with its source's limits.  The caller may step it on."""
         replay._history_retention_scans = self._history_retention_scans
         replay._records_bounded = self._records_bounded
         # Each replay path starts its fork at the target.  The two forks then trim alike.
         if target_scan_id > replay._initial_scan_id:
             replay._trim_history_before(target_scan_id, trim_records=False)
+        # A harness install or a reload edits the checkpoint between scans.  History serves
+        # the edited state, so the fork starts from it and not from the scan as stepped.
+        edited = self._checkpoints.get(target_scan_id)
+        if edited is not None:
+            replay._start_from_state(edited)
+        # The fork steps on under the plant that ran the scans after the target.
+        self._copy_current_synthesis_onto(replay)
+        self._run_on_the_plant_of_the_scan_after(target_scan_id, replay)
+        current_plant = self._earlier_plant_at(target_scan_id) is None
+        if with_harness and current_plant and self._harness is not None and replay._harness is None:
+            self._harness.fork_onto(replay, as_recorded=True)
         return replay
+
+    def _start_from_state(self, state: SystemState) -> None:
+        """Make *state* this runner's tip and oldest kept state, both at the same scan."""
+        scan_id = state.scan_id
+        assert scan_id == self._state.scan_id == self._initial_scan_id
+        self._state = state
+        self._initial_state = state
+        self._causal_initial_tags = dict(state.tags)
+        replaced = self._recent_state_cache.pop(scan_id, None)
+        if replaced is not None:
+            self._recent_state_cache_bytes -= replaced[1]
+        self._reset_cache(state)
+        if scan_id in self._checkpoints:
+            self._checkpoints[scan_id] = state
+        self._causal_lineage.invalidate_current_epoch()
+        self._sync_runtime_flags_from_state()
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
         """The kernel, if it can rebuild every key of the scans after *scan_id*'s checkpoint.
@@ -3630,7 +3659,6 @@ class PLC:
         lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
         for event in log.lifecycle_events:
             lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
-        self._run_on_the_plant_of_the_scan_after(target_scan_id - 1, replay)
         # As in the interpreted walk, the stepped scan trims nothing and is recorded in full.
         replay._history_retention_scans = None
         replay._records_bounded = False
@@ -3685,7 +3713,8 @@ class PLC:
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
-        # A fork that ran no scan takes the checkpoint's state.  The kernel's adds the fault flags.
+        # A fork that ran no scan takes the checkpoint's state, since the kernel's state would
+        # add the fault flags.
         ran = target_scan_id > anchor_scan_id
         state = replay._materialize_replay_state() if ran else anchor_state
         fork = self._fork_from_reconstructed_state(
