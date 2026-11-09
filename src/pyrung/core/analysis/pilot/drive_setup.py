@@ -224,7 +224,7 @@ def prepare_drive(
 def start_fork(plc: PLC) -> PLC:
     """The unstepped fork how() starts from, with the defaults of the slots the rungs reach."""
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
-    # Seed before the fork scans, so its first scan starts from these defaults.
+    # Seed before the first scan. A seed after it adds an edit checkpoint to every how().
     _seed_reached_slots(work)
     return work
 

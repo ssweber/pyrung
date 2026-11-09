@@ -861,7 +861,7 @@ def _conform_clone_to_addresses(
                     (memory_type, index), DEFAULT_RETENTIVE[memory_type]
                 )
                 comment = structured_map._source_unmapped_comments.get((memory_type, index), "")
-            if retentive != getattr(builtin, field_name).retentive:
+            if retentive != builtin._blocks[field_name]._tag_at(1).retentive:
                 decl.retentive[field_name] = retentive
             if comment:
                 decl.comments[field_name] = comment

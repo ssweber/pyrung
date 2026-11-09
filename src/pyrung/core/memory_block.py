@@ -525,7 +525,10 @@ class Block:
             )
 
     def _tag_at(self, addr: int) -> LiveTag:
-        """``block[addr]`` for pyrung's own code, which a runner built later does not learn of."""
+        """``block[addr]`` for pyrung's own code.
+
+        A runner built later does not learn of a slot asked for here.
+        """
         self._validate_address(addr)
         return self._get_tag(addr)
 
@@ -654,16 +657,17 @@ class Block:
     def _factory_default(self, addr: int) -> Any:
         """What the factory gives a slot, asked once however often the answer is wanted.
 
-        The factory answers each lower slot that takes its default first, in address order.
-        So a factory that counts gives each slot the same answer whichever slot a scan or an
-        analysis asks about first.  A lower slot the factory raises for is skipped.
+        Before it answers a slot, the factory answers each lower slot, in address order.
+        A slot's own default or mapping only decides whether its answer is used.  So a
+        factory that counts gives slot n its nth answer, whatever was asked first and
+        whatever the other slots override.  A lower slot the factory raises for is skipped.
         """
         if addr not in self._factory_given:
             factory = self.default_factory
             assert factory is not None
             lower = max(self.start, self._factory_asked_through + 1)
             for earlier in self._window_addresses(lower, addr - 1):
-                if earlier not in self._factory_given and self._slot_asks_factory(earlier):
+                if earlier not in self._factory_given:
                     try:
                         self._factory_given[earlier] = factory(earlier)
                     except Exception:
@@ -717,8 +721,9 @@ class Block:
         )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
-        # Only a tag the user's code holds refuses.  One a scan or an analysis made takes
-        # the reset in place (``_drop_slot_config``), so a reset never depends on what ran.
+        # Only a slot the user's code indexed or mapped refuses a reset.  A tag a scan or an
+        # analysis made takes the reset in place (``_drop_slot_config``), so whether a reset
+        # works never depends on what ran.
         if addr in self._tag_cache and (addr in self._indexed or addr in self._mapped_tags):
             raise ValueError(
                 f"Cannot {action} {self.name}[{addr}] after tag materialization. "

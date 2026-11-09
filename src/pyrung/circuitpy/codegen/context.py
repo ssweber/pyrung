@@ -927,8 +927,9 @@ class CodegenContext:
 
         Asked through the block (`Block._factory_default`), which asks the factory once
         per slot in address order and keeps the answer.  So a factory that counts gives
-        each slot what stepping reads there, and an export moves no later read.  A slot
-        the factory raises for stays at zero, because the interpreter cannot read it.
+        each slot what stepping reads there, and an export changes no value a later scan
+        reads.  A slot the factory raises for stays at zero, because the interpreter cannot
+        read it.
         """
         block = binding.block
         if block.default_factory is None:

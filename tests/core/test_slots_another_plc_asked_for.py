@@ -13,12 +13,13 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, copy, out
+from pyrung.core import PLC, Block, Bool, Char, Int, Program, Rung, TagType, copy, out
 from pyrung.core.analysis.causal.recorded import _tag_in_block
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import always
 from pyrung.core.harness import Coupling, link_problem
 from pyrung.core.physical import Physical
+from pyrung.dap.expressions import parse, to_conditions
 from pyrung.pytest_plugin import CoverageCollector
 
 
@@ -159,6 +160,64 @@ def test_a_counting_factory_gives_a_slot_one_default_whichever_slot_is_read_firs
 
     # The factory is asked in address order, so slot 4 gets its fourth answer.
     assert later.current_state.tags[seen.name] == first.current_state.tags[seen.name] == 104
+
+
+def _factory_with_slot_2_overridden() -> tuple[Program, Block]:
+    calls = count(101)
+    slots = Block("Fz", TagType.INT, 1, 4, default_factory=lambda _addr: next(calls))
+    slots.slot(2, default=50)
+    pointer = Int("FzPtr", default=2)
+    seen = Int("FzSeen")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(slots[pointer], seen)
+    return program, slots
+
+
+def _slot_2_after_a_reset(scanned: tuple[int, ...]) -> int:
+    program, slots = _factory_with_slot_2_overridden()
+    other = PLC(program, dt=0.01)
+    for addr in scanned:
+        other.patch({"FzPtr": addr})
+        other.step()
+    slots.slot(2).reset()
+    later = PLC(program, dt=0.01)
+    later.step()
+    return later.current_state.tags["FzSeen"]
+
+
+@pytest.mark.parametrize(
+    "scanned", [(), (4,), (4, 2)], ids=["fresh", "after-slot-4", "after-slots-4-and-2"]
+)
+def test_a_slot_whose_override_is_reset_gets_its_own_factory_answer(
+    scanned: tuple[int, ...],
+) -> None:
+    # Slot 2 gets the factory's second answer, though its override skipped it at first.
+    assert _slot_2_after_a_reset(scanned) == 102
+
+
+def _text_compare_program() -> tuple[Program, Block]:
+    text = Block("Tx", TagType.CHAR, 1, 6)
+    pointer = Int("TxPtr", default=5)
+    got = Char("TxGot")
+    lamp = Bool("TxLamp")
+    with Program(strict=False) as program:
+        with Rung(text[1] == "A"):
+            out(lamp)
+        with Rung():
+            copy(text[pointer], got)
+    return program, text
+
+
+def test_a_text_compare_the_debugger_builds_leaves_a_later_plc_alone() -> None:
+    program, text = _text_compare_program()
+    first = PLC(program, dt=0.01)
+    to_conditions(parse('Tx1 == "ABC"'), PLC(program, dt=0.01).tags)
+    later = PLC(program, dt=0.01)
+
+    assert text._indexed == {1}
+    assert later._known_tags_by_name.keys() == first._known_tags_by_name.keys()
+    assert set(later.current_state.tags) == set(first.current_state.tags)
 
 
 def test_a_link_to_a_slot_only_a_pointer_reaches_is_judged_the_same_on_every_plc() -> None:

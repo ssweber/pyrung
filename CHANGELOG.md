@@ -443,8 +443,8 @@
   - generated CircuitPython starts it at its `default=`, and resets a non-retentive one to it at STOP->RUN
 - A PLC answers the same whichever block slots another PLC or an analysis read before it was built:
   - a PLC built later knows and holds the same tags as one built first (it also knew each slot a pointer scan, `how()`, a coverage report or the prover had read)
-  - `slot(n).reset()` and a range's `reset()` work on a slot an analysis has read (they raised `ValueError`)
-  - a `default_factory` is asked once per slot, lowest address first, so a counting factory gives slot 3 its third answer whichever slot a scan reads first (the first slot read got the first answer)
+  - `slot(n).reset()` and a range's `reset()` work on a slot a scan or an analysis has read (they raised `ValueError`)
+  - a `default_factory` is asked once for each slot, lowest address first (it was asked in the order scans read the slots)
   - generated CircuitPython starts each slot at its factory answer (a factory that counted its calls left every slot at 0)
   - the debugger's `prove` and `how` read a slot that only a range reaches, with its `choices=` labels (`how` said `unknown tag`, and `prove` could say `Proven`)
 - A `copy(..., convert=to_text())` of an Inf or NaN `Real` writes it as lowercase text (`inf`, `-inf`, `nan`) with no flag (it left the text unchanged and set `out_of_range`).
