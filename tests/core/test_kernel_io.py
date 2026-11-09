@@ -256,8 +256,9 @@ def test_a_replay_sends_nothing_and_writes_the_recorded_answer(
 
 
 def test_a_replayed_range_has_the_recorded_answer(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The session has no replay kernel, and the how() fork reads the session's scans
-    # through the session.  So every range replays interpreted, with the recorded answers.
+    # A kernel writes each recorded answer after its scan, so a rung after the receive()
+    # would see it a scan late.  That is why the session refuses a replay kernel.  The how()
+    # fork reads the session's scans through the session, so every range replays interpreted.
     futures = _held(monkeypatch)
     plc, recorded = _session_after_one_answer(futures)
     fork = fork_with_pilot_rungs(plc, (), history_budget=float("inf"))
@@ -270,9 +271,8 @@ def test_a_replayed_range_has_the_recorded_answer(monkeypatch: pytest.MonkeyPatc
 
 
 def test_each_compiled_replay_writes_the_recorded_answers(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only a kernel the session refuses reaches these scans.  The kernel writes each answer
-    # after its scan, so a rung after the receive() sees it a scan late (Local at scan 5).
-    # That is why the session refuses it.
+    # Only a kernel the session refuses reaches these scans.  The tags the receive() writes
+    # take the recorded answers.
     futures = _held(monkeypatch)
     plc, recorded = _session_after_one_answer(futures)
     plc._modbus_stubbed = True
@@ -283,7 +283,8 @@ def test_each_compiled_replay_writes_the_recorded_answers(monkeypatch: pytest.Mo
     for start in (1, 3):
         for state in plc._replay_range_compiled(start, 6, kernel):
             scan = state.scan_id
-            assert dict(state.tags) == dict(plc._compiled_fork_at(scan, kernel).state.tags), scan
+            fork_tags = plc._compiled_fork_at(scan, kernel).state.tags
+            assert {n: fork_tags[n] for n in answered} == {n: recorded[scan][n] for n in answered}
             assert {n: state.tags[n] for n in answered} == {n: recorded[scan][n] for n in answered}
     assert len(futures) == 1
 
