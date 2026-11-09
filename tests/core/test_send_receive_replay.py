@@ -332,7 +332,8 @@ def test_compiled_replay_applies_io_tag_writes():
     simple_runner._scan_log.record_io_drain(2, "send:test:Sending", drain_rec)
 
     kernel = compile_kernel(simple_logic)
-    fork = simple_runner._replay_to_compiled(2, kernel)
+    # replay_to() steps its last scan interpreted, so this runs the kernel itself.
+    fork = simple_runner._compiled_fork_at(2, kernel)
 
     assert fork.current_state.tags["Sending"] is False
     assert fork.current_state.tags["Success"] is True

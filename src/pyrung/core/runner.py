@@ -3198,8 +3198,9 @@ class PLC:
         Trims the scan log, rung-firing timelines, and checkpoints in
         lockstep and advances ``_initial_scan_id`` so that
         ``History.oldest_scan_id`` / ``contains()`` / ``scan_ids()``
-        reflect the narrowed range.  A caller whose records already start
-        at *scan_id* passes ``trim_records=False``.
+        reflect the narrowed range.  A replay whose records start at *scan_id*
+        passes ``trim_records=False``, because a record without ``history=``
+        cannot be trimmed.
         """
         if not self._causal_history_contains(scan_id):
             raise KeyError(scan_id)
@@ -3549,15 +3550,15 @@ class PLC:
                 f"({log_base}); those scans have been trimmed"
             )
 
-        # The anchor comes before the target, so the walk steps the target and records it.
+        # Starting before the target makes the walk step the target scan and record it.
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
 
         for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             if scan_id == target_scan_id:
-                # The fork keeps the target's records and none before them.  A record without
-                # history= has a limit and cannot be trimmed, so it starts again here.
+                # The fork keeps the target's records and none before them.  Each record starts
+                # again here, because one without history= has a limit and cannot be trimmed.
                 capped = self._history_retention_scans is None
                 for name in _RECORDS:
                     setattr(replay, name, RungFiringTimelines(capped=capped))
@@ -3570,10 +3571,10 @@ class PLC:
         return self._keep_replay_from(replay, target_scan_id)
 
     def _keep_replay_from(self, replay: PLC, target_scan_id: int) -> PLC:
-        """Hand back *replay* starting at the target, to keep and step on as its source does."""
+        """Start *replay* at the target, with its source's limits.  The caller may step it on."""
         replay._history_retention_scans = self._history_retention_scans
         replay._records_bounded = self._records_bounded
-        # Both replay paths start their fork at the target, so the two forks trim alike.
+        # Each replay path starts its fork at the target.  The two forks then trim alike.
         if target_scan_id > replay._initial_scan_id:
             replay._trim_history_before(target_scan_id, trim_records=False)
         return replay
@@ -3618,8 +3619,8 @@ class PLC:
     ) -> PLC:
         """``replay_to()`` with the kernel running every scan before the target.
 
-        The target scan steps interpreted, so this fork holds the target's records as the
-        interpreted path's fork does.
+        It steps the target scan interpreted.  This fork then holds the target's records,
+        as the interpreted path's fork does.
         """
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
         if anchor is None and target_scan_id == self._initial_scan_id:
@@ -3684,7 +3685,7 @@ class PLC:
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
-        # The kernel's state adds the fault flags, so a fork that ran no scan takes the checkpoint.
+        # A fork that ran no scan takes the checkpoint's state.  The kernel's adds the fault flags.
         ran = target_scan_id > anchor_scan_id
         state = replay._materialize_replay_state() if ran else anchor_state
         fork = self._fork_from_reconstructed_state(

@@ -340,7 +340,8 @@
 
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `history.at()`, `replay_to()`, `cause()` and `effect()` no longer send Modbus requests (a replayed `send()` could write to the device again). A replayed scan writes the answer the device gave on that scan.
-- The fork `replay_to()` or `plan.replay()` returns keeps no scan before the one it replays to (it could keep scans from the checkpoint before).
+- `replay_to()` and `plan.replay()` return a fork whose history starts at the scan replayed to (on some programs the fork also kept the scans from the checkpoint before).
+- `cold_rungs()` on a fork from `replay_to()` or `plan.replay()` no longer names a rung that fired on the scan replayed to.
 - A `fork()` of a PLC with a live `send()` or `receive()` sends its own requests (it could collect the answer to its parent's request). A fork made while a request is in flight never gets that request's answer.
 - `how()` now reaches these targets, or says `Stopped`, where stepping reaches them (it said `Cannot reach`):
   - a rung that needs both a harness flasher feedback (`flasher_on`) and that feedback's enable
