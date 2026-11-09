@@ -330,15 +330,19 @@ To add a case: a slot in `fixed_scan` in `manifest_apart.toml` and raw memory in
 
 ### Raw Modbus part
 
-Part `modbus_raw` asks what a CLICK answers to Modbus requests that pyclickplc never sends or refuses to send. Examples are a NaN into a DF, half of a DD, a read past a bank, and FC03 of 126 registers. Its ladder stages DF, DD and TXT values and echoes into DH and DS what each write left. `test_raw_requests` (`test_modbus_raw.py`, marker `conformance`) sends the requests with `pymodbus`. It reads each value raw and through pyclickplc's `ClickClient`. Each probe records what came back, or the exception code, or `timeout`. The module docstring lists the probes. Nothing is asserted against an answer. A run fails only on a crash, a hang, or an echo that never comes. **It writes past the DD bank, at DD1531, and at the Modbus address that may hold it (19444).** It writes 0 to DD1531 last.
+Part `modbus_raw` asks what a CLICK answers to Modbus requests that pyclickplc never sends or refuses to send. Examples are a NaN into a DF, a read past a bank and FC03 of 126 registers. Its ladder stages DF, DD and TXT values and echoes into DH and DS what each write left. `test_raw_requests` (`test_modbus_raw.py`, marker `conformance`) sends the requests with `pymodbus`. It reads each value raw and through pyclickplc's `ClickClient`. Each probe records what came back, or the exception code, or `timeout`. The entry `modbus_raw/disagree` lists each read where pyclickplc's value is not the raw bits read as CLICK stores the bank. The module docstring lists the probes. Nothing is asserted against an answer. A run fails only on a crash, a hang, or an echo that never comes. A probe restores what it wrote even if it fails, and the readings are recorded even if the run dies.
 
 To run it on a CLICK:
 
-1. `make conformance-export PART=modbus_raw`, and paste it as a project of its own (first load, under "Running against the real PLC"). Put the PLC in RUN.
+1. `make conformance-export PART=modbus_raw`, and paste it as a project of its own (first load, under "Running against the real PLC"). Put the PLC in RUN. **The run writes outside the part's memory.** Do not run it on a CLICK whose memory matters. These are the writes:
+   - DD1531 (past the DD bank) through a pointer, and Modbus 19444, which may be the same memory. The run ends by writing 0 to DD1531, whatever it held before. A run that dies partway may leave 1234 there, until the next run or `past_clean` writes 0.
+   - SD29, SD31 and SD32 get today's date. Then SC53 goes on and sets the PLC's date from them. SD29 also gets the next year. Each is written back.
+   - C1..C1969, written with the values they read just before.
+   - YD register 3, only with `PYRUNG_CONFORMANCE_OUTPUTS=1`. It may turn Y116 on until it is written back.
 2. `make test-conformance PLC=192.168.0.10 GROUP=modbus_raw`. Each probe goes into `readings.toml` as `modbus_raw/<probe>`, never into `confirmed.toml`.
-3. SC51 (watchdog reset) and SC50 (STOP) are sent last, and only with `PYRUNG_CONFORMANCE_STOP=1` set. SC50 puts the PLC in STOP. The run then prints a reminder: put the PLC back in RUN.
+3. SC51 (watchdog reset) and SC50 (STOP) are sent last, and only with `PYRUNG_CONFORMANCE_STOP=1` set. SC50 puts the PLC in STOP. The run then reminds you to put the PLC back in RUN.
 
-A run on the soft PLC or `TARGET=circuitpy` rewrites `build/modbus_raw-readings/<target>.toml` (`pyrung.toml` or `circuitpy.toml`). Those files set the local answers beside the CLICK's.
+A run on the soft PLC or `TARGET=circuitpy` rewrites `build/modbus_raw-readings/<target>.toml` (`pyrung.toml` or `circuitpy.toml`). Compare them with the CLICK's entries in `readings.toml`.
 
 ## Coverage checklist
 
