@@ -57,7 +57,7 @@ def test_epoch_has_no_snapshot_cache_or_frozen_plc_ancestry() -> None:
 
 
 def test_trim_inside_ancestor_slices_sealed_lineage() -> None:
-    root = PLC(logic=[])
+    root = PLC(logic=[], history=1000)
     root.run(2)
     child = root.fork()
     child.run(2)

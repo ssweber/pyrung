@@ -76,7 +76,7 @@ def test_tip_advance_invalidates_only_replay_evidence() -> None:
 
 
 def test_history_trim_clears_reconstruction_caches_and_selectively_prunes_recent() -> None:
-    plc = PLC(logic=[])
+    plc = PLC(logic=[], history=1000)
     plc.run(3)
     _warm_all(plc)
 

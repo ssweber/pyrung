@@ -54,7 +54,6 @@ from pyrung.core.input_overrides import (
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import (
-    _ENTRY_LIMIT,
     _UNKNOWN_VALUE,
     SETTLE_SCAN_LIMIT,
     RungFiringTimelines,
@@ -1703,9 +1702,9 @@ class PLC:
         self._current_rung_traces: dict[int, RungTrace] = {}
         self._current_rung_traces_scan_id: int | None = None
         # Independent compressed columns for rung firing, final attempted
-        # values, and sparse within-scope variation.  A window this short holds fewer
-        # changes than a column's limit, so its records stay small with no limit.
-        capped = history_scans is None or history_scans > _ENTRY_LIMIT
+        # values, and sparse within-scope variation.  A history window bounds their memory,
+        # so with one a column has no limit.
+        capped = history_scans is None
         self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines(capped=capped)
         # Authoritative committed tag boundaries. Unlike rung write payloads,
         # these are captured after the complete scan, so same-scan overwrites
@@ -2092,7 +2091,7 @@ class PLC:
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             if scan_id == target:
                 # A fresh record keeps every value of this one scan.
-                replay._rung_firing_timelines = RungFiringTimelines()
+                replay._rung_firing_timelines = RungFiringTimelines(capped=False)
             replay.step()
         return replay._rung_firing_timelines.at(target)
 
@@ -5054,6 +5053,7 @@ class PLC:
                 self._recent_state_cache_bytes
                 + sum(_estimate_state_bytes(s) for s in self._checkpoints.values())
                 + self._scan_log.bytes_estimate()
+                + sum(getattr(self, name).bytes_estimate() for name in _RECORDS)
             )
             if total > self._recent_state_cache_budget:
                 extra_horizon = horizon + self._checkpoint_interval

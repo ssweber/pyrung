@@ -191,7 +191,7 @@ def test_transition_queries_use_scalar_ranges() -> None:
 
 
 def test_trim_before_rebases_alternating_and_arithmetic_columns() -> None:
-    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines: RungFiringTimelines[int] = RungFiringTimelines(capped=False)
     for scan_id in range(1, 8):
         timelines.append(0, scan_id, {"A": scan_id % 2, "N": scan_id * 2})
 

@@ -1,15 +1,16 @@
 """Each way scans go into the records leaves what stepping leaves.
 
 A model keeps every value the rung wrote, the gaps left open, the trim's floor and the scans
-the loop wrote Unknown into.  Stepping's records follow from it: appending each scan from the
-floor gives the ranges, and the values' changes give the scan a column turns Unknown on.  A
+the loop wrote Unknown into.  Stepping's records follow from it.  Its ranges are the scans
+appended from the floor, and the values' changes give the scan a column turns Unknown on.  A
 state machine drives one record through each kind of change and checks it against the model
 after each one.
 
 * Every value the record knows is the value written.
-* With no gap open and no scan the loop wrote Unknown, the ranges, the count, the scan the
-  column turns Unknown on and how()'s candidate scans are stepping's.
-* Behind an open gap the count may be lower, so the column turns Unknown no sooner.
+* With no gap open, a column the loop wrote no Unknown into holds stepping's ranges and count.
+  It turns Unknown on stepping's scan, and how() ranks stepping's candidate scans.
+* While a gap is open the count may be lower, so the column turns Unknown no sooner.
+* A record with a trim has no limit.
 """
 
 from __future__ import annotations
@@ -85,18 +86,13 @@ def _changes(column: dict[int, Any], scan: int) -> int:
 class Model:
     """What stepping saw, and what it left in its records."""
 
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int | None) -> None:
         self.limit = limit
         self.writes: dict[int, dict[str, Any] | None] = {}
         self.tip = 0
         self.floor = 1
         self.gaps: list[tuple[int, int]] = []
         self.loop: dict[str, set[int]] = {tag: set() for tag in TAGS}
-        # A trim took scans of a gap that never settled, so the count stays low.
-        self.lower = False
-        # Columns whose gap scans a trim took.  The rung may have begun the column there, so
-        # the record may lack the firings with no write.
-        self.unsure: set[str] = set()
 
     def add(self, writes: dict[str, Any] | None) -> int:
         self.tip += 1
@@ -107,13 +103,13 @@ class Model:
         return any(first <= scan <= last for first, last in self.gaps)
 
     def column(self, tag: str) -> dict[int, Any]:
-        """Each scan stepping's column ever held, to its value or no write.
+        """Each scan stepping's column holds, to its value or no write.
 
-        A column begins on the rung's first write and holds each firing after it.  A trim
-        does not end it.
+        A column begins on the rung's first write from the floor on, and holds each firing
+        after it.
         """
         out: dict[int, Any] = {}
-        for scan in range(1, self.tip + 1):
+        for scan in range(self.floor, self.tip + 1):
             writes = self.writes[scan]
             if writes is not None and (tag in writes or out):
                 out[scan] = writes.get(tag, M)
@@ -121,6 +117,8 @@ class Model:
 
     def crossing(self, tag: str) -> tuple[int | None, int]:
         """The scan the column turns Unknown on, and its count up to then."""
+        if self.limit is None:
+            return None, 0
         column = self.column(tag)
         count = 0
         for scan in sorted(column):
@@ -133,8 +131,6 @@ class Model:
         crossing, _count = self.crossing(tag)
         timeline: list[Any] = []
         for scan, value in sorted(self.column(tag).items()):
-            if scan < self.floor:
-                continue
             if crossing is not None and scan > crossing and value is not M:
                 value = U
             _append_value(timeline, scan, value)
@@ -165,19 +161,14 @@ def vars_of(payload: Any) -> tuple[Any, ...]:
     return tuple(getattr(payload, name) for name in payload.__slots__)
 
 
-def _replay_record(ours: RungFiringTimelines, anchor: int) -> RungFiringTimelines:
-    """The record a replay from the checkpoint on scan *anchor* starts with."""
-    return RungFiringTimelines(capped=False)
-
-
 class Records(RuleBasedStateMachine):
-    limit = 1_000
-    trims = True
+    limit: int | None = 1_000
+    trims = False
 
     def __init__(self) -> None:
         super().__init__()
         self.model = Model(self.limit)
-        self.ours: RungFiringTimelines = RungFiringTimelines()
+        self.ours: RungFiringTimelines = RungFiringTimelines(capped=self.limit is not None)
 
     # --- the ways scans go in --------------------------------------------------------
 
@@ -257,9 +248,7 @@ class Records(RuleBasedStateMachine):
             gaps[-1] = (gaps[-1][0], last)
         else:
             gaps.append((first, last))
-        note_gap = getattr(self.ours, "note_gap", None)
-        if note_gap is not None:
-            note_gap(first, last)
+        self.ours.note_gap(first, last)
 
     @precondition(lambda self: self.model.gaps)
     @rule(data=st.data())
@@ -270,7 +259,7 @@ class Records(RuleBasedStateMachine):
         first = data.draw(st.integers(start, end))
         last = data.draw(st.integers(first, end))
         anchor = data.draw(st.integers(max(model.floor - 1, 0), first - 1))
-        replay = _replay_record(self.ours, anchor)
+        replay = RungFiringTimelines(capped=False)
         for scan in range(anchor + 1, last + 1):
             writes = model.writes[scan]
             if writes is not None:
@@ -294,11 +283,6 @@ class Records(RuleBasedStateMachine):
         floor = data.draw(st.integers(model.floor + 1, model.tip))
         self.ours.trim_before(floor)
         model.floor = floor
-        for tag in TAGS:
-            if any(model.in_gap(scan) for scan in model.column(tag) if scan < floor):
-                model.unsure.add(tag)
-        if any(first < floor for first, _last in model.gaps):
-            model.lower = True
         model.gaps = [(max(first, floor), last) for first, last in model.gaps if last >= floor]
 
     def _cut(self, cut: int) -> None:
@@ -370,17 +354,13 @@ class Records(RuleBasedStateMachine):
         if model.loop[tag]:
             return  # The loop's Unknown counts as it reads, so only known values must agree.
         held = ours._counts.get(key, 0)
-        if model.gaps or model.lower:
+        if model.gaps:
             # The count may be low, never high.
             assert theirs is None or (crossing is not None and theirs >= crossing)
             assert theirs is not None or held <= count
-            if model.gaps or crossing is not None:
-                return
-        else:
-            assert theirs == crossing
-            assert theirs is not None or held == count
-        if tag in model.unsure:
-            return  # The record may lack firings with no write, so its ranges may differ.
+            return
+        assert theirs == crossing
+        assert theirs is not None or held == count
         expected = model.ranges(tag)
         timeline = list(_expanded(ours._value_timelines.get(key, []), None, None))
         assert _shape(timeline) == _shape(expected)
@@ -397,24 +377,30 @@ class Records(RuleBasedStateMachine):
 
 
 def _totals_hold(timelines: RungFiringTimelines) -> None:
-    """A record's totals agree with its ranges."""
-    gaps = getattr(timelines, "_gaps", [])
+    """A record's counts are the model's count of the values it holds.
+
+    A scan that looks back into an open gap counts no change, so the count may be lower then.
+    """
+    gaps = timelines._gaps
     assert all(a[1] < b[0] - 1 for a, b in zip(gaps, gaps[1:], strict=False)), gaps
     for key, crossing in timelines._unknown_keys.items():
         for r in _expanded(timelines._value_timelines.get(key, ()), crossing + 1, None):
             for scan in range(max(r.start_scan_id, crossing + 1), r.end_scan_id + 1):
                 assert rung_firings._value_at(r, scan) in (U, M), (key, scan)
     if timelines._limit is None:
+        assert not timelines._counts and not timelines._unknown_keys
         return
-    floor = timelines._floor
     for key, ranges in timelines._value_timelines.items():
         crossing = timelines._unknown_keys.get(key)
-        if crossing is not None and crossing < floor:
-            continue
-        changes = rung_firings._total(timelines._change_groups(key, ranges, floor, crossing))
+        column = {
+            scan: rung_firings._value_at(r, scan)
+            for r in _expanded(ranges, None, crossing)
+            for scan in range(r.start_scan_id, r.end_scan_id + 1)
+            if crossing is None or scan <= crossing
+        }
+        changes = sum(_changes(column, scan) for scan in column)
         held = timelines._limit if crossing is not None else timelines._counts.get(key, 0)
-        # A trim from the front takes changes the count still holds.
-        assert changes == held if not floor else changes <= held, (key, changes, held)
+        assert held <= changes if gaps else held == changes, (key, changes, held)
 
 
 @pytest.fixture
@@ -429,7 +415,8 @@ def checked() -> Iterator[None]:
 def _run_machine(
     machine: type[Records], monkeypatch: pytest.MonkeyPatch, examples: int, derandomize: bool
 ) -> None:
-    monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", machine.limit)
+    if machine.limit is not None:
+        monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", machine.limit)
     machine.TestCase.settings = settings(
         max_examples=examples,
         stateful_step_count=30,
@@ -443,27 +430,21 @@ def _run_machine(
 class NoTrims(Records):
     """No column reaches its limit, and nothing trims from the front."""
 
-    trims = False
 
-
-class Trims(Records):
-    """No column reaches its limit."""
-
-
-class CappedNoTrims(Records):
+class Capped(Records):
     """Columns reach a limit of a few changes, and nothing trims from the front."""
 
     limit = 6
-    trims = False
 
 
-class Capped(Records):
-    """Columns reach a limit of a few changes."""
+class Trims(Records):
+    """A history window trims from the front, so the record has no limit."""
 
-    limit = 6
+    limit = None
+    trims = True
 
 
-MACHINES = [NoTrims, CappedNoTrims, Trims, Capped]
+MACHINES = [NoTrims, Capped, Trims]
 
 
 @pytest.mark.parametrize("machine", MACHINES)

@@ -537,8 +537,6 @@ def compare_runners(
     if kind in _KEEPS_FEWER_CHECKPOINTS:
         _hold_to_a_subset(kind, end, ours, theirs, a, b)
     else:
-        if ours and plc._history_retention_scans is not None:
-            theirs = {scan: state for scan, state in theirs.items() if scan >= min(ours)}
         a["checkpoints"], b["checkpoints"] = sorted(ours), sorted(theirs)
     if a != b:
         keys = sorted(k for k in a.keys() | b.keys() if a.get(k) != b.get(k))

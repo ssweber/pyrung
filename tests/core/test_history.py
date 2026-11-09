@@ -693,7 +693,7 @@ def test_parse_retention_with_int() -> None:
 
 def test_trim_advances_oldest_scan_id() -> None:
     """_trim_history_before advances history.oldest_scan_id."""
-    plc = PLC(logic=[], dt=0.01, checkpoint_interval=5)
+    plc = PLC(logic=[], dt=0.01, checkpoint_interval=5, history=1000)
     for _ in range(20):
         plc.step()
 

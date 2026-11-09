@@ -154,6 +154,14 @@ def small_limit(monkeypatch: pytest.MonkeyPatch) -> int:
     return 100
 
 
+def _trimmed(record: RungFiringTimelines, cut: int) -> RungFiringTimelines:
+    """*record* trimmed to scan *cut*, as a record with a history window and no limit is."""
+    windowed = record.snapshot()
+    windowed._limit = None
+    windowed.trim_before(cut)
+    return windowed
+
+
 class _Uncapped(RungFiringTimelines):
     """Stepping that keeps every value, where stepping stops at the limit to save memory."""
 
@@ -246,10 +254,7 @@ def test_scans_after_a_repeat_and_a_trim_read_back_as_scan_by_scan() -> None:
     _assert_same(stepped, repeated, last)
     for cut in (1, 6, 7, 30, 61, last - 2):
         _assert_same(stepped.snapshot(up_to=cut), repeated.snapshot(up_to=cut), last)
-        early, later = stepped.snapshot(), repeated.snapshot()
-        early.trim_before(cut)
-        later.trim_before(cut)
-        _assert_same(early, later, last)
+        _assert_same(_trimmed(stepped, cut), _trimmed(repeated, cut), last)
 
 
 def test_a_range_taken_from_another_record_reads_back_as_scan_by_scan() -> None:
@@ -341,10 +346,7 @@ def test_random_stepping_cycles_read_back_as_scan_by_scan(seed: int) -> None:
     _assert_same(stepped, repeated, last)
     cut = rng.randrange(1, last + 1)
     _assert_same(stepped.snapshot(up_to=cut), repeated.snapshot(up_to=cut), last)
-    early, later = stepped.snapshot(), repeated.snapshot()
-    early.trim_before(cut)
-    later.trim_before(cut)
-    _assert_same(early, later, last)
+    _assert_same(_trimmed(stepped, cut), _trimmed(repeated, cut), last)
 
 
 def test_most_random_stepping_cycles_go_in_with_steps() -> None:
