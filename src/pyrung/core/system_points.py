@@ -302,13 +302,17 @@ _SD_ERROR_MOUNT_FAILURE = 1
 _SD_ERROR_LOAD_FAILURE = 2
 _SD_ERROR_SAVE_FAILURE = 3
 
-# What SystemPointRuntime.on_scan_start() reads and clears, for the check that
-# it would do nothing.  Keep these with the hook.
-_SCAN_START_TAG_NAMES = (
+# The fault flags carry from scan to scan, as on a CLICK: only an instruction
+# clears one.  The scan start binds each at False once, so a state holds them.
+_FAULT_FLAG_NAMES = (
     system.fault.division_error.name,
     system.fault.math_operation_error.name,
     system.fault.out_of_range.name,
     system.fault.address_error.name,
+)
+# What SystemPointRuntime.on_scan_start() reads and clears, for the check that
+# it would do nothing.  Keep these with the hook.
+_SCAN_START_TAG_NAMES = (
     system.rtc.apply_date_error.name,
     system.rtc.apply_time_error.name,
     system.rtc.apply_date.name,
@@ -335,6 +339,7 @@ _SCAN_TIME_MAX_NAME = system.sys.scan_time_max_ms.name
 # What the scan hooks bind on a state's first scan, whatever the rungs do.
 HOOK_BOUND_TAG_NAMES = frozenset(
     {
+        *_FAULT_FLAG_NAMES,
         *_SCAN_START_TAG_NAMES,
         _SCAN_TIME_MIN_NAME,
         _SCAN_TIME_MAX_NAME,
@@ -529,9 +534,10 @@ class SystemPointRuntime:
     def scan_start_is_quiet(self, tags: Mapping[str, Any], memory: Mapping[str, Any]) -> bool:
         """Whether :meth:`on_scan_start` would change nothing on a kernel's state.
 
-        Every status and command tag it clears is bound and False, and no
-        memory default is missing.  A compiled scan asks this first because
-        the check costs a few C calls and the hook about twenty Python ones.
+        Every status and command tag it clears is bound and False, every
+        fault flag is bound, and no memory default is missing.  A compiled scan
+        asks this first because the check costs a few C calls and the hook
+        about twenty Python ones.
         """
         try:
             values = _SCAN_START_TAGS(tags)
@@ -540,6 +546,7 @@ class SystemPointRuntime:
             return False
         return (
             values.count(False) == len(values)
+            and all(name in tags for name in _FAULT_FLAG_NAMES)
             and not tags.get(_SD_EJECT_NAME, False)
             and not tags.get(_SD_DELETE_ALL_NAME, False)
             and status[0] is True  # mode run
@@ -599,14 +606,12 @@ class SystemPointRuntime:
             ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
-        # A math error (SC46) is status like the others: it reads on for the
-        # rest of the scan that raised it, and the PLC stays in RUN (a CLICK
-        # does, whatever its help says about SC50 and STOP).
+        # The fault flags are not cleared here: a CLICK carries one raised by
+        # the last Math of a scan into the next (``flag_carry``).
+        unbound = {name: False for name in _FAULT_FLAG_NAMES if not _raw_has_tag(ctx, name)}
+        if unbound:
+            ctx._set_tags_internal(unbound)
         updates = {
-            system.fault.division_error.name: False,
-            system.fault.math_operation_error.name: False,
-            system.fault.out_of_range.name: False,
-            system.fault.address_error.name: False,
             system.rtc.apply_date_error.name: False,
             system.rtc.apply_time_error.name: False,
         }

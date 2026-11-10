@@ -73,14 +73,6 @@ _RTC_FIELDS = (
     (system.rtc.minute.name, "_rtc_now[4]"),
     (system.rtc.second.name, "_rtc_now[5]"),
 )
-#: Fault flags cleared at the start of every scan; an instruction that faults
-#: sets its flag again for the rest of that scan.
-_SCAN_CLEARED_FAULTS = (
-    system.fault.division_error.name,
-    system.fault.math_operation_error.name,
-    system.fault.out_of_range.name,
-    system.fault.address_error.name,
-)
 
 
 def _system_clock_symbols(ctx: CodegenContext) -> list[tuple[str, int]]:
@@ -207,18 +199,13 @@ def _render_system_point_reset_lines(ctx: CodegenContext) -> list[str]:
 def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[str]:
     """Derived system points for the scan about to run, as core resolves them.
 
-    The fault flags clear; then the scan counter (SD9, ``scan_id % 32768``),
-    the scan clock (SC3, on when SD9 is even), the first-scan bit, the
+    The scan counter (SD9, ``scan_id % 32768``), the scan clock (SC3, on when SD9 is even), the first-scan bit, the
     free-running clocks over the time of the RUN scans before this one (0 on
     the first scan, so every clock starts off), the scan time (SD10) and the
     RTC.
     """
     sp = " " * indent
     lines: list[str] = []
-    for name in _SCAN_CLEARED_FAULTS:
-        symbol = ctx.symbol_if_referenced(name)
-        if symbol is not None:
-            lines.append(f"{sp}{symbol} = False")
     always_on = ctx.symbol_if_referenced(system.sys.always_on.name)
     if always_on is not None:
         lines.append(f"{sp}{always_on} = True")

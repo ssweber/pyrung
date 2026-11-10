@@ -38,8 +38,7 @@ referenced system tag:
     when the program writes the command that changes them.
 ``scan_start``
     Status bits and command bits the runtime resets before each scan
-    (transient fault flags, RTC apply errors, mode/watchdog/SD commands,
-    RTC apply requests).  They are reset before every step function call.
+    (RTC apply errors, mode/watchdog/SD commands, RTC apply requests).  They are reset before every step function call.
     Their end-of-scan value is not what the next scan reads, so they are
     hidden from partial evaluation (``hidden``).
 
@@ -110,11 +109,9 @@ _FREE_WHEN_WRITTEN: dict[str, frozenset[str]] = {
 }
 
 # Reset by ``SystemPointRuntime.on_scan_start`` before the logic runs.
+# The fault flags are not reset: they carry from scan to scan, so the state key
+# holds them like any tag the rungs write.
 SCAN_START_RESETS: dict[str, Any] = {
-    _fault.division_error.name: False,
-    _fault.out_of_range.name: False,
-    _fault.address_error.name: False,
-    _fault.math_operation_error.name: False,
     _rtc.apply_date_error.name: False,
     _rtc.apply_time_error.name: False,
     _rtc.apply_date.name: False,

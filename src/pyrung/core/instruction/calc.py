@@ -9,7 +9,6 @@ from pyrung.core.expression import (
     ABS_OF_TYPE,
     CALC_FAULTS,
     CALC_OPS,
-    DOMAIN_LIMITED_MATH_FUNCS,
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
@@ -21,7 +20,6 @@ from pyrung.core.expression import (
     TagExpr,
     UnaryExpr,
     _op_and,
-    may_be_float,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import check_real_value
@@ -107,41 +105,6 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
     if isinstance(value, (list, tuple, set, frozenset)):
         for item in value:
             _collect_calc_tag_types(item, found, seen)
-
-
-def has_domain_limited_func(value: Any, seen: set[int] | None = None) -> bool:
-    """True when a calc of *value* can set SC46 (``fault.math_operation_error``),
-    a :class:`~pyrung.core.expression.MathDomainError` of one of its operations:
-    a math function with a domain (``sqrt``, ``log``, ...), a ``**`` whose
-    exponent may be fractional (``(-8.0) ** 0.5`` has no real value), either of
-    those in a ``randint`` bound, or a ``randint`` whose bounds can be equal
-    (equal constants, or any tag bound)."""
-    if seen is None:
-        seen = set()
-    if id(value) in seen:
-        return False
-    seen.add(id(value))
-    if isinstance(value, RandIntExpr):
-        # A bare Real tag as a bound leaves both bounds unread.  Equal bounds are
-        # the error themselves, and tag bounds may hold one value.  A computed
-        # bound is read in the calc too, where sqrt(N) can fail.
-        if value.real_bounds:
-            return False
-        return (
-            value.equal_bounds
-            or value.reads_bounds
-            or has_domain_limited_func(value.lo, seen)
-            or has_domain_limited_func(value.hi, seen)
-        )
-    if isinstance(value, MathFuncExpr) and value.name in DOMAIN_LIMITED_MATH_FUNCS:
-        return True
-    if isinstance(value, BinaryExpr) and value.symbol == "**" and may_be_float(value.right):
-        return True
-    if isinstance(value, Expression):
-        return any(has_domain_limited_func(child, seen) for child in vars(value).values())
-    if isinstance(value, (list, tuple)):
-        return any(has_domain_limited_func(item, seen) for item in value)
-    return False
 
 
 def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
@@ -344,6 +307,10 @@ class CalcInstruction(OneShotMixin, Instruction):
     flag (``system.fault.division_error``, CLICK's SC40).  The instruction
     completes normally.
 
+    **Flags:** every Math the scan reaches clears SC40, SC43, SC44 and SC46 as
+    it starts, before it reads.  That holds on a false rung and for a one-shot
+    that does not fire too.  A flag left on carries into the next scan.
+
     **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
     the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
     CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
@@ -359,8 +326,8 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1, a negative base to a fractional
     power): the function is 0 and the math-operation error flag
-    (``system.fault.math_operation_error``, CLICK's SC46) is set for the rest of
-    the scan; the next scan starts with it off.  The PLC stays in RUN, as a
+    (``system.fault.math_operation_error``, CLICK's SC46) is set until the next
+    Math clears it, as SC40 is.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
     hardware does not).  ``0 ** 0``, ``0 ** -1`` and a MOD by 0 are 0 and set
     no flag (into a REAL 0.0: unread, the reading went through an Int).
@@ -392,8 +359,12 @@ class CalcInstruction(OneShotMixin, Instruction):
         "fault.division_error",
         "fault.out_of_range",
         "fault.address_error",
+        "fault.math_operation_error",
     )
     _fault_follows = _fault_writes
+    # A CLICK Math clears its four flags even on a false rung, or as a one-shot
+    # that does not fire (``flag_steps``, ``flag_reads``).
+    _fault_settles_idle = True
     _conditions = ()
     _structural_fields = ("mode",)
 
@@ -416,10 +387,6 @@ class CalcInstruction(OneShotMixin, Instruction):
         self.mode_inference = infer_calc_mode(expression, dest)
         self.mode = self.mode_inference.mode
         self.expression = calc_form(expression, self.mode, _dest_type(dest))
-        if has_domain_limited_func(self.expression):
-            # Only a calc that can hit a domain error sets SC46: the analyses
-            # (PDG, prover) see the flag written where it can be.
-            self._fault_writes = (*CalcInstruction._fault_writes, "fault.math_operation_error")
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
