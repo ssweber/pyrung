@@ -370,6 +370,9 @@
   - a target compared with a tag that only a `patch()` or `force()` by name gave a value gives a plan (it raised `TypeError`)
 
   `avoid=Bank[Idx] >= 9000` now reads the slot `Idx` points to (it counted as violated everywhere), and ends the plan on any scan where the condition becomes true.
+- `how()` reaches more comparison goals against a number:
+  - a goal on a tag that a rung adds a constant to with `math()`, such as `how(Count > 3)` on `math(Count + 1, Count)` (it said `Stopped`)
+  - a `!=` goal, such as `how(Count != 0)` (it raised `ValueError`)
 - `how(And(A, B))` is the same as `how(A, B)`. `how(Or(...))`, `how(T.Acc >= Sp + 1)`, and `how(T.Acc >= Tag)` where no rung uses `Tag`, raise a `ValueError` saying what to pass.
 - Timers, Out coils and time drums count time exactly in every unit. At a fixed `dt`, a timer is Done on scan `ceil(delay / dt)` whatever unit it counts in (a `60s` timer at `dt=0.1` or a `1min` at `dt=0.01` ended a scan late).
 - A Real range `.sum()` adds plain left to right everywhere, so the stored result no longer changes in the last bit with the Python version, or between stepping, compiled runs and generated code.
