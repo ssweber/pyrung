@@ -19,6 +19,7 @@ from pyclickplc.server import ClickServer, MemoryDataProvider
 
 from pyrung.core.instruction.send_receive.backends import _run_click_send_request
 
+
 class _KeepEverything(MemoryDataProvider):
     """Stores each value as given, NaN included (the default provider refuses a NaN)."""
 
