@@ -103,7 +103,7 @@ def _system_first_needed(ctx: CodegenContext) -> bool:
 
 
 def _stop_command_used(ctx: CodegenContext) -> bool:
-    """Whether a rung can put the code in STOP with the STOP command (SC50).
+    """Whether the code carries SC50, so a rung can put it in STOP.
 
     A Modbus write to SC50 is refused, so only a rung stops the code.  A math
     error (SC46) does not stop the code, as it does not stop a CLICK.
@@ -126,7 +126,10 @@ def _mode_state_needed(ctx: CodegenContext) -> bool:
 
 
 def _render_stop_lines(ctx: CodegenContext, sp: str) -> list[str]:
-    """Put the code in STOP and hold it there (see :func:`_stop_hold_needed`)."""
+    """Put the code in STOP.
+
+    With a RUN/STOP switch, also set the hold (see :func:`_stop_hold_needed`).
+    """
     lines = [f"{sp}_mode_run = False"]
     if _stop_hold_needed(ctx):
         lines.append(f"{sp}_stop_hold = True")

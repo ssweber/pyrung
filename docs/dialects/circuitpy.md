@@ -196,7 +196,7 @@ The STOP command (SC50) also puts the code in STOP, as in core. When a rung turn
 
 STOP then holds while the switch reads RUN. Moving the switch to STOP and back to RUN restarts the code (STOP->RUN). Without a `RunStopConfig`, nothing but a restart of the board returns the code to RUN.
 
-SC50 and SC51 are ladder only. The Modbus server refuses a write to either with exception code 2, as pyrung's soft PLC does.
+Only a rung can write SC50 and SC51. The Modbus server refuses a write to either with exception code 2, as pyrung's soft PLC does.
 
 ### Watchdog
 

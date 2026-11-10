@@ -431,7 +431,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             ]
         )
     for slot in reg_slots:
-        if slot.read_only and slot.logical_name != system.sys.cmd_mode_stop.name:
+        if slot.read_only:
             lines.extend(
                 [
                     f'    if bank == "{slot.bank}" and index == {slot.index}:',
