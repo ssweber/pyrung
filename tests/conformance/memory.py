@@ -513,7 +513,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "deb_fall": {"C": range(661, 663), "T": range(271, 273)},
     "flash_zero": {"C": range(671, 678), "DS": range(4031, 4037), "T": range(273, 283)},
-    "tof_rewrite": {"T": range(291, 293)},
+    "tof_rewrite": {"T": range(291, 292)},
     # C411 is set by hand, as for_dd_minus has C401.
     "for_signed": {
         "C": range(411, 413),
