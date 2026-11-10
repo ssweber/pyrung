@@ -1442,3 +1442,51 @@ case = "for_signed/minus_counts"
 hash = "3a508c407b9b"
 on = "2026-11-10"
 read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1, ErrorCode = 1 }
+
+[[reading]]
+case = "flag_reads/unpowered_division"
+hash = "18e158aefb39"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "flag_reads/oneshot_held"
+hash = "bf5888d3d92f"
+on = "2026-11-10"
+read = { Result1 = 5, Result2 = 7, Result3 = 0 }
+
+[[reading]]
+case = "flag_reads/pointer_minus_one"
+hash = "682c99d9efeb"
+on = "2026-11-10"
+read = { Result1 = 7, Result2 = 7, Result3 = 1 }
+
+[[reading]]
+case = "flag_reads/math_after_sqrt"
+hash = "b0b647e1dad8"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 1, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "term_zero/quiet_terms"
+hash = "29f25526b31d"
+on = "2026-11-10"
+read = { Result1 = 5, Result2 = 5, Result3 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "term_zero/abs_int_min"
+hash = "e0b789fae639"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 2, ErrorCode = 3 }
+
+[[reading]]
+case = "term_zero/real_quiet_terms"
+hash = "574c98a361a0"
+on = "2026-11-10"
+read = { Result1 = 4, Result2 = 1, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "pack_point/point_into_dd"
+hash = "7708a81c2c65"
+on = "2026-11-10"
+read = { Result1 = 12, Result2 = 12, Result3 = 12, Result4 = 0, ErrorCode = 0 }
