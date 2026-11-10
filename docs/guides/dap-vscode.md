@@ -439,7 +439,7 @@ Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce
 
 Anyone can drive, and the last command wins. While Continue runs, a step or `run` from VS Code or `pyrung live` pauses Continue first and then executes.
 
-The Debug Console verbs `mode [run|stop]` and `speed [N|max]` set the PLC mode and the pacing.
+The Debug Console verbs `mode [run|stop]` and `speed [N|max]` set the PLC mode and the pacing. Going from STOP to RUN resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set.
 
 ## Data View
 
