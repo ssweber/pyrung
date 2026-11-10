@@ -155,7 +155,6 @@ Counters count **rising edges**, as on a CLICK. A counter counts once each time 
 
 - An input held True through a reset does not count again once the reset releases.
 - An input already True on the first scan counts once.
-- A counter inside a `for` loop sees each iteration's input, so it counts the edges between iterations.
 
 ### Count up (CTU)
 
