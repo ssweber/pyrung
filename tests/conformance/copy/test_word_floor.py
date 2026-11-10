@@ -102,11 +102,12 @@ group = Group(
     "word_floor",
     [
         case(
-            "A Copy into a DH preset 4660 floors at -32768 and wraps: DD -40000 writes 32768 "
-            "(Result1 = 2, 1 for 25536 all 16 bits wrapped, 3 for 0, 4 for none); DD -70000 "
-            "32768 (Result2 = 2, as Result1); a DF NaN 0 (Result3 = 1, 2 none, 3 65535, 4 32768, "
-            "5 32767); the NaN made and no SC43 after or before any store (Result4 = 1); no "
-            "unclassed DH (ErrorCode = 0)",
+            "A Copy into a DH preset 4660 floors a value below -32768 at -32768, which a Word "
+            "holds as 32768.  DD -40000 writes 32768 (Result1 = 2, 1 for 25536 all 16 bits "
+            "wrapped, 3 for 0, 4 for none).  DD -70000 writes 32768 too (Result2 = 2, classed as "
+            "Result1).  A DF NaN writes 0 (Result3 = 1, 2 none, 3 65535, 4 32768, 5 32767).  "
+            "The DF is a NaN, and no store raises SC43 (Result4 = 1).  Every DH is classed "
+            "(ErrorCode = 0)",
             ladder=prove_below_int_and_nan,
             init=init_below_int_and_nan,
             expect={"Result1": 2, "Result2": 2, "Result3": 1, "Result4": 1, "ErrorCode": 0},
