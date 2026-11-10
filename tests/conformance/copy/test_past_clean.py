@@ -18,8 +18,8 @@ preset to -7 on its scan, so -7 is a read that left its destination alone:
 - Result3: after a Copy of 0 again: 0 where it lands, 1234 where only the first write landed.
 - Result4: SC43 (bit 1) and SC44 (bit 2) right after the write of 1234, latched by coils.
 
-A CLICK read 0, 1234, 0, 0 and 0 on 2026-11-06 and 2026-11-09: each write lands, and it raises
-neither flag.  pyrung drops the writes and reads 0, 0, 0, 0 and 0, so the case is pending
+A CLICK read 0, 1234, 0, 0 and 0 on 2026-11-06 and 2026-11-09.  Each write lands, and no write
+raises either flag.  pyrung drops the writes and reads 0, 0, 0, 0 and 0, so the case is pending
 ``PASTBANK``.  ErrorCode expects 0, what this case and ``modbus_raw`` leave there.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
