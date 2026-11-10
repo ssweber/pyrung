@@ -1406,3 +1406,15 @@ case = "tof_rewrite/done_after_td_zeroed"
 hash = "07e090c7e750"
 on = "2026-11-10"
 read = { Result1 = 0, Result2 = 1, Result3 = 2, Result4 = 33 }
+
+[[reading]]
+case = "drum_ds/ds_preset_ends"
+hash = "7226a50f5a69"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "jump_return/bad_jump_on_return"
+hash = "7f673e8ef774"
+on = "2026-11-10"
+read = { Result1 = 2222, Result2 = 2020, Result3 = 2020, Result4 = 2020, ErrorCode = 2222 }
