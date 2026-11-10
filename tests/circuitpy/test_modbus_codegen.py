@@ -236,7 +236,7 @@ def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
     assert namespace["_t_Dest"] == 42
 
 
-def test_unmapped_and_invalid_register_addresses_return_error(monkeypatch):
+def test_an_unmapped_register_reads_0_and_an_address_outside_the_banks_answers_02(monkeypatch):
     mapped = Int("Mapped", default=5)
     mapping = TagMap({mapped: ds[1]})
     with Program(strict=False) as prog:
@@ -267,18 +267,19 @@ def test_unmapped_and_invalid_register_addresses_return_error(monkeypatch):
         source, monkeypatch, StubBase(), runtime_source=result.runtime
     )
 
-    # Unmapped-but-valid Click address (DS2) — sparse lookup returns error
+    # DS2 is a CLICK address no tag holds.  It reads 0, and a write to it is refused.
     resp = namespace["_mb_handle"](_mbap(10, struct.pack(">BHH", 3, 1, 1)), 12)
-    assert resp is not None
-    assert resp[-2:] == bytes([0x83, 0x02])
+    assert resp == _mbap(10, struct.pack(">BBH", 3, 2, 0))
+    resp = namespace["_mb_handle"](_mbap(12, struct.pack(">BHH", 6, 1, 9)), 12)
+    assert resp[-2:] == bytes([0x86, 0x02])
 
-    # Completely invalid address — also returns error
+    # Register 5000 is in no bank.
     resp = namespace["_mb_handle"](_mbap(11, struct.pack(">BHH", 3, 5000, 1)), 12)
     assert resp is not None
     assert resp[-2:] == bytes([0x83, 0x02])
 
 
-def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
+def test_read_only_system_writes_answer_02(monkeypatch):
     with Program(strict=False) as prog:
         pass
 
@@ -316,10 +317,10 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
     )
 
     coil_resp = namespace["_mb_handle"](_mbap(12, struct.pack(">BHH", 5, 61441, 0xFF00)), 12)
-    assert coil_resp == _mbap(12, struct.pack(">BHH", 5, 61441, 0xFF00))
+    assert coil_resp[-2:] == bytes([0x85, 0x02])
 
     reg_resp = namespace["_mb_handle"](_mbap(13, struct.pack(">BHH", 6, 61440, 99)), 12)
-    assert reg_resp == _mbap(13, struct.pack(">BHH", 6, 61440, 99))
+    assert reg_resp[-2:] == bytes([0x86, 0x02])
 
 
 def test_yd_mirror_read_and_write(monkeypatch):

@@ -17,7 +17,7 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._helpers import _render_helper_defs
 from pyrung.circuitpy.codegen.context import CodegenContext
-from pyrung.circuitpy.codegen.render_modbus import _df_words
+from pyrung.circuitpy.codegen.render_modbus import _df_words, _modbus_protocol_lines
 
 
 def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
@@ -35,9 +35,9 @@ def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
         "_mb_clients = None",
         "_mb_buf = None",
         "_mb_read_coil = None",
-        "_mb_write_coil = None",
+        "_mb_write_coils = None",
         "_mb_read_reg = None",
-        "_mb_write_reg = None",
+        "_mb_write_regs = None",
         "",
         "# Modbus client — set by code.py at startup",
         "_mb_pool = None",
@@ -49,115 +49,13 @@ def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
     lines.extend(_render_helper_defs(set(_HELPER_ORDER)))
 
     # -- Modbus protocol handler (server) ------------------------------------
-    lines.extend(_render_modbus_protocol_static())
+    lines.extend(_modbus_protocol_lines())
     lines.extend(_render_modbus_server_service_static())
 
     # -- Modbus client infrastructure ----------------------------------------
     lines.extend(_render_modbus_client_runtime_static())
 
     return "\n".join(lines).rstrip() + "\n"
-
-
-def _render_modbus_protocol_static() -> list[str]:
-    """Render ``_mb_err`` and ``_mb_handle`` unconditionally (no ctx)."""
-    return [
-        "def _mb_err(tid, uid, fc, code):",
-        "    return struct.pack('>HHHBB', int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80) + bytes([int(code) & 0xFF])",
-        "",
-        "def _mb_handle(data, n):",
-        "    if n < 8:",
-        "        return None",
-        "    try:",
-        "        tid, pid, length, uid = struct.unpack('>HHHB', bytes(data[:7]))",
-        "    except Exception:",
-        "        return None",
-        "    if pid != 0:",
-        "        return None",
-        "    if length < 2 or (length + 6) > int(n):",
-        "        return None",
-        "    fc = int(data[7])",
-        "    pdu_end = 6 + length",
-        "    if fc in (1, 2):",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if count < 1 or count > 2000:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        bits = []",
-        "        for _offset in range(count):",
-        "            _bit = _mb_read_coil(start + _offset)",
-        "            if _bit is None:",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "            bits.append(bool(_bit))",
-        "        byte_count = (count + 7) // 8",
-        "        payload = bytearray(byte_count)",
-        "        for _offset, _bit in enumerate(bits):",
-        "            if _bit:",
-        "                payload[_offset // 8] |= 1 << (_offset % 8)",
-        "        return struct.pack('>HHHBBB', tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(payload)",
-        "    if fc in (3, 4):",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if count < 1 or count > 125:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        regs = []",
-        "        for _offset in range(count):",
-        "            _reg = _mb_read_reg(start + _offset)",
-        "            if _reg is None:",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "            regs.append(int(_reg) & 0xFFFF)",
-        "        payload = bytearray()",
-        "        for _reg in regs:",
-        "            payload.extend(struct.pack('>H', _reg))",
-        "        return struct.pack('>HHHBBB', tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(payload)",
-        "    if fc == 5:",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        addr, raw = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if raw not in (0x0000, 0xFF00):",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        if not _mb_write_coil(addr, raw == 0xFF00):",
-        "            return _mb_err(tid, uid, fc, 2)",
-        "        return bytes(data[:12])",
-        "    if fc == 6:",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        addr, raw = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if not _mb_write_reg(addr, raw):",
-        "            return _mb_err(tid, uid, fc, 2)",
-        "        return bytes(data[:12])",
-        "    if fc == 15:",
-        "        if pdu_end < 13:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count, byte_count = struct.unpack('>HHB', bytes(data[8:13]))",
-        "        if count < 1 or count > 1968 or byte_count != ((count + 7) // 8):",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        if pdu_end < 13 + byte_count:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        payload = data[13:13 + byte_count]",
-        "        for _offset in range(count):",
-        "            _bit = bool((payload[_offset // 8] >> (_offset % 8)) & 0x1)",
-        "            if not _mb_write_coil(start + _offset, _bit):",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)",
-        "    if fc == 16:",
-        "        if pdu_end < 13:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count, byte_count = struct.unpack('>HHB', bytes(data[8:13]))",
-        "        if count < 1 or count > 123 or byte_count != (count * 2):",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        if pdu_end < 13 + byte_count:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        for _offset in range(count):",
-        "            _base = 13 + (_offset * 2)",
-        "            _reg = struct.unpack('>H', bytes(data[_base:_base + 2]))[0]",
-        "            if not _mb_write_reg(start + _offset, _reg):",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)",
-        "    return _mb_err(tid, uid, fc, 1)",
-        "",
-    ]
 
 
 def _render_modbus_server_service_static() -> list[str]:

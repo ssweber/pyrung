@@ -449,9 +449,9 @@ def _render_runtime_wiring(ctx: CodegenContext) -> list[str]:
         lines.extend(
             [
                 "_rt._mb_read_coil = _mb_read_coil",
-                "_rt._mb_write_coil = _mb_write_coil",
+                "_rt._mb_write_coils = _mb_write_coils",
                 "_rt._mb_read_reg = _mb_read_reg",
-                "_rt._mb_write_reg = _mb_write_reg",
+                "_rt._mb_write_regs = _mb_write_regs",
                 "_rt._mb_server = _mb_server",
                 "_rt._mb_clients = _mb_clients",
                 "_rt._mb_buf = _mb_buf",

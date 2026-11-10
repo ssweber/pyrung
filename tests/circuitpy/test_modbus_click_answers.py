@@ -11,7 +11,7 @@ import struct
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Int, Program, TagType
+from pyrung import Block, Bool, Int, Program, Rung, TagType, copy
 from pyrung.click import ClickBlocks, TagMap
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.circuitpy.test_modbus_codegen import _ctx_and_source, _IdleBase, _mbap
@@ -25,9 +25,10 @@ def _addr(bank: str, index: int) -> int:
     return plc_to_modbus(bank, index)[0]
 
 
-def _server(monkeypatch, mapping: TagMap):
-    with Program(strict=False) as prog:
-        pass
+def _server(monkeypatch, mapping: TagMap, prog: Program | None = None):
+    if prog is None:
+        with Program(strict=False) as prog:
+            pass
     result = _ctx_and_source(prog, mapping)
     ns = _run_single_scan_source(
         result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime
@@ -191,3 +192,16 @@ def test_a_read_past_a_bank_end_answers_02(monkeypatch):
     assert _read_regs(send, 3, _addr("DS", 4500) + 1, 1) == 2
     assert _read_regs(send, 3, _addr("DS", 4500), 2) == 2
     assert _read_bits(send, 1, _addr("C", 2000) + 1, 1) == 2
+
+
+def test_a_cell_a_rung_reaches_by_pointer_answers_02_unless_a_tag_names_it(monkeypatch):
+    ptr = Int("Ptr", default=7)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(99, ds[ptr])
+    ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
+    assert ns["_b_DS"][6] == 99
+    # The server serves no DS7, and reading 0 there would hide the 99.
+    assert _read_regs(send, 3, _addr("DS", 7), 1) == 2
+    # No rung reaches DH7, so it reads 0.
+    assert _read_regs(send, 3, _addr("DH", 7), 1) == [0]
