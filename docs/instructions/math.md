@@ -42,21 +42,16 @@ An Inf or NaN operand follows IEEE 754:
 - `Inf > 1.0E+38` is true.
 - NaN compares false with everything (`R == R` is false for a NaN).
 
-A `Real` that stays NaN counts as no change for `monitor()`, `plc.diff()` and `cause()`.
-
-A `math()` whose result is ±Inf sets `out_of_range`. A `math()` whose result is NaN sets no flag.
+A `math()` whose result is NaN sets no flag.
 
 Where Inf or NaN meets an integer:
 
 - A `math()` result of ±Inf stores 0 into an `Int`, `Dint` or `Word` and sets `out_of_range`. NaN stores 0 with no flag.
 - A `copy()` of ±Inf into an `Int` clamps to its limit and sets `out_of_range`, and into a `Dint` clamps with no flag. NaN stores 0 with no flag. Into a `Word`, +Inf stores 65535 and −Inf 32768, with no flag.
-- In a `math()`, a bitwise or shift operation (`&`, `|`, `^`, `<<`, `>>`, `~`, `lsh`, `rsh`, `lro`, `rro`) on an Inf or NaN operand is 0 and sets `out_of_range`. A shift (`<<`, `>>`, `lsh`, `rsh`) by a negative count does the same.
-- A [`forloop()`](program-control.md) whose `Real` count is Inf or NaN runs no iteration and sets `out_of_range`.
-- `unpack_to_words()` of an Inf or NaN `Real` writes its bit pattern, so +Inf is 0x7F800000 and a NaN is 0xFFFFFFFF.
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, while a CLICK REAL is a 32-bit float. For example, `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
-pyrung checks the range when `math()` stores its result, not at each step of the formula. Inside one `math()` each intermediate result is a 64-bit float, as on a CLICK, so `math(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag. A whole number past 2**53 loses its last digits.
+pyrung checks the range when `math()` stores its result, not at each step of the formula. Inside one `math()` each intermediate result is a 64-bit float, as on a CLICK, so `math(Big * 10 / 100, Result)` with `Big` = 3.0E+38 stores 3.0E+37 with no flag.
 
 ## Division
 
@@ -72,7 +67,7 @@ math(sqrt(Level), Root)     # Level = -4.0
 
 A math function given an operand outside its domain is 0 and sets `system.fault.math_operation_error` (CLICK's SC46). Examples are `sqrt` of a negative, `log`/`log10` of 0 or a negative, and `asin`/`acos` outside −1..1. The rest of the formula runs, so `sqrt(Level) + 5` stores 5. The rest of the scan runs too, so a later rung can see the flag. The next scan starts with the flag off, like the other fault flags. The PLC stays in RUN, as a real CLICK does, even though CLICK's help for SC46 says it goes to STOP.
 
-A negative base to a fractional power (`(-8.0) ** 0.5`) is a math error too. In a `math()`, zero to the power 0 or to a negative power is 0 with no flag. Anywhere else `0 ** 0` is 1.
+A negative base to a fractional power (`(-8.0) ** 0.5`) is a math error too.
 
 ## Math outside `math()`
 
@@ -133,7 +128,7 @@ Mode inference applies normally. WORD-only ranges infer hex mode, and anything e
 math(abs(Error), Magnitude)
 ```
 
-Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding. `abs()` of an `Int` tag holding −32768, or of a `Dint` tag holding −2147483648, has no value of its type, so in a `math()` it is 0 and sets `system.fault.out_of_range`, as a CLICK does.
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding.
 
 ## `randint()`
 
@@ -147,7 +142,7 @@ math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 `randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
 
 - Equal bounds are a math error. Examples are `randint(7, 7)` and two `Int`/`Dint` tags that hold the same value. The `randint()` reads 0 and the rest of the formula runs (`randint(7, 7) + 5` stores 5). The `math()` sets `system.fault.math_operation_error` (SC46).
-- A bare `Real` tag as a bound makes the `randint()` read 0 with no flag, whatever it holds. Any other bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`, a float literal), so `randint(2.5, 2.9)` has equal bounds (2 and 2) and is a math error.
+- An expression or a float literal as a bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`), so `randint(2.5, 2.9)` has equal bounds (2 and 2) and is a math error.
 - Into an `Int`, and in hex mode into a `Word`, each constant bound is cut to 16 bits like any constant in the formula ([Constants past 16 bits](#constants-past-16-bits)). `randint(70000, 70002)` draws 4464..4466. Into a `Dint` or `Real` the bounds stay whole.
 
 CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses:
@@ -169,9 +164,9 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A draw cut into an `Int` is chosen through `expr.cut_tag` instead. Equal bounds and a bare `Real` bound read no draw, so patching or forcing their tag changes nothing.
+A draw cut into an `Int` is chosen through `expr.cut_tag` instead.
 
-The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `run_for()` and `run_until()` do not skip scans in a program that uses `randint`. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the draw's tag.
+The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the draw's tag.
 
 `randint` is not allowed inside a `forloop()`. Every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so its draws are not replayable.
 
