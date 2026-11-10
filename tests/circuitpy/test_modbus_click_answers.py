@@ -11,7 +11,7 @@ import struct
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Int, Program, Rung, TagType, copy
+from pyrung import Block, Bool, Dint, Int, Program, Rung, TagType, copy, fill
 from pyrung.click import ClickBlocks, TagMap
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.circuitpy.test_modbus_codegen import _ctx_and_source, _IdleBase, _mbap
@@ -194,14 +194,52 @@ def test_a_read_past_a_bank_end_answers_02(monkeypatch):
     assert _read_bits(send, 1, _addr("C", 2000) + 1, 1) == 2
 
 
-def test_a_cell_a_rung_reaches_by_pointer_answers_02_unless_a_tag_names_it(monkeypatch):
+def test_a_cell_a_rung_reaches_by_pointer_is_served(monkeypatch):
     ptr = Int("Ptr", default=7)
     with Program(strict=False) as prog:
         with Rung():
             copy(99, ds[ptr])
+            copy(70000, dd[ptr])
     ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
-    assert ns["_b_DS"][6] == 99
-    # The server serves no DS7, and reading 0 there would hide the 99.
-    assert _read_regs(send, 3, _addr("DS", 7), 1) == 2
-    # No rung reaches DH7, so it reads 0.
-    assert _read_regs(send, 3, _addr("DH", 7), 1) == [0]
+    assert _read_regs(send, 3, _addr("DS", 7), 1) == [99]
+    assert _read_regs(send, 3, _addr("DD", 7), 2) == [70000 & 0xFFFF, 70000 >> 16]
+    assert _exception(send(_fc16(_addr("DS", 8), [5, 0xFFFF]))) is None
+    assert ns["_b_DS"][7:9] == [5, -1]
+    assert _exception(send(_fc16(_addr("DD", 8), [1, 1]))) is None
+    assert ns["_b_DD"][7] == 65537
+
+
+def test_a_cell_a_block_instruction_reaches_is_served(monkeypatch):
+    with Program(strict=False) as prog:
+        with Rung():
+            fill(True, c.select(1, 3))
+    ns, send = _server(monkeypatch, TagMap(), prog)
+    assert _read_bits(send, 2, _addr("C", 1), 4) == [1, 1, 1, 0]
+    assert _exception(send(_fc15(_addr("C", 1999), [True, True]))) is None
+    assert ns["_b_C"][1998:2000] == [True, True]
+    # Past C2000, the whole write is refused.
+    assert _exception(send(_fc15(_addr("C", 1), [False] * 2001))) == 3
+    assert _exception(send(_fc15(_addr("C", 1999), [False] * 3))) == 2
+    assert ns["_b_C"][1998:2000] == [True, True]
+
+
+# -- X gaps and read-only coil banks -------------------------------------------------------
+
+
+def test_a_read_between_x_or_y_slots_answers_0(monkeypatch):
+    _ns, send = _server(monkeypatch, TagMap())
+    # Units 17..32 of slot 1, and of slot 8, which ends the bank.
+    for base in (0, 8192):
+        assert _read_bits(send, 1 if base else 2, base + 48, 16) == [0] * 16
+        assert _read_bits(send, 1 if base else 2, base + 272, 16) == [0] * 16
+        assert _read_bits(send, 1 if base else 2, base + 288, 1) == 2
+
+
+@pytest.mark.parametrize("bank", ["X", "T", "CT"])
+def test_a_coil_write_to_a_read_only_bank_answers_02(monkeypatch, bank):
+    bit = Bool("Bit")
+    hardware = {"X": x, "T": t, "CT": ct}[bank]
+    ns, send = _server(monkeypatch, TagMap({bit: hardware[1]}))
+    assert _exception(send(struct.pack(">BHH", 5, _addr(bank, 1), 0xFF00))) == 2
+    assert _exception(send(_fc15(_addr(bank, 1), [True]))) == 2
+    assert _read_bits(send, 2, _addr(bank, 1), 1) == [0]
