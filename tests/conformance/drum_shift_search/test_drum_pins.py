@@ -4,11 +4,8 @@ Three groups: ``drum_pins`` (part ``drum2``), ``drum_branch`` (``drum3``), ``dru
 ask what no recording in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
 ``test_drum_jump.py``, ``test_drum_settle.py``, ``test_drum_close.py`` or
 ``test_drum_idle.py`` separates.  ``drum_pins`` and ``drum_limits`` were read on a CLICK
-on 2026-11-05 and expect what it read.  A ``drum_branch`` expectation is a ``range`` over
-the candidates, so neither answer is asserted, whichever routine pyrung has; a run over
-Modbus prints the reading (``read <case> ...``) and a CLICK's goes in ``readings.toml``, and
-the reading is the answer.  What pyrung reads in-process says nothing about a CLICK.  An
-exact expectation in those cases is a control: it must read that way under every candidate.
+on 2026-11-05, and ``drum_branch`` on 2026-11-05 and 2026-11-09.  Each case expects what
+the CLICK read.
 
 Snapshots as in ``test_drum_settle``: two digits a drum, ``S`` then ``4 * flag + 2 * B +
 A``, the first drum named above the other.  On a 3-step drum row 1 is 11, row 2 is 22 and
@@ -87,35 +84,44 @@ Reading at the return   2626          2626           2424
   5252 for ErrorCode: step 5 stands.
 - ``correction_with_flag``: a completed drum with step 5 staged: corrects with the flag on,
   1414, or the flag stops it, 5454 (Result2, Result3).  Staged while paused, read paused,
-  5454 (Result4), and on the return, 1414 (ErrorCode).
+  5454 (Result4), and on the return, 1414 (ErrorCode).  The CLICK read 1414, 1414, 5454 and
+  1414: the correction runs with the flag on.
 - ``flag_cleared``: a jumped completed drum's flag reset from outside writes no row, 1010, or
   does, 1111 (Result2); its own end on the next scan moves it, 2222 (Result3).  A completed
   drum's flag reset while paused: the return writes the row, 2222, or leaves it, 2020
-  (Result4).
+  (Result4).  The CLICK read 1010, 2222 and 2222: clearing the flag writes no row, and the
+  return writes it.
 - ``reset_paths``: a reset while paused on a completed drum, 1010 at the reset (Result2),
   and the return writes the row, 1111 (Result3).  A jump that rises on a reset's scan and
   holds is spent (Result4 on the next scan, ErrorCode on the one after), 1111, or lands
   when the reset ends, 3333.  The jog's twin is recorded (``drum/reset_swallows_held_jog``).
+  The CLICK read 1010, 1111, 1111 and 1111: the held jump is spent.
 - ``written_and_paused_acc``: a step written with a jog on one scan moves from what was
   written, 3333, or from what the drum held, 2222 (Result2).  A paused drum's Acc holds, 9
   hundreds, or clears, 0 (Result3); a paused jog (Result4) and a paused jump (ErrorCode)
-  clear it, 0, or leave it, 9.
+  clear it, 0, or leave it, 9.  The CLICK read 3333, 9, 0 and 0: the jog moves from what was
+  written, a pause keeps Acc, and a paused jog or jump clears it.
 - ``event_rises_in_pause``: step 1's event rises during a pause and holds through the return.
   An event drum that kept tracking its event never moves (1 in the top digit); one whose
   memory stood still moves after the return (2).  The time & event drum below takes the
   level on the scan after the return (2) as ``te_level_from_scan_1`` says.  Result2 on the
-  return, Result3 and Result4 after it.
+  return, Result3 and Result4 after it.  The CLICK read 1111, 1122 and 1122: the event drum
+  keeps tracking its event while paused.
 - ``te_event_before_time``: on a timed time & event step, an event pulse before the time is up
   is lost, and with the time up later and no event the drum stays, 11; one latched moves,
   22 (top drum, Result2).  The drum below has the time up first and takes a later pulse, 22
   (Result3).  Recorded: a level event, and a held event (``te_level_event_already_on``).
   Result4: Acc 32760 on a time & event step waiting for its event, 5 scans on: 32767 (1,
-  stops), negative (2, wraps), or 0 for neither.
+  stops), negative (2, wraps), or 0 for neither.  The CLICK read 1111, 1122 and 1: the early
+  pulse is lost, and Acc stops at 32767.
 - ``drum_in_loop``: a time drum in a For of 3 beside the same drum outside it, both from Acc
   0 for 150 ms by a free TON.  Result2 = 10 * inside / outside: 30 if the body's time adds up
   per pass, 10 if a scan's time is once.  Result3: a jog bit up once, in the loop: 2 (one
   move; the edge is spent on the first pass) or 4 (every pass).  An event drum with an
-  event up on one scan (Result4) likewise.
+  event up on one scan (Result4) likewise.  The CLICK read 30, 2 and 2: each pass adds the
+  scan's time, and an edge acts on the first pass only.  Result2 keeps the range 20..60,
+  since it moves with the scan time.  pyrung's first scan adds the time on the second and
+  third passes only, so a 10 ms scan reads 31 and the soft PLC's 30-40 ms scans read more.
 
 ``drum_limits``, last in the part since a paste may refuse one:
 
@@ -160,7 +166,6 @@ from pyrung.core import (
 )
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pattern_for, put, track
 from tests.conformance.memory import ClickTimer, dd, ds, td
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 _BITS = [
@@ -971,101 +976,65 @@ branch_group = Group(
             probe="does a valid jump beat the correction and a jog's freeze",
         ),
         case(
-            "A bad step in a completed drum: corrects with the flag on, 1414, or stands, 5454 "
-            "(Result2, Result3); paused 5454 (Result4), on the return 1414 (ErrorCode)",
+            "A bad step in a completed drum corrects with the flag on, 1414 (Result2, Result3); "
+            "staged while paused it stands, 5454 (Result4), and the return corrects it, 1414 "
+            "(ErrorCode)",
             ladder=prove_correction_with_flag,
             scans=SCANS,
-            expect={
-                "Result2": between(1414, 5454),
-                "Result3": between(1414, 5454),
-                "Result4": between(1414, 5454),
-                "ErrorCode": between(1414, 5454),
-            },
-            probe="does a correction run with the flag on",
+            expect={"Result2": 1414, "Result3": 1414, "Result4": 5454, "ErrorCode": 1414},
         ),
         case(
-            "A flag cleared on a jumped drum: 1010, or 1111 if clearing writes the row (Result2), "
-            "then its own end moves it, 2222 (Result3); a flag cleared while paused: the return "
-            "writes the row, 2222, or does not, 2020 (Result4)",
+            "A flag cleared on a jumped drum writes no row, 1010 (Result2), then its own end "
+            "moves it, 2222 (Result3); after a flag cleared while paused the return writes the "
+            "row, 2222 (Result4)",
             ladder=prove_flag_cleared,
             init=restoring(_EXTRA[6]),
             scans=SCANS,
-            expect={
-                "Result2": between(1010, 1414),
-                "Result3": between(1010, 2424),
-                "Result4": between(2020, 2424),
-            },
-            probe="what a cleared flag frees on a jumped drum and on a return",
+            expect={"Result2": 1010, "Result3": 2222, "Result4": 2222},
         ),
         case(
             "A reset while paused on a completed drum: 1010 (Result2), the return writes the row, "
-            "1111 (Result3); a jump rising on a reset's scan and held is spent, 1111, or lands "
-            "after it, 3333 (Result4, ErrorCode)",
+            "1111 (Result3); a jump rising on a reset's scan and held is spent, 1111 (Result4, "
+            "ErrorCode)",
             ladder=prove_reset_paths,
             init=restoring(_EXTRA[7]),
             scans=SCANS,
-            expect={
-                "Result2": between(1010, 2424),
-                "Result3": between(1010, 2424),
-                "Result4": between(1010, 3333),
-                "ErrorCode": between(1010, 3333),
-            },
-            probe="a reset with the rung false and the flag on; a held jump across a reset",
+            expect={"Result2": 1010, "Result3": 1111, "Result4": 1111, "ErrorCode": 1111},
         ),
         case(
-            "A step written with a jog on one scan moves from what was written, 3333, or what "
-            "the drum held, 2222 (Result2); Acc in a paused drum holds, 9 (Result3); a paused jog "
-            "(Result4) and a paused jump (ErrorCode) clear it, 0, or leave it, 9",
+            "A step written with a jog on one scan moves from what was written, 3333 (Result2); "
+            "Acc in a paused drum holds, 9 (Result3); a paused jog (Result4) and a paused jump "
+            "(ErrorCode) clear it, 0",
             ladder=prove_written_and_paused_acc,
             init=restoring(_EXTRA[8]),
             scans=SCANS,
-            expect={
-                "Result2": between(1111, 3333),
-                "Result3": between(0, 9),
-                "Result4": between(0, 9),
-                "ErrorCode": between(0, 9),
-            },
-            probe="what the register reads with a jog; Acc through paused moves",
+            expect={"Result2": 3333, "Result3": 9, "Result4": 0, "ErrorCode": 0},
         ),
         case(
             "Step 1's event rises during a pause and holds through the return: an event drum "
-            "over a time & event drum on the return (Result2), then 1122 or 2222 (Result3, "
-            "Result4): does the event drum's memory track its event while paused",
+            "keeps tracking its event while paused and never moves, 1111 on the return "
+            "(Result2), then 1122 (Result3, Result4) as the time & event drum below moves",
             ladder=prove_event_rises_in_pause,
             scans=SCANS,
-            expect={
-                "Result2": between(1111, 2222),
-                "Result3": between(1111, 2222),
-                "Result4": between(1111, 2222),
-            },
-            probe="an event drum's edge memory across a pause",
+            expect={"Result2": 1111, "Result3": 1122, "Result4": 1122},
         ),
         case(
             "A time & event step: an event pulse before the time is up is lost, and the time up "
             "later moves nothing, top digit 1 (Result2); time first, then a pulse, moves "
-            "it (Result3); Acc 32760 waiting for its event, 5 scans on: 1 stops at 32767, 2 "
-            "wraps (Result4)",
+            "it (Result3); from Acc 32760 on a step waiting for its event, Acc stops at 32767, "
+            "1 (Result4)",
             ladder=prove_te_event_before_time,
             scans=SCANS,
-            expect={
-                "Result2": between(1111, 2222),
-                "Result3": between(1111, 2222),
-                "Result4": between(0, 2),
-            },
-            probe="time & event: is an earlier pulse lost or held; Acc at the top of an Int",
+            expect={"Result2": 1111, "Result3": 1122, "Result4": 1},
         ),
         case(
-            "A drum in a For of 3 beside the same drum outside: 10 * inside Acc / outside Acc is "
-            "30 if a pass adds a scan's time, 10 if it is once (Result2); a jog bit up one scan "
-            "moves it to step 2 or step 4 (Result3), an event likewise (Result4)",
+            "A drum in a For of 3 beside the same drum outside: each pass adds a scan's time, so "
+            "10 * inside Acc / outside Acc is about 30, not 10 (Result2); a jog bit up one scan "
+            "moves it to step 2 only (Result3), an event likewise (Result4)",
             ladder=prove_drum_in_loop,
             scans=60,
-            expect={
-                "Result2": between(0, 60),
-                "Result3": between(1, 4),
-                "Result4": between(1, 4),
-            },
-            probe="a drum's time and edges in a For body",
+            # Result2 moves with the scan time.  A CLICK reads 30, and pyrung's 10 ms scan 31.
+            expect={"Result2": range(20, 61), "Result3": 2, "Result4": 2},
         ),
     ],
 )
