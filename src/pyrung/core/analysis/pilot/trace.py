@@ -93,6 +93,7 @@ from pyrung.core.expression import ExprCompare
 from pyrung.core.instruction.advance import ConditionDemand, constraint_holds
 from pyrung.core.instruction.conversions import copy_store_transform
 from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+from pyrung.core.tag import metadata_edits
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -305,8 +306,14 @@ def _is_wire(pdg: ProgramGraph, tag: str) -> bool:
     return True
 
 
-@functools.lru_cache(maxsize=16)
 def _loop_call_gates(program: Any) -> dict[tuple[str | None, int, tuple[int, ...], str], Any]:
+    return _loop_call_gates_as_of(program, metadata_edits())
+
+
+@functools.lru_cache(maxsize=16)
+def _loop_call_gates_as_of(
+    program: Any, _edits: int
+) -> dict[tuple[str | None, int, tuple[int, ...], str], Any]:
     """What a call inside a forloop needs beyond its rung's contacts, per call site.
 
     Keyed ``(caller subroutine, rung index, branch path, callee)``, as a rung node
