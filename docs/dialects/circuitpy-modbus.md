@@ -196,8 +196,13 @@ The generated server serves:
 
 - every register the TagMap maps, whether a rung uses it or not, so an HMI or SCADA system can write a value no ladder rung touches
 - every raw CLICK register a rung uses directly (`ds[3901]`, `c[1801]`), at its own address
+- XD and YD in CLICK's layout, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits.
 
-Any other address answers with Modbus exception 2 (illegal data address). A CLICK serves its whole address space. To serve a range on the P1AM, map it in the TagMap.
+A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there answers with Modbus exception 2 (illegal data address), because the P1AM has nowhere to keep it (a CLICK stores it). To keep such a value on the P1AM, map it in the TagMap.
+
+A rung that reaches a range by pointer or block instruction (`ds[ptr]`) can write cells no tag names. A read of such a cell answers with exception 2, so an HMI never sees a 0 that hides the value. Map the cell in the TagMap to serve it.
+
+A write to an SC or SD that CLICK's Data View shows as Read Only answers with exception 2. An FC 15 or FC 16 write that reaches one refused address stores nothing.
 
 ## Scan cycle with Modbus
 
