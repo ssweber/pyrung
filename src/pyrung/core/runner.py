@@ -103,7 +103,7 @@ _RECORDS = ("_rung_firing_timelines", "_committed_tag_timelines", "_node_firing_
 
 _EPOCH_REFERENCE_VALUES = count(1)
 
-# Byte budget for the recent-state cache (default for ``history_budget``).
+# Default ``history_budget``, in bytes.
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
 
 # Floor: never evict below this many entries regardless of byte budget.
@@ -1610,8 +1610,11 @@ class PLC:
             cache: Instant-lookup window for full ``SystemState``
                 snapshots.  Same formats as *history*.  ``None`` uses
                 byte-budget-only eviction.
-            history_budget: Byte ceiling for the recent-state cache.
-                Defaults to 100 MB.  Raises ``ValueError`` below 1 MB.
+            history_budget: Byte limit on the history the runner holds.  With
+                ``history=``, the runner weighs only the window's checkpoints
+                against it.  When they weigh more, the runner drops the
+                window's oldest scans.  The limit also caps the recent-state
+                cache.  Defaults to 100 MB.  Raises ``ValueError`` below 1 MB.
             checkpoint_interval: Number of scans between replay checkpoints.
                 Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
             record_all_tags: Bypass the PDG-based rung-firing capture
@@ -2683,10 +2686,9 @@ class PLC:
             max_scans: Work budget for the search.  Each scan the search steps counts
                 one, and so do the first two scans and the last scan of each wait.  The
                 other scans of a wait count a hundredth each, so a long timer fits a small
-                budget.  A wait pyrung cannot run compiled counts one for every scan.  A
-                Modbus ``send()`` or ``receive()`` makes one, and so do a write to a
-                read-only system tag and a ``run_function()`` that keeps state between
-                calls.  A forced tag makes one too.
+                budget.  A wait pyrung cannot run compiled counts one for every scan.  That
+                happens when the program writes a read-only system tag, has a
+                ``run_function()`` that keeps state between calls, or has a forced tag.
             wall_clock_s: Seconds of real time before the search stops and says so, or
                 ``None`` for no limit.  A search this ends may have reached on a faster
                 machine.

@@ -131,8 +131,9 @@ PAYING_STRETCH = 16
 # and the landing cost a unit each.  The search reads its answers from them.  The scans
 # between cost a hundredth each.  A wait no loop may ever run costs a unit a scan, because
 # every scan of it is interpreted.  Such a wait has one of these:
-# - a program with no kernel (it writes a read-only system tag, it has a Modbus send or
-#   receive, a run_function() in it or in the overlay keeps state, or it does not compile)
+# - a program with no kernel (it writes a read-only system tag, a run_function() in it or in
+#   the overlay keeps state, or it does not compile).  A Modbus send or receive keeps the
+#   kernel here, because how()'s forks never talk to the device.
 # - a runner the loop refuses (not fixed-step, a breakpoint, a force, a watched tag moving
 #   without a write)
 # - a stop predicate whose reads the loop cannot watch

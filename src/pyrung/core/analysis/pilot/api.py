@@ -331,9 +331,9 @@ def pilot_how(
     scans and the last scan of each wait. The other scans of a wait count a
     hundredth each, whether the guarded loop ran them or not, so a long timer fits
     a small budget. A wait pyrung cannot run compiled counts one for every scan.
-    A Modbus ``send()`` or ``receive()`` makes one, and so do a write to a
-    read-only system tag and a ``run_function()`` that keeps state between calls.
-    A forced tag makes one too. Research tools also keep their local caps.
+    That happens when the program writes a read-only system tag, has a
+    ``run_function()`` that keeps state between calls, or has a forced tag.
+    Research tools also keep their local caps.
 
     ``wall_clock_s`` is a backstop on real time, since most of a search's time
     is work the ledger does not charge. A how() that runs out of it stops and
