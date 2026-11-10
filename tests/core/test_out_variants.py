@@ -13,6 +13,7 @@ TD, and a preset of 0 or below gives a flasher or a timed coil no pulse
 import pytest
 
 from pyrung.core import (
+    PLC,
     Bool,
     Int,
     Program,
@@ -236,17 +237,18 @@ class TestFlasher:
         )
         # Neither Timer's Done turns on (O6).
         assert rows == [
-            # A phase shows through the scan its TD reaches the preset.
+            # A phase shows through the scan its TD reaches the preset.  The other TD holds
+            # until its own phase starts on the next scan.
             (True, False, 10, False, 0),
             (True, False, 20, False, 0),
             (True, False, 30, False, 0),
             (False, False, 30, False, 10),
-            (False, False, 0, False, 20),
+            (False, False, 30, False, 20),
             (True, False, 10, False, 20),
             (True, False, 20, False, 20),
-            (True, False, 30, False, 0),
+            (True, False, 30, False, 20),
             (False, False, 30, False, 10),
-            (False, False, 0, False, 20),
+            (False, False, 30, False, 20),
             (True, False, 10, False, 20),
             (False, False, 10, False, 20),  # O4: both TDs freeze
             (True, False, 10, False, 0),  # a full on phase again, both TDs from 0
@@ -269,7 +271,44 @@ class TestFlasher:
         assert rows == [(True, 70, 0), (False, 70, 10)]
         runner.patch({"OT4_Acc": 60})
         rows = _trace(runner, [1, 1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
-        assert rows == [(False, 0, 70), (True, 10, 70), (True, 20, 70)]
+        assert rows == [(False, 70, 70), (True, 10, 70), (True, 20, 70)]
+
+    @staticmethod
+    def _assert_other_td_holds(rows, preset):
+        """After the first on phase, the TD of the phase not shown is at its preset or past it."""
+        first_off = next(i for i, (lit, _on, _off) in enumerate(rows) if not lit)
+        for lit, on_td, off_td in rows[first_off:]:
+            assert (off_td if lit else on_td) >= preset, rows
+
+    @pytest.mark.parametrize("dt", [0.020, 0.030, 0.035, 0.040])
+    def test_the_other_td_holds_through_the_scan_a_phase_ends(self, runner_factory, dt):
+        """``out_more/preset_mid_phase`` reads the off TD on the on phase.  At scans of 20..40 ms
+        a 100 ms phase ends on its third to fifth scan, and the off TD must hold on that scan."""
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 100), off=(T[4], 100))
+
+        runner = runner_factory(logic, dt=dt)
+        self._assert_other_td_holds(_trace(runner, [1] * 40, "Beacon", "OT3_Acc", "OT4_Acc"), 100)
+
+    def test_the_other_td_holds_at_uneven_scans(self):
+        """The soft PLC's scans vary from scan to scan (``SimServer``)."""
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 100), off=(T[4], 100))
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({In: True})
+        dts = [0.031, 0.040, 0.012, 0.037, 0.040, 0.019, 0.026, 0.040, 0.008]
+        rows = []
+        for n in range(90):
+            plc._dt_override_for_next_scan = dts[n % len(dts)]
+            plc.step()
+            tags = plc.current_state.tags
+            rows.append((tags["Beacon"], tags["OT3_Acc"], tags["OT4_Acc"]))
+        self._assert_other_td_holds(rows, 100)
 
     @pytest.mark.parametrize("off_preset", [0, -5])
     def test_off_preset_of_0_or_below_holds_it_reset(self, runner_factory, off_preset):
