@@ -199,10 +199,11 @@ def _render_system_point_reset_lines(ctx: CodegenContext) -> list[str]:
 def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[str]:
     """Derived system points for the scan about to run, as core resolves them.
 
-    The scan counter (SD9, ``scan_id % 32768``), the scan clock (SC3, on when SD9 is even), the first-scan bit, the
+    These are the scan counter (SD9, ``scan_id % 32768``) and the scan clock
+    (SC3, on when SD9 is even). Then come the first-scan bit and the
     free-running clocks over the time of the RUN scans before this one (0 on
-    the first scan, so every clock starts off), the scan time (SD10) and the
-    RTC.
+    the first scan, so every clock starts off). Last are the scan time (SD10)
+    and the RTC. The fault flags carry from the scan before.
     """
     sp = " " * indent
     lines: list[str] = []

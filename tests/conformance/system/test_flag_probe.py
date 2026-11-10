@@ -38,7 +38,7 @@ or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
   flag is still on the scan it does not fire.  CLICK read 0, 31.  Result1 says
   nothing about the oneshot.  The read rung of the scan before sits between the
   oneshot and its read, and as a Math on a false rung it clears every flag.
-  ``flag_reads/oneshot_held`` reads it with a coil: the Copy leaves its flags.
+  ``flag_reads/oneshot_held`` reads it with a coil, and the Copy leaves its flags.
 - ``boxes_leave_flags`` (probe): a Search, a Shift, an event Drum, a timer and a
   counter box between the raise and the read.  Bits 1, 2, 4, 8, 16 in that order,
   set when the flag is still on after the box: Result1 SC40, Result2 SC43,

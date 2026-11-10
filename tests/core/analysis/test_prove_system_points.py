@@ -295,7 +295,7 @@ class TestFaultFlags:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "fault.division_error")
 
-    def test_fault_flag_clears_before_the_next_scan(self):
+    def test_fault_flag_clears_at_the_next_math(self):
         divisor = _divisor("Divisor")
         quotient = Int("Quotient")
         seen = Bool("Seen")
@@ -381,15 +381,31 @@ class TestFaultFlags:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
 
-    def test_math_error_clears_before_the_next_scan(self):
-        # SC46 is reset at scan start like the other fault flags, so a rung
-        # above the Math never reads it on (a math error does not stop the PLC).
+    def test_math_error_carries_into_the_next_scan(self):
+        # SC46 carries from scan to scan like the other fault flags (CLICK,
+        # ``flag_carry``), so a rung above the Math reads it on the scan after.
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung(F.math_operation_error):
                 out(hit)
             with Rung():
                 math(sqrt(_operand()), Real("Root"))
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_false_math_clears_the_carried_flag(self):
+        # A Math on a false rung clears SC40 (CLICK, ``flag_steps``), so the
+        # flag a scan carries never reaches the rung below it.
+        divisor = _divisor("Divisor")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                math(100 / divisor, Int("Quotient"))
+            with Rung(Bool("Never")):
+                math(1, Int("Sink"))
+            with Rung(F.division_error):
+                out(hit)
         assert isinstance(always(logic, ~hit), Proven)
 
     def test_scans_after_a_math_error_run(self):

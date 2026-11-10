@@ -47,7 +47,7 @@ and each case expects what it read.
   set when SC43 is still on).  Result3 = 1 is the control.  The CLICK read 0, 3 and 1.  Result1
   says nothing about the oneshot.  The read rung of the scan before sits between the oneshot and
   its read, and as a Math on a false rung it clears SC43.  ``flag_reads/oneshot_held`` reads it
-  with a coil: a oneshot Copy that does not fire leaves SC43.  pyrung reads the same.
+  with a coil, and a oneshot Copy that does not fire leaves SC43.  pyrung reads the same.
 - ``source_sc43``: ``copy(SC43, C)`` right after the raise.  Result1 = 1 when the C bit saw SC43
   on, 0 when the Copy settles the flag before it reads (SC44 read 0,
   ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the

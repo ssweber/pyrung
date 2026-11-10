@@ -302,7 +302,7 @@ _SD_ERROR_MOUNT_FAILURE = 1
 _SD_ERROR_LOAD_FAILURE = 2
 _SD_ERROR_SAVE_FAILURE = 3
 
-# The fault flags carry from scan to scan, as on a CLICK: only an instruction
+# The fault flags carry from scan to scan, as on a CLICK, and only an instruction
 # clears one.  The scan start binds each at False once, so a state holds them.
 _FAULT_FLAG_NAMES = (
     system.fault.division_error.name,
@@ -606,8 +606,8 @@ class SystemPointRuntime:
             ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
-        # The fault flags are not cleared here: a CLICK carries one raised by
-        # the last Math of a scan into the next (``flag_carry``).
+        # A CLICK carries a fault flag raised by the last Math of a scan into
+        # the next (``flag_carry``), so the flags are only bound here.
         unbound = {name: False for name in _FAULT_FLAG_NAMES if not _raw_has_tag(ctx, name)}
         if unbound:
             ctx._set_tags_internal(unbound)

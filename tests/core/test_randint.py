@@ -236,7 +236,8 @@ class TestBoundsAsCLICKReadsThem:
         assert state.tags["fault.math_operation_error"] is True
         assert state.tags["fault.out_of_range"] is False
 
-    def test_bounds_that_can_be_equal_declare_the_math_error(self):
+    def test_every_randint_declares_the_math_error(self):
+        # Every Math clears SC46 as it starts, so each one writes it.
         lo = Int("Lo", default=4)
         with Program(strict=False) as logic:
             with Rung():
@@ -246,7 +247,7 @@ class TestBoundsAsCLICKReadsThem:
         faults = [instr._fault_writes for instr in logic.rungs[0]._instructions]
         assert ["fault.math_operation_error" in writes for writes in faults] == [
             True,
-            False,
+            True,
             True,
         ]
 
@@ -828,11 +829,12 @@ class TestProver:
             pytest.param(lambda n: randint(7, 7), True, id="equal-constants"),
             pytest.param(lambda n: randint(0, n), True, id="tag-bound"),
             pytest.param(lambda n: randint(0, n / 2), True, id="division-bound"),
-            pytest.param(lambda n: randint(0, 5), False, id="constants"),
-            pytest.param(lambda n: randint(Real("R"), sqrt(n)), False, id="real-tag-reads-0"),
+            pytest.param(lambda n: randint(0, 5), True, id="constants"),
+            pytest.param(lambda n: randint(Real("R"), sqrt(n)), True, id="real-tag-reads-0"),
         ],
     )
-    def test_the_math_error_flag_is_written_where_a_bound_can_hit_one(self, make, writes_it):
+    def test_every_bound_writes_the_math_error_flag(self, make, writes_it):
+        # A bound that cannot raise SC46 still writes it, because the Math clears it.
         with Program(strict=False) as logic:
             with Rung():
                 math(make(Int("N")), Dint("D"))
