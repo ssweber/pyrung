@@ -8,8 +8,12 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, latch, math
+from pyrung import PLC, Bool, Int, Program, Real, Rung, call, copy, latch, math, subroutine
 from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
+from pyrung.core.analysis.steerable import compute_steerable
 
 
 def test_a_goal_on_a_tag_nothing_reads_finds_the_writer() -> None:
@@ -259,3 +263,49 @@ def test_a_real_count_with_a_fractional_step_is_reached() -> None:
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.last_resort is None
     assert plan.replay().state.tags["Level"] > 2.2
+
+
+def test_a_call_gate_beside_the_copy_source_adds_no_need() -> None:
+    start, requested, current = Bool("Start", external=True), Int("Requested"), Int("Current")
+    with Program(strict=False) as prog:
+        with subroutine("finish"):
+            with Rung():
+                copy(requested, current)
+        with Rung(start):
+            copy(6, requested)
+        with Rung(requested != 0):
+            call("finish")
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    snapshot = dict(plc.current_state.tags)
+    pdg = build_program_graph(prog)
+    steerable = frozenset(compute_steerable(pdg, plc._known_tags_by_name, prog))
+
+    tree = trace_back("Current", 6, snapshot, pdg, prog, steerable)
+
+    # Requested = 6 already meets the call gate Requested != 0.
+    assert frontier_pairs(tree, snapshot) == (("Current", 6), ("Requested", 6))
+    assert tree.steerable_leaves() == [("Start", True)]
+    plan = plc.how(current == 6, max_scans=300)
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.replay().state.tags["Current"] == 6
+
+
+def test_two_not_equal_goals_together_are_reached() -> None:
+    go, bump = Bool("Go", external=True), Bool("Bump", external=True)
+    level, count = Int("Level"), Int("Count")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            copy(5, level)
+        with Rung(bump):
+            math(count + 1, count)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+
+    plan = plc.how(level != 0, count != 0, max_scans=300)
+
+    assert plan.status is PlanStatus.REACHED, plan.reason
+    assert plan.last_resort is None
+    final = plan.replay().state.tags
+    assert final["Level"] == 5
+    assert final["Count"] != 0

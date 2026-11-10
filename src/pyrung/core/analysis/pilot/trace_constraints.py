@@ -218,8 +218,15 @@ def _inequality_levers(
     pdg: ProgramGraph,
     prior: _trace_read.DomainPrior | None,
     program: Any = None,
+    *,
+    goal: bool = False,
 ) -> list[_Lever]:
-    """Return actionable left/right levers for one scalar inequality."""
+    """Return actionable left/right levers for one scalar inequality.
+
+    *goal* says the caller asked how() for this comparison.  A ``!=`` takes a lever from
+    what the tag's writers write only then.  Nearly any write meets a ``!=`` gate, so a
+    prerequisite's lever would steer the tag to an arbitrary write.
+    """
 
     levers: list[_Lever] = []
     seen: set[str] = set()
@@ -240,6 +247,8 @@ def _inequality_levers(
             else:
                 # The domain prior only keeps what the program reads, and a goal can name a
                 # tag nothing reads.  What its writers write says the same thing.
+                if requirement.form == "ne" and not goal:
+                    return
                 value = _written_value_satisfying(requirement, snapshot, pdg, program)
                 if value is None:
                     return

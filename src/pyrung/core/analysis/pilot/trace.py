@@ -176,6 +176,9 @@ class _TraceEnv:
     # Joint terminal supports rank alternatives only; they never authorize an
     # assignment or reject the temporary detour needed by a retentive target.
     preferred_actions: tuple[tuple[str, Any], ...] = ()
+    # The comparisons the caller asked how() for, by ``Atom._key()``.  Only these take a
+    # ``!=`` lever from what the tag's writers write (``_written_value_satisfying``).
+    goal_atom_keys: frozenset[Any] = frozenset()
 
 
 def _env_for(
@@ -1398,7 +1401,15 @@ def trace_target(
 
         read = constraints or _trace_read.TraceReadConstraints()
         env = _env_from_constraints(read, snapshot, pdg, program, steerable, max_depth=15)
-        env = replace(env, preferred_actions=input_preferences(target.members, program, steerable))
+        env = replace(
+            env,
+            preferred_actions=input_preferences(target.members, program, steerable),
+            goal_atom_keys=frozenset(
+                member.predicate._key()
+                for member in target.members
+                if isinstance(member.predicate, Atom)
+            ),
+        )
         children = _trace_expression(env, target.predicate, target.tag, _visited=set(), _depth=0)
         root = TraceNode(
             tag=target.tag,
@@ -1458,6 +1469,7 @@ def trace_relational(
         execution_memory=execution_memory,
     )
     env = _env_from_constraints(read, snapshot, pdg, program, steerable, max_depth=max_depth)
+    env = replace(env, goal_atom_keys=frozenset((predicate._key(),)))
     nodes = _trace_expression(env, predicate, predicate.tag, _visited=set(), _depth=0)
     if nodes:
         root = nodes[0]
@@ -1914,7 +1926,13 @@ def _trace_expression(
                 # predicate once (the relational node stops recursion), so the
                 # levers do not double-count as separate goals.
                 levers = _trace_constraints._inequality_levers(
-                    expr, env.snapshot, env.steerable, env.pdg, env.prior, env.program
+                    expr,
+                    env.snapshot,
+                    env.steerable,
+                    env.pdg,
+                    env.prior,
+                    env.program,
+                    goal=expr._key() in env.goal_atom_keys,
                 )
                 lever_children: list[TraceNode] = []
                 for lever in levers:
