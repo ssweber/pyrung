@@ -226,6 +226,46 @@ Incremental note (Phase 3, 2026-02-21):
   - `"inspect"` when the returned event is from committed retained debug scan context
 - Coverage remains intentionally debug-path-only (`scan_steps_debug()` and DAP stepping paths).
 
+### Trace event
+
+The adapter emits `pyrungTrace` after each stop with the current step and region evaluation details used by decorations.
+
+### Simulator custom requests
+
+These requests drive the [simulator controls](../guides/dap-vscode.md#simulator-controls) from a client such as ClickNick.
+
+| Request | Arguments | Response body |
+|---|---|---|
+| `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
+| `pyrungSetSpeed` | `{speed}` | `{speed}` |
+| `pyrungModbusInfo` | none | `{running, host, port, clients, error}` |
+| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, flasherOn?, flasherOff?, timed?, maintained?, toggle?, rampOn?, rampOff?, approachTo?, approachRate?, physical?, system?}` | `{text, command}` |
+| `pyrungUnlink` | `{feedback}` | `{text}` |
+| `pyrungRestoreLink` | `{feedback}` | `{text}` |
+| `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
+| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
+
+`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again.
+
+The link requests mirror the [bench link](../guides/dap-vscode.md#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` gives each value as the text a comment would hold (`"0.8"`, `"500ms"`), and `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
+
+### State frames
+
+`pyrungScanFrame` is sent while Continue runs. It is also sent after any state change, whether the change came from a DAP request, a `pyrung live` command, a Modbus write, or auto-reload. A state change is a step, run, force, patch, mode change, speed change or reload.
+
+Each frame carries `trace` (whose `forces` always holds the full force map), `changes`, `monitors`, `snapshots` and `outputs`. It also carries these fields:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"run"` or `"stop"` |
+| `running` | Continue is executing |
+| `speed` | Requested pacing, `0` = unpaced |
+| `actualSpeed` | Measured simulation time / wall time while running, else `null` |
+| `pendingPatches` | Patches not yet in the committed state (queued, or taken by a scan still being stepped) |
+| `source` | Who caused the frame: `{origin, command}`, origin one of `dap`, `live`, `worker`, `modbus`, `autoreload` |
+
+Frames sent outside Continue carry an empty `changes` list and, when paused, the same trace as the latest `pyrungTrace`.
+
 ---
 
 ## Force Semantics

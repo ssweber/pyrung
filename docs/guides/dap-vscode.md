@@ -305,8 +305,6 @@ harness remove             # disable the harness for this session
 harness install            # re-install after removal
 ```
 
-If a session recording is active, Bool feedback transitions are captured as `harness:nominal` inputs. Analog feedback is computed by the harness each scan, so it is not recorded as a separate input.
-
 ### Bench links
 
 Bench links change the feedback wiring for this session without editing the program. You can add a link, replace one the program declares, or cut one to simulate a failed sensor or a stuck contactor. They take the same keys as a link in a nickname comment. Tags may be names or CLICK addresses:
@@ -435,59 +433,13 @@ Launch arguments (all optional):
 - `startMode` puts the PLC in `"stop"` or `"run"` mode at launch. Without it the runner keeps the mode it was built with.
 - `keepForcesOnRun` sets `PLC.keep_forces_on_run`, so forces survive STOP -> RUN. Without it the program's own setting is kept (off by default). Reloads keep it.
 
-Custom requests:
-
-| Request | Arguments | Response body |
-|---|---|---|
-| `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
-| `pyrungSetSpeed` | `{speed}` | `{speed}` |
-| `pyrungModbusInfo` | none | `{running, host, port, clients, error}` |
-| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, flasherOn?, flasherOff?, timed?, maintained?, toggle?, rampOn?, rampOff?, approachTo?, approachRate?, physical?, system?}` | `{text, command}` |
-| `pyrungUnlink` | `{feedback}` | `{text}` |
-| `pyrungRestoreLink` | `{feedback}` | `{text}` |
-| `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
-| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
-
-`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again. The Modbus server refuses a write to the STOP command bit (SC50) with exception code 2 (illegal data address). The mode does not change. A rung that turns SC50 on still stops the PLC.
+The Modbus server refuses a write to the STOP command bit (SC50) with exception code 2 (illegal data address). The mode does not change. A rung that turns SC50 on still stops the PLC.
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
 
-The link requests mirror the [bench link](#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` gives each value as the text a comment would hold (`"0.8"`, `"500ms"`), and `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
-
 Anyone can drive, and the last command wins. While Continue runs, a step or `run` from VS Code or `pyrung live` pauses Continue first and then executes.
 
-The Debug Console verbs `mode [run|stop]` and `speed [N|max]` mirror the requests.
-
-### State frames
-
-`pyrungScanFrame` is sent while Continue runs. It is also sent after any state change, whether the change came from a DAP request, a `pyrung live` command, a Modbus write, or auto-reload. A state change is a step, run, force, patch, mode change, speed change or reload.
-
-Each frame carries `trace` (whose `forces` always holds the full force map), `changes`, `monitors`, `snapshots` and `outputs`. It also carries these fields:
-
-| Field | Meaning |
-|---|---|
-| `mode` | `"run"` or `"stop"` |
-| `running` | Continue is executing |
-| `speed` | Requested pacing, `0` = unpaced |
-| `actualSpeed` | Measured simulation time / wall time while running, else `null` |
-| `pendingPatches` | Patches not yet in the committed state (queued, or taken by a scan still being stepped) |
-| `source` | Who caused the frame: `{origin, command}`, origin one of `dap`, `live`, `worker`, `modbus`, `autoreload` |
-
-Frames sent outside Continue carry an empty `changes` list and, when paused, the same trace as the latest `pyrungTrace`.
-
-## DAP to runner mapping
-
-| VS Code action | Runner API |
-|---------------|------------|
-| Step Over / Into / Out / `pyrungStepScan` | `runner.scan_steps_debug()` |
-| Continue | Adapter loop over `scan_steps_debug()` |
-| Conditional breakpoints | Adapter expression parser + compiled predicates |
-| Monitor values | `runner.monitor(tag, callback)` |
-| Snapshot labels | `runner.history.find_labeled(label)` |
-| Data breakpoints | Monitor-backed change listeners |
-| Debug Console commands | `console.dispatch()` registry |
-
-See [Architecture — Debug stepping APIs](architecture.md#debug-stepping-apis) for details on `scan_steps_debug()` and rung inspection.
+The Debug Console verbs `mode [run|stop]` and `speed [N|max]` set the PLC mode and the pacing.
 
 ## Data View
 
@@ -536,11 +488,11 @@ recovers:FaultLatch
 cause:Running:True
 ```
 
-The result renders inline as chain steps with triggers, enablers and fidelity indicators. The query dispatches to the `pyrungCausal` DAP handler, which calls the same `plc.cause()`/`plc.effect()`/`plc.recovers()` methods available in tests.
+The result renders inline as chain steps with triggers, enablers and fidelity indicators. It runs the same `plc.cause()`, `plc.effect()` and `plc.recovers()` a test calls.
 
 ## Graph View
 
-**pyrung: Open Graph View** opens an interactive tag dependency graph in the editor area. The graph shows tags as nodes and rungs as edges connecting them, laid out left-to-right with dagre.
+**pyrung: Open Graph View** opens an interactive tag dependency graph in the editor area. The graph shows tags as nodes and rungs as edges connecting them, laid out left to right.
 
 ### Node roles
 
@@ -566,7 +518,3 @@ Rung nodes show the rung index and source location.
 - **Reset** clears all pins, hidden nodes, filters, and slices.
 
 During debugging, live value badges appear on tag nodes. The graph rescopes automatically when you switch editor tabs, showing only the rungs and tags from the active file.
-
-## Trace event
-
-The adapter emits `pyrungTrace` after each stop with the current step and region evaluation details used by decorations.
