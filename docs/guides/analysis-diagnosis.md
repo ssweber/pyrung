@@ -120,8 +120,6 @@ Y001 = False  [why]
 
     `how()` is experimental. When it finds a path, the path is a real recording you can replay. On real programs it sometimes stops without one, and it can take a minute. `Stopped` is not a proof that no path exists. See the headline meanings below.
 
-    The `Plan`/`Path`/route API may still change.
-
     `how()` returns a path it has checked, not necessarily the shortest. That is what lets it wait through timer dwells and navigate multi-step machines.
 
 `how()` drives the PLC to a target state the way an engineer would. It reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
@@ -163,14 +161,6 @@ The headline is deliberately specific:
 
 For a program with `send()` or `receive()`, see [how() and Modbus](../instructions/communication.md#how).
 
-The debug console reports long-running work as it happens:
-
-```
-Trying CmdStart=True... done.
-  State jumped 6 -> 10 Checking... unexpected.
-  Preventable? Yes -- with rung(State == 3): out(DoorClosed).
-```
-
 ### Condition syntax
 
 `how()` accepts one or more targets. Each is a Tag (Bool shorthand for `== True`) or a comparison. Several targets, or an `And(...)` of them, are an AND goal. `how()` reaches one state where they all hold at once.
@@ -186,9 +176,6 @@ If the targets can't coexist, the result says `Cannot reach` and names the confl
 ```python
 plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, two values
 ```
-
-`avoid=` works with multiple targets too. The same exclusions apply while
-`how()` works toward each target.
 
 ### `avoid`
 
@@ -212,8 +199,6 @@ When every path is excluded the returned `Plan` stops with a reason that names t
 
 If an `avoid=` callable raises, `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the callable's exception as its cause. A state may not have every tag yet, so read tags with `snapshot.get(name, default)`.
 
-Once a plan reaches its goal, `how()` reruns it to see whether it needs all its temporary logic. A callable that raises on one of those reruns ends that rerun only. The plan `how()` found stands.
-
 ### The route taken
 
 A target can have more than one route, such as two writers or an `OR` over internal coils. `how()` never asks you to choose between them. It takes a deterministic default route and tells you where it went on `Plan.route`:
@@ -236,17 +221,15 @@ You already know your machine, so exclude the reported route with `avoid=` and `
 plc.how(Burner, avoid=ProdMode)    # exclude production; maintenance remains
 ```
 
-The route report is the same for any concrete value target, not just `Bool == True`. Two examples are a word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers. Both report a `Plan.route`, and you can exclude the chosen route the same way:
+Any target with one value reports its route, such as `Running == False` with two stop rungs:
 
 ```python
 plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
 ```
 
-`Plan.route` is `None` for a relational target (`State > 5`), and for a fork that is only a choice of inputs (`Or(Auto, Manual)`).
-
 ## In a debug session
 
-`why` takes space-separated tag names. `how` takes a single condition expression with comparisons (`==`/`!=`/`<`/`>`).
+`why` takes space-separated tag names. `how` takes one or more conditions separated by commas, then optionally `avoid` and more conditions.
 
 ```
 > why Alarm_Horn
