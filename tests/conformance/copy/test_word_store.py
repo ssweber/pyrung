@@ -1,7 +1,8 @@
 """What a Word holds after a store, and what comes out of one: the ``word_store`` group.
 
 Part ``copy`` (``suite.PARTS``).  Every case passed on a CLICK (``confirmed.toml``, 2026-11-07).
-A Copy into a Word from a register wraps below 0 and clamps past 65535, with no flag.  A constant
+A Copy into a Word from a register wraps from -1 down to -32768 and clamps past 65535, with no
+flag.  A constant
 keeps its low 16 bits, with no flag.  Block copy and Fill behave as Copy.  A Word copied into an
 Int keeps its bits, and into a DD or a DF is its value (``core/instruction/conversions.py``).
 A DH under test is preset to 0x1234, so an instruction that

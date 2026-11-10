@@ -35,7 +35,7 @@ class UnrecordedScansError(ValueError):
             f"scans {first}..{last} include some that have no records yet. A compiled run "
             "records none. A stepped run without history= stops recording once its records "
             f"are full. Getting their records means stepping {scans} scans again from the nearest "
-            f"checkpoint. A question may step at most {SETTLE_SCAN_LIMIT}. "
+            f"checkpoint. A question may step at most {SETTLE_SCAN_LIMIT} scans. "
             "A question keeps the records of the scans it steps. So ask first about a scan nearer "
             "the start of that range for cause, or nearer its end for effect. Then ask again. "
             "From Python, cause() also takes since=. A run with jit=False and history= records "

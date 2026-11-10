@@ -30,12 +30,12 @@ referenced system tag:
     clocks, ``scan_clock_toggle``, ``scan_counter`` and the RTC fields, plus
     ``battery_present``, which mirrors the project's Battery Backup Setup box
     (``plc.battery_present``) and so acts as an external input.  The state
-    key carries none of these, so they become nondeterministic inputs: any value on any scan, within the RTC
-    fields' calendar ranges.  That over-approximates (a counterexample may
-    need a timing the PLC never produces, see ``FREE_SYSTEM_CAVEAT``) but never
-    loses a reachable state.  ``mode_run``, ``sd.write_status`` and the RTC
-    apply errors are free only when the program writes the command that
-    changes them.
+    key carries none of these, so they become nondeterministic inputs: any
+    value on any scan, within the RTC fields' calendar ranges.  That
+    over-approximates (a counterexample may need a timing the PLC never
+    produces, see ``FREE_SYSTEM_CAVEAT``) but never loses a reachable state.
+    ``mode_run``, ``sd.write_status`` and the RTC apply errors are free only
+    when the program writes the command that changes them.
 ``scan_start``
     Status bits and command bits the runtime resets before each scan
     (transient fault flags, RTC apply errors, mode/watchdog/SD commands,

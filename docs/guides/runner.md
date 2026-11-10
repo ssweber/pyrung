@@ -221,7 +221,7 @@ runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
 
-`battery_present` mirrors the project's Battery Backup Setup box, and `sys.battery_present` (SC203) reads it. It does not detect a battery. Test a reboot with `battery_present = False` too.
+`battery_present` stands for the project's Battery Backup Setup box. `sys.battery_present` (SC203) reads it. Neither one detects a battery. Test a reboot with `battery_present = False` too.
 
 ## Inspecting state
 

@@ -200,8 +200,9 @@ _SWITCH_IN_RUN = RunStopConfig(debounce_ms=0, run_when_high=False)
 
 @pytest.mark.parametrize("runstop", [None, _SWITCH_IN_RUN], ids=["no-runstop", "switch-in-run"])
 def test_sc50_over_modbus_holds_stop(monkeypatch, runstop):
-    # Core's data provider stops the PLC on the write: no scan after it, SC50
-    # not stored, SC11 off.  Written after scan 1, held for the rest.
+    # The generated code stops on the write: no scan after it, SC50 not
+    # stored, SC11 off.  Written after scan 1, held for the rest.  pyrung's
+    # soft PLC refuses this write instead.
     namespace, read = _run(
         _count_program(),
         monkeypatch,

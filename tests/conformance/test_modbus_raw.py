@@ -13,7 +13,8 @@ memory matters.  These are the writes outside the part's memory:
 - C1..C1969, written with the values they read just before.
 - YD register 3, only with ``PYRUNG_CONFORMANCE_OUTPUTS=1``.  It may turn Y116 on until it is
   written back.
-- SC51 and SC50, only with ``PYRUNG_CONFORMANCE_STOP=1``.  SC50 puts the PLC in STOP.
+- SC51 and SC50, only with ``PYRUNG_CONFORMANCE_STOP=1``.  The SC50 write asks whether a CLICK
+  takes it and stops.  The simulator refuses it with exception code 2.
 
 The simulator and the P1AM code have no memory past the DD bank.
 
@@ -86,8 +87,10 @@ The probes, each one entry (``modbus_raw/<probe>``):
 - ``fc03_x126``, ``fc03_x200``, ``fc15_x1969``: requests past Modbus's limits (125 registers,
   1968 coils), which a server should refuse with exception 03.  The FC15 writes C1..C1969 with
   what they read just before.
-- ``sc51_watchdog_reset``, ``sc50_stop``: only with ``PYRUNG_CONFORMANCE_STOP=1``, last.  SC50
-  puts the PLC in STOP.  The probe records the exception, then SC11.  Put the PLC back in RUN.
+- ``sc51_watchdog_reset``, ``sc50_stop``: only with ``PYRUNG_CONFORMANCE_STOP=1``, last.
+  ``sc50_stop`` asks whether a CLICK takes the SC50 write and stops.  The simulator refuses it
+  with exception code 2.  The probe records the exception, then SC11.  If the PLC stopped, put
+  it back in RUN.
 
 Each probe writes only the part's own memory, or restores what it wrote in a ``finally``.  The
 exceptions are the writes a CLICK should refuse, and DD1531.  The reset (``Cmd = 0``) clears the

@@ -1,8 +1,7 @@
 """What a Copy of a Real into a TXT writes: the ``real_text`` group (part ``follow_values``).
 
 ``store_probe/real_into_text_and_fill`` read "66.6999969" from TXT541 for a DF of 66.7, then '0'
-in TXT551..TXT555: written or left over, not known.  One value does not give the format.  The fix
-step ``store-click`` 3b (``conform-fix`` arc) waits on this.
+in TXT551..TXT555.  Those '0's were left over, since a CLICK leaves the TXTs past the digits alone.
 
 Each case has a DF and 20 TXT of its own.  On one scan it fills the 20 with 'Z', copies its value
 into the DF and the DF into the first TXT, and reads 10 of the 20: two characters a field, as ASCII

@@ -478,7 +478,7 @@ class CompiledPLC:
     def reboot(self) -> SystemState:
         if self._kernel_pass_open:
             raise refused_inside_its_own_scan()
-        # A battery keeps the retentive tags, as STOP -> RUN does (runner.PLC.reboot).
+        # battery_present True keeps the retentive tags, as STOP -> RUN does (runner.PLC.reboot).
         tag_values = self._rebuild_tags_for_reset(preserve_retentive=self._battery_present)
         self._reset_runtime_scope(
             tag_values=tag_values,

@@ -2895,8 +2895,8 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        # A new PLC starts in RUN with the battery in.  A fork of a stopped state, or of one
-        # without the battery, steps on as that state would.
+        # A new PLC starts in RUN with battery_present True.  A fork of a stopped state, or of
+        # one with battery_present False, steps on as that state would.
         memory = historical_state.memory
         if not (memory.get(_MODE_RUN_KEY, True) and memory.get(_BATTERY_PRESENT_KEY, True)):
             fork._start_from_state(seeded)
@@ -4243,8 +4243,8 @@ class PLC:
     def battery_present(self) -> bool:
         """Whether the project's Battery Backup Setup box is checked (default True).
 
-        ``sys.battery_present`` (SC203 on a CLICK) reads it.  It mirrors that
-        setting and does not detect a battery.  With it True, :meth:`reboot`
+        ``sys.battery_present`` (SC203 on a CLICK) reads it.  The property
+        mirrors that setting and does not detect a battery.  With it True, :meth:`reboot`
         keeps the retentive tags.  With it False, :meth:`reboot` resets every tag.
         """
         return self._battery_present

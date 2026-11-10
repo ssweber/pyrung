@@ -398,7 +398,7 @@ Common findings:
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
 | `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Bit memory only: X, Y, C, T, CT, SC (`CLK_BANK_WRONG_ROLE`); clear a register with `copy()` or `fill()` |
-| Whole-number constant in `math()` | Any, cut to 16 bits as on a CLICK | −32768..32767. Stage a wider one in a DINT tag (`CLK_MATH_WIDE_CONSTANT`) |
+| Whole-number constant in `math()` | Any, cut to 16 bits as on a CLICK | −32768..32767 (0..65535 in hex mode). Stage a wider one in a DINT tag (`CLK_MATH_WIDE_CONSTANT`) |
 | Text compare on a `Char` (`Name == "AB"`) | Compares the Chars that follow it in its block | Those Chars mapped to consecutive TXT addresses in order (`CLK_TEXT_WINDOW_NOT_CONTIGUOUS`) |
 | Text `copy()` that runs past the end of its bank | Drops what runs past | Start it low enough to keep every character (`CLK_TEXT_PAST_BANK`) |
 | Text `copy()` that runs past the end of its block | Drops what runs past | A CLICK writes on into the bank. Map the block onto more of the bank (`CLK_TEXT_PAST_BLOCK`) |
