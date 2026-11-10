@@ -159,6 +159,12 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   a cap in the code.
 - The conformance stages use the local soft PLC; no agent runs `-m conformance` while a job's
   conf stage runs (the hook refuses it for agents anyway).
+- A branch that adds or changes a conformance case, or changes what an instruction computes, adds
+  `conf` to its own gate (`--stages lint,docs,fold-new,prove,pilot,conf`). In-process cases run on
+  fixed 10 ms scans. The soft PLC runs wall-clock scans of 10-40 ms and builds the apart groups
+  into one program. Train 23 (2026-11-10) found three failures only there, after five branches
+  were READY on `fast`: a confirmed flasher case broken by longer scans, a case whose one-scan tick
+  equalled its preset, and a case needing its part alone.
 
 ## Ground truth
 
