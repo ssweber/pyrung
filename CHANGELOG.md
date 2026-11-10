@@ -358,6 +358,8 @@
 
 ### Fixes
 
+- The ladder export puts the second and later outputs of a rung with an Or from the last Or row down (they started on the second row). The CLICK editor moved them there when the project was written to the PLC, so a pasted rung now stays as drawn.
+
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
