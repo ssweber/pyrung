@@ -25,16 +25,16 @@ and each case expects what it read.
   Result3 SC44 by -1.  The round read 0 for Result3; Result2 = 31 says the pointer decides, 0
   that the box clears SC44 however it was raised.  Result4 is the control: bits 1, 2, 4 for the
   three raises alone, 7.  The CLICK read 31, 0, 0 and 7.  SC43 is on after each box, and SC44
-  is off however it was raised.  pyrung reads 31, 31, 31 and 7, so the case is pending ``SYS``.
+  reads off however it was raised.  Each SC44 read sits behind the read rungs of the scans
+  before it, Maths on false rungs, and each clears SC44 (``flag_steps``).  pyrung reads the same.
 - ``ton_ctu_by_pointer``: ``address_flag_vs_other_instructions``'s layout, the TON and the CTU
   enabled on every scan of the window and the raise on the rung above each: pointer 0 on scan 3
   (bit 1), pointer -1 on scan 4 (bit 2), set when SC44 is still on after it.  Result2 the TON,
   Result3 the CTU.  Result1 is the control.  The CLICK read 1, 1 and 1.  In this layout the
   raise by pointer -1 alone reads SC44 off, so bit 2 says nothing about the TON or the CTU.
   Bit 1 says both leave SC44 raised by pointer 0 on, as ``address_flag_vs_other_instructions``
-  reads.  In ``boxes_by_pointer`` SC44 is off after each box.  Why the two layouts differ is
-  open, and ``flag_steps`` (part ``follow2_flags``) asks it.  pyrung reads 3, 3 and 3, so the
-  case is pending ``SYS``.
+  reads.  In this layout the raise by pointer -1 sits behind the read rung of scan 3, a Math on a
+  false rung on scan 4, and that clears SC44 (``flag_steps``).  pyrung reads the same.
 
 ``flag_halves``, the SC43 halves of ``flag_probe`` with a raise that takes:
 
@@ -44,9 +44,10 @@ and each case expects what it read.
   each op settles SC43.  pyrung reads the same.
 - ``oneshot_settles_sc43``: a oneshot Copy (bit 1) and a oneshot Math (bit 2), on the scan it
   fires (Result2, set when SC43 is off after it) and the next, when it does not fire (Result1,
-  set when SC43 is still on).  SC44 and SC40 read 0 for Result1 (``oneshot_that_does_not_fire``),
-  so a oneshot that does not fire still settles them.  Result3 = 1 is the control.  The CLICK
-  read 0, 3 and 1, so a oneshot that does not fire settles SC43 too.  pyrung reads the same.
+  set when SC43 is still on).  Result3 = 1 is the control.  The CLICK read 0, 3 and 1.  Result1
+  says nothing about the oneshot.  The read rung of the scan before sits between the oneshot and
+  its read, and as a Math on a false rung it clears SC43.  ``flag_reads/oneshot_held`` reads it
+  with a coil: a oneshot Copy that does not fire leaves SC43.  pyrung reads the same.
 - ``source_sc43``: ``copy(SC43, C)`` right after the raise.  Result1 = 1 when the C bit saw SC43
   on, 0 when the Copy settles the flag before it reads (SC44 read 0,
   ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the
@@ -209,7 +210,6 @@ flag_boxes = Group(
             init=init_boxes_by_pointer,
             expect={"Result1": 31, "Result2": 0, "Result3": 0, "Result4": 7},
             scans=scans_for(BOX_WINDOW),
-            pending="SYS",
         ),
         case(
             "A TON and a CTU enabled every scan, as address_flag_vs_other_instructions has them, "
@@ -219,7 +219,6 @@ flag_boxes = Group(
             init=init_ton_ctu_by_pointer,
             expect={"Result1": 1, "Result2": 1, "Result3": 1},
             scans=scans_for(),
-            pending="SYS",
         ),
     ],
 )

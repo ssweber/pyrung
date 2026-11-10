@@ -3,8 +3,8 @@
 CLICK's help: "SC46 _Math_Operation_Error: Data Registers used in the Math
 formula have Invalid values.  SC50 is turned to ON, the PLC is put in Stop
 Mode."  A CLICK does not do that (hardware round 1, 2026-10-29: all seven
-errors below, one per run): the Math writes 0 over its destination, SC46 is on
-for the rest of that scan, and the PLC stays in RUN, with SC46 and SC50 off
+errors below, one per run).  The Math writes 0 over its destination, SC46 is on
+until a later Math clears it, and the PLC stays in RUN.  SC46 and SC50 are off
 when the harness reads them afterwards.  No CLICK setting is known to change
 this; record the firmware version with the next round.  pyrung matches the
 hardware, so the group runs with every other group, last in
@@ -20,12 +20,13 @@ all seven have run.  What tells the models apart:
 
 - Result1 = 127: every error writes 0.  A bit off: that Math skipped the write
   (99) or stored something else.
-- Result2 = 127: every error raises SC46 for the rest of its scan.  A bit
-  off: that one raised no error, or SC46 comes up only after the scan.
+- Result2 = 127: every error raises SC46 right after its Math.  A bit off:
+  that one raised no error, or SC46 comes up only after the scan.
 - SC11 = 1, SC50 = 0 (read by the harness at the end): the PLC kept running.
   A PLC that stops does so after the first error, scan 2: the case never
   fires, and the harness reads SC11 = 0 (and SC50 = 1 if it follows the help).
-- SC46 = 0 at the end: no error is left standing.
+- SC46 = 0 at the end: a later Math cleared the last error (``flag_carry``
+  reads SC46 carried into the next scan when no Math runs after it).
 """
 
 from __future__ import annotations

@@ -10,8 +10,9 @@ nothing from another case can show.
 Most values read back as a class, 1 for the first reading the case names, 2 for
 the second and so on, 0 for anything else: a Word or a Real does not fit a slot's
 Int whatever a Copy does with it, and how a Word comes out of a Copy is itself
-one of the questions.  SC46 stays on to the end of the scan, so a case that
-reads it uses :class:`GuardedProbes`, which waits for a scan the flag starts off.
+one of the questions.  SC46 stays on until a Math clears it, so another case's
+op can leave it on.  A case that reads it uses :class:`GuardedProbes`, which
+waits for a scan the flag starts off.
 """
 
 from __future__ import annotations
@@ -165,8 +166,8 @@ def record_run(
 class GuardedProbes:
     """An op once, on the first scan past the stage whose start finds *flag* off.
 
-    For a flag that stays on to the end of the scan (SC46), where another case's
-    op on the same scan would otherwise read as this one's.  ``Scratch`` is the
+    For a flag another case's op can leave on (SC46), which would otherwise
+    read as this one's.  ``Scratch`` is the
     scan number (``scans.count_scans``).  Each probe takes two C bits from *bits*.
     """
 
