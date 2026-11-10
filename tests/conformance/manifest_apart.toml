@@ -258,3 +258,10 @@ slots = 1
 
 [groups.pack_point.cases]
 point_into_dd = 1
+
+[groups.modbus_raw]
+base = 1571 # Conf_ModbusRaw: DS1571..DS1590
+slots = 1
+
+[groups.modbus_raw.cases]
+raw_values = 1

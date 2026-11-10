@@ -19,8 +19,8 @@ Each part's main program writes its own layout hash to ``DS1``, and a run
 against a real PLC reads it to pick that part's groups (``build_for``).
 
 The parts ``units``, ``fixed_scan``, ``text_flasher``, ``follow_flags``, ``follow_values``,
-``follow_timing``, ``follow_extra`` and the ``follow2_*`` parts have memory of their own
-(``APART_PARTS``), apart from the whole suite;
+``follow_timing``, ``follow_extra``, the ``follow2_*`` parts and ``modbus_raw`` have memory of
+their own (``APART_PARTS``), apart from the whole suite;
 ``fixed_scan`` is run with CLICK's fixed scan on, and its export says how.
 
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
@@ -44,6 +44,7 @@ from pyrung.conformance import (
     load_manifest,
     read_program_hash,
 )
+from tests.conformance import test_modbus_raw
 from tests.conformance.coils import (
     test_coil_phase,
     test_coil_range,
@@ -338,6 +339,8 @@ APART_GROUPS = [
     test_tof_rewrite.group,
     # May stop the PLC: run alone, with C411 set by hand.
     test_for_signed.group,
+    # Raw Modbus requests (test_modbus_raw.py drives it).
+    test_modbus_raw.group,
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
@@ -379,6 +382,8 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
     # For counts that may stop the PLC on its watchdog, alone: C411 set by hand arms it.
     "follow2_for": ApartPart(("for_signed",)),
+    # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
+    "modbus_raw": ApartPart(("modbus_raw",)),
 }
 
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,

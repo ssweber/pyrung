@@ -38,6 +38,7 @@ from tests.conformance.probe_kit import (
     asks_for_a_reading,
     between,
     reading_lines,
+    record_raw_readings,
     record_readings,
     record_run,
 )
@@ -178,7 +179,10 @@ def test_each_part_apart_fits_a_click_project(part: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "part", sorted(p for p in suite.APART_PARTS if p.startswith(("follow_", "follow2_")))
+    "part",
+    sorted(
+        p for p in suite.APART_PARTS if p.startswith(("follow_", "follow2_")) or p == "modbus_raw"
+    ),
 )
 def test_each_follow_part_pastes_under_the_rung_limit(part: str, tmp_path) -> None:
     out = suite.build(part).export(tmp_path / part)
@@ -488,6 +492,33 @@ def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, mo
     monkeypatch.setenv("PYRUNG_CONFORMANCE_STEP", "STOP->RUN")
     record_readings(path, [read], on="2026-11-07")
     assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"][-1]["step"] == "STOP->RUN"
+
+
+def test_a_raw_reading_is_an_entry_toml_reads_back(tmp_path) -> None:
+    path = tmp_path / "readings.toml"
+    readings = {
+        "staged_nan": {"raw": ["0x0000", "0xFFC0"], "decoded": "nan", "settled": 1},
+        "fc03_x200": {"raw": "timeout", "echo": [{"DH1": 0}, {}], "sent": True},
+    }
+    keys = record_raw_readings(path, readings, group="modbus_raw", case_hash="h", on="2026-11-09")
+    assert keys == ["modbus_raw/staged_nan", "modbus_raw/fc03_x200"]
+    record_raw_readings(path, {"a": {"raw": [1]}}, group="g", case_hash="h2", on="2026-11-10")
+    entries = tomllib.loads(path.read_text(encoding="utf-8"))["reading"]
+    assert entries == [
+        {
+            "case": "modbus_raw/staged_nan",
+            "hash": "h",
+            "on": "2026-11-09",
+            "read": readings["staged_nan"],
+        },
+        {
+            "case": "modbus_raw/fc03_x200",
+            "hash": "h",
+            "on": "2026-11-09",
+            "read": readings["fc03_x200"],
+        },
+        {"case": "g/a", "hash": "h2", "on": "2026-11-10", "read": {"raw": [1]}},
+    ]
 
 
 def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) -> None:
