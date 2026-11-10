@@ -523,7 +523,7 @@ The History panel (in the debug sidebar) has two tabs: **Tags** and **Chain**.
 
 Shows tag values at each retained scan. The slider scrubs through the scan cache, and tag values update live as you drag. Values update automatically during `continue` runs. Right-click a tag in the Data View or Graph View to add it here.
 
-Each entry is the scan a tag changed on. A long `run_for()` leaves scans with no record of that. The panel therefore steps those scans again when you open it, newest first, for up to about 3 seconds a request. What it hasn't read yet shows as a range with the net change across it. The range does not say which scan made the change. **Load older** reads further back.
+Each entry is a scan on which a tag changed. A long `run_for()` does not record which scans those are. When you open the panel, it steps the run's scans again, newest first. Each request steps for up to about 3 seconds. A stretch of scans it has not stepped yet shows as one range with the net change across it. The range does not say which scan made the change. **Load older** reads further back.
 
 ### Chain tab
 
