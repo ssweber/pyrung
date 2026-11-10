@@ -580,7 +580,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "        return False",
         '    if _mapped[0] == "SD" and _mapped[1] not in _MB_SD_WRITABLE:',
         "        return False",
-        # A write to half of a Dint or Real keeps the other half, and a cell holding what no
+        # A write to half of a Dint or Real keeps the other half.  A cell holding what no
         # register can (a Dint past 32 bits) has no other half to keep.  Reading the cell
         # first finds that, so a multi-write refuses it before storing anything.
         "    if _mapped[0] in _MB_WIDE:",

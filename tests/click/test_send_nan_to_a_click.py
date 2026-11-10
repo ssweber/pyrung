@@ -21,7 +21,7 @@ from pyrung.core.instruction.send_receive.backends import _run_click_send_reques
 
 
 class _KeepEverything(MemoryDataProvider):
-    """Stores each value as given, NaN included (the default provider refuses a NaN)."""
+    """Stores each value as given, so the test reads the bits that reached it."""
 
     def __init__(self) -> None:
         super().__init__()

@@ -407,14 +407,15 @@
   - `cause()`, `effect()` and `history.previous_transition()` answer for it (they returned `None`). It last changed on the scan it became NaN, even when `math()` computes the NaN again.
   - `plc.diff()`, `monitor()` callbacks and the debugger's tag changes no longer report a change for it (they reported one on every scan).
 - Over Modbus and in `unpack_to_words()` or `unpack_to_bits()`, a `Real` holding any NaN is 0xFFFF:0xFFFF as on a CLICK (it was its own bits, such as 0x7FC0:0x0000). This holds for the soft PLC, for generated CircuitPython and for a `send()` to a `ModbusAddress`. A `send()` of a NaN or Inf to a CLICK address now works too (the server refused it).
-- The soft PLC (`SimServer`) answers raw Modbus requests as a CLICK does, and pyrung now needs pyclickplc 0.5.1:
+- pyrung needs pyclickplc 0.5.1, so a `ClickServer` (and the soft PLC, `SimServer`) answers raw Modbus requests as a CLICK does:
   - a read past the end of a bank answers exception 02 (it returned 0)
   - a request outside the Modbus limits answers exception 03
   - a write the server refuses leaves memory unchanged
   - a `DF` write accepts +Inf, -Inf and NaN, and every NaN reads back as 0xFFFF:0xFFFF
   - a `Text` write accepts any character code from 0 to 255
-  - each unnamed `XD` or `YD` register is a spare word of its own
+  - an odd `XD` or `YD` register above `XD0u` or `YD0u` holds its own value (it read and wrote the register before it), and an `XD` one reads 0 and refuses a write
   - function codes 22 and 23 answer exception 01
+- A `send()` or `receive()` to a CLICK address sends a range longer than the Modbus limits as several requests. A short reply sets the error flag with exception code 0 (it could return fewer values).
 - `how(avoid=...)` no longer treats an avoid check that raises as clear, which let it plan through the avoided state. When the check raises on the start state, or on a scan of a command `how()` tries, `how()` raises `AvoidCheckError` with the check's exception as its cause.
 - A long `how()` wait keeps its memory bounded. It keeps at most two compiled kernels and 512 checkpoints, and records a long run's scans only when a later `cause()` or a survey such as `cold_rungs()` reaches them.
 - A kernel that fails to compile for a reason pyrung doesn't expect gives a `RuntimeWarning`, and the scans run interpreted, instead of raising out of `run_for()` or `how()`.
@@ -538,7 +539,7 @@
     - a coil write to X, T or CT answers with exception code 2 (it stored the write)
     - a read of an address in a CLICK bank that no tag or rung uses returns 0 (it answered with exception code 2). A write there still answers with exception code 2.
     - it serves every cell of a bank that a rung reaches by pointer or block instruction, as in `ds[ptr]` (a cell no tag named answered with exception code 2)
-    - XD and YD serve CLICK's 17 registers each, built from the X and Y bits the server serves. A write to YD sets those Y bits. A YD register with no Y bits keeps the word written to it.
+    - XD and YD serve CLICK's 17 registers each, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits. A YD register with no Y bits keeps the word written to it.
     - a read of units 17..32 of an X or Y slot returns 0 (it answered with exception code 2)
   - timers take their time from `time.monotonic_ns()`, so they no longer drift after hours of uptime, and the first scan after STOP->RUN counts its time
 - A TXT blanked by `fill("")` or `reset()` holds NUL, as an unwritten TXT and CLICK's text registers do:
