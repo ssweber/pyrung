@@ -464,7 +464,7 @@
 
   When the search can't cover an input, it now answers `Intractable` and names the input. Give the input `choices=` or an integer `min=`/`max=` (1000 values at most), and write a callable property as a condition.
 - `always()`, `never()` and `reachable_states()` answer `Intractable` for:
-  - a `split_at=` tag that holds none of its choices (it raised a Python error)
+  - a `split_at=` tag that holds none of its choices (it raised `ValueError`)
   - a property that reads something the verifier can't evaluate (it could answer `Proven`)
 - A block slot that only a `select()` or a pointer reaches behaves like any other slot, in `PLC`, `CompiledPLC` and generated CircuitPython:
   - a tag on the slot and a pointer to it no longer split into two registers in `replay_to()`, a seek, `CompiledPLC` or generated CircuitPython (the pointer read the slot's power-on value)
@@ -559,7 +559,7 @@
 - The debugger sends a `Real` holding Inf or NaN as `inf`, `-inf` or `nan` (it sent `Infinity`, which DAP clients refused).
 - CLICK ladder export refuses a rung whose drawing would move a contact's read past an output on that rung that writes the contact's tag. The error names the contact and the output. Move the output to a rung of its own, or give the rows their own contacts.
 - CLICK import refuses a pin row whose pin doesn't belong to the instruction above it, or comes out of CLICK's order (`.down()` or `.clock()` before `.reset()`, and a drum's `.reset()`, `.jump()`, `.jog()` in that order).
-- `math()` into a pointer destination (`math(X + 1, DS[Ptr])`) raises a `TypeError` that says what to do when the program is built (it raised `AttributeError`). Store into a tag with `math()`, then `copy()` it to `DS[Ptr]`.
+- `math()` into a pointer destination (`math(X + 1, DS[Ptr])`) raises a `TypeError` when the program is built, and the error says what to do (it raised `AttributeError`). Store into a tag with `math()`, then `copy()` it to `DS[Ptr]`.
 - A generated CLICK project's `run.py` checks one scan on a fork, so the PLC the debugger attaches to starts at scan 0 (it started at scan 1).
 
 ### Performance
