@@ -117,8 +117,8 @@ group = Group(
             probe="the order and width of a Real SUM (see the table)",
         ),
         case(
-            "SUM of the same orderings of {1e30, 1, -1e30} adds a double left to right: they "
-            "read 0, 0, 1 (Result1..3), and a compensated SUM would read 1, 1, 1",
+            "SUM adds a double left to right.  The same orderings of {1e30, 1, -1e30} read 0, "
+            "0, 1 (Result1..3).  A compensated SUM would read 1, 1, 1",
             ladder=prove_f64_row,
             init=init_f64_row,
             expect={"Result1": 0, "Result2": 0, "Result3": 1},
