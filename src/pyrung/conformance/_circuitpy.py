@@ -55,7 +55,10 @@ def generate(build: ConformanceProgram, *, ip: str = "127.0.0.1", port: int = 50
     """``generate_circuitpy()`` output for *build*: the P1AM-200 project to load.
 
     The generated server serves every register *build*'s TagMap maps (slots,
-    their spares, the hashes) and every raw register a case uses.
+    their spares, the hashes) and every raw register a case uses.  A read of any
+    other address in a CLICK bank returns 0, as on a CLICK.  A cell of a range
+    that a rung reaches by pointer or block instruction answers with exception
+    code 2 unless a tag names it.
     """
     from pyrung.circuitpy import P1AM, ModbusServerConfig, generate_circuitpy
 
@@ -78,7 +81,7 @@ class CircuitPySim:
     its own generated Modbus server between scans.  The RUN/STOP switch reads
     RUN.  A rung's STOP command (SC50) puts the code in STOP, and the code
     keeps serving Modbus in STOP.  The Modbus server refuses a write to SC50
-    with exception code 2, as the soft PLC does.  Same interface as
+    with exception code 2, as a CLICK does.  Same interface as
     :class:`~pyrung.conformance.SimServer`: a context manager with
     :attr:`endpoint` and :meth:`raise_if_failed`.
     """

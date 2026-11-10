@@ -463,8 +463,8 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "    _mapped = _MB_REG_MAP.get(addr)",
         "    if _mapped is None:",
         "        return 0 if _mb_in(addr, _MB_REG_SPANS) else None",
-        # A cell can hold what no register can (a Dint on a DS slot): that read is refused,
-        # and the program keeps running.
+        # A cell can hold what no register can (a Dint on a DS slot). The server refuses
+        # that read, and the program keeps running.
         "    try:",
         "        return _mb_read_reg_plc(_mapped[0], _mapped[1], _mapped[2])",
         "    except Exception:",
