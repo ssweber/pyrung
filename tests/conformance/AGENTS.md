@@ -71,11 +71,11 @@ def test_rungs():
 - `SYS`: the fault-flag model (SC40 follows the last Math, SC43 and SC44 the last Copy-family instruction or Math).
 - `MATH`: Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results).
 - `SC43`: which stores raise SC43 (a clamping Copy, a Math that wraps, a Copy of +/-Inf into an integer, but not a Copy of NaN).
-- `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`).
-- `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). No case reads the bank's flag (the flag side is `SYS`).
+- `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`), and writes a Real's float32 digits into a TXT (`real_text/six_digits_first`, `real_text/six_digits_past`).
+- `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). `past_clean` reads SC43 and SC44 off after the write, as pyrung does (the flag side is `SYS`).
 - `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times). A CLICK does not.
 
-`DRUM`, `MATH`, `SC43`, `SYS` and the `faults` `TEXT` case are met: no case carries `DRUM`, `MATH`, `SC43` or `SYS` now.
+No case carries `DRUM`, `MATH` or `SC43` now, and the `faults` `TEXT` case is met. `SYS` is on the two `flag_boxes` cases only (part `follow_flags`). `flag_steps` asks what clears SC44 there.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
