@@ -1418,3 +1418,21 @@ case = "jump_return/bad_jump_on_return"
 hash = "7f673e8ef774"
 on = "2026-11-10"
 read = { Result1 = 2222, Result2 = 2020, Result3 = 2020, Result4 = 2020, ErrorCode = 2222 }
+
+[[reading]]
+case = "flag_steps/sc44_steps"
+hash = "19d6320f69d0"
+on = "2026-11-10"
+read = { Result1 = 1005, Result2 = 1005, Result3 = 0 }
+
+[[reading]]
+case = "flag_steps/sc43_steps"
+hash = "498f241238ae"
+on = "2026-11-10"
+read = { Result1 = 1005, Result2 = 1005, Result3 = 0 }
+
+[[reading]]
+case = "flag_steps/sc40_steps"
+hash = "d2643c0b871e"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 0 }
