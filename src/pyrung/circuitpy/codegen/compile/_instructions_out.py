@@ -191,12 +191,8 @@ def _compile_flasher_instruction(
         f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp4}_off_preset = int({_compile_value(instr.off_preset, ctx)})",
         f"{sp4}if _on_preset <= 0 or _off_preset <= 0:",
-        # Held reset: idle, dark, both accumulators 0.
+        # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
         f'{sp8}_mem["{phase_key}"] = {_FLASH_IDLE}',
-        f'{sp8}_mem["{on_frac}"] = 0',
-        f'{sp8}_mem["{off_frac}"] = 0',
-        f"{sp8}{on_write} = 0",
-        f"{sp8}{off_write} = 0",
         f"{sp8}{target_write} = False",
         f"{sp4}else:",
         f'{sp8}_phase = _mem.get("{phase_key}", {_FLASH_IDLE})',
@@ -206,12 +202,13 @@ def _compile_flasher_instruction(
         f"{sp12}{off_write} = 0",
         f'{sp12}_mem["{on_frac}"] = 0',
         f'{sp12}_mem["{off_frac}"] = 0',
+        # The coil shows the phase that runs this scan, even one that ends on it.
+        f"{sp8}{target_write} = _phase == {_FLASH_ON}",
         f"{sp8}if _phase == {_FLASH_ON}:",
         *_compile_flasher_phase(instr, True, ctx, sp12),
         f"{sp8}else:",
         *_compile_flasher_phase(instr, False, ctx, sp12),
         f'{sp8}_mem["{phase_key}"] = _phase',
-        f"{sp8}{target_write} = _phase == {_FLASH_ON}",
     ]
 
 

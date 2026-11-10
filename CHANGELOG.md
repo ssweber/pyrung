@@ -125,7 +125,6 @@
     - after the command drops, `Fb` turns off one scan later than it did
   - `Physical(flasher_on=, flasher_off=)` runs as a `flasher`:
     - its `Fb` goes high the scan after its enable turns on (it waited out the off time first)
-    - its first high phase is one scan short
     - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
   - both delays of one `Physical` count in the same unit, and so do `flasher_on` and `flasher_off`
   - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
@@ -568,6 +567,7 @@
 - `math()` with `sqrt` of a negative, `log`/`log10` of 0 or a negative, or `asin`/`acos` outside -1..1 no longer raises out of the scan. The function gives 0 and sets `fault.math_operation_error` (SC46) for the rest of the scan, and the PLC stays in RUN, in `PLC`, `CompiledPLC` and generated CircuitPython.
 - `rise()` and `fall()` on the timed clocks (`sys.clock_10ms` .. `sys.clock_1h`) count one edge per toggle in realtime mode (with 1 ms scans, `clock_100ms` counted about 80 rises a second).
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit, such as a scan under 1 ms at `"Tms"` (its accumulator stayed at 0).
+- An `off_delay()` that has timed out turns Done back on and times again when its accumulator is written to 0 while its rung is false (Done stayed off and the accumulator stayed at 0).
 - A `select()` with tag bounds (`DS.select(Start, End)`) sets `fault.address_error` and writes nothing, everywhere, when a bound is outside its block at either end. A `search()` over one now compiles (it generated an `IndentationError`).
 - A `select()` with tag bounds that spans a gap in a sparse block skips the gap everywhere, as a static `select()` does (compiled runs and generated CircuitPython set `fault.address_error`). So `always()` and `never()` no longer report `Proven` on what `PLC` didn't do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan, everywhere.
 - A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses (the feedback never flipped, because its millisecond timer stopped at 32767). Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on). Both delays of one `Physical` then count in that unit.

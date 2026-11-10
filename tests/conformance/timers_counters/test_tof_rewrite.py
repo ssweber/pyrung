@@ -1,21 +1,20 @@
 """A timed-out TOF whose TD the ladder writes to 0: the ``tof_rewrite`` group (part ``follow2_coils``).
 
-``coil_timing/deb_off_against_tof`` hung in its reset on a CLICK: its init wrote 0 into a TOF's TD
-on every reset scan, and its ``ready`` waited for the TOF's Done to be off, which it never was
-again.  That says a CLICK TOF judges ``Acc < preset`` from its TD on every scan its rung is false,
-so a TD written to 0 turns Done back on; pyrung keeps Done off once the TOF has timed out.  No case
-has read it straight.
-
 ``done_after_td_zeroed`` (T1): a TOF of 20 ms on a rung true on scans 1 and 2, false after.  By
-scan 30 it has timed out (Result1, Done then: 0, the control; Result4 its TD, past 20).  On scan
-31 a Copy below the TOF writes its TD to 0, and on scan 32, on the rung after the TOF, Result2 is
-Done (1 on) and Result3 the TD:
+scan 30 it has timed out.  Result1 is its Done then (0), and Result4 its TD (past 20).  On scan
+31 a Copy below the TOF writes its TD to 0.  On scan 32, on the rung after the TOF, Result2 is
+Done (1 on) and Result3 the TD.
 
-- 1 and about a scan's ms: Done comes back on, judged from the TD (CLICK, from the hang).
-- 0 and about a scan's ms: Done stays off, the TD counting on.
-- 0 and 0: Done stays off and the TD stands at 0 (pyrung reads 0, 0, 0 and 280: its TOF counts
-  on past its preset until the write, and not after it).
-- 0 and the TD of scan 30 or more: the write is undone.
+A CLICK read 0, 1, 1..2, 33..34 (2026-11-10, twice).  Done comes back on and the TD counts from
+0.  So a TOF that has been enabled judges ``TD < preset`` on every scan its rung is false, and a
+TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never enabled still
+rests at Done off, TD 0 (``timers/tof_never_enabled``).  pyrung read 0, 0, 0, 280 before, because
+it kept a timed-out TOF at rest once its TD read 0.
+
+Result3 and Result4 are milliseconds, so they follow the target's scan and are ranges.  Result3
+is a scan's tick from 0, under the 20 ms preset (Done on says so).  Result4 is past the preset,
+and at most the 28 scans it times (3..30) at the 50 ms scan cap, with a little room.  pyrung reads
+10 and 280 at the in-process 10 ms scan.
 
 The case's reset depends on nothing the TOF does: its rung is false through the reset, and its
 Done and TD are kept (a TOF times on, and its Done may come back on, after the case).  The case owns
@@ -29,7 +28,6 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, off_delay
 from tests.conformance.memory import ClickTimer
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 WINDOW = 34
@@ -58,19 +56,18 @@ group = Group(
     "tof_rewrite",
     [
         case(
-            "A timed-out TOF (Result1 = 0, Result4 its TD) whose TD the ladder writes to 0 turns "
-            "Done back on on its next scan (Result2 = 1, 0 it stays off), the TD counting from 0 "
-            "(Result3)",
+            "A timed-out TOF (Result1 = 0, Result4 its TD, past its 20 ms preset) whose TD the "
+            "ladder writes to 0 turns Done back on on its next scan (Result2 = 1), the TD "
+            "counting from 0 (Result3, a scan's ms)",
             ladder=prove_done_after_td_zeroed,
             keep=(TOF.Done, TOF.Acc),
             expect={
                 "Result1": 0,
-                "Result2": between(0, 1),
-                "Result3": between(0, 32767),
-                "Result4": between(0, 32767),
+                "Result2": 1,
+                "Result3": range(1, 20),
+                "Result4": range(20, 1451),
             },
             scans=scans_for(WINDOW),
-            probe="a TOF's TD written to 0 after it timed out: Done on again or not (5)",
         ),
     ],
 )

@@ -236,22 +236,22 @@ class TestFlasher:
         )
         # Neither Timer's Done turns on (O6).
         assert rows == [
-            # The first on phase counts the rung's first scan, as on_delay does.
+            # A phase shows through the scan its TD reaches the preset.
             (True, False, 10, False, 0),
             (True, False, 20, False, 0),
-            (False, False, 30, False, 0),
+            (True, False, 30, False, 0),
             (False, False, 30, False, 10),
-            (True, False, 0, False, 20),
+            (False, False, 0, False, 20),
             (True, False, 10, False, 20),
             (True, False, 20, False, 20),
-            (False, False, 30, False, 0),
+            (True, False, 30, False, 0),
             (False, False, 30, False, 10),
-            (True, False, 0, False, 20),
+            (False, False, 0, False, 20),
             (True, False, 10, False, 20),
             (False, False, 10, False, 20),  # O4: both TDs freeze
             (True, False, 10, False, 0),  # a full on phase again, both TDs from 0
             (True, False, 20, False, 0),
-            (False, False, 30, False, 0),
+            (True, False, 30, False, 0),
             (False, False, 30, False, 10),
         ]
 
@@ -266,14 +266,17 @@ class TestFlasher:
         assert _trace(runner, [1], "Beacon", "OT3_Acc", "OT4_Acc") == [(True, 10, 0)]
         runner.patch({"OT3_Acc": 60})
         rows = _trace(runner, [1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
-        assert rows == [(False, 70, 0), (False, 70, 10)]
+        assert rows == [(True, 70, 0), (False, 70, 10)]
         runner.patch({"OT4_Acc": 60})
         rows = _trace(runner, [1, 1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
-        assert rows == [(True, 0, 70), (True, 10, 70), (True, 20, 70)]
+        assert rows == [(False, 0, 70), (True, 10, 70), (True, 20, 70)]
 
     @pytest.mark.parametrize("off_preset", [0, -5])
     def test_off_preset_of_0_or_below_holds_it_reset(self, runner_factory, off_preset):
-        """``flasher_off``: dark, both TDs 0; a positive preset starts an on phase."""
+        """``flash_zero``: the flasher is dark with both TDs frozen.
+
+        A positive preset starts an on phase.
+        """
         Beacon = Bool("Beacon")
         OffTime = Int("OffTime", default=off_preset)
         with Program() as logic:
@@ -283,10 +286,10 @@ class TestFlasher:
         runner = runner_factory(logic, dt=0.010)
         runner.patch({"OT3_Acc": 7, "OT4_Acc": 9})
         rows = _trace(runner, [1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
-        assert rows == [(False, 0, 0)] * 2
+        assert rows == [(False, 7, 9)] * 2
         runner.patch({OffTime: 20})
-        rows = _trace(runner, [1, 1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
-        assert rows == [(True, 10, 0), (True, 20, 0), (False, 30, 0)]
+        rows = _trace(runner, [1, 1, 1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
+        assert rows == [(True, 10, 0), (True, 20, 0), (True, 30, 0), (False, 30, 10)]
 
     def test_needs_both_phases(self):
         Beacon = Bool("Beacon")
@@ -303,15 +306,16 @@ class TestFlasher:
 
         runner = runner_factory(logic, dt=0.250)
         rows = _trace(runner, [1] * 12, "Beacon")
-        assert [r[0] for r in rows] == [True] * 3 + [False] * 4 + [True] * 4 + [False]
+        assert [r[0] for r in rows] == [True] * 4 + [False] * 4 + [True] * 4
 
 
 class TestShortPhases:
-    """The first on phase counts the rung's first scan, as on_delay does: one no longer
-    than a scan does not show.  A preset of 0 or below gives no pulse (hardware,
-    ``out_more/zero_and_below``)."""
+    """A ``timed`` pulse counts the rung's first scan, as on_delay does, so one no longer than
+    a scan does not show.  A flasher phase shows through the scan it ends on, so one no
+    longer than a scan shows for that scan (hardware, ``flash_zero/short_first_phase``).
+    A preset of 0 or below gives no pulse (hardware, ``out_more/zero_and_below``)."""
 
-    def test_flasher_shows_an_on_time_under_a_scan_only_after_an_off_phase(self, runner_factory):
+    def test_flasher_shows_an_on_time_under_a_scan_for_one_scan(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):
@@ -319,7 +323,7 @@ class TestShortPhases:
 
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(runner, [1] * 8, "Beacon")
-        assert [r[0] for r in rows] == [False, False, False, True, False, False, False, True]
+        assert [r[0] for r in rows] == [True, False, False, False, True, False, False, False]
 
     @pytest.mark.parametrize("on_preset", [0, -5])
     def test_flasher_with_no_on_time_never_shows(self, runner_factory, on_preset):

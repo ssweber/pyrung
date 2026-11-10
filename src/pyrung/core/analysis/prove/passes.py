@@ -2027,7 +2027,7 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     """
     assert ctx.compiled is not None
     defaults: dict[str, Any] = dict(program_memory_defaults(ctx.program))
-    defaults.update(dict.fromkeys(_tof_timing_keys(ctx.program), False))
+    defaults.update(dict.fromkeys(_tof_armed_keys(ctx.program), False))
     pilot = ctx.compiled.create_kernel()
     if ctx.system_points is not None:
         ctx.system_points.seed(pilot.tags)
@@ -2041,19 +2041,18 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     ctx.memory_key_defaults = tuple(defaults[k] for k in names)
 
 
-def _tof_timing_keys(program: Program) -> set[str]:
-    """Each off-delay timer's ``tof_timing_key``, which the pilot scan rarely sets.
+def _tof_armed_keys(program: Program) -> set[str]:
+    """Each off-delay timer's ``tof_armed_key``.
 
-    The marker decides whether ``Done False, Acc 0`` rests or keeps timing
-    (preset reached under a sub-unit scan), so two states that differ only
-    in it differ in what follows: it belongs in the state key.  It is absent
-    (``None``) in every state of a timer that never stalls at zero.
+    The key decides whether ``Done False, Acc 0`` rests (never enabled) or
+    keeps timing.  Two states that differ only in it go on differently, so it
+    belongs in the state key.
     """
-    from pyrung.core.instruction.timers import OffDelayInstruction, tof_timing_key
+    from pyrung.core.instruction.timers import OffDelayInstruction, tof_armed_key
     from pyrung.core.validation._common import walk_instructions
 
     return {
-        tof_timing_key(instr.accumulator.name)
+        tof_armed_key(instr.accumulator.name)
         for instr in walk_instructions(program)
         if isinstance(instr, OffDelayInstruction)
     }

@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset, which starts the other phase from 0. The other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are. When the rung comes back, both restart from 0 with an on phase. CLICK's editor refuses a constant preset of 0 or below. A DS preset of 0 or below keeps `Beacon` off and both `Acc` values at 0.
+The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset. `Beacon` still shows that phase on the scan its `Acc` reaches the preset, and the other phase starts from 0 on the next scan. The other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are. When the rung comes back, both restart from 0 with an on phase. CLICK's editor refuses a constant preset of 0 or below. A DS preset of 0 or below turns `Beacon` off and freezes both `Acc` values where they are.
 
 ### `timed` — on for a set time
 
@@ -57,7 +57,7 @@ with rung(CallButton):
 
 A rung edge starts the on time. The on time runs out whatever the rung does, and an edge during it does not restart it. Without `maintained=True`, the next pulse needs the rung to go false and true again. The coil has timed out while its `Acc` is at or past the preset. The `Acc` keeps its value after the rung falls, and the next edge starts it from 0. Each scan reads the timed-out state from `Acc >= preset`. Lowering a register preset below a running `Acc` therefore reads as timed out on the next scan.
 
-An on preset of 0 or below gives a `timed` coil no pulse. The rung's first scan counts toward the first phase, as with `on_delay`, so a `timed` pulse or a first `flasher` on phase of one scan or less never shows. These coils never turn on their timer's `Done` bit, so a contact on `Timer[3].Done` won't tell you a `flasher` or `timed` coil has finished. Read the coil itself, or compare the `Acc`. Only `toggle` takes `immediate(...)`. Don't reuse a coil's timer elsewhere. An `on_delay` on the same timer is a conflicting-output finding, as it is in CLICK.
+An on preset of 0 or below gives a `timed` coil no pulse. The rung's first scan counts toward the first phase, as with `on_delay`. So a `timed` pulse of one scan or less never shows, but a `flasher` phase that short shows for one scan. These coils never turn on their timer's `Done` bit, so a contact on `Timer[3].Done` won't tell you a `flasher` or `timed` coil has finished. Read the coil itself, or compare the `Acc`. Only `toggle` takes `immediate(...)`. Don't reuse a coil's timer elsewhere. An `on_delay` on the same timer is a conflicting-output finding, as it is in CLICK.
 
 ## `latch` — set and hold (SET)
 

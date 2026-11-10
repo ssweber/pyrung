@@ -187,11 +187,11 @@ def flasher_model(
 ) -> list[bool]:
     """The coil per scan.  Each time the rung goes true a run starts at scan 1,
     always in an on phase, both TDs from 0 (hardware, probe O4 and 2026-11-05).
-    A phase ends on the scan its timer reaches the preset, and that scan
-    already shows the next phase, so on and off phases run ``ka`` and ``kb``
-    scans, but the first on phase counts scan 1 as a tick, as on_delay does.
-    An on or off time of 0 or below holds it dark (hardware,
-    ``out_more/zero_and_below`` and ``flasher_off``)."""
+    A phase ends on the scan its timer reaches the preset, and that scan still
+    shows it (hardware, ``flash_zero/short_first_phase``), so from scan 1 on
+    and off phases run ``ka`` and ``kb`` scans.  An on or off time of 0 or
+    below holds it dark (hardware, ``out_more/zero_and_below`` and
+    ``flasher_off``)."""
     ka = _ticks_to_reach(on_preset, per_scan)
     kb = _ticks_to_reach(off_preset, per_scan)
     out, n = [], 0
@@ -199,10 +199,8 @@ def flasher_model(
         n = n + 1 if level else 0
         if not level or on_preset <= 0 or off_preset <= 0:
             out.append(False)
-        elif n < ka:
-            out.append(True)
         else:
-            out.append((n - ka) % (ka + kb) >= kb)
+            out.append((n - 1) % (ka + kb) < ka)
     return out
 
 
