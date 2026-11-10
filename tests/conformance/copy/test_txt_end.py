@@ -3,7 +3,7 @@
 
 ``copy_more/to_text_real`` read on a CLICK that 1.5 copied as text (Copy Option 4c) writes
 "1.5000000", nine characters.  Started at TXT995 only six of them fit before the bank ends.  The
-fix step ``store-click`` (3 in the ``conform-fix`` arc) waits on what CLICK does then (store-click
+fix step ``store-click`` (3 in the ``conform-fix`` arc) waited on what CLICK does then (store-click
 review NB4).
 
 ``by_pointer`` stages TXT994..TXT1000 to 'Z' on scan 1, copies the DF 1.5 as text through a DS
@@ -19,13 +19,13 @@ ErrorCode is the code of TXT994, 90 where nothing before the start was written. 
 (bit 1) and SC44 (bit 2) on the rung right after the Copy, and the controls on scan 3: SC43 from
 a Copy of DD 40000 into a DS (bit 4, ``faults/copy_clamp_out_of_range``) and SC44 from a Copy
 through a DD pointer of 0 (bit 8), so 12 is two raises that took and the flags read as they
-should.  The expectation takes any of 0..15, since a CLICK may latch a flag across scans or not
-raise SC44 for a pointer of 0: the bits are the reading (1 SC43 and 2 SC44 after the Copy, 4 and 8
-the controls).  pyrung reads 6318, 6832, 6192, 12, 90.
+should.  The bits are 1 SC43 and 2 SC44 after the Copy, 4 and 8 the controls.
 
-No Copy into a TXT by pointer has been pasted (``to_text_real`` pasted the form by address): if
-CLICK's editor refuses it, delete the group's call rung.  A case by address would need the same
-TXT, which no two cases may share.
+A CLICK read 6318, 6832, 6192, 12 and 90 (2026-11-06).  The Copy writes what fits and stops,
+raises no flag, and leaves TXT994 alone.  pyrung reads the same.
+
+CLICK's editor took this Copy into a TXT by pointer (``to_text_real`` pasted the form by address).
+A case by address would need the same TXT, which no two cases may share.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -37,7 +37,6 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, fill, math, system, to_ascii, to_text
 from tests.conformance.memory import dd, df, ds, txt
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 SC43 = system.fault.out_of_range
@@ -109,21 +108,20 @@ group = Group(
     "txt_end",
     [
         case(
-            "A Real copied as text by a DS pointer to TXT995, its digits running past TXT1000: "
-            "TXT995..TXT1000 as pairs of codes (Result1-3: the digits that fit, 6318, 6832, 6192, "
-            "or the pairs left alone, 11610 each, or another answer); SC43 and SC44 after it "
-            "(Result4 bits 1, 2, over the controls' 12); TXT994 (ErrorCode, 90 untouched)",
+            "A Real copied as text by a DS pointer to TXT995, its digits running past TXT1000, "
+            "writes the digits that fit: TXT995..TXT1000 as pairs of codes read 6318, 6832, 6192 "
+            "(Result1-3, 11610 a pair left alone); no SC43 or SC44 after it, the controls' 12 "
+            "alone (Result4); TXT994 untouched, 90 (ErrorCode)",
             ladder=prove_by_pointer,
             init=init_txt_end,
             expect={
-                "Result1": between(0, 16383),
-                "Result2": between(0, 16383),
-                "Result3": between(0, 16383),
-                "Result4": between(0, 15),
-                "ErrorCode": between(0, 127),
+                "Result1": 6318,
+                "Result2": 6832,
+                "Result3": 6192,
+                "Result4": 12,
+                "ErrorCode": 90,
             },
             scans=scans_for(WINDOW),
-            probe="a Real as text by pointer past TXT1000: part, none, which flag (3)",
         ),
     ],
 )
