@@ -319,6 +319,7 @@ def test_a_real_holding_inf_reads_as_inf_and_a_nan_write_is_accepted():
 
     assert provider.read("DF1") == math.inf
     provider.write("DF1", math.nan)
+    runner.step()
     assert math.isnan(provider.read("DF1"))
 
 

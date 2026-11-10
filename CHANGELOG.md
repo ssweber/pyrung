@@ -406,7 +406,15 @@
 - A `Real` that holds NaN and stays NaN no longer changes on every scan:
   - `cause()`, `effect()` and `history.previous_transition()` answer for it (they returned `None`). It last changed on the scan it became NaN, even when `math()` computes the NaN again.
   - `plc.diff()`, `monitor()` callbacks and the debugger's tag changes no longer report a change for it (they reported one on every scan).
-- Over Modbus and in `unpack_to_words()` or `unpack_to_bits()`, a `Real` holding any NaN is 0xFFFF:0xFFFF as on a CLICK (it was its own bits, such as 0x7FC0:0x0000). This holds for the soft PLC, for generated CircuitPython and for a `send()` to a `ModbusAddress`.
+- Over Modbus and in `unpack_to_words()` or `unpack_to_bits()`, a `Real` holding any NaN is 0xFFFF:0xFFFF as on a CLICK (it was its own bits, such as 0x7FC0:0x0000). This holds for the soft PLC, for generated CircuitPython and for a `send()` to a `ModbusAddress`. A `send()` of a NaN or Inf to a CLICK address now works too (the server refused it).
+- The soft PLC (`SimServer`) answers raw Modbus requests as a CLICK does, and pyrung now needs pyclickplc 0.5.1:
+  - a read past the end of a bank answers exception 02 (it returned 0)
+  - a request outside the Modbus limits answers exception 03
+  - a write the server refuses leaves memory unchanged
+  - a `DF` write accepts +Inf, -Inf and NaN, and every NaN reads back as 0xFFFF:0xFFFF
+  - a `Text` write accepts any character code from 0 to 255
+  - each unnamed `XD` or `YD` register is a spare word of its own
+  - function codes 22 and 23 answer exception 01
 - `how(avoid=...)` no longer treats an avoid check that raises as clear, which let it plan through the avoided state. When the check raises on the start state, or on a scan of a command `how()` tries, `how()` raises `AvoidCheckError` with the check's exception as its cause.
 - A long `how()` wait keeps its memory bounded. It keeps at most two compiled kernels and 512 checkpoints, and records a long run's scans only when a later `cause()` or a survey such as `cold_rungs()` reaches them.
 - A kernel that fails to compile for a reason pyrung doesn't expect gives a `RuntimeWarning`, and the scans run interpreted, instead of raising out of `run_for()` or `how()`.
