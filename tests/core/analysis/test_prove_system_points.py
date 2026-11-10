@@ -429,7 +429,9 @@ class TestFaultFlags:
                 id="oneshot-pack-bits",
             ),
             pytest.param(
-                lambda: search(_WORDS.select(_LO, _HI) == 99, result=Int("At"), found=Bool("Found")),
+                lambda: search(
+                    _WORDS.select(_LO, _HI) == 99, result=Int("At"), found=Bool("Found")
+                ),
                 id="search-over-a-select",
             ),
         ],
