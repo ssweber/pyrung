@@ -54,7 +54,7 @@ class Rung:
         # lifetime follows the program and invalidate them while the rung is
         # still being assembled.
         self._writer_by_tag_cache: dict[str, Instruction | None] | None = None
-        self._written_value_cache: dict[str, object] | None = None
+        self._written_value_cache: tuple[int, dict[str, object]] | None = None
         self._sp_tree_cache: SPNode | None | object = _ANALYSIS_CACHE_MISS
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence

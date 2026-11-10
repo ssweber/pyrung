@@ -184,8 +184,11 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> Any:
     """
     from pyrung.core.analysis import crossings as _crossings
     from pyrung.core.crossing import UNKNOWN, CrossingContext
+    from pyrung.core.tag import metadata_edits
 
-    cache = getattr(rung_obj, "_written_value_cache", None)
+    edits = metadata_edits()
+    stamped = getattr(rung_obj, "_written_value_cache", None)
+    cache = stamped[1] if stamped is not None and stamped[0] == edits else None
     if cache is not None and tag_name in cache:
         return cache[tag_name]
     instr = _writer_for_tag(rung_obj, tag_name)
@@ -196,7 +199,7 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> Any:
     if cache is None:
         cache = {}
         try:
-            rung_obj._written_value_cache = cache
+            rung_obj._written_value_cache = (edits, cache)
         except (AttributeError, TypeError):
             return result
     cache[tag_name] = result
