@@ -1328,3 +1328,9 @@ case = "modbus_raw/disagree"
 hash = "2f80cef5effa"
 on = "2026-11-10"
 read = { "lines" = ["fc01_y_gap: raw [0], pyclickplc error ValueError: Y address must be *01-*16."] }
+
+[[reading]]
+case = "flag_carry/math_flags_carry"
+hash = "a7ab8555c3ed"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1 }
