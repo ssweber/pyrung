@@ -196,6 +196,9 @@ def test_a_for_loop_index_with_a_constant_count_is_bounded_by_the_count():
     assert report(1000) == []
     (finding,) = report(1100)
     assert "can reach DD1001" in finding.message
+    # The index's values stop at 65535, so the largest count builds no 2 ** 31 of them.
+    (finding,) = report(2**31 - 1)
+    assert "can reach DD1001" in finding.message
 
 
 def test_a_program_with_no_pointer_builds_no_value_sets(monkeypatch):

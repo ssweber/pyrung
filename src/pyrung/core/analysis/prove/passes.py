@@ -1619,7 +1619,11 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any)
     *instructions* is one node's own list (``rung._instructions``); a branch is
     a node of its own.
     """
-    from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
+    from pyrung.core.instruction.control import (
+        ForLoopInstruction,
+        for_count_mask,
+        for_loop_iterations,
+    )
 
     for instr in instructions:
         if isinstance(instr, ForLoopInstruction):
@@ -1629,7 +1633,7 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any)
             literal = isinstance(count, int) and not isinstance(count, bool)
             if instr._oneshot or instr.body_rungs or not literal:
                 return False
-            if for_loop_iterations(count) == 0:
+            if for_loop_iterations(count, for_count_mask(count)) == 0:
                 return False
             if not _writes_run_when_powered(instr.instructions, name, reach):
                 return False
@@ -1757,6 +1761,10 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         x_name, scale, offset = next(iter(offsets))
         if x_name == y_name:
             continue
+        # A fault flag moves at instructions the write targets do not list
+        # (``_fault_writes``), so a copy of one never keeps up with it.
+        if x_name in FAULT_FLAGS or y_name in FAULT_FLAGS:
+            continue
         # Walk-grade widenings: a negated form (``lit - x``) or an
         # ND-input source is useless to BFS state-key elision but exactly
         # what the walker's chase needs (``pv = 100 - analog_input``).
@@ -1852,7 +1860,9 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
         program=ctx.program,
         graph=ctx.graph,
         sites_by_target=sites_by_target,
-        candidate_tags=set(ctx.stateful_dims),
+        # The write sites leave out the fault flags' implicit writers
+        # (``_fault_writes``), so a flag is never taken for constant.
+        candidate_tags=set(ctx.stateful_dims) - FAULT_FLAGS,
         nondeterministic_inputs=set(ctx.nondeterministic_dims),
         edge_source_tags=_edge_source_tags(ctx.program),
     )
@@ -2027,7 +2037,7 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     """
     assert ctx.compiled is not None
     defaults: dict[str, Any] = dict(program_memory_defaults(ctx.program))
-    defaults.update(dict.fromkeys(_tof_timing_keys(ctx.program), False))
+    defaults.update(dict.fromkeys(_tof_armed_keys(ctx.program), False))
     pilot = ctx.compiled.create_kernel()
     if ctx.system_points is not None:
         ctx.system_points.seed(pilot.tags)
@@ -2041,19 +2051,18 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     ctx.memory_key_defaults = tuple(defaults[k] for k in names)
 
 
-def _tof_timing_keys(program: Program) -> set[str]:
-    """Each off-delay timer's ``tof_timing_key``, which the pilot scan rarely sets.
+def _tof_armed_keys(program: Program) -> set[str]:
+    """Each off-delay timer's ``tof_armed_key``.
 
-    The marker decides whether ``Done False, Acc 0`` rests or keeps timing
-    (preset reached under a sub-unit scan), so two states that differ only
-    in it differ in what follows: it belongs in the state key.  It is absent
-    (``None``) in every state of a timer that never stalls at zero.
+    The key decides whether ``Done False, Acc 0`` rests (never enabled) or
+    keeps timing.  Two states that differ only in it go on differently, so it
+    belongs in the state key.
     """
-    from pyrung.core.instruction.timers import OffDelayInstruction, tof_timing_key
+    from pyrung.core.instruction.timers import OffDelayInstruction, tof_armed_key
     from pyrung.core.validation._common import walk_instructions
 
     return {
-        tof_timing_key(instr.accumulator.name)
+        tof_armed_key(instr.accumulator.name)
         for instr in walk_instructions(program)
         if isinstance(instr, OffDelayInstruction)
     }

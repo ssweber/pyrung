@@ -33,11 +33,13 @@ def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fra
 def guard_oneshot_execution(func: F) -> F:
     """Skip execute calls when one-shot state says not to run.
 
-    An enabled instruction settles the flags in its ``_fault_follows`` as it
-    starts, before it reads anything: it clears them, and a raise in its body
-    sets them again.  A source naming one of those flags reads it off.  A
-    one-shot that does not fire still settles them (CLICK,
-    ``flag_probe/oneshot_that_does_not_fire``); a disabled one leaves them.
+    An instruction that runs clears the flags in its ``_fault_follows`` as it
+    starts, before it reads anything.  A raise in its body sets them again.  A
+    source that names one of those flags reads it as off.  One with
+    ``_fault_settles_idle`` (a Math) clears them on a scan it is reached but
+    does not run too, with its rung false or as a one-shot that does not fire
+    (CLICK, ``flag_steps``, ``flag_reads/oneshot_held``).  Any other leaves
+    them then.
     """
 
     @wraps(func)
@@ -45,18 +47,26 @@ def guard_oneshot_execution(func: F) -> F:
         if not enabled:
             if getattr(self, "_oneshot", False):
                 ctx.set_memory(self.memory_key("_oneshot"), False)
+            if self._fault_settles_idle:
+                _settle_fault_flags(self, ctx)
             return None
-        for name in self._fault_follows:
-            if ctx._get_tag_internal(name, False):
-                ctx._set_tag_internal(name, False)
         if getattr(self, "_oneshot", False):
             key = self.memory_key("_oneshot")
             if ctx.get_memory(key, False):
+                if self._fault_settles_idle:
+                    _settle_fault_flags(self, ctx)
                 return None
             ctx.set_memory(key, True)
+        _settle_fault_flags(self, ctx)
         return func(self, ctx, enabled, *args, **kwargs)
 
     return cast(F, wrapper)
+
+
+def _settle_fault_flags(instr: Any, ctx: ScanContext) -> None:
+    for name in instr._fault_follows:
+        if ctx._get_tag_internal(name, False):
+            ctx._set_tag_internal(name, False)
 
 
 def to_condition(obj: Any) -> Any:

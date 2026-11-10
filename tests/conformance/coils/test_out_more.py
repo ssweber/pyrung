@@ -47,6 +47,7 @@ from dataclasses import replace
 import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     Or,
     Rung,
@@ -277,6 +278,15 @@ def test_preset_mid_phase_holds_wherever_the_last_run_stopped(scans):
     """One flasher cycle (1100 ms) in 100 ms steps: where the reset cuts the off phase."""
     mid_phase = next(c for c in group.cases if c.id == "preset_mid_phase")
     assert_all_passed(run(Group("out_more", [replace(mid_phase, scans=scans)])))
+
+
+@pytest.mark.parametrize("dt", [0.020, 0.030, 0.035, 0.040])
+def test_preset_mid_phase_at_long_scans(monkeypatch, dt):
+    """The soft PLC scans every 20..40 ms under load.  An on phase of 100 ms then ends on its
+    second or third scan, and the off TD must still hold on that scan for Result3."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    mid_phase = next(c for c in group.cases if c.id == "preset_mid_phase")
+    assert_all_passed(run(Group("out_more", [mid_phase])))
 
 
 def test_debounce_of_zero_goes_off_a_scan_after_its_rung():

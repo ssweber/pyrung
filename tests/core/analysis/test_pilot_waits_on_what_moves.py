@@ -77,11 +77,15 @@ def _pulse_program(*, on_ms: int = 500, off_ms: int = 500) -> tuple[Any, Any, An
 
 
 def test_a_pulse_feedback_is_waited_for_with_its_enable_on() -> None:
-    # A one-scan first on phase never shows, so the first edge is a full off dwell away.
+    # The one-scan first on phase has passed and Hit is cleared, so the next edge is a full
+    # off dwell away.
     prog, _enable, hit = _pulse_program(on_ms=10)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
     plc.patch({"En": True})
+    plc.run(3)
+    assert plc.current_state.tags["Fb"] is False
+    plc.patch({"Hit": False})
     plc.step()
     plan = plc.how(hit)
     _lands_on(plan, "Hit")

@@ -1,15 +1,16 @@
 """Flag probes: the ``flag_probe`` group (subroutine ``Conf_FlagProbe``).
 
 Part ``system`` (``suite.PARTS``).  The fault-flag model (``bob/flags``)
-chose several things without a reading; each case here asks a CLICK one of them.
-The model, as pyrung has it: SC40 follows the last Math; SC43 and SC44 follow the
-last Copy or Math, and pyrung counts Block copy, Fill, Pack and Unpack as Copy tabs;
-nothing else touches a flag.  Answered on a CLICK (2026-11-05): such an instruction
-clears its flags as it starts, then reads its operands, and a oneshot one that does
-not fire still clears them; a rung that is off clears nothing.  A Copy of DF
-1.0E+10 into a DD raises no SC43, so every SC43 half here raises nothing (the
-``flag_halves`` group, part ``follow_flags``, asks them again with a raise that
-takes).
+chose several things without a reading, and each case here asks a CLICK one of them.
+SC40 follows the last Math.  SC43 and SC44 follow the last Copy or Math, and Block
+copy, Fill, Pack and Unpack count as Copy tabs.  Nothing else touches a flag.
+Answered on a CLICK (2026-11-05): such an instruction clears its flags as it starts,
+then reads its operands.  A Copy of DF 1.0E+10 into a DD raises no SC43, so every
+SC43 half here raises nothing (the ``flag_halves`` group, part ``follow_flags``,
+asks them again with a raise that takes).  ``flag_steps`` and ``flag_reads`` (parts
+``follow2_flags``, ``follow2_values``) later found that a Math on a false rung, or a
+oneshot Math that does not fire, clears SC40, SC43 and SC44.  A false Copy and a
+oneshot Copy that does not fire leave them.
 
 Every probe stands on its own: it raises the flag itself with something a CLICK has
 already answered (a Copy that clamps raises SC43, a pointer below its bank SC44, a
@@ -17,9 +18,8 @@ division by zero SC40), runs the instruction under test right after, and reads t
 flag on the rung after that.  So no other group's rungs on the same scan (every case
 of every group runs at once) can change what a probe reads.  A probe has a scan of
 its own (``Scratch`` is the scan), and its read is a Math that adds a bit to a
-result: a Math settles the flags, but nothing is read after it.  The cases leave a
-flag up at the end of the scan, so the group runs after every group that reads one
-(``suite.ALL_GROUPS``).
+result.  The cases leave a flag up at the end of the scan, so the group runs after
+every group that reads one (``suite.ALL_GROUPS``).
 
 A pointer of -1 is staged in a slot field (CLICK takes a pointer in a Single Copy
 or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
@@ -34,16 +34,19 @@ or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
 - ``oneshot_that_does_not_fire`` (probe): a Copy or Math under a oneshot, on the
   scan it fires and the next, when it does not.  Five probes (bits 1, 2, 4, 8, 16):
   a Copy with SC43 and SC44 raised, a Math with SC40, SC43 and SC44.  Result2 has
-  a bit where the oneshot clears the flag the scan it fires, Result1 where it
-  leaves it the scan it does not fire.  31, 31 for a oneshot that leaves them;
-  CLICK read 0, 31: its oneshot box settles the flags every scan its rung is on.
+  a bit where the oneshot clears the flag the scan it fires, Result1 where the
+  flag is still on the scan it does not fire.  CLICK read 0, 31.  Result1 says
+  nothing about the oneshot.  The read rung of the scan before sits between the
+  oneshot and its read, and as a Math on a false rung it clears every flag.
+  ``flag_reads/oneshot_held`` reads it with a coil, and the Copy leaves its flags.
 - ``boxes_leave_flags`` (probe): a Search, a Shift, an event Drum, a timer and a
   counter box between the raise and the read.  Bits 1, 2, 4, 8, 16 in that order,
   set when the flag is still on after the box: Result1 SC40, Result2 SC43,
-  Result3 SC44.  pyrung: 31, 0 (the SC43 raise does not take), 31.  A bit missing
-  is a box that clears that flag.  CLICK read 31, 0, 0, which contradicts the
-  confirmed ``system/address_flag_vs_other_instructions`` (raised by pointer 0, not
-  -1); ``flag_boxes`` (part ``follow_flags``) asks again.
+  Result3 SC44.  A bit missing is a flag that is off after the box.  CLICK read 31,
+  0, 0.  The SC43 raise does not take.  SC44 reads off because the read rungs of
+  the two scans before it are Maths on false rungs, and each clears SC44
+  (``flag_steps``).  The boxes leave every flag (``flag_steps``, and the confirmed
+  ``system/address_flag_vs_other_instructions``).
 - ``source_flag_is_read_before_the_copy_settles`` (probe): a Copy whose source is
   the flag.  After the raise, ``copy(SC43, C)``: Result1 = 1 when C saw it on,
   0 if the Copy settles the flag before it reads its source; Result2 = 1 when
@@ -58,13 +61,15 @@ Not probed, pack_text with bad text and a bad destination pointer (which flag): 
 takes a pointer in a Single Copy only (the exporter refuses a Pack text destination
 pointer, CLK_PTR_CONTEXT_ONLY_COPY), so it cannot be written.
 
-Not probed: whether a flag carries over a scan boundary.  pyrung clears them at
-scan start.  A reader on the next scan has to run before any Copy or Math (or, for
-SC40, any Math), and the harness's own rungs get in the way: the program header
-Copy and each group's hash Copy settle SC43 and SC44 first, every case of every
-group runs on the same scan (so another group's Math settles SC40 or raises SC46
-before the reader), and the reset rungs are Fills.  A reading would be that of
-whichever rung ran last, not of the flag.
+Not probed here: whether a flag carries over a scan boundary.  The harness's own
+rungs get in the way.  The program header Copy and each group's hash Copy clear
+SC43 and SC44 first.  Every group runs on the same scan, so another group's Math
+clears SC40 or raises SC46 before the reader.  ``flag_carry`` (part
+``follow2_carry``) runs alone and reads SC40 and SC46 carried.
+
+Each read here is a Math on a rung true only on its scan.  On every other scan it is
+a Math on a false rung, so it clears SC40, SC43 and SC44 too.  The readings above
+count that in.
 
 The cases own C1331..C1380, T181, CT147, DD689..DD717, DF430..DF433, DH417..DH421
 and TXT501..TXT502 (``memory.OWNED``).
@@ -296,9 +301,11 @@ group = Group(
             probe="do the bulk Copy tabs settle SC43 and SC44 as a single Copy does",
         ),
         case(
-            "A Copy or Math under a oneshot clears its flags every scan its rung is on, the "
-            "scan it fires (Result2 = 31) and the next, when it does not fire (Result1 = 0): "
-            "SC43 and SC44 after a Copy, SC40, SC43 and SC44 after a Math",
+            "A oneshot Copy or Math clears its flags on the scan it fires (Result2 = 31).  The "
+            "Copies follow a raise of SC43 or SC44, the Maths a raise of SC40, SC43 or SC44.  On "
+            "the next scan the oneshot does not fire, and no flag reads on (Result1 = 0).  The "
+            "read rung of the scan before sits between the oneshot and that read, and as a Math "
+            "on a false rung it clears every flag",
             ladder=prove_oneshot_that_does_not_fire,
             init=_init(dds=(700, 706), dfs=(431, 431)),
             expect={"Result1": 0, "Result2": 31},
@@ -306,12 +313,13 @@ group = Group(
             probe="a oneshot that does not fire: does it run, and settle a flag",
         ),
         case(
-            "A Search, Shift, event Drum, timer and counter box leave SC40 and SC44 as they "
-            "found them (Result1, Result3 = 31); a Copy of DF 1.0E+10 into a DD raises no "
-            "SC43, so none is on after a box (Result2 = 0)",
+            "A Search, Shift, event Drum, timer and counter box leave SC40 as they found it "
+            "(Result1 = 31).  A Copy of DF 1.0E+10 into a DD raises no SC43, so none is on "
+            "after a box (Result2 = 0).  The read rungs of the two scans before are Maths on "
+            "false rungs, and they clear SC44 (Result3 = 0)",
             ladder=prove_boxes_leave_flags,
             init=_init(bits=(1363, 1377), dds=(707, 712), dfs=(432, 432), dss=(4018, 4018)),
-            expect={"Result1": 31, "Result2": 0, "Result3": 31},
+            expect={"Result1": 31, "Result2": 0, "Result3": 0},
             scans=SCANS,
             probe="do search, shift, drum, timer and counter boxes touch a fault flag",
         ),

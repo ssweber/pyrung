@@ -131,6 +131,7 @@ from tests.conformance.system import (
 from tests.conformance.timers_counters import (
     test_counters,
     test_fixed_scan,
+    test_reset_pins,
     test_timers,
     test_tof_rewrite,
     test_unit_minute,
@@ -337,8 +338,10 @@ APART_GROUPS = [
     test_coil_phase.deb_fall,
     test_coil_phase.flash_zero,
     test_tof_rewrite.group,
-    # May stop the PLC: run alone, with C411 set by hand.
+    # Stops the PLC on a 200 ms watchdog: run alone, with the watchdog at 10000 ms.
     test_for_signed.group,
+    # A reset held on while its rung is on.
+    test_reset_pins.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -380,8 +383,10 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow2_drums": ApartPart(("drum_ds", "jump_return")),
     # a debounce's off count at its fall, flashers on presets of 0, a TOF's TD written to 0.
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
-    # For counts that may stop the PLC on its watchdog, alone: C411 set by hand arms it.
+    # For counts whose runs stop the PLC on a 200 ms watchdog, alone.
     "follow2_for": ApartPart(("for_signed",)),
+    # The 2026-11-11 round: a down counter's and an RTON's reset held on while its rung is on.
+    "follow3_reset": ApartPart(("reset_pins",)),
     # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
     "modbus_raw": ApartPart(("modbus_raw",)),
 }
@@ -422,14 +427,20 @@ def build_apart() -> ConformanceProgram:
 def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> ConformanceProgram:
     """The build loaded at *endpoint*: the part, or the whole suite, whose layout
     hash is in its ``DS1``.  A local target (``None``) runs the whole suite, or the
-    groups on memory of their own when *names* asks for those.
+    groups on memory of their own when *names* asks for those, in their own part when
+    one part holds them all.
 
     Raises:
         BuildMismatchError: ``DS1`` holds no build of the suite's layout hash.
     """
     if endpoint is None:
         apart = {g.name for g in APART_GROUPS}
-        return build_apart() if names and apart.issuperset(names) else build()
+        if not names or not apart.issuperset(names):
+            return build()
+        for part, held in APART_PARTS.items():
+            if set(held.groups).issuperset(names):
+                return build(part)
+        return build_apart()
     found = read_program_hash(endpoint)
     known: list[str] = []
     for part in [*PARTS, *APART_PARTS, None]:

@@ -1,0 +1,9 @@
+Address,Data Type,Nickname,Initial Value,Retentive,Address Comment
+T2,BIT,"WaitA_Done",0,No,""
+T3,BIT,"WaitB_Done",0,No,""
+CT2,BIT,"TallyA_Done",0,Yes,""
+CT3,BIT,"TallyB_Done",0,Yes,""
+TD2,INT,"WaitA_Acc",0,No,""
+TD3,INT,"WaitB_Acc",0,No,""
+CTD2,INT2,"TallyA_Acc",0,Yes,""
+CTD3,INT2,"TallyB_Acc",0,Yes,""

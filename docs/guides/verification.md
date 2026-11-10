@@ -144,7 +144,7 @@ System tags read as they do in a fixed-step run at the verifier's `dt`. That hol
 - `sys.first_scan` is True on the first scan only.
 - `sys.scan_time_min_ms` and `sys.scan_time_max_ms` read 0 on the first scan and the fixed scan time after.
 - `sys.always_on`, `sys.scan_time_current_ms` and `sys.mode_run` are constants.
-- Fault and command bits reset at the start of each scan.
+- Command bits reset at the start of each scan. Fault flags carry from one scan into the next, as on a CLICK.
 
 When the program writes `sys.cmd_mode_stop`, `sys.mode_run` becomes an input that can take any value instead. A stop written from outside the program, over Modbus or from an HMI, is not modeled.
 

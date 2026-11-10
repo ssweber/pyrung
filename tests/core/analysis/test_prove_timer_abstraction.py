@@ -242,7 +242,7 @@ class TestTimerUnitsCoarserThanTheScan:
     def test_off_delay_at_preset_zero_keeps_timing(self):
         """Preset 0: the first off scan leaves Done False, Acc 0 (the resting
         pair) on its carry alone, and the timer keeps timing from there.  Only
-        its ``_tof_timing`` marker tells that state from the initial one, so
+        its ``_tof_armed`` marker tells that state from the initial one, so
         the state key must carry it or the two merge and Acc >= 1 is missed."""
         enable = Bool("CoarseTof0En", external=True)
         timer = Timer.clone("CoarseTof0")

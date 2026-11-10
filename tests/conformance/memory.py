@@ -514,13 +514,14 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "deb_fall": {"C": range(661, 663), "T": range(271, 273)},
     "flash_zero": {"C": range(671, 678), "DS": range(4031, 4037), "T": range(273, 283)},
     "tof_rewrite": {"T": range(291, 292)},
-    # C411 is set by hand, as for_dd_minus has C401.
+    # C411 arms the loops from the reset, and STOP -> RUN clears it.
     "for_signed": {
-        "C": range(411, 413),
+        "C": range(411, 412),
         "DS": range(4051, 4053),
         "DD": range(141, 148),
         "CT": range(6, 7),
     },
+    "reset_pins": {"C": range(701, 704), "T": range(301, 305), "CT": range(11, 13)},
     # DS10 is a spare header register no group writes, for a pointer with choices of its own.
     # DS4500 is the last DS, for a Modbus write that runs past it.
     "modbus_raw": {

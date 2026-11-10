@@ -422,12 +422,12 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return result",
         "",
     ],
-    # ** in a calc (core _op_pow_calc): 0 ^ 0 and 0 ^ -1 are 0 with no flag, and
-    # a complex result is 0, with SC46 in a calc.
+    # ** in a calc (core _op_pow_calc): 0 ^ 0 is 0 with no flag, 0 to a
+    # negative power is +Inf, and a complex result is 0, with SC46 in a calc.
     "_pow_calc": [
         "def _pow_calc(base, exp, flags=None):",
         "    if base == 0 and exp <= 0:",
-        "        return 0",
+        '        return 0 if exp == 0 else float("inf")',
         "    try:",
         "        return _pow(base, exp)",
         "    except _MathDomainError:",

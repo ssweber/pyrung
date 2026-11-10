@@ -179,8 +179,8 @@ def _compile_expression_impl(
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
         if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
-            # A calc's ** (core _op_pow_calc): a zero base to a power of 0 or
-            # below is 0 with no flag, a complex result 0 with SC46.
+            # A calc's ** (core _op_pow_calc): 0 ^ 0 is 0 with no flag, 0 to a
+            # negative power is +Inf, and a complex result is 0 with SC46.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")
@@ -983,8 +983,9 @@ def _copy_converter_write_lines(
 def _fault_follow_lines(instr: Any, ctx: CodegenContext) -> list[str]:
     """Clear *instr*'s followed flags as it starts, before it reads: a raise in its body sets them.
 
-    A source naming one of the flags reads it off.  The lines run whenever the
-    instruction is enabled, a one-shot that does not fire too.
+    A source naming one of the flags reads it off.  The lines run each scan the
+    instruction runs.  For a Math they also run on a scan its rung is false or
+    its one-shot does not fire (``guard_oneshot_execution``).
     """
     return [f"{ctx.symbol_if_referenced(name)} = False" for name in instr._fault_follows]
 
@@ -999,8 +1000,13 @@ def _compile_guarded_instruction(
     disabled_body: list[str] | None = None,
 ) -> list[str]:
     sp = " " * indent
+    inner = " " * (indent + 4)
     lines: list[str] = []
     settle = _fault_follow_lines(instr, ctx)
+    # A Math clears its flags on every path, so the lines go ahead of the
+    # one-shot test.  Any other instruction clears them only as its body runs.
+    idle = settle if instr._fault_settles_idle else []
+    run_settle = [] if instr._fault_settles_idle else settle
     if ctx.used_indirect_blocks:
         enabled_body = [
             "try:",
@@ -1008,6 +1014,7 @@ def _compile_guarded_instruction(
             "except IndexError:",
             "    pass",
         ]
+    disabled = [*idle, *(disabled_body or ())]
     enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
         key = f"_oneshot:{ctx.state_key_for(instr)}"
@@ -1015,24 +1022,22 @@ def _compile_guarded_instruction(
             ctx.mark_function_global(ctx._current_function, "_mem")
         if enabled_literal is False:
             lines.append(f"{sp}_mem[{key!r}] = False")
-            if disabled_body:
-                lines.extend(f"{sp}{line}" for line in disabled_body)
+            lines.extend(f"{sp}{line}" for line in disabled)
             return lines
         fire = [
             f"if not bool(_mem.get({key!r}, False)):",
-            *[f"    {line}" for line in enabled_body],
+            *[f"    {line}" for line in (*run_settle, *enabled_body)],
             f"    _mem[{key!r}] = True",
         ]
         if enabled_literal is True:
-            lines.extend(f"{sp}{line}" for line in (*settle, *fire))
+            lines.extend(f"{sp}{line}" for line in (*idle, *fire))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
-        if disabled_body:
-            lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
-        if settle:
+        lines.append(f"{inner}_mem[{key!r}] = False")
+        lines.extend(f"{inner}{line}" for line in disabled)
+        if idle:
             lines.append(f"{sp}else:")
-            lines.extend(f"{' ' * (indent + 4)}{line}" for line in (*settle, *fire))
+            lines.extend(f"{inner}{line}" for line in (*idle, *fire))
         else:
             lines.append(f"{sp}el{fire[0]}")
             lines.extend(f"{sp}{line}" for line in fire[1:])
@@ -1043,15 +1048,14 @@ def _compile_guarded_instruction(
         lines.extend(f"{sp}{line}" for line in enabled_body)
         return lines
     if enabled_literal is False:
-        if disabled_body is not None:
-            lines.extend(f"{sp}{line}" for line in disabled_body)
+        lines.extend(f"{sp}{line}" for line in disabled)
         return lines
 
     lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-    if disabled_body:
+    lines.extend(f"{inner}{line}" for line in enabled_body)
+    if disabled:
         lines.append(f"{sp}else:")
-        lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
+        lines.extend(f"{inner}{line}" for line in disabled)
     return lines
 
 

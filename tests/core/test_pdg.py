@@ -80,7 +80,12 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
     assert math_node.data_reads == frozenset({"Scale"})
     assert math_node.writes == frozenset({"Result"})
     assert math_node.implicit_writes == frozenset(
-        {"fault.division_error", "fault.out_of_range", "fault.address_error"}
+        {
+            "fault.division_error",
+            "fault.out_of_range",
+            "fault.address_error",
+            "fault.math_operation_error",
+        }
     )
 
 

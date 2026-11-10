@@ -19,7 +19,8 @@
 - `math()` follows CLICK's Math, in `PLC`, `CompiledPLC` and generated CircuitPython:
   - each intermediate result in a formula is a 64-bit float, so a whole number past 2**53 loses its last digits
   - `%` takes the sign of the dividend, so `-7 % 2` is now -1 (it was 1). Outside `math()`, `%` and `**` still work as in Python
-  - `%` by 0, and 0 raised to 0 or to a negative power, give 0 with no flag (they set `fault.division_error`, and `0 ** 0` was 1)
+  - `%` by 0 and `0 ** 0` give 0 with no flag (they set `fault.division_error`, and `0 ** 0` was 1)
+  - 0 raised to a negative power is +Inf (it set `fault.division_error`). A `Real` stores +Inf, and an `Int`, `Dint` or `Word` stores 0. Both set `fault.out_of_range`
   - `abs()` of an `Int` holding -32768 or a `Dint` holding -2147483648 is 0 with `fault.out_of_range`
   - a hex shift that pushes a bit out of the Word sets no flag
   - a math error zeroes only the operation that failed and sets its flag. The rest of the formula still runs, so `X / 0 + 5` now stores 5 with `fault.division_error` (the whole formula was 0)
@@ -125,7 +126,6 @@
     - after the command drops, `Fb` turns off one scan later than it did
   - `Physical(flasher_on=, flasher_off=)` runs as a `flasher`:
     - its `Fb` goes high the scan after its enable turns on (it waited out the off time first)
-    - its first high phase is one scan short
     - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
   - both delays of one `Physical` count in the same unit, and so do `flasher_on` and `flasher_off`
   - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
@@ -154,10 +154,11 @@
   - when one rung has several `out()` writes of a tag, the last one decides it. `out(Y)` under branch `A` and then under branch `B` gives `Y = B` (it gave `Or(A, B)`). For an OR, write the contacts as `Or(A, B)`
   - contacts a branch shares with the start of the rung are read where the rung starts
 - Fault flags report the most recent instruction, as on a CLICK, instead of staying on to the end of the scan:
-  - each `math()` clears `fault.division_error` (SC40), then sets the flag if it divides by 0
+  - each `math()` clears `fault.division_error` (SC40) and `fault.math_operation_error` (SC46), then sets whichever one it trips
   - each `math()`, `copy()`, `blockcopy()`, `fill()`, `pack_*()` and `unpack_*()` clears `fault.out_of_range` (SC43) and `fault.address_error` (SC44), then sets whichever one it trips
+  - a `math()` on a false rung, or a one-shot `math()` that does not fire, clears its flags too. A copy instruction that does not run leaves them
   - a `copy()` clears them before reading its operands, so `copy(fault.address_error, Bit)` reads off
-  - all of them clear at the start of each scan
+  - a flag stays on into the next scan until an instruction clears it
 - A `copy()` that writes text across several elements (`to_text()`, a `Real` or a string literal into a TXT, `to_value`, `to_ascii`) fills what fits in its block, and drops the rest with no flag. Into a tag mapped with a TagMap or `Tag.map_to`, it keeps writing from the mapped address on. CLICK validation warns:
   - when the text always runs past the end of its bank (`CLK_TEXT_PAST_BANK`)
   - when the text runs past the end of a block mapped inside the bank, since a CLICK keeps writing past it (`CLK_TEXT_PAST_BLOCK`)
@@ -358,6 +359,7 @@
 
 ### Fixes
 
+- The ladder export draws a rung with an Or of 3 or more rows and several outputs the way the CLICK keeps it, so a pasted project shows no redraw (it put the second output on row 2).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
@@ -527,7 +529,7 @@
   - a program with `math()`, split into `code.py` and `pyrung_rt.py`, now imports (it failed)
   - a text literal copied into a TXT (`copy("ABC", txt[1])`) fills consecutive registers (it stopped the scan with `ValueError`)
   - it drives the same system bits and registers as `PLC`:
-    - SC40, SC43, SC44 and SC46 clear at the start of every scan
+    - SC40, SC43, SC44 and SC46 are set and cleared as in `PLC`
     - a pointer copy below its block sets SC44
     - SD9 counts scans
     - SC1, SC2, SC3 and the clocks SC4..SC9 move
@@ -565,9 +567,10 @@
   - they check each contact of each output's condition, its pins and its wire, and raise when a contact is lost or moved
   - a lone `branch()` still passes as the rung's own contacts, because it draws the same (`with rung(A): with branch(B): out(Y)` reads back as `with rung(A, B):`)
   - a pin that branches off the box's input wire still passes. It keeps the shared contacts in its condition and exports again from the rail
-- `math()` with `sqrt` of a negative, `log`/`log10` of 0 or a negative, or `asin`/`acos` outside -1..1 no longer raises out of the scan. The function gives 0 and sets `fault.math_operation_error` (SC46) for the rest of the scan, and the PLC stays in RUN, in `PLC`, `CompiledPLC` and generated CircuitPython.
+- `math()` with `sqrt` of a negative, `log`/`log10` of 0 or a negative, or `asin`/`acos` outside -1..1 no longer raises out of the scan. The function gives 0 and sets `fault.math_operation_error` (SC46) until the next `math()`, and the PLC stays in RUN, in `PLC`, `CompiledPLC` and generated CircuitPython.
 - `rise()` and `fall()` on the timed clocks (`sys.clock_10ms` .. `sys.clock_1h`) count one edge per toggle in realtime mode (with 1 ms scans, `clock_100ms` counted about 80 rises a second).
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit, such as a scan under 1 ms at `"Tms"` (its accumulator stayed at 0).
+- An `off_delay()` that has timed out turns Done back on and times again when its accumulator is written to 0 while its rung is false (Done stayed off and the accumulator stayed at 0).
 - A `select()` with tag bounds (`DS.select(Start, End)`) sets `fault.address_error` and writes nothing, everywhere, when a bound is outside its block at either end. A `search()` over one now compiles (it generated an `IndentationError`).
 - A `select()` with tag bounds that spans a gap in a sparse block skips the gap everywhere, as a static `select()` does (compiled runs and generated CircuitPython set `fault.address_error`). So `always()` and `never()` no longer report `Proven` on what `PLC` didn't do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan, everywhere.
 - A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses (the feedback never flipped, because its millisecond timer stopped at 32767). Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on). Both delays of one `Physical` then count in that unit.

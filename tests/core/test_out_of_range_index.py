@@ -460,6 +460,7 @@ def test_every_calc_declares_the_flags_it_follows() -> None:
             "fault.division_error",
             "fault.out_of_range",
             "fault.address_error",
+            "fault.math_operation_error",
         }
         assert set(instruction._fault_follows) <= set(instruction._fault_writes)
 

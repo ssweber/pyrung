@@ -767,8 +767,8 @@ class TestInstructionCoverage:
         assert "_frac:" in result.code
 
     def test_off_delay_codegen_keeps_timing_at_done_false_acc_zero(self):
-        """The TOF rests at Done False, Acc 0 unless its own scan left it there
-        while timing (``_tof_timing:<Acc>``), as in the interpreter."""
+        """The TOF rests at Done False, Acc 0 only until it is first enabled
+        (``_tof_armed:<Acc>``), as in the interpreter."""
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
@@ -778,9 +778,9 @@ class TestInstructionCoverage:
         result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         compile(result.code, "code.py", "exec")
-        assert '_mem.get("_tof_timing:Timer2_Acc", False)' in result.code
-        assert "if _tof_timing or " in result.code
-        assert '_mem["_tof_timing:Timer2_Acc"] = _tof_stalled' in result.code
+        assert '_mem.get("_tof_armed:Timer2_Acc", False)' in result.code
+        assert "if _tof_armed or " in result.code
+        assert '_mem["_tof_armed:Timer2_Acc"] = True' in result.code
 
     def test_out_coil_variants_codegen_compiles(self):
         hw = P1AM()
@@ -2269,6 +2269,25 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (hits,), scans=1)
         assert results == {name: (3,) for name in results}
 
+    def test_forloop_constant_and_negative_dint_counts_on_every_backend(self, monkeypatch):
+        """A constant count is read whole, so 70000 runs 70000 (not 4464), and a DD of
+        -65535 or -2 runs none (not its low word), as a CLICK reads them (hardware
+        2026-11-10), on all three backends."""
+        low = Dint("Low", default=-65535)
+        minus_two = Dint("MinusTwo", default=-2)
+        whole, signed = Dint("Whole"), Dint("Signed")
+        with Program(strict=False) as prog:
+            with Rung(system.sys.first_scan):
+                with forloop(70000):
+                    math(whole + 1, whole)
+            for count in (low, minus_two):
+                with Rung(system.sys.first_scan):
+                    with forloop(count):
+                        math(signed + 1, signed)
+
+        results = _on_every_backend(prog, monkeypatch, (whole, signed), scans=1)
+        assert results == {name: (70000, 0) for name in results}
+
     _FAULTS = (
         system.fault.division_error,
         system.fault.out_of_range,
@@ -2456,7 +2475,9 @@ class TestBoardPeripheralsAndRunStop:
         ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
         ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
         ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
-        ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, 0.0, (0, 0, 0)),
+        # A CLICK read both values on 2026-11-10.  Their SC43 is pyrung's, as for any Inf result.
+        ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, pymath.inf, (0, 1, 0)),
+        ("zero_to_minus_one_int", lambda n, d, z, w, r: z ** (z - 1) + 5, Int, 0, (0, 1, 0)),
         ("zero_to_literal_zero", lambda n, d, z, w, r: z**0, Int, 0, (0, 0, 0)),
         (
             "wide_constant_into_dint",

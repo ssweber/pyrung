@@ -244,7 +244,7 @@ class Conveyor:
 
 A counter instruction in the logic counts the rising edges. The harness produces the pulse train and the program counts it.
 
-`Fb` goes high the scan after `En` turns on. That first high phase is one scan short. A `flasher_on` or `flasher_off` of 0 keeps `Fb` low.
+`Fb` goes high the scan after `En` turns on. A `flasher_on` or `flasher_off` of 0 keeps `Fb` low.
 
 In a comment, `link=` names the enable by nickname or by CLICK address, with the same optional `~` or trigger: `[on_delay=2s, off_delay=500ms, link=Motor_Run]`, `[on_delay=2s, link=Y001]`, `[on_delay=300ms, link=~Vent_Sol]`, or `[on_delay=1s, link=State:SORTING]`. An address reads as the nickname at that address. An address without a nickname keeps its address name (`Y005`).
 

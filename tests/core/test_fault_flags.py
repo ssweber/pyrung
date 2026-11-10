@@ -1,14 +1,19 @@
 """What sets and clears a fault flag, on every engine.
 
-SC40 (``fault.division_error``) follows the last Math: any Math that runs sets or
-clears it.  SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
-follow the last Copy or Math.  Nothing else touches them.  An instruction clears
-the flags it follows as it starts, before it reads its operands, and a one-shot
-that does not fire still clears them; one on a rung that is off clears nothing.
-A pointer below its block is SC44 with the destination left alone; past it,
-there is no flag, a read gets the type's zero and a write is dropped.  A dynamic
-window out of its block is SC44 on either side, with nothing written.  ``tests/conformance/system/test_system.py`` and
-``tests/conformance/system/test_faults.py`` hold what a CLICK read.
+SC40 (``fault.division_error``) and SC46 (``fault.math_operation_error``) follow
+the last Math.  SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
+follow the last Copy or Math.  Nothing else touches them, and a flag carries from
+one scan into the next.  An instruction clears the flags it follows as it starts,
+before it reads its operands.
+
+Every Math the scan reaches clears its flags.  That includes a Math on a false
+rung and a one-shot Math that does not fire.  A Copy clears its flags only when it
+runs.
+
+A pointer below its block is SC44 with the destination left alone.  Past it there
+is no flag, a read gets the type's zero and a write is dropped.  A dynamic window
+out of its block is SC44 on either side, with nothing written.  The conformance
+groups in ``tests/conformance/system/`` hold what a CLICK read.
 """
 
 from __future__ import annotations
@@ -50,6 +55,7 @@ from pyrung.core import (
     reset,
     search,
     shift,
+    sqrt,
     system,
     to_ascii,
     to_text,
@@ -62,6 +68,7 @@ from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_
 SC40 = system.fault.division_error
 SC43 = system.fault.out_of_range
 SC44 = system.fault.address_error
+SC46 = system.fault.math_operation_error
 
 _ENGINES = [
     "interpreted",
@@ -149,6 +156,8 @@ _Clk = Bool("Clk")
 _Coil = Bool("Coil")
 _Found = Bool("Found")
 _Result = Int("SearchResult")
+_Neg = Real("Neg", default=-4.0)
+_RealSink = Real("RealSink")
 _Tmr = Timer.clone("FlagTmr")
 _Ctr = Counter.clone("FlagCtr")
 
@@ -158,7 +167,10 @@ _FAULTS: dict[str, tuple[Any, Callable[[], object]]] = {
     "SC43_math": (SC43, lambda: math(_Big + 0, _Sink)),
     "SC43_copy": (SC43, lambda: copy(_Big, _Sink)),
     "SC44_copy": (SC44, lambda: copy(_Tbl[_Zero], _Sink)),
+    "SC46": (SC46, lambda: math(sqrt(_Neg), _RealSink)),
 }
+#: The flags only a Math follows.
+_MATH_ONLY = ("SC40", "SC46")
 
 #: One Math of each kind, and every Copy tab, none of which faults here.
 _MATH: dict[str, Callable[[], object]] = {
@@ -214,7 +226,7 @@ def _flag_after(fault: Callable[[], object], flag: Any, step: Callable[[], objec
 
 _FOLLOW_CASES = [
     *((f, s, False) for f in _FAULTS for s in _MATH),
-    *((f, s, f == "SC40") for f in _FAULTS for s in _COPY),
+    *((f, s, f in _MATH_ONLY) for f in _FAULTS for s in _COPY),
     *((f, s, True) for f in _FAULTS for s in _NEITHER),
 ]
 
@@ -230,18 +242,31 @@ def test_what_clears_a_flag(engine, fault_name, step_name, stays, monkeypatch) -
     assert bool(end) is stays
 
 
+_ON_A_FALSE_RUNG: dict[str, tuple[Callable[[], object], bool]] = {
+    "copy": (lambda: copy(1, _Other), True),
+    "blockcopy": (lambda: blockcopy(_Tbl.select(1, 2), _Words.select(1, 2)), True),
+    "copy_oneshot": (lambda: copy(1, _Other, oneshot=True), True),
+    "math": (lambda: math(_Other + 1, _Other), False),
+    "math_oneshot": (lambda: math(_Other + 1, _Other, oneshot=True), False),
+}
+
+
 @pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("step_name", list(_ON_A_FALSE_RUNG))
 @pytest.mark.parametrize("fault_name", list(_FAULTS))
-def test_a_rung_that_does_not_run_clears_nothing(engine, fault_name, monkeypatch) -> None:
+def test_on_a_false_rung_a_math_clears_and_a_copy_does_not(
+    engine, fault_name, step_name, monkeypatch
+) -> None:
+    """CLICK: ``flag_steps`` (bits 2 and 4) and ``flag_reads/unpowered_division``."""
     flag, fault = _FAULTS[fault_name]
+    step, stays = _ON_A_FALSE_RUNG[step_name]
     never = Bool("Never")
     with Program(strict=False) as prog:
         with Rung():
             fault()
         with Rung(never):
-            copy(1, _Other)
-            math(_Other + 1, _Other)
-    assert _run(prog, engine, (flag,), monkeypatch) == (True,)
+            step()
+    assert _run(prog, engine, (flag,), monkeypatch) == (stays,)
 
 
 _ONESHOTS: dict[str, Callable[[], object]] = {
@@ -252,24 +277,24 @@ _ONESHOTS: dict[str, Callable[[], object]] = {
 
 @pytest.mark.parametrize("engine", _SCANNING_ENGINES)
 @pytest.mark.parametrize(
-    ("fault_name", "oneshot"),
+    ("fault_name", "oneshot", "kept"),
     [
-        ("SC43_copy", "copy"),
-        ("SC44_copy", "copy"),
-        ("SC40", "calc"),
-        ("SC43_copy", "calc"),
-        ("SC44_copy", "calc"),
+        ("SC43_copy", "copy", True),
+        ("SC44_copy", "copy", True),
+        ("SC40", "calc", False),
+        ("SC43_copy", "calc", False),
+        ("SC44_copy", "calc", False),
+        ("SC46", "calc", False),
     ],
 )
-def test_a_oneshot_that_does_not_fire_still_clears(
-    engine, fault_name, oneshot, monkeypatch
-) -> None:
-    """The oneshot clears the flag on scan 1, when it fires, and on scan 2, when it does not.
+def test_a_oneshot_that_does_not_fire(engine, fault_name, oneshot, kept, monkeypatch) -> None:
+    """The oneshot clears the flag on scan 1, when it fires.
 
-    CLICK: ``flag_probe/oneshot_that_does_not_fire``.
+    On scan 2 it does not fire, and only a Math clears the flag then.  CLICK:
+    ``flag_reads/oneshot_held``.
     """
     flag, fault = _FAULTS[fault_name]
-    cleared, kept = Bool("Cleared"), Bool("Kept")
+    cleared, left = Bool("Cleared"), Bool("Kept")
     with Program(strict=False) as prog:
         with Rung():
             fault()
@@ -278,8 +303,8 @@ def test_a_oneshot_that_does_not_fire_still_clears(
         with Rung(system.sys.first_scan, ~flag):
             latch(cleared)
         with Rung(~system.sys.first_scan, flag):
-            latch(kept)
-    assert _run(prog, engine, (cleared, kept), monkeypatch, scans=2) == (True, False)
+            latch(left)
+    assert _run(prog, engine, (cleared, left), monkeypatch, scans=2) == (True, kept)
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
@@ -299,18 +324,51 @@ def test_each_flag_follows_on_its_own(engine, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("engine", _SCANNING_ENGINES)
-def test_a_flag_clears_at_the_next_scan_whatever_runs(engine, monkeypatch) -> None:
-    """pyrung's choice: nothing has to run on the next scan to clear a flag."""
+@pytest.mark.parametrize("fault_name", list(_FAULTS))
+def test_a_flag_carries_into_the_next_scan(engine, fault_name, monkeypatch) -> None:
+    """CLICK: ``flag_carry/math_flags_carry``.  The top rung of scan 2 reads the flag on.
+
+    The faulting rung is false on scan 2.  A Math there clears its flag, and a Copy leaves it.
+    """
+    flag, fault = _FAULTS[fault_name]
     armed = Bool("Armed")
     at_top = Bool("AtTop")
     with Program(strict=False) as prog:
-        with Rung(SC44):
+        with Rung(flag):
             latch(at_top)
         with Rung(~armed):
-            copy(_Tbl[_Zero], _Sink)
+            fault()
         with Rung():
             out(armed)
-    assert _run(prog, engine, (at_top, SC44), monkeypatch, scans=2) == (False, False)
+    left = fault_name.endswith("_copy")
+    assert _run(prog, engine, (at_top, flag), monkeypatch, scans=2) == (True, left)
+
+
+@pytest.mark.parametrize("engine", _SCANNING_ENGINES)
+def test_a_carried_flag_waits_for_an_instruction_that_follows_it(engine, monkeypatch) -> None:
+    """A coil and a timer on the next scan leave SC44, and the Copy after them clears it."""
+    armed = Bool("Armed")
+    before, after = Bool("Before"), Bool("After")
+    with Program(strict=False) as prog:
+        with Rung(~armed):
+            copy(_Tbl[_Zero], _Sink)
+        with Rung(armed):
+            out(_Coil)
+        with Rung(armed):
+            on_delay(_Tmr, preset=1000, unit="Ts")
+        with Rung(armed, SC44):
+            latch(before)
+        with Rung(armed):
+            copy(1, _Other)
+        with Rung(armed, SC44):
+            latch(after)
+        with Rung():
+            out(armed)
+    assert _run(prog, engine, (before, after, SC44), monkeypatch, scans=2) == (
+        True,
+        False,
+        False,
+    )
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
@@ -1177,10 +1235,13 @@ _FLAG_READS: dict[str, tuple[Callable[[Any], object], Any]] = {
 def test_a_source_reads_a_flag_its_instruction_follows_as_clear(
     engine, position, fault_name, monkeypatch
 ) -> None:
-    """A Copy or Fill follows SC43 and SC44, and reads SC40 as it is; a Math follows all three."""
+    """A Copy or Fill follows SC43 and SC44, and reads SC40 and SC46 as they are.
+
+    A Math follows all four.
+    """
     flag, fault = _FAULTS[fault_name]
     read, shown = _FLAG_READS[position]
-    followed = flag is not SC40 or position.startswith("calc")
+    followed = fault_name not in _MATH_ONLY or position.startswith("calc")
     with Program(strict=False) as prog:
         with Rung():
             copy(1, _FlagInts[1])

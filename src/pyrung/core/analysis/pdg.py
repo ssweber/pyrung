@@ -425,9 +425,16 @@ class ProgramGraph:
         guard: a reader outside the subroutine runs after the return and
         reads the value the skipped write left standing, however the
         subroutine is called.
+
+        A fault flag is never written before it is read.  The chains count each
+        implicit fault write (``_fault_writes``) as a full write, but most of
+        those instructions clear the flag only when they run, or only ever set
+        it, and the flag carries from scan to scan.
         """
         chain = self.def_use_chains.get(tag_name)
         if not chain:
+            return False
+        if any(tag_name in node.implicit_writes for node in self.rung_nodes):
             return False
         entry_version = chain[0]
         if entry_version.defined_at is not None or entry_version.read_by:

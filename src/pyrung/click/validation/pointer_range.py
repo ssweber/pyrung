@@ -9,7 +9,12 @@ from pyclickplc.banks import BANKS
 from pyrung.core.analysis.value_sets import _scan, _ValueSets
 from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.expression import format_expr
-from pyrung.core.instruction.control import iter_loop_body_rungs
+from pyrung.core.instruction.control import (
+    FOR_COUNT_MASK_16,
+    for_count_mask,
+    for_loop_iterations,
+    iter_loop_body_rungs,
+)
 from pyrung.core.memory_block import IndirectBlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef
 from pyrung.core.validation.walker import ProgramLocation, _instruction_fields
@@ -69,8 +74,13 @@ class _PointerBounds:
             self._lookup[name] = known
         for instruction in instructions:
             count = getattr(instruction, "count", None)
-            if isinstance(instruction, ForLoopInstruction) and type(count) is int and count > 0:
-                self._lookup[instruction.idx_tag.name] = frozenset(range(count))
+            if isinstance(instruction, ForLoopInstruction) and type(count) is int:
+                runs = for_loop_iterations(count, for_count_mask(count))
+                if runs:
+                    # No bank holds 65536 addresses, so the first one past its end still shows.
+                    self._lookup[instruction.idx_tag.name] = frozenset(
+                        range(min(runs, FOR_COUNT_MASK_16 + 1))
+                    )
         return sets
 
     def reach(self, ref: Any) -> frozenset[int] | None:

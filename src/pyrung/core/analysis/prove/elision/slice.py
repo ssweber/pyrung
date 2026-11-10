@@ -101,6 +101,7 @@ from pyrung.core.tag import ImmediateRef
 
 from ..expr import _referenced_tags
 from ..results import PENDING
+from ..system_points import FAULT_FLAGS
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.simplified import Expr
@@ -451,10 +452,13 @@ class _SliceElision:
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
         # The checks run scans on the interpreter, which has no iteration cap:
         # a 32-bit For count can run up to 2147483647 times (a positive
-        # Dint), so a program with one gets no enumerated check.
+        # Dint), so a program with one gets no enumerated check.  A constant
+        # count is read whole too, but a constant of 65535 or less runs no more
+        # iterations than a 16-bit count.
         self.runs_a_wide_for = any(
             isinstance(instr, ForLoopInstruction)
             and for_count_mask(instr.count) > FOR_COUNT_MASK_16
+            and not (isinstance(instr.count, int) and instr.count <= FOR_COUNT_MASK_16)
             for instr in _iter_program_instructions(program)
         )
 
@@ -504,7 +508,10 @@ class _SliceElision:
             return False
 
         tag = self.graph.tags.get(name)
-        if tag is None:
+        if tag is None or name in FAULT_FLAGS:
+            # A fault flag carries from scan to scan.  The one-shot survey
+            # here reads only the declared write targets, not
+            # ``_fault_writes``, so a flag is never taken for scan-local.
             self._scan_local_memo[name] = False
             return False
 

@@ -123,13 +123,14 @@ class EnabledFunctionCallInstruction(Instruction):
 
 # What a For does with a count of 0.  CLICK reads a 16-bit count as unsigned:
 # a DS of -1 runs 65535 iterations (hardware 2026-10-29).  It reads a 32-bit
-# count whole and signed: a DD of 65536 runs 65536 (hardware 2026-11-05) and a
-# DD of -1 runs none (hardware 2026-11-06).  A count of 0 runs none.  The
-# runtime, the debugger and the generated P1AM-200 code all read this one
-# switch.
+# count whole and signed.  A DD of 65536 runs 65536 (hardware 2026-11-05).  A
+# DD of -1, -65535 or -2 and a CTD of -1 run none (hardware 2026-11-06,
+# 2026-11-10).  It reads a constant whole, so 70000 runs 70000
+# (hardware 2026-11-10).  A count of 0 runs none.  The runtime, the debugger
+# and the generated P1AM-200 code all read this one switch.
 FOR_ZERO_COUNT_ITERATIONS = 0
 
-#: The mask of a 16-bit count (DS, TD, SD, a literal) and of a 32-bit one (DD, CTD).
+#: The mask of a 16-bit count (DS, TD, SD) and of a 32-bit one (DD, CTD, a constant).
 FOR_COUNT_MASK_16 = 0xFFFF
 FOR_COUNT_MASK_32 = 0xFFFFFFFF
 #: The most a 32-bit count runs: past it, its bits are a negative count, which runs none.
@@ -137,14 +138,16 @@ FOR_COUNT_MAX_32 = 0x7FFFFFFF
 
 
 def for_count_mask(count: Any) -> int:
-    """The mask a For reads *count* through: a Dint register is read whole.
+    """The mask a For reads *count* through: a Dint register or a constant is read whole.
 
-    A Dint tag or a Dint block element (a DD, a CTD) is read as signed 32-bit;
-    anything else (an Int, a Word, a literal, an expression, a REAL) as unsigned
-    16-bit.  How many a constant past 16 bits runs on a CLICK is unread.
+    A Dint tag, a Dint block element (a DD, a CTD) and an integer constant are
+    read as signed 32-bit.  Anything else (an Int, a Word, an expression, a
+    REAL) is read as unsigned 16-bit.
     """
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
+    if isinstance(count, int) and not isinstance(count, bool):
+        return FOR_COUNT_MASK_32
     if isinstance(count, Tag):
         return FOR_COUNT_MASK_32 if count.type == TagType.DINT else FOR_COUNT_MASK_16
     if isinstance(count, (IndirectRef, IndirectExprRef)):

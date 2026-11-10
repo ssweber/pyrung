@@ -265,3 +265,13 @@ slots = 1
 
 [groups.modbus_raw.cases]
 raw_values = 1
+
+[groups.reset_pins]
+base = 1591 # Conf_ResetPins: DS1591..DS1640
+slots = 4
+
+[groups.reset_pins.cases]
+down_reset_positive = 1
+down_reset_negative = 2
+rton_reset_held = 3
+rton_reset_after = 4

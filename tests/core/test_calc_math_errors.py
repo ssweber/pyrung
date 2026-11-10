@@ -1,10 +1,11 @@
-"""calc math-domain errors: 0 in the destination, SC46 on for the scan, PLC in RUN.
+"""calc math-domain errors: 0 in the destination, SC46 on until the next Math, PLC in RUN.
 
 CLICK's help: "SC46 _Math_Operation_Error: Data Registers used in the Math
 formula have Invalid values.  SC50 is turned to ON, the PLC is put in Stop
-Mode."  The hardware does not stop (conformance ``math_error``): SC46 is on
-for the rest of the faulting scan, clears at the next scan start, SC50 stays
-off and the PLC keeps running.  The ``runner_factory`` cases run on the
+Mode."  The hardware does not stop (conformance ``math_error``).  SC46 stays on
+until the next Math the scan reaches clears it, in this scan or a later one
+(conformance ``flag_carry``, ``flag_reads/math_after_sqrt``).  SC50 stays off
+and the PLC keeps running.  The ``runner_factory`` cases run on the
 interpreter and the compiled kernel (and assert they agree under
 ``--runner-backend=both``).
 """
@@ -88,7 +89,7 @@ def test_domain_error_into_any_destination_writes_zero(runner_factory, dest_type
     assert plc.mode == "run"
 
 
-def test_the_error_clears_at_the_next_scan(runner_factory):
+def test_the_next_math_clears_the_error(runner_factory):
     program, x, go = _program(sqrt)
     plc = runner_factory(program)
     plc.patch({x: -4.0, go: True})
@@ -164,12 +165,76 @@ def test_math_domain_error_is_a_value_error():
     assert issubclass(MathDomainError, ValueError)
 
 
-def test_only_domain_limited_calcs_declare_sc46():
+def test_every_calc_declares_sc46():
+    """A Math with no function in it still clears SC46, so it writes the flag."""
     x, dest = Real("X"), Real("Dest")
     assert SC46.name in CalcInstruction(sqrt(x) + 1, dest)._fault_writes
     assert SC46.name in CalcInstruction(acos(x), dest)._fault_writes
-    assert SC46.name not in CalcInstruction(sin(x) + x, dest)._fault_writes
-    assert SC46.name not in CalcInstruction(x * 2, dest)._fault_writes
+    assert SC46.name in CalcInstruction(sin(x) + x, dest)._fault_writes
+    assert SC46.name in CalcInstruction(x * 2, dest)._fault_writes
+
+
+def _error_then(later) -> tuple[Program, Bool]:
+    x = Real("X", default=-4.0)
+    dest, other = Real("Dest"), Real("Other")
+    seen = Bool("Seen")
+    with Program(strict=False) as program:
+        with Rung():
+            math(sqrt(x), dest)
+        with Rung(SC46):
+            out(seen)
+        later(other)
+    return program, seen
+
+
+def _plain_math(other):
+    with Rung():
+        math(other + 1, other)
+
+
+def _math_on_a_false_rung(other):
+    with Rung(Bool("Never")):
+        math(other + 1, other)
+
+
+def _a_copy(other):
+    with Rung():
+        copy(1, other)
+
+
+@pytest.mark.parametrize(
+    ("later", "left"),
+    [
+        pytest.param(_plain_math, False, id="a_later_math_clears_it"),
+        pytest.param(_math_on_a_false_rung, False, id="a_math_on_a_false_rung_clears_it"),
+        pytest.param(_a_copy, True, id="a_copy_leaves_it"),
+    ],
+)
+def test_what_clears_sc46(runner_factory, later, left):
+    """CLICK: ``flag_reads/math_after_sqrt``, ``flag_steps``."""
+    program, seen = _error_then(later)
+    plc = runner_factory(program)
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Seen"] is True
+    assert tags[SC46.name] is left
+
+
+def test_sc46_carries_into_the_next_scan(runner_factory):
+    """CLICK: ``flag_carry``.  The first rung of the next scan reads it on."""
+    x = Real("X", default=-4.0)
+    dest = Real("Dest")
+    seen_at_top = Bool("SeenAtTop")
+    with Program(strict=False) as program:
+        with Rung(SC46):
+            out(seen_at_top)
+        with Rung():
+            math(sqrt(x), dest)
+    plc = runner_factory(program)
+    plc.step()
+    assert plc.current_state.tags["SeenAtTop"] is False
+    plc.step()
+    assert plc.current_state.tags["SeenAtTop"] is True
 
 
 def test_pdg_sees_the_calc_write_sc46():

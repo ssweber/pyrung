@@ -443,12 +443,16 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     iteration never runs it (None).
     """
     from pyrung.core.condition import IndirectCompareNe
-    from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS, for_loop_iterations
+    from pyrung.core.instruction.control import (
+        FOR_ZERO_COUNT_ITERATIONS,
+        for_count_mask,
+        for_loop_iterations,
+    )
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     count = loop.count
     if isinstance(count, (bool, int, float)):
-        return None if for_loop_iterations(count) == 0 else ((), True)
+        return None if for_loop_iterations(count, for_count_mask(count)) == 0 else ((), True)
     if FOR_ZERO_COUNT_ITERATIONS:
         return ((), True)
     if isinstance(count, Tag):

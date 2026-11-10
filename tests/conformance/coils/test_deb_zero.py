@@ -75,6 +75,8 @@ group = Group(
             ladder=prove_off_side_lag,
             init=init_off_side_lag,
             ready=lambda slot: (~c[222], ~t[114]),
+            # The TOF was enabled, so it times on from the 0 the init writes, through the reset.
+            keep=(TOF.Acc,),
             expect={"Result1": 4076, "Result2": 3784, "Result3": 3784, "ErrorCode": 3784},
             scans=scans_for(WINDOW),
         ),

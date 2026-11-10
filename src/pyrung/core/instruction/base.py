@@ -63,13 +63,15 @@ class Instruction(ABC):
     # System fault flags (``fault.*`` tag names) the instruction can set or
     # clear while executing, beyond its declared destinations.
     _fault_writes: tuple[str, ...] = ()
-    # The flags that follow this instruction: each scan it is enabled (a
-    # one-shot that does not fire too) it clears them as it starts, before it
-    # reads, and sets each it raises (``guard_oneshot_execution``).  A flag not
-    # named here keeps its value until the instruction raises it or the next
-    # scan starts.
+    # The flags that follow this instruction: each scan it runs it clears them
+    # as it starts, before it reads, and sets each it raises
+    # (``guard_oneshot_execution``).  A flag carries from scan to scan until an
+    # instruction that follows it clears it.
     # Every name here is in ``_fault_writes`` too.
     _fault_follows: tuple[str, ...] = ()
+    # Whether it clears those flags on a scan it is reached but does not run
+    # (its rung false, or a one-shot that does not fire), as a CLICK Math does.
+    _fault_settles_idle: bool = False
     _executor_kind: int = _EXECUTOR_INSTRUCTION
 
     @abstractmethod

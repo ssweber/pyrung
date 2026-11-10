@@ -77,17 +77,13 @@ def _permissive(error: Exception) -> int:
 class QuietMathError(ArithmeticError):
     """A math error CLICK's Math answers with 0 and no fault flag.
 
-    ``0 ** -1`` and a MOD by 0 (measured on a CLICK, 2026-11-05: 0, no flag), and
-    ``0 ** 0`` (measured 2026-11-06: 0, no flag).  Raised only by the ops
-    :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc``
+    A MOD by 0 and ``0 ** 0`` (a CLICK read 0 and no flag).  Raised only by
+    the ops :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc``
     (:func:`_op_mod`, :func:`_op_pow_calc`): the operation is 0 and the formula
-    carries on, as for every math error (:data:`CALC_FAULTS`).  Each was read
-    alone, where a 0 for the term and for the formula look the same: that the
-    rest of the formula runs (``MOD(DS7, 0) + 5``, ``0 ^ 0 + 5``, ``0 ^ -1 + 5``
-    reading 5) is pyrung's one model, for a hardware probe to confirm.  Into a
-    DF the 0 is 0.0, unread too (the reading went through an Int, which cannot
-    tell 0.0 from NaN or Inf).  Outside ``calc``, ``%`` floors and ``0 ** 0`` is
-    1, as Python's.
+    carries on, as for every math error (:data:`CALC_FAULTS`), so ``MOD(DS7, 0)
+    + 5`` and ``0 ^ 0 + 5`` are 5 (hardware, 2026-11-10).  Into a DF the 0 is
+    0.0 (``7.5 MOD 0.0`` read 0.0).  Outside ``calc``, ``%`` floors and ``0 **
+    0`` is 1, as Python's.
     """
 
 
@@ -153,10 +149,17 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
 
 
 def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
-    """``a ** b`` in a ``calc``: a zero base to a power of 0 or below is a
-    :class:`QuietMathError`, as a CLICK's Math takes ``0 ^ 0`` and ``0 ^ -1``."""
+    """``a ** b`` in a ``calc``: ``0 ^ 0`` is a :class:`QuietMathError`, and 0 to
+    a negative power is +Inf.
+
+    A CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF.  It stores 0 for
+    ``0 ^ -1 + 5`` into a DS, since the whole formula is +Inf (hardware,
+    2026-11-10).  Python raises ``ZeroDivisionError`` for both.
+    """
     if a == 0 and b <= 0:
-        raise QuietMathError(f"({a!r}) ** {b!r}")
+        if b == 0:
+            raise QuietMathError(f"({a!r}) ** {b!r}")
+        return math.inf
     return _op_pow(a, b)
 
 
@@ -217,8 +220,7 @@ def _op_invert(a: Numeric) -> int:
 #: The bottom of each signed range ABS cannot take, by its own op: ``calc`` swaps
 #: ``abs()`` of an Int or Dint tag for one of these.  Its error is the ABS's
 #: alone, as for every math error: ``ABS(DS1) + 1`` with DS1 = -32768 is 1 with
-#: SC43.  Only ``ABS`` alone is read (0 with SC43, Int and Dint), so the term
-#: is pyrung's one model, for a hardware probe to confirm.
+#: SC43, and ``ABS(DS1)`` into a DD is 0 with SC43 (hardware, 2026-11-10).
 ABS_FLOORS: dict[str, int] = {"INT": -32768, "DINT": -2147483648}
 
 
@@ -613,7 +615,7 @@ class MathDomainError(ValueError):
     ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, ``asin``/``acos``
     outside -1..1.  ``calc`` turns it into CLICK's math-operation error (SC46):
     the function is 0 and the formula carries on (``SQRT(-4.0) + 5`` is 5), the
-    flag is on for the rest of the scan, and the PLC stays in RUN.
+    flag stays on until the next Math clears it, and the PLC stays in RUN.
     """
 
 

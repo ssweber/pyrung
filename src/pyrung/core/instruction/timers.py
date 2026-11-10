@@ -22,21 +22,17 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
 
 
-def tof_timing_key(acc_name: str) -> str:
-    """Memory key that marks an off-delay timer timing at ``Done False, Acc 0``.
+def tof_armed_key(acc_name: str) -> str:
+    """Memory key set on the first scan an off-delay timer runs enabled, or runs
+    with Done on or Acc above 0.
 
-    An off-delay timer that was never enabled rests at ``Done False, Acc 0``
-    and does not time.  The same pair is also what the timer itself writes
-    on an off scan when the preset is already reached (preset 0) and the scan
-    added no whole unit yet (a scan shorter than one unit).  That timer must
-    keep timing, so its own scan records the fact here: ``True`` exactly when
-    the timer's last execution left ``Done False, Acc 0`` while timing.  The
-    key is absent until that first happens and is written back to ``False``
-    on the timer's next execution that leaves anything else.  Any other path
-    to ``Done False, Acc 0`` (a zero copy into a timed-out accumulator, a
-    patch, STOP -> RUN) still rests, as before.
+    A TOF that was never enabled rests at ``Done False, Acc 0`` and does not
+    time (``timers/tof_never_enabled``).  Once enabled, it judges ``Acc <
+    preset`` on every scan its rung is false, so a TD the ladder writes to 0
+    turns Done back on and counts from 0 (``tof_rewrite/done_after_td_zeroed``).
+    STOP -> RUN clears the key with the rest of the memory.
     """
-    return f"_tof_timing:{acc_name}"
+    return f"_tof_armed:{acc_name}"
 
 
 class OnDelayInstruction(Instruction):
@@ -198,9 +194,11 @@ class OffDelayInstruction(Instruction):
     - **Rung True:** done = True, accumulator = 0 (resets immediately)
     - **Rung False:** accumulator counts up; done = False once acc ≥ preset
     - **Re-enabling:** re-enables immediately (acc and done reset)
+    - **Never enabled:** rests at done = False, acc = 0
 
     If `preset` is a dynamic tag that increases past the current accumulator
     after the timer has already fired, done re-enables until acc catches up.
+    So does an accumulator written below the preset.
 
     Args:
         done_bit: BOOL tag that stays True until delay expires.
@@ -250,13 +248,13 @@ class OffDelayInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
-        timing_key = tof_timing_key(self.accumulator.name)
-        timing_at_zero = ctx.get_memory(timing_key, False)
+        armed_key = tof_armed_key(self.accumulator.name)
+        armed = ctx.get_memory(armed_key, False)
 
         if enabled:
             # While enabled: done = True, acc = 0
-            if timing_at_zero:
-                ctx.set_memory(timing_key, False)
+            if not armed:
+                ctx.set_memory(armed_key, True)
             ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
@@ -268,14 +266,14 @@ class OffDelayInstruction(Instruction):
         else:
             acc_value = ctx.get_tag(self.accumulator.name, 0)
 
-            # Done=False, Acc=0 is the resting state of a timer that was never
-            # enabled (or was reset to it), unless this timer's own last scan
-            # left it there while timing (see tof_timing_key).
-            if not timing_at_zero and acc_value == 0 and not ctx.get_tag(self.done_bit.name, False):
+            # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
+            if not armed and acc_value == 0 and not ctx.get_tag(self.done_bit.name, False):
                 status = self._status_tags(False, False)
                 if status:
                     ctx.set_tags(status)
                 return
+            if not armed:
+                ctx.set_memory(armed_key, True)
 
             sp = resolve_preset_ctx(self.preset, ctx)
 
@@ -291,10 +289,6 @@ class OffDelayInstruction(Instruction):
             done = acc_value < sp
 
             ctx.set_memory(frac_key, new_frac)
-            # Preset reached with no whole unit yet: still timing.
-            stalled = not done and acc_value == 0
-            if stalled != timing_at_zero:
-                ctx.set_memory(timing_key, stalled)
             # TOF TT: timing while disabled and done is still True
             ctx.set_tags(
                 {

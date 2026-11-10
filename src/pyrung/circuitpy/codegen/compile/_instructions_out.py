@@ -15,7 +15,13 @@ from pyrung.core.instruction import (
     TimedInstruction,
     ToggleInstruction,
 )
-from pyrung.core.instruction.out_variants import _FLASH_IDLE, _FLASH_OFF, _FLASH_ON
+from pyrung.core.instruction.out_variants import (
+    _FLASH_IDLE,
+    _FLASH_OFF,
+    _FLASH_OFF_NEXT,
+    _FLASH_ON,
+    _FLASH_ON_NEXT,
+)
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
@@ -132,7 +138,7 @@ def _compile_flasher_phase(
     ctx: CodegenContext,
     sp: str,
 ) -> list[str]:
-    """The running phase's tick; at or past its preset, the other phase starts from 0."""
+    """The running phase's tick.  At or past its preset, the other phase runs from the next scan."""
     sp4 = sp + "    "
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
@@ -142,7 +148,7 @@ def _compile_flasher_phase(
             instr.off_acc,
             instr.on_preset,
             "_on_preset",
-            _FLASH_OFF,
+            _FLASH_OFF_NEXT,
         )
     else:
         acc, other, preset, limit, other_phase = (
@@ -150,14 +156,13 @@ def _compile_flasher_phase(
             instr.on_acc,
             instr.off_preset,
             "_off_preset",
-            _FLASH_ON,
+            _FLASH_ON_NEXT,
         )
     return [
         *_tick_lines(acc, preset, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
         f"{sp}if _acc >= {limit}:",
         f"{sp4}_phase = {other_phase}",
-        f"{sp4}{_compile_lvalue(other, ctx)} = 0",
         f'{sp4}_mem["{on_frac}"] = 0',
         f'{sp4}_mem["{off_frac}"] = 0',
         f"{sp}else:",
@@ -191,12 +196,8 @@ def _compile_flasher_instruction(
         f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp4}_off_preset = int({_compile_value(instr.off_preset, ctx)})",
         f"{sp4}if _on_preset <= 0 or _off_preset <= 0:",
-        # Held reset: idle, dark, both accumulators 0.
+        # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
         f'{sp8}_mem["{phase_key}"] = {_FLASH_IDLE}',
-        f'{sp8}_mem["{on_frac}"] = 0',
-        f'{sp8}_mem["{off_frac}"] = 0',
-        f"{sp8}{on_write} = 0",
-        f"{sp8}{off_write} = 0",
         f"{sp8}{target_write} = False",
         f"{sp4}else:",
         f'{sp8}_phase = _mem.get("{phase_key}", {_FLASH_IDLE})',
@@ -206,12 +207,22 @@ def _compile_flasher_instruction(
         f"{sp12}{off_write} = 0",
         f'{sp12}_mem["{on_frac}"] = 0',
         f'{sp12}_mem["{off_frac}"] = 0',
+        # The phase that starts now runs from 0, and the other's accumulator holds.
+        f"{sp8}elif _phase == {_FLASH_ON_NEXT}:",
+        f"{sp12}_phase = {_FLASH_ON}",
+        f"{sp12}{on_write} = 0",
+        f'{sp12}_mem["{on_frac}"] = 0',
+        f"{sp8}elif _phase == {_FLASH_OFF_NEXT}:",
+        f"{sp12}_phase = {_FLASH_OFF}",
+        f"{sp12}{off_write} = 0",
+        f'{sp12}_mem["{off_frac}"] = 0',
+        # The coil shows the phase that runs this scan, even one that ends on it.
+        f"{sp8}{target_write} = _phase == {_FLASH_ON}",
         f"{sp8}if _phase == {_FLASH_ON}:",
         *_compile_flasher_phase(instr, True, ctx, sp12),
         f"{sp8}else:",
         *_compile_flasher_phase(instr, False, ctx, sp12),
         f'{sp8}_mem["{phase_key}"] = _phase',
-        f"{sp8}{target_write} = _phase == {_FLASH_ON}",
     ]
 
 

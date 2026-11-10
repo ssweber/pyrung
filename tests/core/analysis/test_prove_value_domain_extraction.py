@@ -9,6 +9,7 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Dint,
     Int,
     Program,
     Real,
@@ -139,6 +140,31 @@ class TestValueDomainExtraction:
         assert not isinstance(result, Intractable)
         assert result[0]["W"] == (0, 1, 2, 65534, 65535)
         assert isinstance(always(logic, ~high, max_states=5000), Counterexample)
+
+    def test_a_power_that_may_be_zero_to_a_negative_is_not_bounded_by_its_corners(self):
+        """0 ** -1 is +Inf, which a Dint stores as 0.  So the corners of N ** E run from 0 to
+        +Inf, and the domain of D must still hold 2 (2 ** 1)."""
+        two_base, plus_one = Bool("TwoBase", external=True), Bool("PlusOne", external=True)
+        n, e, d = Int("N"), Int("E"), Dint("D")
+        big = Bool("Big")
+        with Program(strict=False) as logic:
+            with Rung(two_base):
+                copy(2, n)
+            with Rung(~two_base):
+                copy(0, n)
+            with Rung(plus_one):
+                copy(1, e)
+            with Rung(~plus_one):
+                copy(-1, e)
+            with Rung():
+                math(n**e, d)
+            with Rung(d > 1):
+                latch(big)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert 2 in result[0]["D"]
+        assert isinstance(always(logic, ~big, max_states=5000), Counterexample)
 
     @staticmethod
     def _real_mod_program():
