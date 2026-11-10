@@ -67,10 +67,6 @@ The four severities are:
 
 The report is truthy when it contains any finding. Use `assert not report` when every severity must be clean.
 
-### Diagnostic frames
-
-`str(finding)` is the complete terminal diagnostic shown above. For integrations, `finding.display` exposes the structured `.problem`, `.frames`, and `.hint`. `finding.message` contains the frame-and-hint body without the code and severity header. Consumers do not need to parse terminal text.
-
 ## Selecting rules
 
 The core rules run when `select` is omitted. `select` replaces that set. `extend_select` adds to it. `ignore` excludes rules. Selectors accept complete codes, prefixes, or `ALL`:
@@ -100,7 +96,7 @@ Categories are the prefixes before the first underscore:
 
 The most specific matching selector wins, and `ignore` wins a tie. `report.checked_rules` records the actual selection, including checks that produced no findings.
 
-The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `RUNG_ORDER_DEPENDENT`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`. Registry entries expose `default_on` for integrations.
+The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `RUNG_ORDER_DEPENDENT`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`.
 
 ### Project settings
 
@@ -114,7 +110,7 @@ Omit `select` to retain core defaults, or use `select = ["ALL"]` to enable every
 
 `pyrung check` starts in the current directory and reads the nearest ancestor `pyproject.toml` that contains this section. `--config path/to/pyproject.toml` chooses a file explicitly. Command-line `--select` and `--ignore` replace their project values. `--extend-select` adds to the project's `extend-select` list.
 
-The Python API never reads a working-directory configuration implicitly. Integrations can share the same policy through `pyrung.core.validation.CheckConfig`, `load_check_config`, and `save_check_config`.
+`logic.check()` does not read `[tool.pyrung.check]`. Pass `select` and `ignore` to it.
 
 ## Command line
 
@@ -156,6 +152,8 @@ The check ignores instruction operands, because they always see every write abov
 | `COIL_STUCK_HIGH` | Warning | A tag is latched but never reset. An `out` inside a skippable subroutine counts as a latch; see [Outputs in skippable subroutines](#outputs-in-skippable-subroutines). |
 | `COIL_STUCK_LOW` | Warning | A tag is reset but never latched anywhere in the program. |
 
+For conflicting outputs, the lint proves mutual exclusivity for different-constant equality comparisons, complementary Boolean contacts, and complementary ranges such as `<`/`>=` or `<=`/`>`. Different subroutines are safe when their caller conditions are provably exclusive. When exclusivity cannot be established statically, the lint keeps the finding.
+
 ### Comparisons
 
 | Code | Severity | What it detects |
@@ -163,7 +161,7 @@ The check ignores instruction operands, because they always see every write abov
 | `CMP_ALWAYS_FALSE` | Warning | A comparison that is false for every value its operand can hold, as set by its Bool type, its `choices=`, its integer bounds, or the values the rungs that write it produce. |
 | `CMP_ALWAYS_TRUE` | Info | An equality or inequality comparison that is true for every value in a complete domain. |
 | `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
-| `CMP_EQ_ON_COMPUTED_REAL` | Advisory | `==` or `!=` on a REAL the ladder computes with `math()` (or copies from one), where rounding can step over the exact value. Use a range or a tolerance. REALs written through a block index or pointer are not followed. |
+| `CMP_EQ_ON_COMPUTED_REAL` | Advisory | `==` or `!=` on a REAL the ladder computes with `math()` (or copies from one), where rounding can step over the exact value. Use a range or a tolerance. |
 | `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. |
 | `CMP_PRESET_STAYS_ZERO` | Warning | A timer, counter or drum step preset is a tag that starts at 0 and no rung writes, so a timer or counter completes at once and a drum step never ends. |
 | `CMP_STEPPER_VALUE_NOT_SET` | Warning | A step tag (one the program moves through a set of values) is compared with a value no rung sets it to. |
@@ -179,7 +177,7 @@ The check ignores instruction operands, because they always see every write abov
 | `TAG_CHOICES_VIOLATION` | Error | A literal write is not present in the target tag's `choices` keys. |
 | `TAG_RANGE_VIOLATION` | Error | A literal write falls outside the target tag's declared `min`/`max` limits. |
 | `TAG_FINAL_MULTIPLE_WRITERS` | Error | More than one write site targets a tag declared with `final=True`. Mutual exclusivity does not exempt the writers. |
-| `TAG_DEAD_WRITE` | Warning | A resolved direct scalar write that ordered scan analysis proves is overwritten before any read. Loops, branches, calls, subroutine returns, indirect targets, one-shots, and conditional overwrites are not followed. |
+| `TAG_DEAD_WRITE` | Warning | A write that a later write in the same scan always overwrites before anything reads it. |
 
 ### Pointers
 
@@ -189,7 +187,7 @@ The check ignores instruction operands, because they always see every write abov
 | `PTR_MAY_ESCAPE_BLOCK` | Warning | A pointer can still point outside its block where it is used, even with the conditions that guard that use. |
 | `PTR_UNGUARDED_ACCESS` | Advisory | Nothing limits the pointer's values, and its guards don't check both ends of the block. |
 
-These checks cover scalar `Block[Ptr]` accesses. This is conservative static analysis, not a complete reachability proof.
+These checks cover scalar `Block[Ptr]` accesses.
 
 ```python
 with rung(Ptr >= 1, Ptr <= 100):
@@ -256,12 +254,6 @@ with rung(Mode == 3):
 
 The state tag needs a closed domain through `choices=` or `min`/`max`. Without one, `Mode == 7` remains possible and the lint reports the coil. A `Bool` discriminator such as `Enable`/`~Enable` already has a closed domain. An edge-gated call such as `rise(Request)` never provides full coverage because the edge is false on nearly every scan.
 
-## Structural checks and reachability
-
-`COIL_STUCK_HIGH` and `COIL_STUCK_LOW` ask whether the program contains the required opposing write. [`plc.query.stranded_bits()`](analysis-coverage.md#stranded-bits) asks whether that write can actually be reached.
-
-For conflicting outputs, the lint proves mutual exclusivity for different-constant equality comparisons, complementary Boolean contacts, and complementary ranges such as `<`/`>=` or `<=`/`>`. Different subroutines are safe when their caller conditions are provably exclusive. When exclusivity cannot be established statically, the lint keeps the finding.
-
 ## Target validation
 
 Core ladder lints and target portability checks run separately:
@@ -272,4 +264,4 @@ logic.validate("click", tag_map=mapping, mode="strict")
 logic.validate("circuitpy", hw=hw, mode="strict")
 ```
 
-`logic.validate()` without a dialect remains a compatibility alias for `logic.check()`. The dialect forms check whether a program can run on that target. They do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.
+The dialect forms check whether a program can run on that target. They do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.
