@@ -18,7 +18,9 @@ preset to -7 on its scan, so -7 is a read that left its destination alone:
 - Result3: after a Copy of 0 again: 0 where it lands, 1234 where only the first write landed.
 - Result4: SC43 (bit 1) and SC44 (bit 2) right after the write of 1234, latched by coils.
 
-pyrung drops the writes and reads 0: 0, 0, 0, 0, 0.
+A CLICK read 0, 1234, 0, 0 and 0 on 2026-11-06 and 2026-11-09: each write lands, and it raises
+neither flag.  pyrung drops the writes and reads 0, 0, 0, 0 and 0, so the case is pending
+``PASTBANK``.  ErrorCode expects 0, what this case and ``modbus_raw`` leave there.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -31,7 +33,6 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, latch, math, reset, system
 from tests.conformance.copy.test_past_bank_write import ADDRESS, POINTER
 from tests.conformance.memory import c, dd
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 WINDOW = 10
@@ -79,26 +80,19 @@ def init_clear_then_write(slot: Any) -> None:
     copy(0, POINTER)
 
 
-reading = between(-32768, 32767)
-
 group = Group(
     "past_clean",
     [
         case(
-            "WRITES PAST THE DD BANK on a CLICK, at DD1531, and clears it last.  Read as found "
-            "(ErrorCode), after a Copy of 0 (Result1), of 1234 (Result2: 1234 if a write lands, "
-            "0 if dropped) and of 0 again (Result3); SC43 and SC44 after the 1234 (Result4)",
+            "WRITES PAST THE DD BANK on a CLICK, at DD1531, and clears it last.  Each write lands: "
+            "0 as found (ErrorCode), 0 after a Copy of 0 (Result1), 1234 after a Copy of 1234 "
+            "(Result2) and 0 after a Copy of 0 again (Result3); no SC43 or SC44 after the 1234 "
+            "(Result4 = 0)",
             ladder=prove_clear_then_write,
             init=init_clear_then_write,
-            expect={
-                "Result1": reading,
-                "Result2": reading,
-                "Result3": reading,
-                "Result4": between(0, 3),
-                "ErrorCode": reading,
-            },
+            expect={"Result1": 0, "Result2": 1234, "Result3": 0, "Result4": 0, "ErrorCode": 0},
             scans=scans_for(WINDOW),
-            probe="a Copy through a pointer past the DD bank, cleared first: does it land (1h)",
+            pending="PASTBANK",
         ),
     ],
 )
