@@ -708,7 +708,7 @@ class InputTag(Tag):
 
     - **Simulation:** no runtime effect.
     - **Click dialect:** the ladder export writes an immediate contact. Click
-      validation checks where it may be used.
+      validation checks its placement.
     - **CircuitPython dialect:** no effect. The generated code reads the input
       at the start of the scan, as for a plain tag.
 
@@ -739,7 +739,7 @@ class OutputTag(Tag):
 
     - **Simulation:** no runtime effect.
     - **Click dialect:** the ladder export writes an immediate coil. Click
-      validation checks where it may be used.
+      validation checks its placement.
     - **CircuitPython dialect:** no effect. The generated code writes the output
       at the end of the scan, as for a plain tag.
 
