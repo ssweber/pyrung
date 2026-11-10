@@ -4,7 +4,7 @@
 ``word_store/word_below_zero`` read on a CLICK that DD -1 copied into a DH writes 65535, the
 wrap.  It does not say what a value below -32768 writes, where a store could wrap all 16 bits or
 first floor the value at the least Int, nor what a NaN writes.  The fix step ``store-click`` (3 in
-the ``conform-fix`` arc) guesses both and waits on this.
+the ``conform-fix`` arc) guessed both, and this case reads them.
 
 ``below_int_and_nan``: the values are staged on scan 1 (making the NaN raises SC43, which scan 2
 starts without) and stored on scan 2, each into a DH preset to 0x1234 (4660), so a store that is
@@ -27,8 +27,8 @@ refused reads apart from one that writes:
   halved, 0 where both are classed.  The DH into a DD may read unsigned or signed
   (``word_store/word_into_signed`` asks), so a DH past 32767 reads 16384..32767 or -16384..-1.
 
-pyrung on dev 42dd614 wraps with no flag and reads 1, 1, 1, 1, 0.  With ``store-click``'s floor at
--32768 it reads 2, 2, 1.
+A CLICK read 2, 2, 1, 1 and 0 (2026-11-06).  It floors each value at -32768, which a Word holds
+as 32768, and a NaN writes 0.  No store raises SC43.  pyrung reads the same.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -40,7 +40,6 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, fill, math, system
 from tests.conformance.memory import dd, df, dh
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 SC43 = system.fault.out_of_range
@@ -103,22 +102,15 @@ group = Group(
     "word_floor",
     [
         case(
-            "A Copy into a DH preset 4660: DD -40000 writes 25536, all 16 bits wrapped "
-            "(Result1 = 1, 2 for 32768 floored at -32768, 3 for 0, 4 for none); DD -70000 "
-            "61072 (Result2, as Result1); a DF NaN 0 (Result3 = 1, 2 none, 3 65535, 4 32768, "
-            "5 32767); the NaN made (Result4 bit 1), SC43 after each (bits 2, 4, 8) and "
-            "before the first (16); an unclassed DH halved (ErrorCode)",
+            "A Copy into a DH preset 4660 floors at -32768 and wraps: DD -40000 writes 32768 "
+            "(Result1 = 2, 1 for 25536 all 16 bits wrapped, 3 for 0, 4 for none); DD -70000 "
+            "32768 (Result2 = 2, as Result1); a DF NaN 0 (Result3 = 1, 2 none, 3 65535, 4 32768, "
+            "5 32767); the NaN made and no SC43 after or before any store (Result4 = 1); no "
+            "unclassed DH (ErrorCode = 0)",
             ladder=prove_below_int_and_nan,
             init=init_below_int_and_nan,
-            expect={
-                "Result1": between(0, 4),
-                "Result2": between(0, 4),
-                "Result3": between(0, 5),
-                "Result4": between(0, 31),
-                "ErrorCode": between(-32768, 32767),
-            },
+            expect={"Result1": 2, "Result2": 2, "Result3": 1, "Result4": 1, "ErrorCode": 0},
             scans=scans_for(WINDOW),
-            probe="a Copy into a Word below -32768 and from NaN: wrap, floor or 0 (3)",
         ),
     ],
 )
