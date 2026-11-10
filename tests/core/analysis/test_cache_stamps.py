@@ -109,3 +109,21 @@ def test_plc_graph_follows_a_slot_rename():
     assert plc.dataview.inputs().tags == {"Lim2", "Go"}
     limits.slot(2, name="Renamed")
     assert plc.dataview.inputs().tags == {"Renamed", "Go"}
+
+
+def test_capture_filter_follows_a_slot_rename_without_a_graph_call():
+    limits = _limit_block()
+    Dest = Int("Dest")
+    Go = Bool("Go")
+    with Program() as prog:
+        with Rung(Go):
+            copy(limits[2], Dest)
+    plc = PLC(prog)
+    plc.step()
+    assert "Lim2" in (plc._consumed_tags_for_capture() or ())
+    limits.slot(2, name="Renamed")
+    plc.step()
+    retained = plc._consumed_tags_for_capture()
+    assert retained is not None
+    assert "Renamed" in retained
+    assert "Lim2" not in retained

@@ -2321,6 +2321,10 @@ class PLC:
         """
         if self._record_all_tags or not self._logic:
             return None
+        from pyrung.core.tag import metadata_edits
+
+        if self._pdg_consumed_tags is not None and self._pdg_edits != metadata_edits():
+            self._ensure_pdg()
         if self._pdg_consumed_tags is None:
             from pyrung.core.rung import Rung as RungClass
 
