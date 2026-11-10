@@ -224,8 +224,8 @@ def _inequality_levers(
     """Return actionable left/right levers for one scalar inequality.
 
     *goal* says the caller asked how() for this comparison.  A ``!=`` takes a lever from
-    what the tag's writers write only then.  Nearly any write meets a ``!=`` gate, so a
-    prerequisite's lever would steer the tag to an arbitrary write.
+    what the tag's writers write only then.  Nearly any write meets a ``!=`` gate.  A lever
+    for a prerequisite would steer the tag to an arbitrary write.
     """
 
     levers: list[_Lever] = []
