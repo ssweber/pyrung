@@ -205,7 +205,10 @@ def _fc05(coil: int) -> bytes:
 
 def _fc15_on(start: int, count: int) -> bytes:
     payload = bytes([(1 << count) - 1])
-    return struct.pack(">HHHBBHHB", 2, 0, 7 + len(payload), 1, 15, start, count, 1) + payload
+    return (
+        struct.pack(">HHHBBHHB", 2, 0, 7 + len(payload), 1, 15, start, count, len(payload))
+        + payload
+    )
 
 
 @pytest.mark.parametrize("runstop", [None, _SWITCH_IN_RUN], ids=["no-runstop", "switch-in-run"])
@@ -231,7 +234,7 @@ def test_sc50_and_sc51_over_modbus_are_refused(monkeypatch, runstop, request_fra
     assert namespace["_t_answer"] == struct.pack(">HHHBBB", tid, 0, 3, 1, fc | 0x80, 2)
     assert namespace["_mode_run"] is True
     assert read(RunScans) == 6
-    # The TagMap brings SC11, SC50 and SC51 in; the program alone does not.
+    # The TagMap brings SC11, SC50 and SC51 in.  The program alone does not.
     assert namespace["_t_sys_mode_run"] is True
     assert namespace["_t_sys_cmd_mode_stop"] is False
     assert namespace["_t_sys_cmd_watchdog_reset"] is False
