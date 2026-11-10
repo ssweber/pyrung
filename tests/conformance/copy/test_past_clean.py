@@ -84,10 +84,10 @@ group = Group(
     "past_clean",
     [
         case(
-            "WRITES PAST THE DD BANK on a CLICK, at DD1531, and clears it last.  Each write lands: "
-            "0 as found (ErrorCode), 0 after a Copy of 0 (Result1), 1234 after a Copy of 1234 "
-            "(Result2) and 0 after a Copy of 0 again (Result3); no SC43 or SC44 after the 1234 "
-            "(Result4 = 0)",
+            "WRITES PAST THE DD BANK on a CLICK, at DD1531, and clears it last.  Each write "
+            "lands.  DD1531 reads 0 as found (ErrorCode) and 0 after a Copy of 0 (Result1).  It "
+            "reads 1234 after a Copy of 1234 (Result2), and 0 after a Copy of 0 again "
+            "(Result3).  No SC43 or SC44 follows the 1234 (Result4 = 0)",
             ladder=prove_clear_then_write,
             init=init_clear_then_write,
             expect={"Result1": 0, "Result2": 1234, "Result3": 0, "Result4": 0, "ErrorCode": 0},

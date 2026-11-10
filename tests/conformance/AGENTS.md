@@ -72,7 +72,7 @@ def test_rungs():
 - `MATH`: Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results).
 - `SC43`: which stores raise SC43 (a clamping Copy, a Math that wraps, a Copy of +/-Inf into an integer, but not a Copy of NaN).
 - `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`), and writes a Real's float32 digits into a TXT (`real_text/six_digits_first`, `real_text/six_digits_past`).
-- `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). `past_clean` reads no flag after the write, and neither does pyrung (the flag side is `SYS`).
+- `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). `past_clean` reads SC43 and SC44 off after the write, as pyrung does (the flag side is `SYS`).
 - `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times). A CLICK does not.
 
 No case carries `DRUM`, `MATH` or `SC43` now, and the `faults` `TEXT` case is met. `SYS` is on the two `flag_boxes` cases only (part `follow_flags`). `flag_steps` asks what clears SC44 there.
