@@ -150,6 +150,8 @@
 "flag_probe/source_flag_in_a_math" = { hash = "2fae14eccb78", on = "2026-11-09" }
 "flag_probe/source_flag_is_read_before_the_copy_settles" = { hash = "c2c9101394fa", on = "2026-11-09" }
 "flag_scan/math_flags_over_a_scan" = { hash = "3ebb134b9fe5", on = "2026-11-07" }
+"flasher_off/ds_minus_five" = { hash = "778a24963497", on = "2026-11-10" }
+"flasher_off/ds_zero" = { hash = "0d6248d4c346", on = "2026-11-10" }
 "for_dd_minus/minus_one_count" = { hash = "9d228b3b5bdc", on = "2026-11-09" }
 "for_more/clock_edges_in_a_body" = { hash = "c08350dd4748", on = "2026-11-10" }
 "for_more/oneshot_and_edges" = { hash = "a4c1e11033f3", on = "2026-11-10" }
@@ -304,6 +306,9 @@
 "system/scan_clock_follows_counter" = { hash = "b9e17b5dcd8f", on = "2026-11-09" }
 "system/scan_counter_steps_by_one" = { hash = "1af8fddb503d", on = "2026-11-09" }
 "system/scan_counter_wraps_to_zero" = { hash = "7be993d01b1f", on = "2026-11-09" }
+"td_write/debounce_on_td_write" = { hash = "aba57d420db9", on = "2026-11-10" }
+"td_write/flasher_off_td_write" = { hash = "0fb73075b432", on = "2026-11-10" }
+"td_write/flasher_on_td_write" = { hash = "664ce82cca5b", on = "2026-11-10" }
 "text/fill_blank_ascii" = { hash = "4d04729ac25d", on = "2026-11-10" }
 "text/literal_fanout" = { hash = "593fa315f53f", on = "2026-11-10" }
 "text/null_ascii" = { hash = "c2db7e360725", on = "2026-11-10" }
@@ -335,6 +340,7 @@
 "timers/tof_times_only_when_false" = { hash = "455ab06cdb61", on = "2026-11-07" }
 "timers/ton_auto_reset" = { hash = "36008261d96e", on = "2026-11-07" }
 "timers/ton_done_on_enabling_scan" = { hash = "be32e270b67a", on = "2026-11-07" }
+"txt_end/by_pointer" = { hash = "5cb6f7383195", on = "2026-11-10" }
 "unit_minute/one_minute" = { hash = "d8c66af6c036", on = "2026-11-05" }
 "unit_minute/thirty_seconds" = { hash = "2af1085ba437", on = "2026-11-05" }
 "unit_pairs/one_second" = { hash = "b3f5c7c75146", on = "2026-11-05" }
