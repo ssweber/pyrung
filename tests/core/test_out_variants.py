@@ -273,7 +273,10 @@ class TestFlasher:
 
     @pytest.mark.parametrize("off_preset", [0, -5])
     def test_off_preset_of_0_or_below_holds_it_reset(self, runner_factory, off_preset):
-        """``flash_zero``: dark, both TDs frozen; a positive preset starts an on phase."""
+        """``flash_zero``: the flasher is dark with both TDs frozen.
+
+        A positive preset starts an on phase.
+        """
         Beacon = Bool("Beacon")
         OffTime = Int("OffTime", default=off_preset)
         with Program() as logic:
@@ -307,8 +310,8 @@ class TestFlasher:
 
 
 class TestShortPhases:
-    """A ``timed`` pulse counts the rung's first scan, as on_delay does: one no longer than a
-    scan does not show.  A flasher phase shows through the scan it ends on, so one no
+    """A ``timed`` pulse counts the rung's first scan, as on_delay does, so one no longer than
+    a scan does not show.  A flasher phase shows through the scan it ends on, so one no
     longer than a scan shows for that scan (hardware, ``flash_zero/short_first_phase``).
     A preset of 0 or below gives no pulse (hardware, ``out_more/zero_and_below``)."""
 

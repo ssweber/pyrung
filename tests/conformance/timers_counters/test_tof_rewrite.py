@@ -1,15 +1,15 @@
 """A timed-out TOF whose TD the ladder writes to 0: the ``tof_rewrite`` group (part ``follow2_coils``).
 
 ``done_after_td_zeroed`` (T1): a TOF of 20 ms on a rung true on scans 1 and 2, false after.  By
-scan 30 it has timed out (Result1, Done then: 0; Result4 its TD, past 20).  On scan 31 a Copy
-below the TOF writes its TD to 0, and on scan 32, on the rung after the TOF, Result2 is Done (1
-on) and Result3 the TD.
+scan 30 it has timed out.  Result1 is its Done then (0), and Result4 its TD (past 20).  On scan
+31 a Copy below the TOF writes its TD to 0.  On scan 32, on the rung after the TOF, Result2 is
+Done (1 on) and Result3 the TD.
 
 A CLICK read 0, 1, 1..2, 33..34 (2026-11-10, twice).  Done comes back on and the TD counts from
 0.  So a TOF that has been enabled judges ``TD < preset`` on every scan its rung is false, and a
 TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never enabled still
-rests at Done off, TD 0 (``timers/tof_never_enabled``).  pyrung read 0, 0, 0, 280 before: it kept
-a timed-out TOF at rest once its TD read 0.
+rests at Done off, TD 0 (``timers/tof_never_enabled``).  pyrung read 0, 0, 0, 280 before, because
+it kept a timed-out TOF at rest once its TD read 0.
 
 Result3 and Result4 are milliseconds, so they follow the target's scan and are ranges.  Result3
 is a scan's tick from 0, under the 20 ms preset (Done on says so).  Result4 is past the preset.

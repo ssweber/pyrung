@@ -2045,8 +2045,8 @@ def _tof_armed_keys(program: Program) -> set[str]:
     """Each off-delay timer's ``tof_armed_key``.
 
     The key decides whether ``Done False, Acc 0`` rests (never enabled) or
-    keeps timing, so two states that differ only in it differ in what
-    follows: it belongs in the state key.
+    keeps timing.  Two states that differ only in it go on differently, so it
+    belongs in the state key.
     """
     from pyrung.core.instruction.timers import OffDelayInstruction, tof_armed_key
     from pyrung.core.validation._common import walk_instructions

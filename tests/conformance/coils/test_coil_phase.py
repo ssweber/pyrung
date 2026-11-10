@@ -17,11 +17,11 @@ Result2 the first and Result3 the last (``scans.trace``).  The readings fit one 
 with a preset of 0 or below is dark and its TDs stand where they are (``FlasherInstruction``).
 
 - ``off_zero_first_phase`` (L1): 1000 ms on, a DS off preset of 0.  Result4 the on TD and
-  ErrorCode the off TD on scan 14.  A CLICK read 0, 0, 0, 0, 0: dark from the start, no first on
-  phase, both TDs 0.
-- ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK read 0, 0, 0, 0, 0:
-  dark, both TDs held at 0.  An off TD running would be the empty on phase passing to the off
-  phase.
+  ErrorCode the off TD on scan 14.  A CLICK read 0, 0, 0, 0, 0.  The flasher was dark from the
+  start, with no first on phase and both TDs at 0.
+- ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK read 0, 0, 0, 0, 0.
+  The flasher was dark with both TDs held at 0.  An off TD running would be the empty on phase
+  passing to the off phase.
 - ``lowered_to_zero`` (L3): two flashers on DS presets.  A, 1000 / 1000 ms, has its on preset
   lowered to 0 on scan 6, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on scan 10,
   in its off phase.  Each reading is ``on TD * 180 + off TD``.  Result1 is A's on scan 5, and
@@ -34,9 +34,9 @@ with a preset of 0 or below is dark and its TDs stand where they are (``FlasherI
   its 5 ms preset or past it with the off TD running.  Each TD stays under 180 for any scan under
   about 35 ms, which keeps each reading in an Int.
 - ``short_first_phase`` (L4): 1 ms on, 1000 ms off.  Result4 the on TD on scan 1.  A CLICK read 1,
-  1, 1, 1..2: the coil is on on the rung's first true scan, though the on TD reached its preset
+  1, 1, 1..2.  The coil is on on the rung's first true scan, though the on TD reached its preset
   on that scan.  The coil shows the phase that ran on a scan, and the next phase shows from the
-  scan after.  pyrung read 0, 0, 0, 10 before: its coil showed the next phase at once, so an on
+  scan after.  pyrung read 0, 0, 0, 10 before.  Its coil showed the next phase at once, so an on
   phase of a scan or less stayed dark.  Result4 follows the target's scan, so it is a range.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.

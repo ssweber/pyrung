@@ -16,8 +16,8 @@ reset on, as the init writes it.
 A CLICK read 1, 1, 2, 2.  No DS preset ended a step, not even one that held 1 ms from the reset
 on, while a constant 1 ms did.  So the drum does not read its preset while it is held in reset
 (that reads 2 in Result2), and a DS of 0 entered by a move does not end at once (that reads 3 in
-Result3).  No reading yet shows a DS preset ending a drum step.  pyrung reads 2, 1, 2, 2: it reads
-a DS preset when the step starts timing, so D1 ends, and the case is pending ``PRESET``.
+Result3).  No reading yet shows a DS preset ending a drum step.  pyrung reads 2, 1, 2, 2.  It reads
+a DS preset when the step starts timing, so D1 ends.  The case is pending ``PRESET``.
 
 ``jump_return/bad_jump_on_return``: does a jump to a bad step on the scan the drum's rung comes
 back keep the drum from writing its row?  ``bad_jump`` read on a CLICK that a jump to a bad step
