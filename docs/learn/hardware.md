@@ -88,7 +88,7 @@ The `Bin[1].Sensor` mapping is the [Lesson 9](structured-tags.md) UDT in action.
 
 !!! tip "The validator is the bridge"
 
-    pyrung lets you write rich expressions because the simulator can handle them. CLICK can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but CLICK requires you to `math` that into a separate tag first. The validator catches this. By the time `validate()` is clean, the codegen is guaranteed to produce something the PLC can run, with the same behavior as the simulator.
+    pyrung lets you write rich expressions because the simulator can handle them. CLICK can't. `mapping.validate(logic)` catches every gap between what you wrote and what your target can run, and tells you exactly what to fix. For example, pyrung lets you write `rung(SizeReading + Offset > Threshold)` with math directly in the condition, but CLICK requires you to `math` that into a separate tag first. The validator catches this. When `validate()` is clean, the exported project loads on the PLC.
 
 `pyrung_to_ladder` generates a directory with one CSV per program, a nickname file for the tag table, and a manifest. [ClickNick](https://github.com/ssweber/clicknick)'s Guided Paste reads the manifest and walks you through importing each piece into CLICK Programming Software in the right order.
 

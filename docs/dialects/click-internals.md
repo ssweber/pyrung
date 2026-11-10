@@ -13,11 +13,11 @@ estimate = estimate_steps(pyrung_to_ladder(logic, mapping))
 print(estimate.total, estimate.main, estimate.subroutines)
 ```
 
-`estimate.unmeasured` names any instruction that has not been measured yet. Each one is costed high (8) on purpose. Validation reports `CLK_STEP_LIMIT` when the estimate passes 95% of the limit (a hint) or the limit itself (a warning).
+`estimate.unmeasured` names any instruction with no known cost. Each one is costed high (8) on purpose. Validation reports `CLK_STEP_LIMIT` when the estimate passes 95% of the limit (a hint) or the limit itself (a warning).
 
 The estimate reads the exported CSV rows, so it sees the legs, pin rows and always-on rail as CLICK lays them out. The estimate is within about 1% on a large project. Leave a few hundred steps of margin.
 
-### Measured costs
+### Costs per element
 
 Each cost below excludes the rung's contacts unless noted.
 
