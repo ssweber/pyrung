@@ -415,7 +415,7 @@
   - a `Text` write accepts any character code from 0 to 255
   - an odd `XD` or `YD` register above `XD0u` or `YD0u` holds its own value (it read and wrote the register before it), and an `XD` one reads 0 and refuses a write
   - function codes 22 and 23 answer exception 01
-- A `send()` or `receive()` to a CLICK address sends a range longer than the Modbus limits as several requests. A long read set the error flag with exception code 0, and a long write set it with code 3 (code 0 above 127 values).
+- A `send()` or `receive()` to a CLICK address sends a range longer than the Modbus limits as several requests (it set the error flag).
 - `how(avoid=...)` no longer treats an avoid check that raises as clear, which let it plan through the avoided state. When the check raises on the start state, or on a scan of a command `how()` tries, `how()` raises `AvoidCheckError` with the check's exception as its cause.
 - A long `how()` wait keeps its memory bounded. It keeps at most two compiled kernels and 512 checkpoints, and records a long run's scans only when a later `cause()` or a survey such as `cold_rungs()` reaches them.
 - A kernel that fails to compile for a reason pyrung doesn't expect gives a `RuntimeWarning`, and the scans run interpreted, instead of raising out of `run_for()` or `how()`.
