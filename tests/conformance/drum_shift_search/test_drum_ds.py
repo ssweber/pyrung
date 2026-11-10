@@ -2,9 +2,11 @@
 
 Part ``follow2_drums``.  A CLICK answered both on 2026-11-10, once.
 
-``drum_ds/ds_preset_ends``: four time drums of three steps, each read on scan 20 (its step: 1 for
-step 1 still timing, 2 when step 1 has ended), so that a 1 ms step has ended on any scan.  Every
-step but the one asked about is a constant 30 s.  Each DS holds the value the case means from the
+``drum_ds/ds_preset_ends``: four time drums of three steps.  Each field is a drum's step: 1 for
+step 1 still timing, 2 when step 1 has ended.  The case reads them, and raises ``Fired``, once the
+control drum has timed 50 ms on its step 2.  A 1 ms step has ended by then at any scan length, and
+so has the 5 ms step of Result3.  The run the CLICK read took them on scan 20 instead.  Every step
+but the one asked about is a constant 30 s.  Each DS holds the value the case means from the
 reset on, as the init writes it.
 
 - Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again.
@@ -41,9 +43,13 @@ The cases own what ``memory.OWNED_APART`` lists under these groups.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import Rung, copy, fill, reset
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put, track
 from tests.conformance.drum_shift_search.test_drum_pins import snap, te_box, time_box
@@ -52,8 +58,8 @@ from tests.conformance.scans import count_scans, done, scans_for
 
 # --- drum_ds -------------------------------------------------------------------------
 
-DS_WINDOW = 22
-READ_SCAN = 20
+#: The ms the control drum times on its step 2 before the case reads the steps.
+SETTLED = 50
 #: ds_preset_ends: C611..C622, step registers DS4011..4014, presets DS4015..4017, TD261..264.
 DS_BITS = range(611, 623)
 DS_STEPS = range(4011, 4015)
@@ -69,17 +75,17 @@ def prove_ds_preset_ends(slot: Any) -> None:
         sides.append(Side(ds[step], td[acc], a, b, flag, None))
     held, at_reset, by_move, control = sides
     p_held, p_reset, p_zero = (ds[n] for n in DS_PRESETS)
-    count_scans(slot, DS_WINDOW)
+    count_scans(slot, 1)
     put(slot, 1, LONG, p_reset)
     time_box(slot, held, [p_held, LONG, LONG])
     time_box(slot, at_reset, [p_reset, LONG, LONG])
     time_box(slot, by_move, [5, p_zero, LONG])
     time_box(slot, control, [1, LONG, LONG])
     fields = (slot.Result1, slot.Result2, slot.Result3, slot.Result4)
-    with Rung(slot.Scratch == READ_SCAN):
+    with Rung(slot.Cmd != 0, slot.Fired == 0, control.step == 2, control.acc >= SETTLED):
         for side, field in zip(sides, fields, strict=True):
             copy(side.step, field)
-    done(slot, DS_WINDOW)
+        copy(1, slot.Fired)
 
 
 def init_ds_preset_ends(slot: Any) -> None:
@@ -102,7 +108,7 @@ drum_ds = Group(
             ladder=prove_ds_preset_ends,
             init=init_ds_preset_ends,
             expect={"Result1": 1, "Result2": 1, "Result3": 2, "Result4": 2},
-            scans=scans_for(DS_WINDOW),
+            scans=24,
             pending="PRESET",
         ),
     ],
@@ -191,3 +197,15 @@ def test_drum_ds():
 
 def test_jump_return():
     assert_all_passed(run(jump_return))
+
+
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
+def test_drum_ds_at_any_scan(monkeypatch, dt):
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms.  pyrung reads 2, 1, 2, 2 at
+    each, so the case stays pending."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    (only,) = drum_ds.cases
+    results = run(Group("drum_ds", [replace(only, scans=max(only.scans, int(0.2 / dt)))]))
+    assert_all_passed(results)
+    read = results[0].actual
+    assert (read["Result1"], read["Result2"], read["Result3"], read["Result4"]) == (2, 1, 2, 2)

@@ -73,9 +73,11 @@ Reading at the return   2626          2626           2424
 - ``jump_to_bad_step``: a jump to a step the drum does not have, from a DS: to 9 (Result1),
   to 0 (Result2), and to 4 with a jog on its scan (Result3).  Dropped reads 1111, 1111 and,
   the jog acting, 2222.  Standing reads 9191; clamping to the last step 3333.  ErrorCode is
-  the time drum's Acc hundreds after the jump to 9: 9 if a dropped jump keeps the time,
-  0 if it clears it.  The CLICK read (2026-11-05) 1111 for all three and ErrorCode 9: the jumps
-  are dropped, even with a jog on the scan, and the time is kept.
+  the time drum's Acc in thousands after the jump to 9.  The Acc is staged at 9000 the scan
+  before.  It reads 9 if a dropped jump keeps the time and 0 if the jump clears it.  The CLICK
+  read (2026-11-05) 1111 for all three and ErrorCode 9: the jumps are dropped, even with a jog
+  on the scan, and the time is kept.  That run staged 900 and read hundreds, which two scans
+  of 50 ms push to 10.
 - ``jump_on_bad_step``: step 5 staged on the scan of a jump to 2.  The jump lands with its
   row, 2222; the correction wins, 1111 (Result2, next scan Result1).  With a jog as well
   (Result3, Result4): the jump wins, 2222; the jog freezes the scan as it does alone, 5151.
@@ -98,9 +100,10 @@ Reading at the return   2626          2626           2424
   The CLICK read 1010, 1111, 1111 and 1111, so the held jump is spent.
 - ``written_and_paused_acc``: a step written with a jog on one scan moves from what was
   written, 3333, or from what the drum held, 2222 (Result2).  A paused drum's Acc holds, 9
-  hundreds, or clears, 0 (Result3); a paused jog (Result4) and a paused jump (ErrorCode)
-  clear it, 0, or leave it, 9.  The CLICK read 3333, 9, 0 and 0.  The jog moves from what was
-  written.  A pause keeps Acc, and a paused jog or jump clears it.
+  thousands, or clears, 0 (Result3); a paused jog (Result4) and a paused jump (ErrorCode)
+  clear it, 0, or leave it, 9.  The Acc is staged at 9000 the scan before the pause.  The
+  CLICK read 3333, 9, 0 and 0, with 900 staged and read in hundreds.  The jog moves from what
+  was written.  A pause keeps Acc, and a paused jog or jump clears it.
 - ``event_rises_in_pause``: step 1's event rises during a pause and holds through the return.
   An event drum that kept tracking its event never moves (1 in the top digit); one whose
   memory stood still moves after the return (2).  The time & event drum below takes the
@@ -111,9 +114,11 @@ Reading at the return   2626          2626           2424
   is lost, and with the time up later and no event the drum stays, 11; one latched moves,
   22 (top drum, Result2).  The drum below has the time up first and takes a later pulse, 22
   (Result3).  Recorded: a level event, and a held event (``te_level_event_already_on``).
-  Result4: Acc 32760 on a time & event step waiting for its event, 5 scans on: 32767 (1,
-  stops), negative (2, wraps), or 0 for neither.  The CLICK read 1111, 1122 and 1.  The early
-  pulse is lost, and Acc stops at 32767.
+  Result4: Acc 32760 on a time & event step waiting for its event, read once a TON started
+  on the same scan reads 50 ms.  It reads 1 if the Acc stops at 32767, 2 if it wraps
+  negative, and 3 for neither.  ``Fired`` waits for that reading.  The CLICK read 1111, 1122
+  and 1.  The early pulse is lost, and Acc stops at 32767.  That run read Result4 five scans
+  on (0 for neither then), which on scans under about 1.2 ms falls short of 32767.
 - ``drum_in_loop``: a time drum in a For of 3 beside the same drum outside it, both from Acc
   0 for 150 ms by a free TON.  Result2 = 10 * inside / outside: 30 if the body's time adds up
   per pass, 10 if a scan's time is once.  Result3: a jog bit up once, in the loop: 2 (one
@@ -147,10 +152,13 @@ The cases own the raw memory listed in ``memory.OWNED`` under these groups.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     Or,
     Rung,
@@ -164,8 +172,9 @@ from pyrung.core import (
     time_event_drum,
 )
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pattern_for, put, track
+from tests.conformance.drum_shift_search.test_drum_settle import acc_thousands
 from tests.conformance.memory import ClickTimer, dd, ds, td
-from tests.conformance.scans import count_scans, done, scans_for
+from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
 _BITS = [
     n
@@ -341,6 +350,10 @@ def over(slot: Any, s: Side, base: int, scan: int, into: Any) -> None:
 
 #: A case's window past the default, for the drums that first run through their steps.
 WIDE = 13
+#: The Acc a case stages to ask whether a drum keeps it, read in thousands (:func:`acc_thousands`).
+STAGED = 9000
+#: ``te_event_before_time`` reads its Acc once this many ms have passed on its clock.
+SETTLED = 50
 
 
 # ------------------------------------------------------------------- Q1
@@ -546,7 +559,7 @@ def prove_jump_to_bad_step(slot):
     on_scans(slot, jump, 3, 5, 7)
     on_scans(slot, jog, 7)
     put(slot, 1, 9, _EXTRA[5])
-    put(slot, 2, 900, tm.acc)
+    put(slot, 2, STAGED, tm.acc)
     put(slot, 4, 0, _EXTRA[5])
     put(slot, 6, 4, _EXTRA[5])
     time_box(slot, tm, [LONG, LONG, LONG], jog=jog, jump=jump, step=_EXTRA[5])
@@ -556,7 +569,7 @@ def prove_jump_to_bad_step(slot):
     snap(slot, tm, te, 3, slot.Result1)
     snap(slot, tm, te, 5, slot.Result2)
     snap(slot, tm, te, 7, slot.Result3)
-    hundreds(slot, tm, 3, slot.ErrorCode)
+    acc_thousands(slot, tm, 3, slot.ErrorCode)
     done(slot)
 
 
@@ -694,8 +707,8 @@ def prove_written_and_paused_acc(slot):
     put(slot, 3, 2, a.step)
     put(slot, 3, 2, b.step)
     put(slot, 1, 2, _EXTRA[8])
-    put(slot, 3, 900, d.acc)
-    put(slot, 3, 900, e.acc)
+    put(slot, 3, STAGED, d.acc)
+    put(slot, 3, STAGED, e.acc)
     on_scans(slot, pause, 4, 5, 6, 7)
     on_scans(slot, jog2, 6)
     on_scans(slot, jump, 6)
@@ -706,9 +719,9 @@ def prove_written_and_paused_acc(slot):
     for side in (a, b):
         track(slot, side)
     snap(slot, a, b, 3, slot.Result2)
-    hundreds(slot, d, 5, slot.Result3)
-    hundreds(slot, d, 6, slot.Result4)
-    hundreds(slot, e, 6, slot.ErrorCode)
+    acc_thousands(slot, d, 5, slot.Result3)
+    acc_thousands(slot, d, 6, slot.Result4)
+    acc_thousands(slot, e, 6, slot.ErrorCode)
     done(slot)
 
 
@@ -744,17 +757,24 @@ def prove_te_event_before_time(slot):
     track(slot, under)
     snap(slot, top, under, 5, slot.Result2)
     snap(slot, top, under, 6, slot.Result3)
-    # A step waiting for its event goes on timing: from 32760, to the top of an Int.
+    # A step waiting for its event goes on timing, from 32760 up to the top of an Int.  A TON
+    # from the same scan is the clock, since 7 ms takes many scans on a CLICK.
     q = rig(26)
     te = q.side(0)
     e3, e4 = q.take(2)
+    clock = ClickTimer(_TDS[2 * 26 + 1])
     put(slot, 3, 32760, te.acc)
     te_box(slot, te, [e3, e4], [LONG, LONG])
-    with Rung(slot.Scratch == 8, te.acc == 32767):
+    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+        on_delay(clock, LONG)
+    with Rung(slot.Result4 == 0, clock.Acc >= SETTLED, te.acc == 32767):
         copy(1, slot.Result4)
-    with Rung(slot.Scratch == 8, te.acc < 0):
+    with Rung(slot.Result4 == 0, clock.Acc >= SETTLED, te.acc < 0):
         copy(2, slot.Result4)
-    done(slot)
+    with Rung(slot.Result4 == 0, clock.Acc >= SETTLED):
+        copy(3, slot.Result4)
+    with Rung(slot.Cmd != 0, slot.Scratch > WINDOW, slot.Result4 != 0):
+        copy(1, slot.Fired)
 
 
 def prove_preset_from_ds(slot):
@@ -946,7 +966,7 @@ branch_group = Group(
         case(
             "A jump to a step the drum does not have from a DS is dropped: to 9 leaves 1111 "
             "(Result1), to 0 leaves 1111 (Result2), and to 4 with a jog on its scan leaves 1111 "
-            "(Result3); the dropped jump keeps Acc, 9 hundreds (ErrorCode)",
+            "(Result3); the dropped jump keeps Acc, 9 thousands (ErrorCode)",
             ladder=prove_jump_to_bad_step,
             init=restoring(_EXTRA[5]),
             scans=SCANS,
@@ -1002,7 +1022,7 @@ branch_group = Group(
         ),
         case(
             "A step written with a jog on one scan moves from what was written, 3333 (Result2).  "
-            "A paused drum keeps its Acc, 9 hundreds (Result3).  A paused jog (Result4) and a "
+            "A paused drum keeps its Acc, 9 thousands (Result3).  A paused jog (Result4) and a "
             "paused jump (ErrorCode) clear it, 0",
             ladder=prove_written_and_paused_acc,
             init=restoring(_EXTRA[8]),
@@ -1022,7 +1042,7 @@ branch_group = Group(
             "On a time & event step, an event pulse before the time is up is lost.  The time up "
             "later moves nothing, top digit 1 (Result2).  The time up first, then a pulse, moves "
             "it (Result3).  From 32760, the Acc of a step waiting for its event stops at 32767, "
-            "1 (Result4)",
+            "1 (Result4, 50 ms on)",
             ladder=prove_te_event_before_time,
             scans=SCANS,
             expect={"Result2": 1111, "Result3": 1122, "Result4": 1},
@@ -1081,3 +1101,20 @@ def test_drum_branch():
 
 def test_drum_limits():
     assert_all_passed(run(limits_group))
+
+
+#: The cases that read an Acc, run alone at other scan lengths.
+ACC_CASES = ("jump_to_bad_step", "written_and_paused_acc", "te_event_before_time")
+
+
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
+def test_drum_branch_acc_at_any_scan(monkeypatch, dt):
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    cases = [
+        replace(c, scans=max(c.scans, int(0.2 / dt)))
+        for c in branch_group.cases
+        if c.id in ACC_CASES
+    ]
+    assert len(cases) == len(ACC_CASES)
+    assert_all_passed(run(Group("drum_branch", cases)))

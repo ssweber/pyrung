@@ -459,10 +459,11 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "T": range(201, 205),
         "DD": range(71, 75),
     },
+    # T210 is entry_or_first_timing_scan's clock.
     "drum_preset": {
         "C": (range(331, 337), range(341, 353)),
         "DS": range(3923, 3931),
-        "T": range(205, 210),
+        "T": range(205, 211),
     },
     "real_text": {"DF": range(21, 31), "TXT": range(101, 301)},
     "deb_zero": {"C": range(221, 223), "T": range(111, 115)},

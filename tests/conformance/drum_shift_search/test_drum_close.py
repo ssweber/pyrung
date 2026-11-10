@@ -23,10 +23,11 @@ above the other.
   Result3).  A time and a time & event drum on their last step, paused with Acc past the
   preset and a level event from the return scan: 2222 on it (Result4), not done, and 2424
   on the next (ErrorCode).
-- ``te_acc_by_step_kind``: a timed time & event drum's correction keeps Acc, 9 hundreds
-  (Result1), and it counts on (Result2 above 0).  An event-only one with Acc 500 staged does
-  not move (Result3 = 0); one that has an event-only step 1 and a timed step 2, jogged to it,
-  does (Result4 above 0).  A timed one completed by a jog holds (ErrorCode = 0).
+- ``te_acc_by_step_kind``: a timed time & event drum's correction keeps the 9000 staged in
+  its Acc, 9 in thousands (Result1), and it counts on (Result2 above 0).  The CLICK read 9 in
+  hundreds of 900 staged, which a scan of 100 ms pushes to 10.  An event-only one with Acc
+  500 staged does not move (Result3 = 0).  One with an event-only step 1 and a timed step 2,
+  jogged to it, does (Result4 above 0).  A timed one completed by a jog holds (ErrorCode = 0).
 
 The cases own C702..C750, C969..C1000, C414..C450, C27..C50, T271..T298, T377..T400, DD754..DD809 and
 DS4332..DS4342, DS4352..DS4362, DS4372..DS4382 (``memory.OWNED``).
@@ -37,11 +38,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import Rung, latch, math, out, reset
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pool_of, put, track
 from tests.conformance.drum_shift_search.test_drum_settle import (
-    acc_hundreds,
+    acc_thousands,
     moves,
     pause_on,
     snap_two,
@@ -245,7 +249,7 @@ def prove_te_acc_by_step_kind(slot):
     jog, jog2, e1 = r.take(3)
     count_scans(slot)
     put(slot, 3, 5, corrected.step)
-    put(slot, 3, 900, corrected.acc)
+    put(slot, 3, 9000, corrected.acc)
     put(slot, 2, 500, event_only.acc)
     on_scans(slot, jog, 3)
     on_scans(slot, jog2, 1, 3)
@@ -253,7 +257,7 @@ def prove_te_acc_by_step_kind(slot):
     te_side(slot, event_only, [e1, e1])
     te_side(slot, mixed, [e1, None], presets=[None, LONG], jog=jog)
     te_side(slot, completed, [e1, e1], presets=[LONG, LONG], jog=jog2)
-    acc_hundreds(slot, corrected, 3, slot.Result1)
+    acc_thousands(slot, corrected, 3, slot.Result1)
     moves(slot, corrected.acc, r.spare_dd(0), 4, 8, slot.Result2)
     moves(slot, event_only.acc, r.spare_dd(1), 3, 8, slot.Result3)
     moves(slot, mixed.acc, r.spare_dd(2), 5, 8, slot.Result4)
@@ -320,7 +324,7 @@ group = Group(
         ),
         case(
             "A time & event drum times only a step with a time, and not once completed: a timed "
-            "one's correction keeps 9 hundreds (Result1) and counts on (Result2), an event-only "
+            "one's correction keeps 9 thousands (Result1) and counts on (Result2), an event-only "
             "one does not move (Result3), a step 2 with a time does (Result4), and a completed "
             "one holds (ErrorCode)",
             ladder=prove_te_acc_by_step_kind,
@@ -339,3 +343,12 @@ group = Group(
 
 def test_drum_close():
     assert_all_passed(run(group))
+
+
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
+def test_te_acc_by_step_kind_at_any_scan(monkeypatch, dt):
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    cases = [c for c in group.cases if c.id == "te_acc_by_step_kind"]
+    assert len(cases) == 1
+    assert_all_passed(run(Group("drum_close", cases)))

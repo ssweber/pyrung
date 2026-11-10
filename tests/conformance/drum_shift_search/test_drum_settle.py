@@ -36,17 +36,21 @@ nothing and its accumulator holds; a jog forward still writes the row:
 
 - ``after_jump_jog_alone``: completed by a jog and jumped to step 1, 1414, a jog alone
   brings step 2's row back, 2626, and step 2's own end does not complete it again, 2626.
-- ``acc_in_completed_drum``: a time drum completed by its time keeps its Acc, 25 hundreds,
+- ``acc_in_completed_drum``: a time drum completed by its time keeps its Acc, 25 thousands,
   moving on none of scans 5..12, and one jumped and jogged back, 2426, moves on none of
-  scans 8..12.
+  scans 8..12.  Its step 2 is 20 s, and 25000 staged past it ends it.
 - ``event_drum_after_completion``: an event drum as the other two.  One jumped to step 1
   (14) does not take step 1's event, and one jogged on its last step while paused turns
   off at once: 2424, 1424, 1424, 1424.
 
-The correction.  ``correction_with_acc_staged``: step 5 and Acc 900 staged on scan 3 with
+The correction.  ``correction_with_acc_staged``: step 5 and Acc 9000 staged on scan 3 with
 no jog, a time drum over a time & event drum whose steps have no time.  The scan corrects
-and leaves the row alone, 1111, and neither Acc clears, 9 hundreds each.  The time drum
+and leaves the row alone, 1111, and neither Acc clears, 9 thousands each.  The time drum
 moves on all of scans 4..8; the other on none, an event-only step not timing.
+
+Both Acc cases read in thousands, so a few scans of up to 50 ms leave the reading alone.
+The CLICK read 25 and 9 in hundreds, from 2500 staged on a 2 s step and from 900 staged.
+Two scans of 50 ms add a hundred there.
 
 The cases own C1852..C1900 and C582..C660, T359..T376, DD718..DD753 and DS4208..DS4222,
 DS4227..DS4230 (``memory.OWNED``).
@@ -58,7 +62,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import Or, Rung, copy, event_drum, math, out, time_drum, time_event_drum
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pattern_for, pool_of, put, track
 from tests.conformance.memory import dd, ds, td
@@ -202,9 +209,11 @@ def snap_two(slot: Any, top: Side, under: Side, scan: int, into: Any) -> None:
         math(top.state * 100 + under.state, into)
 
 
-def acc_hundreds(slot: Any, s: Side, scan: int, into: Any) -> None:
+def acc_thousands(slot: Any, s: Side, scan: int, into: Any) -> None:
+    """*into* = Acc in whole seconds (Math truncates).  An Acc staged at 9000 reads 9 up to
+    9999, so a few scans of up to 50 ms leave it alone."""
     with Rung(slot.Scratch == scan):
-        math(s.acc / 100, into)
+        math(s.acc / 1000, into)
 
 
 def moves(slot: Any, acc: Any, prev: Any, first: int, last: int, into: Any) -> None:
@@ -340,14 +349,14 @@ def prove_acc_in_completed_drum(slot):
     # Result1 holds the jump step, 1 (a DS address).
     put(slot, 1, 1, slot.Result1)
     on_scans(slot, jog_time, 1)
-    put(slot, 3, 2500, by_time.acc)
+    put(slot, 3, 25000, by_time.acc)
     on_scans(slot, jog, 1, 3, 7)
     on_scans(slot, jump, 5)
-    time_side(slot, by_time, (LONG, 2000), jog=jog_time)
+    time_side(slot, by_time, (LONG, 20000), jog=jog_time)
     time_side(slot, by_jog, jog=jog, jump=jump, jump_step=slot.Result1)
     track(slot, by_time)
     track(slot, by_jog)
-    acc_hundreds(slot, by_time, 4, slot.Result2)
+    acc_thousands(slot, by_time, 4, slot.Result2)
     snap_two(slot, by_time, by_jog, 8, slot.Result4)
     moves(slot, by_time.acc, r.spare_dd, 5, LONG_WINDOW, slot.Result3)
     moves(slot, by_jog.acc, r.second_spare_dd, 8, LONG_WINDOW, slot.ErrorCode)
@@ -384,15 +393,15 @@ def prove_correction_with_acc_staged(slot):
     count_scans(slot)
     put(slot, 3, 5, tm.step)
     put(slot, 3, 5, te.step)
-    put(slot, 3, 900, tm.acc)
-    put(slot, 3, 900, te.acc)
+    put(slot, 3, 9000, tm.acc)
+    put(slot, 3, 9000, te.acc)
     time_side(slot, tm)
     te_side(slot, te, [e1, e2])
     track(slot, tm)
     track(slot, te)
     snap_two(slot, tm, te, 3, slot.Result2)
-    acc_hundreds(slot, tm, 3, slot.Result3)
-    acc_hundreds(slot, te, 3, slot.Result4)
+    acc_thousands(slot, tm, 3, slot.Result3)
+    acc_thousands(slot, te, 3, slot.Result4)
     moves(slot, tm.acc, r.spare_dd, 4, 8, slot.ErrorCode)
     moves(slot, te.acc, r.second_spare_dd, 4, 8, slot.Result1)
     done(slot)
@@ -461,7 +470,7 @@ group = Group(
             scans=scans_for(AFTER_JUMP_WINDOW),
         ),
         case(
-            "A completed time drum's Acc holds: one completed by its time keeps 25 hundreds "
+            "A completed time drum's Acc holds: one completed by its time keeps 25 thousands "
             "(Result2) and moves on no scan after (Result3); one completed by a jog, jumped "
             "and jogged back (Result4) moves on none either (ErrorCode)",
             ladder=prove_acc_in_completed_drum,
@@ -477,8 +486,8 @@ group = Group(
             scans=SCANS,
         ),
         case(
-            "A correction keeps a drum's Acc: step 5 and Acc 900 staged on scan 3 of a time "
-            "drum and an event-only time & event drum read their row (Result2), 9 hundreds "
+            "A correction keeps a drum's Acc: step 5 and Acc 9000 staged on scan 3 of a time "
+            "drum and an event-only time & event drum read their row (Result2), 9 thousands "
             "each (Result3, Result4); the time drum counts on (ErrorCode), and the other, "
             "whose step has no time, does not (Result1)",
             ladder=prove_correction_with_acc_staged,
@@ -497,3 +506,13 @@ group = Group(
 
 def test_drum_settle():
     assert_all_passed(run(group))
+
+
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
+def test_drum_settle_acc_at_any_scan(monkeypatch, dt):
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    ids = ("acc_in_completed_drum", "correction_with_acc_staged")
+    cases = [c for c in group.cases if c.id in ids]
+    assert len(cases) == len(ids)
+    assert_all_passed(run(Group("drum_settle", cases)))
