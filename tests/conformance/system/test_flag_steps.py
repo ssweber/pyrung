@@ -529,7 +529,8 @@ flag_reads = Group(
     "flag_reads",
     [
         case(
-            "A division by 0 on a rung that is never true, read by a coil.  SC40 is off after it "
+            "A coil reads SC40 after a division by 0 on a rung that is never true.  SC40 is off "
+            "after it "
             "from off (Result1 = 0, it does not evaluate).  It is off after it from a raise "
             "(Result2 = 0, it clears the flag).  The raise alone leaves SC40 on (Result3 = 1)",
             ladder=prove_unpowered_division,
@@ -538,8 +539,8 @@ flag_reads = Group(
             scans=scans_for(),
         ),
         case(
-            "A oneshot Copy and Math held on, right after a raise of SC44 (bits 1, 2), SC43 (4, "
-            "8) or SC40 (16).  A bit per op is set when its flag is still on after it.  On the "
+            "A oneshot Copy and a Math are held on right after a raise of SC44 (bits 1, 2), SC43 "
+            "(4, 8) or SC40 (16).  A bit per op is set when its flag is still on after it.  On the "
             "scan it does not fire the Copies leave theirs (Result1 = 5).  On the scan it fires "
             "none is on (Result3 = 0).  Each raise alone reads 7 (Result2)",
             ladder=prove_oneshot_held,
