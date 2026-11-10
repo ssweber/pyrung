@@ -68,7 +68,7 @@ def test_rungs():
 - `DRUM`: drum ordering.
 - `INF`: REAL overflow stores +/-Inf.
 - `TEXT`: text, pack, NUL and search-cursor fixes.
-- `SYS`: the fault-flag model. The flags carry from scan to scan. Every Math the scan reaches clears SC40, SC43, SC44 and SC46 as it starts, and a Copy-family instruction clears SC43 and SC44 when it runs.
+- `SYS`: the fault-flag model. The flags carry from scan to scan. Every Math the scan reaches clears SC40, SC43, SC44 and SC46 as it starts. A Copy-family instruction clears SC43 and SC44 when it runs.
 - `MATH`: Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results).
 - `SC43`: which stores raise SC43 (a clamping Copy, a Math that wraps, a Copy of +/-Inf into an integer, but not a Copy of NaN).
 - `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`), and writes a Real's float32 digits into a TXT (`real_text/six_digits_first`, `real_text/six_digits_past`).

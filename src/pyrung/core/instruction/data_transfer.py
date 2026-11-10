@@ -107,7 +107,7 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     **Fault flags:** A copy clears the out-of-range and address-error flags as it
     starts, before it reads its source, and sets each it raises.  A one-shot copy
-    on an enabled rung clears them on the scans it does not fire too.
+    that does not fire leaves them.
 
     Args:
         source: Value to copy from.

@@ -66,7 +66,7 @@ class Instruction(ABC):
     # The flags that follow this instruction: each scan it runs it clears them
     # as it starts, before it reads, and sets each it raises
     # (``guard_oneshot_execution``).  A flag carries from scan to scan until an
-    # instruction that follows it settles it.
+    # instruction that follows it clears it.
     # Every name here is in ``_fault_writes`` too.
     _fault_follows: tuple[str, ...] = ()
     # Whether it clears those flags on a scan it is reached but does not run

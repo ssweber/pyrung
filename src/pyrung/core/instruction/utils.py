@@ -33,9 +33,8 @@ def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fra
 def guard_oneshot_execution(func: F) -> F:
     """Skip execute calls when one-shot state says not to run.
 
-    An instruction that runs settles the flags in its ``_fault_follows`` as it
-    starts, before it reads anything.  It clears them, and a raise in its body
-    sets them again.  A source naming one of those flags reads it off.  One
+    An instruction that runs clears the flags in its ``_fault_follows`` as it
+    starts, before it reads anything.  A raise in its body sets them again.  A source naming one of those flags reads it off.  One
     with ``_fault_settles_idle`` (a Math) clears them on a scan it is reached
     but does not run too, with its rung false or as a one-shot that does not
     fire (CLICK, ``flag_steps``, ``flag_reads/oneshot_held``).  Any other

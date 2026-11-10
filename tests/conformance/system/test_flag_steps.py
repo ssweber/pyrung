@@ -529,9 +529,9 @@ flag_reads = Group(
     "flag_reads",
     [
         case(
-            "A division by 0 on a rung that is never true, read by a coil: SC40 off after it from "
-            "off (Result1 = 0, it does not evaluate), off after it from a raise (Result2 = 0, it "
-            "clears the flag); the raise alone leaves SC40 on (Result3 = 1)",
+            "A division by 0 on a rung that is never true, read by a coil.  SC40 is off after it "
+            "from off (Result1 = 0, it does not evaluate).  It is off after it from a raise "
+            "(Result2 = 0, it clears the flag).  The raise alone leaves SC40 on (Result3 = 1)",
             ladder=prove_unpowered_division,
             init=init_unpowered_division,
             expect={"Result1": 0, "Result2": 0, "Result3": 1},
@@ -539,26 +539,27 @@ flag_reads = Group(
         ),
         case(
             "A oneshot Copy and Math held on, right after a raise of SC44 (bits 1, 2), SC43 (4, "
-            "8) or SC40 (16): a bit per op still on after it on the scan it does not fire "
-            "(Result1 = 5, the Copies leave them), and on the scan it fires (Result3 = 0); each "
-            "raise alone (Result2 = 7)",
+            "8) or SC40 (16).  A bit per op is set when its flag is still on after it.  On the "
+            "scan it does not fire the Copies leave theirs (Result1 = 5).  On the scan it fires "
+            "none is on (Result3 = 0).  Each raise alone reads 7 (Result2)",
             ladder=prove_oneshot_held,
             init=init_oneshot_held,
             expect={"Result1": 5, "Result2": 7, "Result3": 0},
             scans=scans_for(),
         ),
         case(
-            "SC44 raised by a pointer of -1 is on right after (bit 1), after a TON (2) and a CTU "
-            "(4), on scan 3 (Result1) and 4 (Result2); by a pointer of 0 (Result3 = 1)",
+            "SC44 raised by a pointer of -1 is on right after (bit 1) and after a TON (2) and a "
+            "CTU (4).  That holds on scan 3 (Result1) and scan 4 (Result2).  A pointer of 0 "
+            "raises it too (Result3 = 1)",
             ladder=prove_pointer_minus_one,
             init=init_pointer_minus_one,
             expect={"Result1": 7, "Result2": 7, "Result3": 1},
             scans=scans_for(),
         ),
         case(
-            "SC46 from SQRT(-1.0) is off after an enabled Math (Result1 = 0, the Math clears it); "
-            "the root alone (Result2 = 1); off before the root (Result3 = 0); off on the next "
-            "scan after the same Math with no root (Result4 = 0)",
+            "SC46 from SQRT(-1.0) is off after an enabled Math (Result1 = 0, the Math clears it).  "
+            "The root alone leaves it on (Result2 = 1).  It is off before the root (Result3 = 0).  "
+            "It is off on the next scan after the same Math with no root (Result4 = 0)",
             ladder=prove_math_after_sqrt,
             init=init_math_after_sqrt,
             expect={"Result1": 0, "Result2": 1, "Result3": 0, "Result4": 0},

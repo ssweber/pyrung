@@ -167,8 +167,8 @@ class GuardedProbes:
     """An op once, on the first scan past the stage whose start finds *flag* off.
 
     For a flag another case's op can leave on (SC46), which would otherwise
-    read as this one's.  ``Scratch`` is the
-    scan number (``scans.count_scans``).  Each probe takes two C bits from *bits*.
+    read as this one's.  ``Scratch`` is the scan number (``scans.count_scans``).
+    Each probe takes two C bits from *bits*.
     """
 
     def __init__(self, bits: Iterable[Any], *, stage_scan: int, window: int) -> None:

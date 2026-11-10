@@ -75,7 +75,7 @@ group = Group(
     [
         case(
             "SC40 (Result1) and SC46 (Result2) raised by the scan's last Math are still on at the "
-            "top of the next scan (1); each on right after the op (Result3 = 1, Result4 = 1)",
+            "top of the next scan (1).  Each is on right after the op (Result3 = 1, Result4 = 1)",
             ladder=prove_math_flags_carry,
             init=init_math_flags_carry,
             expect={

@@ -314,9 +314,9 @@ group = Group(
         ),
         case(
             "A Search, Shift, event Drum, timer and counter box leave SC40 as they found it "
-            "(Result1 = 31); a Copy of DF 1.0E+10 into a DD raises no SC43, so none is on "
-            "after a box (Result2 = 0); the false-rung read Maths of the two scans before clear "
-            "SC44 (Result3 = 0)",
+            "(Result1 = 31).  A Copy of DF 1.0E+10 into a DD raises no SC43, so none is on "
+            "after a box (Result2 = 0).  The read rungs of the two scans before are Maths on "
+            "false rungs, and they clear SC44 (Result3 = 0)",
             ladder=prove_boxes_leave_flags,
             init=_init(bits=(1363, 1377), dds=(707, 712), dfs=(432, 432), dss=(4018, 4018)),
             expect={"Result1": 31, "Result2": 0, "Result3": 0},

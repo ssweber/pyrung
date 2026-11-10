@@ -303,7 +303,7 @@ _SD_ERROR_LOAD_FAILURE = 2
 _SD_ERROR_SAVE_FAILURE = 3
 
 # The fault flags carry from scan to scan, as on a CLICK, and only an instruction
-# clears one.  The scan start binds each at False once, so a state holds them.
+# clears one.  The scan start adds a missing flag as False and never clears one.
 _FAULT_FLAG_NAMES = (
     system.fault.division_error.name,
     system.fault.math_operation_error.name,

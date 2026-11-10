@@ -1003,8 +1003,8 @@ def _compile_guarded_instruction(
     inner = " " * (indent + 4)
     lines: list[str] = []
     settle = _fault_follow_lines(instr, ctx)
-    # An idle settler clears its flags on every path, so the lines go ahead of
-    # the one-shot test.  Any other clears them only as its body runs.
+    # A Math clears its flags on every path, so the lines go ahead of the
+    # one-shot test.  Any other instruction clears them only as its body runs.
     idle = settle if instr._fault_settles_idle else []
     run_settle = [] if instr._fault_settles_idle else settle
     if ctx.used_indirect_blocks:

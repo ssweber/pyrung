@@ -101,6 +101,7 @@ from pyrung.core.tag import ImmediateRef
 
 from ..expr import _referenced_tags
 from ..results import PENDING
+from ..system_points import FAULT_FLAGS
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.simplified import Expr
@@ -504,7 +505,10 @@ class _SliceElision:
             return False
 
         tag = self.graph.tags.get(name)
-        if tag is None:
+        if tag is None or name in FAULT_FLAGS:
+            # A fault flag carries from scan to scan.  The one-shot survey
+            # here reads only the declared write targets, not
+            # ``_fault_writes``, so a flag is never taken for scan-local.
             self._scan_local_memo[name] = False
             return False
 
