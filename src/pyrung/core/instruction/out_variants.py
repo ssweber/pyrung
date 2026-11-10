@@ -220,12 +220,13 @@ class FlasherInstruction(Instruction):
     hardware round of 2026-11-05).  Each scan ticks the running phase's
     accumulator, and the target shows that phase.  When the running phase's
     accumulator reaches its preset, the other phase runs from the next scan.
-    That scan clears the other phase's accumulator before its tick.  So every
-    phase shows for at least one scan, and a 1 ms first on phase lights the
-    rung's first scan (``flash_zero/short_first_phase``).  The accumulator of
-    the phase not running holds, the scan a phase ends included
-    (``out_more/preset_mid_phase`` reads the off TD on the on phase).  A TD the ladder writes past the running phase's preset
-    ends that phase on its next tick (``td_write`` read it for both phases).
+    The new phase clears its accumulator on that scan, before it ticks.  So
+    every phase shows for at least one scan, and a 1 ms first on phase lights
+    the rung's first scan (``flash_zero/short_first_phase``).  The accumulator
+    of the phase not running holds, on the scan a phase ends too
+    (``out_more/preset_mid_phase`` reads the off TD in the on phase).  A TD
+    the ladder writes past the running phase's preset ends that phase on its
+    next tick (``td_write`` read it for both phases).
     One written to the phase not running stands until that phase starts
     again and clears it.  The model implies this, but no CLICK has read it.
 
