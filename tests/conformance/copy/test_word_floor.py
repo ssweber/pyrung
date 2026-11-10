@@ -104,10 +104,12 @@ group = Group(
         case(
             "A Copy into a DH preset 4660 floors a value below -32768 at -32768, which a Word "
             "holds as 32768.  DD -40000 writes 32768 (Result1 = 2, 1 for 25536 all 16 bits "
-            "wrapped, 3 for 0, 4 for none).  DD -70000 writes 32768 too (Result2 = 2, classed as "
-            "Result1).  A DF NaN writes 0 (Result3 = 1, 2 none, 3 65535, 4 32768, 5 32767).  "
-            "The DF is a NaN, and no store raises SC43 (Result4 = 1).  Every DH is classed "
-            "(ErrorCode = 0)",
+            "wrapped, 3 for 0, 4 for none).  DD -70000 writes 32768 too (Result2 = 2, 1 for "
+            "61072 all 16 bits wrapped, 3 for 0, 4 for none).  A DF NaN writes 0 (Result3 = 1, "
+            "2 none, 3 65535, 4 32768, 5 32767).  Result4 = 1 is bit 1 alone.  Bit 1 says the DF "
+            "is a NaN, since it is neither >= 0 nor < 0.  Bits 2, 4, 8 and 16 stay off, so SC43 "
+            "is off before the first store and after each one.  Result1 and Result2 each read a "
+            "listed value, so ErrorCode stays 0",
             ladder=prove_below_int_and_nan,
             init=init_below_int_and_nan,
             expect={"Result1": 2, "Result2": 2, "Result3": 1, "Result4": 1, "ErrorCode": 0},
