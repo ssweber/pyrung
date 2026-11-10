@@ -176,7 +176,7 @@ The codegen maps `register_type` to the correct Modbus function code:
 
 `word_swap` on `send()`/`receive()` controls how 32-bit values (DINT, REAL) are split across register pairs. `False` (the default) puts the high word first (big-endian, common in VFDs and power meters). `True` puts the low word first.
 
-The CircuitPython code generator makes no RTU (serial) targets.
+CircuitPython code generation supports Modbus TCP only, not RTU (serial).
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|

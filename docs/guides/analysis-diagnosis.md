@@ -221,7 +221,7 @@ You already know your machine, so exclude the reported route with `avoid=` and `
 plc.how(Burner, avoid=ProdMode)    # exclude production; maintenance remains
 ```
 
-Any target with one value reports its route, such as `Running == False` with two stop rungs:
+Any target that asks for one exact value reports its route, such as `Running == False` with two stop rungs:
 
 ```python
 plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
