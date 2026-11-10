@@ -130,14 +130,17 @@ def test_the_groups_apart_on_a_local_target(
     conformance_groups: list[str] | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
-    """The parts apart, once, on pyrung's own target: a minute's wait, whichever groups run.
+    """Each part apart on pyrung's own target, once, as one program of its own.
 
     ``test_all_groups_over_modbus`` takes them on a CLICK loaded with one, or by ``GROUP=``.
+    A part runs alone because a case may need its Math, or its timers, to be the scan's last.
     Off fixed scan the counts are wall clock, and no case fails on them.
     """
     if conformance_endpoint is not None or conformance_groups is not None:
         pytest.skip("runs when the whole suite runs on a local target")
-    results = run_modbus(suite.build_apart(), sim=conformance_sim)
+    results = []
+    for part in suite.APART_PARTS:
+        results += run_modbus(suite.build(part), sim=conformance_sim)
     print(format_report(results))
     for line in reading_lines(results):
         print(line)
