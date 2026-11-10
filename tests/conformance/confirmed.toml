@@ -10,6 +10,7 @@
 "agg_more/rand_sites" = { hash = "c2e787d5fc3e", on = "2026-11-09" }
 "agg_more/sum_bits" = { hash = "e16ce327e476", on = "2026-11-09" }
 "agg_more/sum_int_wrap" = { hash = "445b260430b0", on = "2026-11-09" }
+"bad_jump/bad_target_takes_the_scan" = { hash = "dd9349a0886b", on = "2026-11-10" }
 "block/blockcopy_overlap" = { hash = "b3cb760c5d7f", on = "2026-11-10" }
 "block/blockcopy_range" = { hash = "802b3e8c6c10", on = "2026-11-10" }
 "block/blockcopy_types" = { hash = "102f7f112849", on = "2026-11-10" }
@@ -24,6 +25,9 @@
 "call_more/called_twice" = { hash = "323ef6269e98", on = "2026-11-10" }
 "call_twice/rise_once_per_scan" = { hash = "779e125c0b83", on = "2026-11-10" }
 "coil_range/ranges_and_search" = { hash = "510b38ad82d9", on = "2026-11-07" }
+"coil_timing/deb_off_against_tof" = { hash = "94a6aee7b988", on = "2026-11-10" }
+"coil_timing/flasher_on_zero" = { hash = "68386baaca1b", on = "2026-11-10" }
+"coil_timing/off_td_held" = { hash = "46e3f6d8f8af", on = "2026-11-10" }
 "coils/edge_before_its_writer" = { hash = "8ad43fc30860", on = "2026-11-07" }
 "coils/edge_behind_open_contact" = { hash = "564aee3036c6", on = "2026-11-07" }
 "coils/edge_in_false_rung_branch" = { hash = "b0354ac69c37", on = "2026-11-07" }
@@ -60,6 +64,7 @@
 "counters/reset_zero_preset" = { hash = "922a21c0deaa", on = "2026-11-07" }
 "counters/survives_rung_false" = { hash = "a51735615a61", on = "2026-11-07" }
 "counters/up_down_same_scan" = { hash = "6c04b9e3dea6", on = "2026-11-07" }
+"deb_zero/off_side_lag" = { hash = "87d48cdb1f54", on = "2026-11-10" }
 "drum/completion_turns_outputs_off" = { hash = "b4facffd4fe1", on = "2026-11-10" }
 "drum/correction_without_jog" = { hash = "45385697ba85", on = "2026-11-10" }
 "drum/events_are_edges" = { hash = "65ea26ca6cad", on = "2026-11-10" }
@@ -112,6 +117,8 @@
 "drum_pins/paused_jog_with_flag" = { hash = "8a5c38f21f16", on = "2026-11-10" }
 "drum_pins/paused_jog_with_flag_mid" = { hash = "a73110e694c5", on = "2026-11-10" }
 "drum_pins/time_and_jog" = { hash = "293063f180ab", on = "2026-11-10" }
+"drum_preset/entry_or_first_timing_scan" = { hash = "3db7c9f99c05", on = "2026-11-10" }
+"drum_preset/literal_zero" = { hash = "bc886027aa1a", on = "2026-11-10" }
 "drum_rule/bad_step_and_first_scan_jog" = { hash = "4ac393018e13", on = "2026-11-10" }
 "drum_rule/correction_moves" = { hash = "88f63227e76e", on = "2026-11-10" }
 "drum_rule/last_step_jog" = { hash = "c5a30a0e3b15", on = "2026-11-10" }
@@ -351,6 +358,7 @@
 "unit_minute/thirty_seconds" = { hash = "2af1085ba437", on = "2026-11-05" }
 "unit_pairs/one_second" = { hash = "b3f5c7c75146", on = "2026-11-05" }
 "unit_pairs/three_seconds" = { hash = "5718f6a72f23", on = "2026-11-05" }
+"word_floor/below_int_and_nan" = { hash = "70457f0af4e0", on = "2026-11-10" }
 "word_store/block_from_word" = { hash = "910c785ac270", on = "2026-11-10" }
 "word_store/block_into_word" = { hash = "28b74acb3fe2", on = "2026-11-10" }
 "word_store/fill_into_word" = { hash = "486f41ea583f", on = "2026-11-10" }
