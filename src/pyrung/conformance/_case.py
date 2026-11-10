@@ -32,8 +32,8 @@ PENDING_STEPS: Mapping[str, str] = {
     "INF": "REAL overflow stores +/-Inf",
     "TEXT": "text, pack, NUL, search cursor and MDN fixes",
     "SYS": (
-        "the fault-flag model (SC40 follows the last Math, SC43/SC44 the last Copy-family"
-        " instruction or Math),"
+        "the fault-flag model (the flags carry across scans, every Math reached clears"
+        " SC40/SC43/SC44/SC46, a Copy-family instruction that runs clears SC43/SC44),"
         " and a pointer past its bank, which is no address error"
     ),
     "MATH": (

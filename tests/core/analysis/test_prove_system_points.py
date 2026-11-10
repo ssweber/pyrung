@@ -7,8 +7,11 @@ against the concrete PLC.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     Dint,
     Int,
@@ -16,13 +19,17 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    TagType,
     call,
     copy,
     fall,
+    fill,
     latch,
     math,
     out,
+    pack_bits,
     rise,
+    search,
     subroutine,
     system,
 )
@@ -48,6 +55,10 @@ from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 S = system.sys
 F = system.fault
 R = system.rtc
+_WORDS = Block("W", TagType.INT, 1, 8)
+_BITS = Block("Bits", TagType.BOOL, 1, 16)
+_LO = Int("Lo", default=1, readonly=True)
+_HI = Int("Hi", default=2, readonly=True)
 
 
 def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
@@ -295,7 +306,7 @@ class TestFaultFlags:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "fault.division_error")
 
-    def test_fault_flag_clears_before_the_next_scan(self):
+    def test_fault_flag_clears_at_the_next_math(self):
         divisor = _divisor("Divisor")
         quotient = Int("Quotient")
         seen = Bool("Seen")
@@ -381,16 +392,66 @@ class TestFaultFlags:
         assert isinstance(result, Counterexample)
         _assert_trace_replays(logic, result, "Hit")
 
-    def test_math_error_clears_before_the_next_scan(self):
-        # SC46 is reset at scan start like the other fault flags, so a rung
-        # above the Math never reads it on (a math error does not stop the PLC).
+    def test_math_error_carries_into_the_next_scan(self):
+        # SC46 carries from scan to scan like the other fault flags (CLICK,
+        # ``flag_carry``), so a rung above the Math reads it on the scan after.
         hit = Bool("Hit")
         with Program(strict=False) as logic:
             with Rung(F.math_operation_error):
                 out(hit)
             with Rung():
                 math(sqrt(_operand()), Real("Root"))
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_false_math_clears_the_carried_flag(self):
+        # A Math on a false rung clears SC40 (CLICK, ``flag_steps``), so the
+        # flag a scan carries never reaches the rung below it.
+        divisor = _divisor("Divisor")
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                math(100 / divisor, Int("Quotient"))
+            with Rung(Bool("Never")):
+                math(1, Int("Sink"))
+            with Rung(F.division_error):
+                out(hit)
         assert isinstance(always(logic, ~hit), Proven)
+
+    @pytest.mark.parametrize(
+        "top",
+        [
+            pytest.param(lambda: copy(1, Int("Q"), oneshot=True), id="oneshot-copy"),
+            pytest.param(lambda: fill(0, _WORDS.select(5, 6), oneshot=True), id="oneshot-fill"),
+            pytest.param(
+                lambda: pack_bits(_BITS.select(1, 16), Int("Packed"), oneshot=True),
+                id="oneshot-pack-bits",
+            ),
+            pytest.param(
+                lambda: search(
+                    _WORDS.select(_LO, _HI) == 99, result=Int("At"), found=Bool("Found")
+                ),
+                id="search-over-a-select",
+            ),
+        ],
+    )
+    def test_a_flag_carries_past_a_writer_that_does_not_clear_it(self, top):
+        # A one-shot copy that does not fire leaves SC44, and a search only
+        # ever sets it.  So the flag the bottom rung raises reaches the next scan.
+        table = Block("Tbl", TagType.INT, 1, 4)
+        pointer = Int("Ptr", external=True, choices={1: "one", 0: "zero"}, default=1)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                top()
+            with Rung(F.address_error):
+                out(hit)
+            with Rung():
+                copy(table[pointer], Int("Sink"))
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
 
     def test_scans_after_a_math_error_run(self):
         seen = Bool("Seen")

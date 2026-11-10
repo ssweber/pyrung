@@ -552,7 +552,14 @@ def _receive_case() -> Program:
 
 
 _COPY_FAULTS = frozenset({"fault.address_error", "fault.out_of_range"})
-_CALC_FAULTS = frozenset({"fault.division_error", "fault.out_of_range", "fault.address_error"})
+_CALC_FAULTS = frozenset(
+    {
+        "fault.division_error",
+        "fault.out_of_range",
+        "fault.address_error",
+        "fault.math_operation_error",
+    }
+)
 
 
 GRAPH_CASES: tuple[GraphCase, ...] = (

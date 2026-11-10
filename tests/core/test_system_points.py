@@ -466,7 +466,8 @@ def test_storage_sd_commands_auto_clear_and_pulse_write_status():
     assert _resolved(runner, system.storage.sd.write_status.name) is False
 
 
-def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_factory):
+def test_fault_division_error_clears_next_scan_by_the_held_oneshot_math(runner_factory):
+    """A one-shot Math that does not fire still clears its flags (CLICK, ``flag_reads/oneshot_held``)."""
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -486,7 +487,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_
     assert runner.current_state.tags[system.fault.division_error.name] is False
 
 
-def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered(runner_factory):
+def test_fault_out_of_range_clears_next_scan_by_the_held_oneshot_math(runner_factory):
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -506,7 +507,11 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
     assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
-def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered(runner_factory):
+def test_fault_out_of_range_carries_until_a_copy_runs(runner_factory):
+    """A one-shot Copy that does not fire, or one on a false rung, leaves its flags.
+
+    CLICK: ``flag_reads/oneshot_held``, ``flag_steps``.
+    """
     CH = Block("CH", TagType.CHAR, 1, 10)
     Dest = Int("Dest")
     Enable = Bool("Enable")
@@ -521,12 +526,18 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered(runner_fa
     assert runner.current_state.tags[system.fault.out_of_range.name] is True
 
     runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+    runner.patch({"Enable": False})
+    runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+    runner.patch({"Enable": True, "CH1": "5"})
+    runner.step()
     assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
-def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
-    runner_factory,
-):
+def test_fault_address_error_carries_until_a_copy_runs(runner_factory):
     DS = Block("DS", TagType.INT, 1, 10)
     CH = Block("CH", TagType.CHAR, 1, 10)
     Pointer = Int("Pointer")
@@ -542,6 +553,12 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
     assert runner.current_state.tags[system.fault.address_error.name] is True
     assert runner.current_state.tags.get(system.fault.out_of_range.name, False) is False
 
+    runner.step()
+    assert runner.current_state.tags[system.fault.address_error.name] is True
+
+    runner.patch({"Enable": False})
+    runner.step()
+    runner.patch({"Enable": True, "Pointer": 1})
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is False
 

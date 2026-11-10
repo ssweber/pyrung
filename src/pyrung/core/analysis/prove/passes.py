@@ -1761,6 +1761,10 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         x_name, scale, offset = next(iter(offsets))
         if x_name == y_name:
             continue
+        # A fault flag moves at instructions the write targets do not list
+        # (``_fault_writes``), so a copy of one never keeps up with it.
+        if x_name in FAULT_FLAGS or y_name in FAULT_FLAGS:
+            continue
         # Walk-grade widenings: a negated form (``lit - x``) or an
         # ND-input source is useless to BFS state-key elision but exactly
         # what the walker's chase needs (``pv = 100 - analog_input``).
@@ -1856,7 +1860,9 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
         program=ctx.program,
         graph=ctx.graph,
         sites_by_target=sites_by_target,
-        candidate_tags=set(ctx.stateful_dims),
+        # The write sites leave out the fault flags' implicit writers
+        # (``_fault_writes``), so a flag is never taken for constant.
+        candidate_tags=set(ctx.stateful_dims) - FAULT_FLAGS,
         nondeterministic_inputs=set(ctx.nondeterministic_dims),
         edge_source_tags=_edge_source_tags(ctx.program),
     )

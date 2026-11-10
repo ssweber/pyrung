@@ -3,72 +3,67 @@
 Parts ``follow2_flags`` (``flag_steps``) and ``follow2_values`` (``flag_reads``, its first group).
 
 The 2026-11-06 round read SC44 off after a Search, a Shift, a Drum, a TON and a CTU
-(``flag_boxes/boxes_by_pointer`` 31/0/0/7) and off in ``ton_ctu_by_pointer``'s control (1/1/1),
-where the confirmed ``system/address_flag_vs_other_instructions`` reads it left on after a TON and
-a CTU.  One construction explains all of it (H): ``flag_boxes`` read a flag with a Math on a rung
+(``flag_boxes/boxes_by_pointer`` 31/0/0/7) and off in ``ton_ctu_by_pointer``'s control (1/1/1).
+The confirmed ``system/address_flag_vs_other_instructions`` reads it left on after a TON and a
+CTU.  One construction explains all of it (H).  ``flag_boxes`` read a flag with a Math on a rung
 ``Scratch == scan, flag``, so the read rungs of earlier scans sat between a raise and its read as
-Maths on false rungs, and H says a Math on a false rung clears SC44.  Every reading that had no
-false Math between the raise and the read found the flag on.
+Maths on false rungs.  H says a Math on a false rung clears SC44.  Every reading that had no false
+Math between the raise and the read found the flag on.
 
 So here every flag is read by an Out coil on the rung right after the step, with nothing between
-raise, step and read, and the coils are recorded into the slot (a Pack, or a Copy) only once every
-probe of the scan has run: the layout of ``system/address_flag_vs_other_instructions``.  Each field
-holds every candidate (``probe_kit.between``), so a pass answers nothing and a run on a CLICK
-records what it read; a control is exact.
+raise, step and read.  The coils are recorded into the slot (a Pack, or a Copy) only once every
+probe of the scan has run, the layout of ``system/address_flag_vs_other_instructions``.  The CLICK
+answered every case on 2026-11-10, and each case expects what it read.  H holds.
 
 ``flag_steps`` (F1), one case a flag.  The flag is raised on scans 3 and 4 right before each step,
 and the step's coil is a bit of Result1 (scan 3) and Result2 (scan 4), set when the flag is still
-on after the step; Result3 is scan 5, with no raise: 0 on every model, the coils follow the flag.
+on after the step.  Result3 is scan 5, with no raise, so it reads 0 (the coils follow the flag).
 
 - ``sc44_steps``: SC44 raised by a Copy through a pointer of 0 (there is no DD0).  The steps, bits 1
   to 512: none (the control), a false-rung ``DS + 1`` Math, a false-rung ``copy(1, DS)``, a
   false-rung Copy through a good pointer, a false-rung Math with an SC44 contact on its rung (the
   shape of ``flag_boxes``' read rungs), a Search into a DS Result, a Shift, an event Drum, a TON and
-  a CTU, the last five enabled on every scan of the window.  The readings:
-
-  - H, a false Math clears SC44 and nothing else here does: 1005 (all but bits 2 and 16).
-  - The boxes clear SC44 ("4b"): 31 (none and the four false rungs).
-  - Neither (pyrung): 1023.
-  - A false Copy clears it too: bits 4 and 8 off as well.
+  a CTU.  The last five are enabled on every scan of the window.  The CLICK read 1005, 1005, 0.
+  Only the two false Maths (bits 2 and 16) clear SC44.  The false Copies and the boxes leave it.
+  pyrung read 1023 when it let no false rung touch a flag.
 - ``sc43_steps``: the same steps after SC43, raised by a Copy of DD 40000 into a DS (it clamps,
-  ``faults/copy_clamp_out_of_range``).  The same readings: H 1005 if it holds for SC43 too, the
-  boxes 31, pyrung 1023.
+  ``faults/copy_clamp_out_of_range``).  The CLICK read 1005, 1005, 0, as for SC44.
 - ``sc40_steps``: SC40, raised by a division by 0, and the Math steps only (a Copy and the boxes
-  leave SC40, ``system/division_flag_vs_hex_math``): none, a false-rung ``DS + 1`` Math, a
-  false-rung Math with an SC40 contact; bits 1, 2, 4.  H for SC40: 1; pyrung: 7.
+  leave SC40, ``system/division_flag_vs_hex_math``).  The steps are none, a false-rung ``DS + 1``
+  Math and a false-rung Math with an SC40 contact, bits 1, 2, 4.  The CLICK read 1, 1, 0, so both
+  false Maths clear SC40 (pyrung read 7).
 
 ``flag_reads``, the questions the audit left beside it:
 
-- ``unpowered_division`` (F2): does a Math on a rung that is never true evaluate its formula, or
-  clear a flag?  ``1 / DS`` (DS 0) on a false rung, then a coil read of SC40.  Result1, scan 3: the
-  flag off right before (a clean Math settles it), on after the false Math only if an unpowered
-  Math still evaluates (raises SC40).  Result2, scan 4: SC40 raised by a true division right
-  before, off after if the false Math clears it (H), on if it leaves it (or raises it again).
-  Result3, scan 5, is the control, the raise alone: 1.  pyrung: 0, 1, 1.  H: 0, 0.
+- ``unpowered_division`` (F2): ``1 / DS`` (DS 0) on a rung that is never true, then a coil read of
+  SC40.  Result1, scan 3: SC40 is off right before (a clean Math clears it), and on after the
+  false Math only if an unpowered Math still evaluates.  Result2, scan 4: SC40 raised by a true
+  division right before, off after if the false Math clears it.  Result3, scan 5, is the control,
+  the raise alone: 1.  The CLICK read 0, 0, 1.  A Math on a false rung does not evaluate, and it
+  clears SC40 (pyrung read 0, 1, 1).
 - ``oneshot_held`` (F3): a oneshot Copy and a oneshot Math held on over scans 3 and 4, so they fire
   on 3 and not on 4, each with its flag raised right before.  Bits: SC44 then the Copy (1), SC44
   then the Math (2), SC43 then the Copy (4), SC43 then the Math (8), SC40 then the Math (16).
-  Result1, scan 4: set when the flag is still on after the oneshot that does not fire.  31: it
-  leaves them (H, no false rung between); 0: a held oneshot settles the flags every scan its rung
-  is on (pyrung, and what ``flag_probe/oneshot_that_does_not_fire`` read behind a false Math).
-  Result3, scan 3: the same when it fires, 0 (a Copy or a Math that runs settles them).  Result2,
-  the controls, each raise alone: 7.  pyrung: 0, 7, 0.
+  Result1, scan 4: set when the flag is still on after the oneshot that does not fire.  Result3,
+  scan 3: the same when it fires, 0.  Result2, the controls, each raise alone: 7.  The CLICK read
+  5, 7, 0.  A oneshot Copy that does not fire leaves SC44 and SC43, and a oneshot Math that does
+  not fire clears all three (pyrung read 0, 7, 0).  ``flag_probe/oneshot_that_does_not_fire`` read
+  0 for both behind a false Math.
 - ``pointer_minus_one`` (F4): SC44 raised by a pointer of -1, read straight after by a coil (bit
-  1), after a TON (bit 2) and after a CTU (bit 4), enabled every scan of the window; Result1 scan
-  3, Result2 scan 4.  ``ton_ctu_by_pointer`` read the -1 raise off behind a false Math; H: 7, 7,
-  and pyrung 7, 7.  0 for bit 1: a pointer of -1 raises no SC44.  Result3, the pointer of 0 read
-  straight after on scan 3, is the control: 1.
+  1), after a TON (bit 2) and after a CTU (bit 4), enabled every scan of the window.  Result1 is
+  scan 3, Result2 scan 4.  Result3, the pointer of 0 read straight after on scan 3, is the
+  control: 1.  The CLICK read 7, 7, 1.  A pointer of -1 raises SC44, and the TON and the CTU leave
+  it (``ton_ctu_by_pointer`` read the -1 raise off behind a false Math).
 - ``math_after_sqrt`` (F5): SC46 from ``SQRT(DF -1.0)`` on scan 3, then an enabled ``DS + 1``
-  Math, then a coil.  Result1 = 1: the Math leaves SC46 (pyrung, "SC46 for the rest of the scan");
-  0: a Math settles SC46 as it does SC40.  Result2 is the control, the root alone on scan 5: 1.
-  Result3, SC46 at the top of scan 3 before the root: 0 (nothing raised it).  Result4, SC46 on
-  scan 4 after the same steps with no root: 0 where it clears at the scan's start or a Math
-  settles it, 1 where it carries over (``flag_carry`` asks that alone).  pyrung: 1, 1, 0, 0.
+  Math, then a coil.  Result1 = 1 when the Math leaves SC46.  Result2 is the control, the root
+  alone on scan 5: 1.  Result3, SC46 at the top of scan 3 before the root: 0 (nothing raised it).
+  Result4 is SC46 on scan 4 after the same steps with no root.  The CLICK read 0, 1, 0, 0.  A Math
+  that runs clears SC46 as it clears SC40 (pyrung read 1, 1, 0, 0).
 
 No case here raises SC46 but ``math_after_sqrt``, and every read follows its own raise.  In part
 ``follow2_values`` ``flag_reads`` runs first, above ``term_zero``, whose quiet errors may raise
-SC46 or SC40 on a CLICK: no flag of a later group sits between a raise here and its read.  The cases own what ``memory.OWNED_APART`` lists under
-these groups.
+SC46 or SC40 on a CLICK.  So no flag of a later group sits between a raise here and its read.
+The cases own what ``memory.OWNED_APART`` lists under these groups.
 """
 
 from __future__ import annotations
@@ -95,7 +90,6 @@ from pyrung.core import (
 )
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, df, ds
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
 SC40 = system.fault.division_error
@@ -323,20 +317,15 @@ def init_sc40_steps(slot: Any) -> None:
     copy(0, SC40_SINK)
 
 
-def _steps_case(name: str, ladder: Any, init: Any, top: int, what: str) -> Any:
+def _steps_case(name: str, ladder: Any, init: Any, left: int, what: str) -> Any:
     return case(
         f"{name} raised right before each step, read by a coil right after: a bit per step "
         f"still on after it on scan 3 (Result1) and 4 (Result2), {what}; none on scan 5 with no "
         "raise (Result3 = 0)",
         ladder=ladder,
         init=init,
-        expect={
-            "Result1": between(0, top),
-            "Result2": between(0, top),
-            "Result3": 0,
-        },
+        expect={"Result1": left, "Result2": left, "Result3": 0},
         scans=scans_for(),
-        probe=f"what clears {name}: a false Math (H), a box, or nothing (4b)",
     )
 
 
@@ -347,22 +336,22 @@ flag_steps = Group(
             "SC44",
             prove_sc44_steps,
             init_sc44_steps,
-            1023,
-            "1023 where none clears it, 1005 where a false Math does (H), 31 where the boxes do",
+            1005,
+            "1005 (each false Math clears it, a false Copy and the boxes leave it)",
         ),
         _steps_case(
             "SC43",
             prove_sc43_steps,
             init_sc43_steps,
-            1023,
-            "1023 where none clears it, 1005 where a false Math does (H), 31 where the boxes do",
+            1005,
+            "1005 (each false Math clears it, a false Copy and the boxes leave it)",
         ),
         _steps_case(
             "SC40",
             prove_sc40_steps,
             init_sc40_steps,
-            7,
-            "7 where neither false Math clears it, 1 where both do (H)",
+            1,
+            "1 (each false Math clears it)",
         ),
     ],
 )
@@ -540,48 +529,42 @@ flag_reads = Group(
     "flag_reads",
     [
         case(
-            "A division by 0 on a rung that is never true, read by a coil: SC40 on after it from "
-            "off (Result1 = 1, it evaluates), still on after it from a raise (Result2 = 1, it "
-            "leaves the flag; 0 it clears it); the raise alone leaves SC40 on (Result3 = 1)",
+            "A coil reads SC40 after a division by 0 on a rung that is never true.  SC40 is off "
+            "after it "
+            "from off (Result1 = 0, it does not evaluate).  It is off after it from a raise "
+            "(Result2 = 0, it clears the flag).  The raise alone leaves SC40 on (Result3 = 1)",
             ladder=prove_unpowered_division,
             init=init_unpowered_division,
-            expect={"Result1": between(0, 1), "Result2": between(0, 1), "Result3": 1},
+            expect={"Result1": 0, "Result2": 0, "Result3": 1},
             scans=scans_for(),
-            probe="does a Math on a false rung evaluate, or clear SC40 (4b)",
         ),
         case(
-            "A oneshot Copy and Math held on, right after a raise of SC44 (bits 1, 2), SC43 (4, "
-            "8) or SC40 (16): a bit per op still on after it on the scan it does not fire "
-            "(Result1), and on the scan it fires (Result3 = 0); each raise alone (Result2 = 7)",
+            "A oneshot Copy and a Math are held on right after a raise of SC44 (bits 1, 2), SC43 "
+            "(4, 8) or SC40 (16).  A bit per op is set when its flag is still on after it.  On the "
+            "scan it does not fire the Copies leave theirs (Result1 = 5).  On the scan it fires "
+            "none is on (Result3 = 0).  Each raise alone reads 7 (Result2)",
             ladder=prove_oneshot_held,
             init=init_oneshot_held,
-            expect={"Result1": between(0, 31), "Result2": 7, "Result3": 0},
+            expect={"Result1": 5, "Result2": 7, "Result3": 0},
             scans=scans_for(),
-            probe="does a oneshot that does not fire settle its flags (4b)",
         ),
         case(
-            "SC44 raised by a pointer of -1 is on right after (bit 1), after a TON (2) and a CTU "
-            "(4), on scan 3 (Result1) and 4 (Result2); by a pointer of 0 (Result3 = 1)",
+            "SC44 raised by a pointer of -1 is on right after (bit 1) and after a TON (2) and a "
+            "CTU (4).  That holds on scan 3 (Result1) and scan 4 (Result2).  A pointer of 0 "
+            "raises it too (Result3 = 1)",
             ladder=prove_pointer_minus_one,
             init=init_pointer_minus_one,
-            expect={"Result1": between(0, 7), "Result2": between(0, 7), "Result3": 1},
+            expect={"Result1": 7, "Result2": 7, "Result3": 1},
             scans=scans_for(),
-            probe="SC44 by a pointer of -1 read straight after (4b)",
         ),
         case(
-            "SC46 from SQRT(-1.0) is still on after an enabled Math (Result1 = 1, 0 it settles); "
-            "the root alone (Result2 = 1); off before the root (Result3 = 0); on the next scan "
-            "with no root (Result4 = 1 it carries over)",
+            "SC46 from SQRT(-1.0) is off after an enabled Math (Result1 = 0, the Math clears it).  "
+            "The root alone leaves it on (Result2 = 1).  It is off before the root (Result3 = 0).  "
+            "It is off on the next scan after the same Math with no root (Result4 = 0)",
             ladder=prove_math_after_sqrt,
             init=init_math_after_sqrt,
-            expect={
-                "Result1": between(0, 1),
-                "Result2": 1,
-                "Result3": 0,
-                "Result4": between(0, 1),
-            },
+            expect={"Result1": 0, "Result2": 1, "Result3": 0, "Result4": 0},
             scans=scans_for(),
-            probe="does a Math that runs settle SC46",
         ),
     ],
 )

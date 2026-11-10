@@ -55,7 +55,7 @@ pyrung checks the range when `math()` stores its result, not at each step of the
 
 ## Division
 
-- A division by zero is 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5. The next `math()` to run sets the flag again only if it divides by zero too, so read the flag on the next rung. A `copy()` leaves it.
+- A division by zero is 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5. Every later `math()` clears the flag unless it divides by zero too. That includes a `math()` on a false rung and a one-shot `math()` that does not fire. So read the flag on the next rung. A `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 - In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero is 0 with no flag, and the rest of the formula runs. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
@@ -65,7 +65,7 @@ pyrung checks the range when `math()` stores its result, not at each step of the
 math(sqrt(Level), Root)     # Level = -4.0
 ```
 
-A math function given an operand outside its domain is 0 and sets `system.fault.math_operation_error` (CLICK's SC46). Examples are `sqrt` of a negative, `log`/`log10` of 0 or a negative, and `asin`/`acos` outside −1..1. The rest of the formula runs, so `sqrt(Level) + 5` stores 5. The rest of the scan runs too, so a later rung can see the flag. The next scan starts with the flag off, like the other fault flags. The PLC stays in RUN, as a real CLICK does, even though CLICK's help for SC46 says it goes to STOP.
+A math function given an operand outside its domain is 0 and sets `system.fault.math_operation_error` (CLICK's SC46). Examples are `sqrt` of a negative, `log`/`log10` of 0 or a negative, and `asin`/`acos` outside −1..1. The rest of the formula runs, so `sqrt(Level) + 5` stores 5. The rest of the scan runs too, so a later rung can see the flag. The next `math()` clears it, as it clears `division_error`. The PLC stays in RUN, as a real CLICK does, even though CLICK's help for SC46 says it goes to STOP.
 
 A negative base to a fractional power (`(-8.0) ** 0.5`) is a math error too.
 
@@ -98,7 +98,7 @@ CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `l
 | Division by zero | That division = 0, the rest of the formula runs, `system.fault.division_error` set |
 | Indexed source below its block (`math(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
 | Indexed source past its block | Reads the type's zero value, no flag |
-| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | That function = 0, the rest of the formula runs, `system.fault.math_operation_error` set for the scan |
+| Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | That function = 0, the rest of the formula runs, `system.fault.math_operation_error` set |
 
 ## Range aggregates
 
