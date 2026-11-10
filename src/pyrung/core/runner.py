@@ -1805,6 +1805,7 @@ class PLC:
         # invalidated.
         self._record_all_tags: bool = record_all_tags
         self._pdg_consumed_tags: frozenset[str] | None = None
+        self._pdg_edits = 0
         # One-slot cache for ``replay_trace_at``.  Reconstructing rung
         # traces for a historical scan costs one fork + up to K plain
         # scans + one debug scan; caching a back-to-back repeat query
@@ -2274,7 +2275,13 @@ class PLC:
         clear ``_pdg_consumed_tags`` together — the two caches share a
         lifetime.
         """
-        if not hasattr(self, "_pdg_cache") or self._pdg_cache is None:
+        from pyrung.core.tag import metadata_edits
+
+        if (
+            not hasattr(self, "_pdg_cache")
+            or self._pdg_cache is None
+            or self._pdg_edits != metadata_edits()
+        ):
             from pyrung.core.analysis.pdg import build_program_graph
             from pyrung.core.program import Program
             from pyrung.core.tag import TagType
@@ -2284,6 +2291,7 @@ class PLC:
                 program = Program.__new__(Program)
                 program.rungs = list(self._logic)
                 program.subroutines = {}
+            self._pdg_edits = metadata_edits()
             self._pdg_cache = build_program_graph(program)
             consumed = set(self._pdg_cache.readers_of.keys())
             # Union in every Bool-typed tag the PDG observed. A mixed rung
@@ -3461,6 +3469,7 @@ class PLC:
         # both for every historical scan replay.
         fork._pdg_cache = self._ensure_pdg()
         fork._pdg_consumed_tags = self._pdg_consumed_tags
+        fork._pdg_edits = self._pdg_edits
         fork._input_overrides._forces.clear()
         fork._input_overrides._forces.update(forces)
         # Historical at-fire replay must execute the same current soft program
