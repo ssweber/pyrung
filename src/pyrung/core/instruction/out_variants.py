@@ -38,8 +38,9 @@ if TYPE_CHECKING:
 
 _ACC_MAX = 32767
 
-# A flasher's phase (memory ``_flash_phase``).
-_FLASH_IDLE, _FLASH_ON, _FLASH_OFF = 0, 1, 2
+# A flasher's phase (memory ``_flash_phase``).  A ``_NEXT`` phase runs from the next scan, which
+# clears its accumulator first.
+_FLASH_IDLE, _FLASH_ON, _FLASH_OFF, _FLASH_ON_NEXT, _FLASH_OFF_NEXT = 0, 1, 2, 3, 4
 
 
 def _coil_tag(target: Tag | ImmediateRef) -> Tag:
@@ -212,16 +213,18 @@ class FlasherInstruction(Instruction):
     """Flasher coil: alternates on and off phases while the rung is true.
 
     The phase is hidden state, a memory cell (hardware readings of
-    2026-11-06): 0 idle, 1 on, 2 off.  The rung false sets it idle, turns the
-    target off and freezes both accumulators.  A true rung on an idle phase
-    starts an on phase, both accumulators from 0 (the off TD does not run on
-    from where it froze, hardware round of 2026-11-05).  Each scan ticks the
-    running phase's accumulator, and the target shows that phase.  When the
-    running phase's accumulator reaches its preset, the other phase's
-    accumulator is cleared and that phase runs from the next scan.  So every phase shows for at least one scan, and a
-    1 ms first on phase lights the rung's first scan
-    (``flash_zero/short_first_phase``).  The accumulator of the phase not
-    running holds.  A TD the ladder writes past the running phase's preset
+    2026-11-06): 0 idle, 1 on, 2 off, 3 on from the next scan, 4 off from the
+    next scan.  The rung false sets it idle, turns the target off and freezes
+    both accumulators.  A true rung on an idle phase starts an on phase, both
+    accumulators from 0 (the off TD does not run on from where it froze,
+    hardware round of 2026-11-05).  Each scan ticks the running phase's
+    accumulator, and the target shows that phase.  When the running phase's
+    accumulator reaches its preset, the other phase runs from the next scan.
+    That scan clears the other phase's accumulator before its tick.  So every
+    phase shows for at least one scan, and a 1 ms first on phase lights the
+    rung's first scan (``flash_zero/short_first_phase``).  The accumulator of
+    the phase not running holds, the scan a phase ends included
+    (``out_more/preset_mid_phase`` reads the off TD on the on phase).  A TD the ladder writes past the running phase's preset
     ends that phase on its next tick (``td_write`` read it for both phases).
     One written to the phase not running stands until that phase starts
     again and clears it.  The model implies this, but no CLICK has read it.
@@ -289,6 +292,12 @@ class FlasherInstruction(Instruction):
             ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0})
             ctx.set_memory(on_frac, 0)
             ctx.set_memory(off_frac, 0)
+        elif phase in (_FLASH_ON_NEXT, _FLASH_OFF_NEXT):
+            # The phase that starts now runs from 0, and the other's accumulator holds.
+            phase = _FLASH_ON if phase == _FLASH_ON_NEXT else _FLASH_OFF
+            starting = self.on_acc if phase == _FLASH_ON else self.off_acc
+            ctx.set_tags({starting.name: 0})
+            ctx.set_memory(f"_frac:{starting.name}", 0)
         # The coil shows the phase that runs this scan, even one that ends on it.
         tags: dict[str, Any] = {self.target.name: phase == _FLASH_ON}
         if phase == _FLASH_ON:
@@ -298,9 +307,8 @@ class FlasherInstruction(Instruction):
         acc_value, frac = _tick(ctx, acc, self.unit)
         tags[acc.name] = acc_value
         if acc_value >= preset:
-            # The other phase starts, from 0.
-            phase = _FLASH_OFF if phase == _FLASH_ON else _FLASH_ON
-            tags[other.name] = 0
+            # The other phase runs from the next scan.  Its accumulator holds until then.
+            phase = _FLASH_OFF_NEXT if phase == _FLASH_ON else _FLASH_ON_NEXT
             ctx.set_memory(on_frac, 0)
             ctx.set_memory(off_frac, 0)
         else:

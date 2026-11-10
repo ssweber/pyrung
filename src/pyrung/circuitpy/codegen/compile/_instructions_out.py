@@ -15,7 +15,13 @@ from pyrung.core.instruction import (
     TimedInstruction,
     ToggleInstruction,
 )
-from pyrung.core.instruction.out_variants import _FLASH_IDLE, _FLASH_OFF, _FLASH_ON
+from pyrung.core.instruction.out_variants import (
+    _FLASH_IDLE,
+    _FLASH_OFF,
+    _FLASH_OFF_NEXT,
+    _FLASH_ON,
+    _FLASH_ON_NEXT,
+)
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
@@ -132,7 +138,7 @@ def _compile_flasher_phase(
     ctx: CodegenContext,
     sp: str,
 ) -> list[str]:
-    """The running phase's tick; at or past its preset, the other phase starts from 0."""
+    """The running phase's tick; at or past its preset, the other phase runs from the next scan."""
     sp4 = sp + "    "
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
@@ -142,7 +148,7 @@ def _compile_flasher_phase(
             instr.off_acc,
             instr.on_preset,
             "_on_preset",
-            _FLASH_OFF,
+            _FLASH_OFF_NEXT,
         )
     else:
         acc, other, preset, limit, other_phase = (
@@ -150,14 +156,13 @@ def _compile_flasher_phase(
             instr.on_acc,
             instr.off_preset,
             "_off_preset",
-            _FLASH_ON,
+            _FLASH_ON_NEXT,
         )
     return [
         *_tick_lines(acc, preset, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
         f"{sp}if _acc >= {limit}:",
         f"{sp4}_phase = {other_phase}",
-        f"{sp4}{_compile_lvalue(other, ctx)} = 0",
         f'{sp4}_mem["{on_frac}"] = 0',
         f'{sp4}_mem["{off_frac}"] = 0',
         f"{sp}else:",
@@ -201,6 +206,15 @@ def _compile_flasher_instruction(
         f"{sp12}{on_write} = 0",
         f"{sp12}{off_write} = 0",
         f'{sp12}_mem["{on_frac}"] = 0',
+        f'{sp12}_mem["{off_frac}"] = 0',
+        # The phase that starts now runs from 0, and the other's accumulator holds.
+        f"{sp8}elif _phase == {_FLASH_ON_NEXT}:",
+        f"{sp12}_phase = {_FLASH_ON}",
+        f"{sp12}{on_write} = 0",
+        f'{sp12}_mem["{on_frac}"] = 0',
+        f"{sp8}elif _phase == {_FLASH_OFF_NEXT}:",
+        f"{sp12}_phase = {_FLASH_OFF}",
+        f"{sp12}{off_write} = 0",
         f'{sp12}_mem["{off_frac}"] = 0',
         # The coil shows the phase that runs this scan, even one that ends on it.
         f"{sp8}{target_write} = _phase == {_FLASH_ON}",
