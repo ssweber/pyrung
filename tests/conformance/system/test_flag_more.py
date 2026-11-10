@@ -24,7 +24,7 @@ and each case expects what it read.
   TON and CTU, set when the flag is still on after the box: Result1 SC43, Result2 SC44 by 0,
   Result3 SC44 by -1.  The round read 0 for Result3; Result2 = 31 says the pointer decides, 0
   that the box clears SC44 however it was raised.  Result4 is the control: bits 1, 2, 4 for the
-  three raises alone, 7.  The CLICK read 31, 0, 0 and 7: SC43 is on after each box, and SC44
+  three raises alone, 7.  The CLICK read 31, 0, 0 and 7.  SC43 is on after each box, and SC44
   is off however it was raised.  pyrung reads 31, 31, 31 and 7, so the case is pending ``SYS``.
 - ``ton_ctu_by_pointer``: ``address_flag_vs_other_instructions``'s layout, the TON and the CTU
   enabled on every scan of the window and the raise on the rung above each: pointer 0 on scan 3
@@ -40,25 +40,25 @@ and each case expects what it read.
 ``flag_halves``, the SC43 halves of ``flag_probe`` with a raise that takes:
 
 - ``bulk_ops_settle_sc43``: a Block copy, Fill, Pack (bits, words, text) and Unpack (bits, words)
-  right after the raise.  Result1 bits 1..64, set when SC43 is off after each; 127 is what SC44
-  read (``bulk_ops_clear_flags``).  Result2 = 1 is the control.  The CLICK read 127 and 1: each
-  op settles SC43.  pyrung reads the same.
+  right after the raise.  Result1 bits 1..64, set when SC43 is off after each.  127 is what SC44
+  read (``bulk_ops_clear_flags``).  Result2 = 1 is the control.  The CLICK read 127 and 1, so
+  each op settles SC43.  pyrung reads the same.
 - ``oneshot_settles_sc43``: a oneshot Copy (bit 1) and a oneshot Math (bit 2), on the scan it
   fires (Result2, set when SC43 is off after it) and the next, when it does not fire (Result1,
   set when SC43 is still on).  SC44 and SC40 read 0 for Result1 (``oneshot_that_does_not_fire``),
   so a oneshot that does not fire still settles them.  Result3 = 1 is the control.  The CLICK
-  read 0, 3 and 1: a oneshot that does not fire settles SC43 too.  pyrung reads the same.
+  read 0, 3 and 1, so a oneshot that does not fire settles SC43 too.  pyrung reads the same.
 - ``source_sc43``: ``copy(SC43, C)`` right after the raise.  Result1 = 1 when the C bit saw SC43
   on, 0 when the Copy settles the flag before it reads (SC44 read 0,
   ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the
-  Copy.  Result3 = 1 is the control.  The CLICK read 0, 1 and 1: the Copy settles SC43 before it
-  reads it.  pyrung reads the same.
+  Copy.  Result3 = 1 is the control.  The CLICK read 0, 1 and 1, so the Copy settles SC43 before
+  it reads it.  pyrung reads the same.
 - ``df_into_dd``: what a Copy of DF 1.0E+10 into a DD (preset 99) writes, the store that raised
   no SC43.  Result1: 1 for 2147483647 (a clamp), 2 for 1410065408 (the low 32 bits), 3 for 99
   (left as it was), 4 for 0, 5 for -2147483648, 0 for any other.  Result2 is the DD / 100000, so
   any other reading still shows its size (21474 or 21475 for the clamp, 14100 or 14101 for the
   low bits).  Result3 has SC43 after it (bit 1; the round read none).  The CLICK read 1, 21474
-  and 0: the Copy clamps and raises no SC43.  pyrung reads the same.
+  and 0, so the Copy clamps and raises no SC43.  pyrung reads the same.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """
