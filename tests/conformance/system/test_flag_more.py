@@ -203,9 +203,10 @@ flag_boxes = Group(
     "flag_boxes",
     [
         case(
-            "SC43 is still on after a Search, Shift, event Drum, TON and CTU, 31 (Result1).  "
-            "SC44 is off after each, raised by pointer 0 (Result2 = 0) or by pointer -1 "
-            "(Result3 = 0).  Each raise alone leaves its flag on (Result4 = 7)",
+            "SC43 is still on after each of the five boxes (Result1 = 31).  SC44 reads off after "
+            "each, raised by pointer 0 (Result2 = 0) or by pointer -1 (Result3 = 0).  The boxes "
+            "leave SC44, but the read rungs of the scans before are Maths on false rungs, and "
+            "they clear it.  Each raise alone leaves its flag on (Result4 = 7)",
             ladder=prove_boxes_by_pointer,
             init=init_boxes_by_pointer,
             expect={"Result1": 31, "Result2": 0, "Result3": 0, "Result4": 7},
@@ -363,9 +364,11 @@ flag_halves = Group(
             scans=scans_for(HALF_WINDOW),
         ),
         case(
-            "A oneshot Copy (bit 1) and Math (bit 2) after SC43 settle it on the scan they "
-            "fire, 3 (Result2).  They settle it on the scan they do not fire too, so no bit reads "
-            "SC43 still on, 0 (Result1).  The raise alone leaves SC43 on (Result3 = 1)",
+            "A oneshot Copy (bit 1) and Math (bit 2) after SC43 clear it on the scan they fire, "
+            "3 (Result2).  On the next scan they do not fire, and no bit reads SC43 still on, 0 "
+            "(Result1).  The read rung of the scan before sits between each oneshot and that "
+            "read, and as a Math on a false rung it clears SC43.  The raise alone leaves SC43 on "
+            "(Result3 = 1)",
             ladder=prove_oneshot_settles_sc43,
             init=init_oneshot_settles_sc43,
             expect={"Result1": 0, "Result2": 3, "Result3": 1},

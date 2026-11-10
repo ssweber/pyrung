@@ -301,9 +301,11 @@ group = Group(
             probe="do the bulk Copy tabs settle SC43 and SC44 as a single Copy does",
         ),
         case(
-            "A Copy or Math under a oneshot clears its flags every scan its rung is on, the "
-            "scan it fires (Result2 = 31) and the next, when it does not fire (Result1 = 0): "
-            "SC43 and SC44 after a Copy, SC40, SC43 and SC44 after a Math",
+            "A oneshot Copy or Math clears its flags on the scan it fires (Result2 = 31).  The "
+            "Copies follow a raise of SC43 or SC44, the Maths a raise of SC40, SC43 or SC44.  On "
+            "the next scan the oneshot does not fire, and no flag reads on (Result1 = 0).  The "
+            "read rung of the scan before sits between the oneshot and that read, and as a Math "
+            "on a false rung it clears every flag",
             ladder=prove_oneshot_that_does_not_fire,
             init=_init(dds=(700, 706), dfs=(431, 431)),
             expect={"Result1": 0, "Result2": 31},
