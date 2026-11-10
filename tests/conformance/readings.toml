@@ -1334,3 +1334,75 @@ case = "flag_carry/math_flags_carry"
 hash = "a7ab8555c3ed"
 on = "2026-11-10"
 read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "deb_fall/off_td_at_fall"
+hash = "7b890481b0aa"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flash_zero/off_zero_first_phase"
+hash = "a232bccf8b91"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/lowered_to_zero"
+hash = "bc13c7a0b990"
+on = "2026-11-10"
+read = { Result1 = 1260, Result2 = 1260, Result3 = 907, Result4 = 907, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/short_first_phase"
+hash = "450542b15add"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 2 }
+
+[[reading]]
+case = "tof_rewrite/done_after_td_zeroed"
+hash = "07e090c7e750"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 1, Result3 = 1, Result4 = 34 }
+
+[[reading]]
+case = "deb_fall/off_td_at_fall"
+hash = "7b890481b0aa"
+on = "2026-11-10"
+read = { Result1 = 2, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flash_zero/off_zero_first_phase"
+hash = "a232bccf8b91"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/lowered_to_zero"
+hash = "bc13c7a0b990"
+on = "2026-11-10"
+read = { Result1 = 1260, Result2 = 1260, Result3 = 908, Result4 = 908, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/short_first_phase"
+hash = "450542b15add"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "tof_rewrite/done_after_td_zeroed"
+hash = "07e090c7e750"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 1, Result3 = 2, Result4 = 33 }
