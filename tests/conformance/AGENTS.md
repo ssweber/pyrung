@@ -75,7 +75,7 @@ def test_rungs():
 - `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). No case reads the bank's flag (the flag side is `SYS`).
 - `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times). A CLICK does not.
 
-`DRUM`, `MATH`, `SC43`, `SYS` and the `faults` `TEXT` case are met: no case carries `DRUM`, `MATH`, `SC43` or `SYS` now.
+No case carries `DRUM`, `MATH` or `SC43` now, and the `faults` `TEXT` case is met. `SYS` is on the two `flag_boxes` cases only (part `follow_flags`). `flag_steps` asks what clears SC44 there.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
