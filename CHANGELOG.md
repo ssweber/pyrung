@@ -28,7 +28,7 @@
 - `run_for()` and `run_until()` take `jit=` in place of `fold=`, and `fold=` raises `TypeError`. `jit=False` runs every scan interpreted.
 - `how()` no longer reports skipped scans, because its waits now run every scan:
   - plans no longer carry a "Jump ahead" line, and `PlanStep` loses `accelerators`. The step's "Wait ~Ns (N scans)" line stays
-  - a wait's `CoastReceipt` reports `stretches` and `stretched_scans` in place of `macro_folds` and `skipped_scans`, and recordings log them as `coast_stretches` and `coast_stretched_scans`. `stretches` counts the runs of scans the compiled loop ran without stopping, and `stretched_scans` counts the scans in them
+  - a wait's `CoastReceipt` reports `stretches` and `stretched_scans` in place of `macro_folds` and `skipped_scans`, and recordings log them as `coast_stretches` and `coast_stretched_scans`. `stretches` counts the compiled runs in the wait, and `stretched_scans` counts the scans in them
   - `advances` and `timer_quanta_replayed` are gone from `CoastReceipt`
 - `Program` now raises `OwnedBitCoilError` (a `ValueError`) when it closes if a coil (`out()`, `latch()`, `reset()`, `toggle()` or another Out coil) writes a timer's or counter's Done bit, or a range that includes one such as `reset(C.select(1, 8))`. Clear the bit with the instruction's `.reset()` pin instead.
 - Rungs evaluate as they do on a CLICK, in `PLC`, `CompiledPLC` and generated CircuitPython. Each instruction reads only the contacts on its own path from the rail:
@@ -38,7 +38,7 @@
   - a box reads its enable and its pins (`.reset()`, `.down()`, `.clock()`, `.jump()`, `.jog()`, drum events) once, when execution reaches it, before it writes anything
 
   A branch, continued rung or box pin now sees the new value of a tag written earlier in the same rung (it saw the value from rung entry). `pyrung check` flags these rungs as `RUNG_ORDER_DEPENDENT`.
-- CLICK import brings each wire of a CLICK rung back as a rung of its own, with `.continued()` on every wire after the first. Outputs share one `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. The exporter no longer puts outputs under one shared contact when an output between them writes that contact's tag.
+- CLICK import brings each wire of a CLICK rung back as a rung of its own, with `.continued()` on every wire after the first. Outputs share one `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact (it put them under one `with rung(...)`, which read the contact before an output above wrote it). The exporter no longer puts outputs under one shared contact when an output between them writes that contact's tag.
 - A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung, because CLICK won't compile it otherwise (error C000A). Building a program raises `RuntimeError` when another output or branch shares the box's rung, as in `with Rung(X1): out(Y1); on_delay(T1, ...).reset(X2)`. Move what comes before the box into a rung above it, and what follows into `with Rung(...).continued():`.
 - The built-in `Timer` and `Counter` follow CLICK's bank defaults. A timer's `Acc` now resets on STOP->RUN (TD is non-retentive), and a counter's `Done` survives it (CT is retentive). To keep a timer's elapsed time across a restart, use `Timer.clone(..., retentive={"Acc": True})`. `clone(retentive=...)` overrides either field.
 - CLICK import no longer makes up timer and counter nicknames. A T/TD (or CT/CTD) address with no nickname keeps its address as its name (it became `T1_Done`/`TD1_Acc`). A tag named after its own address exports with no nickname, so importing and exporting a project leaves its nickname file unchanged.
@@ -74,7 +74,7 @@
   - `pack_text()` into an `Int` or `Dint` clamps an out-of-range value and sets `fault.out_of_range`
   - `pack_text()` stops at a decimal point (`"12.5"` is 12), and rejects any other non-digit
   - `to_value` of a blank TXT writes 0
-  - a continuous `search()` resumes after its last result if that result is inside the range. A result of 0 starts again from the first address, and any other value finds nothing and writes -1
+  - a continuous `search()` resumes after its last result if that result is inside the range. A result of 0 starts again from the first address, and any other value finds nothing and writes -1 (it resumed at the first address past the result, wherever the result was)
 - Drums (`event_drum`, `time_drum`, `time_event_drum`) run CLICK's scan routine:
   - each scan takes one action, the first that applies of reset (a level), a jump edge, a jog edge, and the drum's own time or event
   - jump and jog act even with the rung false
@@ -145,7 +145,6 @@
   - a tag the property reads stays in the search unless an `out()` writes it every scan
   - a `Real` past 2**53 is tried on both sides of each literal it is compared with
 - A block pointer must be an `Int` or `Dint` tag. `DS[Ptr]` with a `Real`, `Word`, `Bool` or `Char` `Ptr` now raises `TypeError` when the program is built. So does an index expression that could be a float (`DS[W + 1]` with a `Word` `W`, `DS[R + 1]`, `DS[I / 2]`), and a `select()` bound that breaks the same rule. Copy a `Real` or `Word` pointer into an `Int` or `Dint` first, and use `//` for division in an index.
-- `math()` into a pointer destination (`math(X + 1, DS[Ptr])`) raises `TypeError` when the program is built. Store into a tag with `math()`, then `copy()` it to `DS[Ptr]`.
 - An expression outside `math()` (a rung condition, a `copy()` source, a `forloop()` count or an index) never stops the scan. An operation in it with a math error gives 0 and sets no fault flag, in `PLC`, `CompiledPLC` and generated CircuitPython. Inside `math()` the flags are still set.
 - A pointer or index outside its block no longer stops the scan with `IndexError`, everywhere:
   - in a rung condition, it reads its type's zero with no flag
@@ -186,9 +185,12 @@
   - it is a `ValueError`, so existing `except ValueError` clauses still catch it
   - its `code` is `"OLD_COMMENT_FORM"`
   - a nickname-file load keeps the class and names the row in the message
-  - `comment_needs_upgrade()`, `pending_migrations()` and `old_form_tokens()` say whether a comment needs "Upgrade Project" and which tokens it would rewrite
 
   Match on the class or the code to offer "Upgrade Project".
+- `pyrung.click.tag_map` gains:
+  - `comment_needs_upgrade()`, which is true when a comment holds an old token
+  - `old_form_tokens()`, which lists those tokens
+  - `pending_migrations()`, the rewrites "Upgrade Project" would make, in the order they run
 - Harness feedback has two new kinds, which run as the CLICK coils of the same names:
   - `Physical(name, timed="200ms")` turns the feedback on for that time at each rise of its enable. With `maintained=True` it also stays on while the enable stays on
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
@@ -264,7 +266,7 @@
 - `toggle()`, `debounce()`, `flasher()` and `timed()` are CLICK v4's Out coil types. Each owns its `(timer, preset)` phases, and `debounce()` needs both sides, as in CLICK:
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive them
   - they export to CLICK and import back, and CLICK validation checks their timer banks and units
-  - their timers' `Done` bits never turn on, and a `debounce`, `flasher` or `timed` coil's timing follows CLICK's
+  - their timers' `Done` bits never turn on
   - the verifier models `toggle` exactly and the timed ones as black-box timers
 - `time_event_drum()` is CLICK v4's Time & Event drum. A step ends when its time is up and its event is on, and either half may be `None`:
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive it
@@ -279,7 +281,7 @@
 - `randint(lo, hi)` (from `pyrung.core`) is CLICK's `RAND`, a new random value from `lo` to `hi` inclusive each scan:
   - a scan draws the same value every time it runs, so replay, seek and `fork()` see the same values. A test can set it by patching or forcing its tag (`expr.tag`, or `expr.cut_tag` for a value cut into an `Int`)
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython (as `random.randint`), and exports to CLICK as `RAND ( lo , hi )` and imports back
-  - a long `run_for()` or `run_until()` of a program that uses it runs at plain compiled speed, and the verifier explores every value in range
+  - a long `run_for()` or `run_until()` of a program that uses it runs its scans compiled, without the faster path for repeated scans, and the verifier explores every value in range
   - it is refused inside a `forloop()`
   - two equal bounds are a math error (0 with SC46), whether constants or tags holding one value
   - into an `Int`, each constant bound is cut to 16 bits (`randint(70000, 70002)` draws 4464..4466)
@@ -289,6 +291,8 @@
 - `run_for()` and `run_until()` no longer skip scans. After the first 1,000 scans of a run, every scan runs compiled, and scans that repeat the one before run faster still. An hour of a plain timer takes about half a second. A run steps every scan interpreted when:
   - it has a callable stop predicate, a monitor, a breakpoint or a `when()`
   - the PLC runs in realtime mode
+  - a `Harness` has a bool feedback (each one watches its tag every scan)
+  - the program has a `send()` or `receive()` to a `ModbusTcpTarget` or `ModbusRtuTarget`
   - the program can't be compiled
 - History answers questions about the scans of a compiled `run_for()` or `run_until()` as if they had been stepped, by stepping them again from the nearest checkpoint:
   - `cause()`, `effect()`, `rung_firings()`, `history.previous_transition()`, `cold_rungs()` and `hot_rungs()` (`cause()` raised `ValueError` on any scan the run skipped)
@@ -303,9 +307,9 @@
   - the plan's last line says that `how()` does not simulate Modbus
   - the forks `how()` returns, such as `plan.fork`, don't talk to the device either
   - `step()`, `run_for()` and the debugger still talk to the device
+- Without `history=`, `rung_firings()` and `cause()` step again for a tag's later writes once one rung's writes to it have changed 1,000 times (they kept every write).
 - Without `history=`, a stepped run stops recording rung firings once the records reach about 140 MB, as `how()` already did for the scans it runs (a stepped run's records had no limit):
   - `cause()`, `effect()` and `rung_firings()` step a later scan again from the nearest checkpoint
-  - `rung_firings()` and `cause()` step again for a tag's later writes once one rung's writes to it have changed 1,000 times (they kept every write)
   - a question that would step more than 250,000 scans raises `UnrecordedScansError`
   - pass `history=` to keep every record in the window
 - With `history=`, the runner keeps every write in the window. A value that changes on every scan takes about 250 bytes a scan, so `history="1h"` at 10 ms holds about 90 MB for each such tag. `history_budget` does not count these writes. Shorten `history=` for a program with many such tags.
@@ -333,23 +337,23 @@
   - the bits stay in `plan.fork`'s tags after the logic is removed
   - conditions leave out terms that can't change them
   - a step that rebuilds a tag's logic says which step it replaces
-- When `how()` would stop, it tries what a technician would try next, each on a fork. A plan that needs one of these says so in its first step:
+- When `how()` would stop, it tries what a technician would try next, each on a fork. A plan that needs one of these says so in a step of its own, before the plan's other steps:
   - releasing the session's forces ("Release the force on X.")
   - STOP->RUN ("Stop the program and go back to RUN."). When a restart alone falls short, the stopped plan names the retentive tags that keep it from the goal, and says which to write while stopped
-  - one wait or one input change it had no lead for. The step says "Nothing in the trace pointed to this."
+  - one wait or one input change that nothing in the trace pointed to ("Nothing in the trace pointed to this.")
   - `Plan.released`, `Plan.restart` and `Plan.last_resort` hold what it tried
-- A `how()` plan runs with the session's forces and pending patches, and doesn't list them as its steps:
+- A `how()` plan runs with the session's forces and pending patches, and doesn't list them as its steps (it planned without them):
   - `plan.changes` and `plan.ordered_steps` leave them out
   - a patch or force that no scan has applied yet gets a first step, "Let one scan run, so the session's own patch or force on X takes effect."
   - `Plan.session_inputs` and `Plan.waiting_overrides` hold them
-- `cause()` shows the forces in its chain:
+- `why()` shows the forces in its answer:
   - a forced root is marked `forced`
   - a forced tag gets a line saying the force restores it before outputs are written
   - a force no scan has applied yet reads `X is forced V from the next scan`
   - a rung that a force accounts for is no longer marked blocked
   - `CausalChain.forced` and `CausalChain.force_pending` hold them
   - the line for a chain with every writer blocked reads "no writer is firing now" (it read "no writer has fired")
-- `check_lock()` raises `LockIntractable` when the verifier can't finish. It is a `RuntimeError`, and its `intractable` holds the answer.
+- `check_lock()` raises `LockIntractable` when the verifier can't finish (it raised a plain `RuntimeError`). `LockIntractable` is a `RuntimeError`, and its `intractable` holds the answer.
 - `Timer.clone()` and `Counter.clone()` take `comments={"Done": ..., "Acc": ...}`. CLICK import keeps each timer and counter address's retentive setting and comment on the clone (`retentive=`, `comments=`).
 
 ### Fixes
@@ -460,8 +464,8 @@
 
   When the search can't cover an input, it now answers `Intractable` and names the input. Give the input `choices=` or an integer `min=`/`max=` (1000 values at most), and write a callable property as a condition.
 - `always()`, `never()` and `reachable_states()` answer `Intractable` for:
-  - a `split_at=` tag that holds none of its choices
-  - a property that reads something the verifier can't evaluate (it read as holding)
+  - a `split_at=` tag that holds none of its choices (it raised a Python error)
+  - a property that reads something the verifier can't evaluate (it could answer `Proven`)
 - A block slot that only a `select()` or a pointer reaches behaves like any other slot, in `PLC`, `CompiledPLC` and generated CircuitPython:
   - a tag on the slot and a pointer to it no longer split into two registers in `replay_to()`, a seek, `CompiledPLC` or generated CircuitPython (the pointer read the slot's power-on value)
   - it keeps a retentive value through `stop()`/`start()`, and any value through a battery `reboot()` (it read 0)
@@ -496,7 +500,7 @@
 - In compiled runs and generated CircuitPython, a box placed directly in a `forloop()` body (not in a body rung) reads its pins (`.reset()`, `.jump()` and so on) before it writes, as `PLC` does. A drum's jump pin no longer reads the step the drum has just corrected.
 - A drum reads its jump step when the scan reaches it, before it moves, everywhere. If the drum itself writes the step tag, the jump goes to the value the tag held when the scan reached the drum (it took the value the drum had just written).
 - Ladder export no longer puts a vertical token (`T`, `|`, `T:`) in column A, the left power rail, which CLICK refuses ("Vertical-down tokens are not allowed in Column A").
-- CLICK ladder export writes a `fill()` of one register as a Copy (CLICK's Fill takes two or more). It refuses a text or REAL value that the Copy would convert, and a text of several characters. Write `copy()` for those.
+- CLICK ladder export writes a `fill()` of one register as a Copy (it wrote a Fill, which CLICK refuses for one register). It refuses a text or REAL value that the Copy would convert, and a text of several characters. Write `copy()` for those.
 - Analysis now sees inside `forloop()` bodies:
   - a `return_early()` in a loop makes the subroutine's later rungs conditional on it, for `cause()`, `how()` and the verifier
   - the stuck-bit and conflicting-output validators, and the call conditions `simplified()` shows, see calls in a body. A body rung's contacts count as part of the call's condition where no iteration can change them
@@ -553,8 +557,9 @@
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)` (they showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name).
 - The debugger sends a `Real` holding Inf or NaN as `inf`, `-inf` or `nan` (it sent `Infinity`, which DAP clients refused).
-- CLICK ladder export refuses a rung whose drawing would read a contact after an output on the same rung writes that contact's tag. The error names the contact and the output. Move the output to a rung of its own, or give the rows their own contacts.
-- CLICK import refuses a pin row whose pin doesn't belong to the instruction above it, or comes out of CLICK's order (`.down()` before `.reset()`, `.reset()`, `.jump()`, `.jog()`).
+- CLICK ladder export refuses a rung whose drawing would move a contact's read past an output on that rung that writes the contact's tag. The error names the contact and the output. Move the output to a rung of its own, or give the rows their own contacts.
+- CLICK import refuses a pin row whose pin doesn't belong to the instruction above it, or comes out of CLICK's order (`.down()` or `.clock()` before `.reset()`, and a drum's `.reset()`, `.jump()`, `.jog()` in that order).
+- `math()` into a pointer destination (`math(X + 1, DS[Ptr])`) raises a `TypeError` that says what to do when the program is built (it raised `AttributeError`). Store into a tag with `math()`, then `copy()` it to `DS[Ptr]`.
 - A generated CLICK project's `run.py` checks one scan on a fork, so the PLC the debugger attaches to starts at scan 0 (it started at scan 1).
 
 ### Performance

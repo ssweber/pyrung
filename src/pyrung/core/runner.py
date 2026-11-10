@@ -1610,11 +1610,10 @@ class PLC:
             cache: Instant-lookup window for full ``SystemState``
                 snapshots.  Same formats as *history*.  ``None`` uses
                 byte-budget-only eviction.
-            history_budget: Byte limit on the history the runner holds.  With
-                ``history=``, the runner weighs only the window's checkpoints
-                against it.  When they weigh more, the runner drops the
-                window's oldest scans.  The limit also caps the recent-state
-                cache.  Defaults to 100 MB.  Raises ``ValueError`` below 1 MB.
+            history_budget: Byte limit on the recent-state cache, and with
+                ``history=`` on the window's checkpoints.  When the checkpoints
+                weigh more, the runner drops the window's oldest scans.
+                Defaults to 100 MB.  Raises ``ValueError`` below 1 MB.
             checkpoint_interval: Number of scans between replay checkpoints.
                 Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
             record_all_tags: Bypass the PDG-based rung-firing capture
