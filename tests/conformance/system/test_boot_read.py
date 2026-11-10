@@ -43,9 +43,10 @@ none.
 
 ``flag_scan``, ahead of ``store_probe`` so that no flag it raises reaches a reader's scan:
 
-- ``math_flags_over_a_scan``: ``_clear_transient_status`` clears SC40 and SC46 at scan start.  Each op
-  is the last Math of its scan (the case starts last and waits 40 scans for its neighbours), read on the next scan
-  above the case's own count, the first Math there.  Result1 = 1 for SC40 still on (0 cleared),
+- ``math_flags_over_a_scan``: ``_clear_transient_status`` clears SC40 and SC46 at scan start.  The
+  case starts last and waits 40 scans for its neighbours.  The SC40 op is the last Math of its scan.
+  The SC46 op is followed by the Math that records it in ``ErrorCode``, and SC46 stays on to the end
+  of the scan.  Each flag is read on the next scan above the case's own count, the first Math there.  Result1 = 1 for SC40 still on (0 cleared),
   Result2 = 1 for SC46 still on (0 cleared).  ``ErrorCode`` = 11 is the control: SC40 (tens) and
   SC46 (units) were each on right after the op.  Main's hash Copy and the groups that main calls
   before this one (``boot_read``, ``rtc_set``, ``for_wide``) run between the op and the reads, so a

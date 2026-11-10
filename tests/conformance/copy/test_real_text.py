@@ -20,8 +20,9 @@ shows ("10000.0000000"), on the float32 value, writes:
 
 pyrung writes the digits as ``to_text()`` does, from the Real's 64-bit value.  That gives CLICK's text
 where the float32 and float64 digits agree, and "123456.7000000" and "66.7000000" where they
-do not.  The fields hold every pair of codes (``probe_kit.between``), so a pass answers nothing
-and a run on a CLICK records what it read.
+do not.  A CLICK read every case (``readings.toml``, 2026-11-06).  It wrote "123456.7031250" for
+123456.7 and left the TXTs past the digits alone.  The fields hold every pair of codes
+(``probe_kit.between``), so a pass answers nothing.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
