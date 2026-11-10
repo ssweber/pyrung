@@ -1,6 +1,8 @@
 """Output-bus drawings: one rung per topology, exported and pinned to a golden CSV.
 
-The golden is the drawing the CLICK keeps.  To check it, paste the export into CLICK, write it
+The golden is pyrung's export for now.  Only the Or of 3 rows with 2 outputs has CLICK evidence
+(``system/address_flag_clears_each_scan``, saved by the CLICK as the golden draws it).  Every other
+rung waits on the pasted project.  To check it, paste the export into CLICK, write it
 to the PLC, save, and compare the CSV ClickNick writes for the saved project (``ckp_check``).
 A DIFF means the CLICK redraws that topology.  Then copy the saved project's ``main.csv`` over
 ``ladder_topology_golden/main.csv``, so the test pins what the CLICK keeps.
@@ -12,11 +14,13 @@ Export the project for Guided Paste (``main.csv`` and ``nicknames.csv``) with::
 
 from __future__ import annotations
 
+import csv
 import sys
 from pathlib import Path
 
-from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.core import Counter, Or, Program, Rung, Timer, branch, count_up, on_delay, out
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+from pyrung.click.ladder._exporter import _LadderExporter
+from pyrung.core import And, Counter, Or, Program, Rung, Timer, branch, count_up, on_delay, out
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -30,47 +34,65 @@ WaitB = Timer.clone("WaitB")
 
 def build_program() -> tuple[Program, TagMap]:
     """One rung per topology: plain outputs, Or rows, branches, and a box under an Or."""
+    coil = iter(range(1, 400))
+
+    def outputs(n: int) -> None:
+        for _ in range(n):
+            out(c[next(coil)])
+
+    def rows(count: int, first: int = 2):
+        return Or(*[x[first + k] for k in range(count)])
+
     with Program(strict=False) as logic:
         # An output bus of 2, 3 and 4 outputs.
         for n in (2, 3, 4):
             with Rung(x[1]):
-                for k in range(n):
-                    out(c[10 * n + k])
-        # An Or of 2, 3 and 4 rows into 2 and 3 outputs.
-        for rows in (2, 3, 4):
-            for n in (2, 3):
-                with Rung(x[1], Or(*[x[1 + k] for k in range(1, rows + 1)])):
-                    for k in range(n):
-                        out(c[100 + 10 * rows + 3 * n + k])
+                outputs(n)
+        # An Or of 2 rows into 2 and 3 outputs, then 3 rows into 2, 3 and 4, 4 rows into 2 and 3,
+        # and 5 rows into 2.
+        for count, counts in ((2, (2, 3)), (3, (2, 3, 4)), (4, (2, 3)), (5, (2,))):
+            for n in counts:
+                with Rung(x[1], rows(count)):
+                    outputs(n)
+        # And rows inside the Or.
+        with Rung(x[1], Or(And(x[2], x[3]), And(x[4], x[5]), x[6])):
+            outputs(2)
+        # A nested Or that flattens to 4 rows.
+        with Rung(x[1], Or(Or(x[2], x[3]), Or(x[4], x[5]))):
+            outputs(2)
+        # An Or followed by a contact, and two Ors in a row.
+        with Rung(x[1], rows(3), x[6]):
+            outputs(2)
+        with Rung(x[1], rows(3), rows(3, first=5)):
+            outputs(2)
         # Branches with contacts of their own on the bus.
         with Rung(x[1]):
-            out(c[201])
+            outputs(1)
             with branch(x[2]):
-                out(c[202])
+                outputs(1)
             with branch(x[3]):
-                out(c[203])
-            out(c[204])
+                outputs(1)
+            outputs(1)
         # A branch inside a branch.
         with Rung(x[1]):
-            out(c[211])
+            outputs(1)
             with branch(x[2]):
-                out(c[212])
+                outputs(1)
                 with branch(x[3]):
-                    out(c[213])
-            out(c[214])
+                    outputs(1)
+            outputs(1)
         # An Or on a branch in front of the outputs.
         with Rung(x[1]):
-            out(c[221])
-            with branch(Or(x[2], x[3], x[4])):
-                out(c[222])
-                out(c[223])
+            outputs(1)
+            with branch(rows(3)):
+                outputs(2)
         # A timer (no pins) beside a plain output, then a counter with a reset pin, after an Or.
-        for rows, wait in ((2, WaitA), (3, WaitB)):
-            with Rung(x[1], Or(*[x[1 + k] for k in range(1, rows + 1)])):
-                out(c[230 + rows])
+        for count, wait in ((2, WaitA), (3, WaitB)):
+            with Rung(x[1], rows(count)):
+                outputs(1)
                 on_delay(wait, preset=250)
-        for rows, tally in ((2, TallyA), (3, TallyB)):
-            with Rung(x[1], Or(*[x[1 + k] for k in range(1, rows + 1)])):
+        for count, tally in ((2, TallyA), (3, TallyB)):
+            with Rung(x[1], rows(count)):
                 count_up(tally, preset=5).reset(x[8])
     mapping = TagMap(
         {
@@ -103,10 +125,16 @@ def test_the_export_equals_the_golden(tmp_path: Path) -> None:
     assert _read(tmp_path / "main.csv") == _read(GOLDEN / "main.csv")
 
 
-def test_the_importer_reads_the_golden_as_the_export() -> None:
+def test_the_importer_reads_the_golden_as_the_programs_rungs() -> None:
+    """Each rung of the golden reads back with the program's own conditions and outputs."""
     logic, mapping = build_program()
-    bundle = pyrung_to_ladder(logic, mapping)
-    assert ladder_to_pyrung(GOLDEN / "main.csv") == ladder_to_pyrung(bundle)
+    exporter = _LadderExporter(tag_map=mapping, program=logic)
+    with (GOLDEN / "main.csv").open(encoding="utf-8", newline="") as handle:
+        rows = [tuple(row) for row in csv.reader(handle)]
+    rungs = rows[1 : len(rows) - len(exporter._end_rung())]
+    exporter._validate_scope_roundtrip(
+        source_rungs=logic.rungs, rendered_rows=rungs, scope="main", subroutine_name=None
+    )
 
 
 if __name__ == "__main__":
