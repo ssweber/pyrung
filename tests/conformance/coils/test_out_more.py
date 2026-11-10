@@ -351,7 +351,7 @@ def test_preset_mid_phase_holds_wherever_the_last_run_stopped(scans):
 STEPPED = {"toggle_and_timed": 1.0, "timed_maintained": 1.0, "preset_mid_phase": 0.8}
 
 
-@pytest.mark.parametrize("dt", [0.001, 0.010, 0.020, 0.025, 0.030, 0.035, 0.040])
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.020, 0.025, 0.030, 0.035, 0.040, 0.050])
 @pytest.mark.parametrize("case_id", STEPPED)
 def test_out_more_at_any_scan(monkeypatch, dt, case_id):
     """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""

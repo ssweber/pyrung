@@ -8,8 +8,9 @@ Every coil's rung is gated on ``Cmd``, so the reset drops each coil's input.
 A debounce coil then turns off only when its off side times out, so those
 cases are ``ready`` once the coil is off, and ``keep`` the off side's timer.
 Its TD keeps counting while the input stays off, from power-up on, so it never
-matches a fresh PLC's.  They keep the on side's TD too, and a timed coil its
-TD.  A CLICK keeps each after the rung falls (``out_more``).
+matches a fresh PLC's.  A CLICK keeps a coil's other TDs after the rung falls
+(``out_more``).  So each case's ``init`` writes 0 to every TD that ends one of
+its steps.  No step then depends on the coil clearing that TD on its rise scan.
 
 The cases are the probes O1-O6 of ``scratchpad/click-v4/RESEARCH.md``.  Hardware
 round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6.  An Out coil
@@ -28,8 +29,8 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   until the on TD reads 200, then off until the off TD reads 100, then on.
   T302 times from that last rise.  Result2 is 1 if the coil is on at 200 ms
   on T302, and Result1 if it is on at 400 ms.  An on side that restarts at
-  the rise comes on at 300 ms and reads 0, 1.  One that runs on from 200
-  comes on near 100 ms and reads 1, 1.
+  the rise comes on at 300 ms and reads Result2 = 0, Result1 = 1.  One that
+  runs on from 200 comes on near 100 ms and reads Result2 = 1, Result1 = 1.
 - ``flasher_restarts_with_on_phase`` (O4, 300 ms phases): the rung drops once
   the off TD reads 150.  It stays false while T305 times 100 ms, then one scan
   more, which resets T305.  On the scan T305 reaches 100 the case reads the
@@ -38,10 +39,10 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   is under 200 then (frozen or cleared) and 2 if not (still counting).  T305
   then times from the restart.  Result2 is 1 if the coil is on at 50 ms, and
   Result4 if it is on at 200 ms.  A CLICK keeps both TDs, frozen, yet
-  restarts with an on phase.  Hardware round 2 (2026-10-30) read 2, 1, 2, 1, 1
-  on an earlier ladder that read the coil at fixed times.  pyrung now does
-  too.  A flasher that froze and resumed (pyrung before round 2) reads 2, 0,
-  2, 1, 1.  It runs the off phase's last 150 ms and then a new on phase.  A
+  restarts with an on phase, and pyrung now does too.  Hardware round 2
+  (2026-10-30) read 2, 1, 2, 1, 1 on an earlier ladder that read the coil at
+  fixed times.  A flasher that froze and resumed (pyrung before round 2)
+  reads 2, 0, 2, 1, 1.  It runs the off phase's last 150 ms and then a new on phase.  A
   fresh off phase reads Result2 = 0, Result4 = 0.
 - ``timed_needs_fresh_edge`` (O5, a 200 ms pulse): Result1 is 1 if the coil is
   on before its TD reaches 200.  T308 then times 200 ms with the rung still
@@ -194,6 +195,27 @@ def init_toggle_flips_once_per_edge(slot):
     reset(c[1801])
 
 
+def init_debounce_td_keeps_counting(slot):
+    copy(0, td[301])
+
+
+def init_debounce_bounce_restarts_on_side(slot):
+    copy(0, td[303])
+
+
+def init_flasher_restarts_with_on_phase(slot):
+    copy(0, td[306])
+    copy(0, td[307])
+
+
+def init_timed_needs_fresh_edge(slot):
+    copy(0, td[309])
+
+
+def init_out_coil_sets_timer_done(slot):
+    copy(0, td[310])
+
+
 group = Group(
     "out",
     [
@@ -210,8 +232,9 @@ group = Group(
             "stays on, as a TON's does (Result2 = 1 once it passes 300 ms on a 100 ms "
             "preset)",
             ladder=prove_debounce_td_keeps_counting,
+            init=init_debounce_td_keeps_counting,
             ready=lambda slot: ~c[1811],
-            keep=[td[301], t[311], td[311]],
+            keep=[t[311], td[311]],
             expect={"Result1": 1, "Result2": 1},
             scans=50,
         ),
@@ -220,8 +243,9 @@ group = Group(
             "100 ms, then on with a 300 ms on side, the coil is still off 200 ms after the "
             "input comes back (Result2 = 0) and on 400 ms after (Result1 = 1)",
             ladder=prove_debounce_bounce_restarts_on_side,
+            init=init_debounce_bounce_restarts_on_side,
             ready=lambda slot: ~c[1821],
-            keep=[td[303], t[304], td[304]],
+            keep=[t[304], td[304]],
             expect={"Result1": 1, "Result2": 0},
             scans=100,
         ),
@@ -231,24 +255,25 @@ group = Group(
             "kept (Result3 = 2) and standing still (ErrorCode = 1); back on, it is on 50 ms "
             "after (Result2 = 1) and 200 ms after (Result4 = 1)",
             ladder=prove_flasher_restarts_with_on_phase,
+            init=init_flasher_restarts_with_on_phase,
             expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 1, "ErrorCode": 1},
-            keep=[t[306], td[306], t[307], td[307]],
             scans=120,
         ),
         case(
             "A timed coil (not maintained) pulses once with its rung held: on (Result1 = "
             "1), then off through the 200 ms after the pulse (Result2 = 0)",
             ladder=prove_timed_needs_fresh_edge,
+            init=init_timed_needs_fresh_edge,
             expect={"Result1": 1, "Result2": 0},
-            keep=[td[309]],
             scans=50,
         ),
         case(
             "An Out coil never sets its Timer's done bit T<n>: a debounce coil whose on "
             "phase is done (Result2 = 1) leaves T<n> off (Result1 = 0)",
             ladder=prove_out_coil_sets_timer_done,
+            init=init_out_coil_sets_timer_done,
             ready=lambda slot: ~c[1851],
-            keep=[td[310], t[312], td[312]],
+            keep=[t[312], td[312]],
             expect={"Result1": 0, "Result2": 1},
             scans=40,
         ),
@@ -270,7 +295,7 @@ STEPPED = {
 }
 
 
-@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
 @pytest.mark.parametrize("case_id", STEPPED)
 def test_out_at_any_scan(monkeypatch, dt, case_id):
     """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""

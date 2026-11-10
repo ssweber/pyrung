@@ -7,18 +7,19 @@ preset with an off TD left mid-phase.
 
 ``frozen_off_td_at_lowered_preset``: on from DS3903, off 800 ms, in steps that ``Scratch`` holds.
 Each step ends on a TD, so no reading depends on how long a scan takes.  A step's rungs come below
-the flasher in reverse order, so each new step starts on the next scan.  T41 times each wait that
-the flasher's TDs cannot time.
+the flasher in reverse order, so each new step starts on the next scan.  Three TONs time what the
+flasher's TDs cannot.  The reset writes 0 to both TDs, so step 0 does not depend on the restart
+clearing them.
 
 - Step 0: the on preset is 100.  The step ends once the off TD reads 400, and DS3904 keeps that TD.
 - Step 1: the rung is false while T41 times 100 ms, and the DS goes to 5000.
-- Step 2: the rung is true again.  On the scan the on TD reads 100, Result1 is 1 if the off TD
-  still equals DS3904 and 2 if it is 0 (cleared by the restart).
-- Step 3: the step ends once the on TD reads 400, and the DS drops to 300 below it.
-- Step 4: T41 times from the drop.  At 100 ms Result2 is 1 if the coil is off (the lowered preset
+- Step 2: the rung is true again, and T44 times from the restart.  At 100 ms on T44, Result1 is 1
+  if the off TD still equals DS3904 and 2 if it is 0 (cleared by the restart).
+- Step 3: at 400 ms on T44 the DS drops to 300, below the on TD.
+- Step 4: T45 times from the drop.  At 100 ms Result2 is 1 if the coil is off (the lowered preset
   ended the on phase) and 2 if it is on.  Result3 is 1 if the off TD is above DS3904 (run on from
   it), 2 if below it (from 0) and 0 if it equals it.
-- Step 5: at 600 ms on T41 Result4 is 1 if the coil is on (the off phase ran the 400 ms it had
+- Step 5: at 600 ms on T45 Result4 is 1 if the coil is on (the off phase ran the 400 ms it had
   left) and 0 if it is off (a whole 800 ms from 0).
 
 Running on from the frozen TD reads 1, 1, 1, 1.  A fresh off phase reads 1, 1, 2, 0.  A CLICK read
@@ -37,12 +38,13 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, fill, flasher, on_delay
+from pyrung.core import Rung, copy, fill, flasher, on_delay
 from tests.conformance.memory import ClickTimer, c, ds, td
 
 
 def prove_frozen_off_td_at_lowered_preset(slot: Any) -> None:
-    on_td, off_td, wait, coil = td[42], td[43], td[41], c[11]
+    off_td, coil = td[43], c[11]
+    wait, restarted_for, dropped_for = td[41], td[44], td[45]
     on_preset, frozen = ds[3903], ds[3904]
 
     def step(n: int) -> tuple[Any, Any]:
@@ -56,15 +58,19 @@ def prove_frozen_off_td_at_lowered_preset(slot: Any) -> None:
         copy(300, on_preset)
     with Rung(slot.Cmd != 0, slot.Scratch != 1):
         flasher(coil, on=(ClickTimer(42), on_preset), off=(ClickTimer(43), 800))
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch >= 4)):
+    with Rung(*step(1)):
         on_delay(ClickTimer(41), 5000)
+    with Rung(slot.Cmd != 0, slot.Scratch >= 2):
+        on_delay(ClickTimer(44), 5000)
+    with Rung(slot.Cmd != 0, slot.Scratch >= 4):
+        on_delay(ClickTimer(45), 5000)
     with Rung(*step(6)):
         copy(1, slot.Fired)
-    with Rung(*step(5), wait >= 600, coil):
+    with Rung(*step(5), dropped_for >= 600, coil):
         copy(1, slot.Result4)
-    with Rung(*step(5), wait >= 600):
+    with Rung(*step(5), dropped_for >= 600):
         copy(6, slot.Scratch)
-    lowered = (*step(4), wait >= 100)
+    lowered = (*step(4), dropped_for >= 100)
     with Rung(*lowered, ~coil):
         copy(1, slot.Result2)
     with Rung(*lowered, coil):
@@ -75,9 +81,9 @@ def prove_frozen_off_td_at_lowered_preset(slot: Any) -> None:
         copy(2, slot.Result3)
     with Rung(*lowered):
         copy(5, slot.Scratch)
-    with Rung(*step(3), on_td >= 400):
+    with Rung(*step(3), restarted_for >= 400):
         copy(4, slot.Scratch)
-    restarted = (*step(2), on_td >= 100)
+    restarted = (*step(2), restarted_for >= 100)
     with Rung(*restarted, off_td == frozen):
         copy(1, slot.Result1)
     with Rung(*restarted, off_td == 0):
@@ -117,7 +123,7 @@ def test_flasher_td():
     assert_all_passed(run(group))
 
 
-@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
 def test_flasher_td_at_any_scan(monkeypatch, dt):
     """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
