@@ -196,8 +196,8 @@ The generated server serves:
 
 - every register the TagMap maps, whether a rung uses it or not, so an HMI or SCADA system can write a value no ladder rung touches
 - every raw CLICK register a rung uses directly (`ds[3901]`, `c[1801]`), at its own address
-- every cell of a bank a rung reaches by pointer or block instruction (`ds[ptr]`)
-- XD and YD in CLICK's layout, built from the X and Y bits. A write to YD sets those Y bits.
+- the whole bank, when a rung reaches it by pointer or block instruction (`ds[ptr]`, `fill(0, c.select(1, 3))`)
+- XD and YD in CLICK's layout, built from the X and Y bits the server serves. A write to YD sets those Y bits.
 
 A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there answers with Modbus exception 2 (illegal data address), because the P1AM has nowhere to keep it (a CLICK stores it). To keep such a value on the P1AM, map it in the TagMap.
 
