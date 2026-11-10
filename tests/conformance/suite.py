@@ -131,6 +131,7 @@ from tests.conformance.system import (
 from tests.conformance.timers_counters import (
     test_counters,
     test_fixed_scan,
+    test_reset_pins,
     test_timers,
     test_tof_rewrite,
     test_unit_minute,
@@ -339,6 +340,8 @@ APART_GROUPS = [
     test_tof_rewrite.group,
     # May stop the PLC: run alone, with C411 set by hand.
     test_for_signed.group,
+    # A reset held on while its rung is on.
+    test_reset_pins.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -382,6 +385,8 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
     # For counts that may stop the PLC on its watchdog, alone: C411 set by hand arms it.
     "follow2_for": ApartPart(("for_signed",)),
+    # The 2026-11-11 round: a down counter's and an RTON's reset held on while its rung is on.
+    "follow3_reset": ApartPart(("reset_pins",)),
     # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
     "modbus_raw": ApartPart(("modbus_raw",)),
 }

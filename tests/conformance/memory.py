@@ -521,6 +521,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(141, 148),
         "CT": range(6, 7),
     },
+    "reset_pins": {"C": range(701, 704), "T": range(301, 305), "CT": range(11, 13)},
     # DS10 is a spare header register no group writes, for a pointer with choices of its own.
     # DS4500 is the last DS, for a Modbus write that runs past it.
     "modbus_raw": {
