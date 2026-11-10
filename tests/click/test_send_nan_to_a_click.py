@@ -19,11 +19,6 @@ from pyclickplc.server import ClickServer, MemoryDataProvider
 
 from pyrung.core.instruction.send_receive.backends import _run_click_send_request
 
-_NEEDS_PYCLICKPLC = pytest.mark.xfail(
-    strict=True, reason="needs pyclickplc to accept a non-finite DF write"
-)
-
-
 class _KeepEverything(MemoryDataProvider):
     """Stores each value as given, NaN included (the default provider refuses a NaN)."""
 
@@ -65,7 +60,6 @@ def _float(bits: int) -> float:
     return struct.unpack("<f", struct.pack("<I", bits))[0]
 
 
-@_NEEDS_PYCLICKPLC
 @pytest.mark.parametrize(
     ("bits", "sent"),
     [

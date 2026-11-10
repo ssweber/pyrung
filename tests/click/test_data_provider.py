@@ -307,7 +307,7 @@ def test_stop_command_calls_on_stop_hook_instead_of_runner_stop():
     assert runner.mode == "run"
 
 
-def test_a_real_holding_inf_reads_as_inf_and_an_inf_write_is_refused():
+def test_a_real_holding_inf_reads_as_inf_and_a_nan_write_is_accepted():
     import math
 
     level = Tag("Level", TagType.REAL)
@@ -318,8 +318,8 @@ def test_a_real_holding_inf_reads_as_inf_and_an_inf_write_is_refused():
     runner.step()
 
     assert provider.read("DF1") == math.inf
-    with pytest.raises(ValueError, match="finite"):
-        provider.write("DF1", math.nan)
+    provider.write("DF1", math.nan)
+    assert math.isnan(provider.read("DF1"))
 
 
 @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
