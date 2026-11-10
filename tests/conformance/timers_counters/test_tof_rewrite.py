@@ -80,7 +80,7 @@ group = Group(
     [
         case(
             "A timed-out TOF (Result1 = 0, Done off at a TD of 300 on a 200 ms preset) whose TD "
-            "the ladder writes to 0 turns Done back on on its next scan (Result2 = 1), the TD "
+            "the ladder writes to 0 has Done on again the scan after (Result2 = 1), the TD "
             "under the preset (Result3 = 1), and times out again at the preset (Result4 = 1)",
             ladder=prove_done_after_td_zeroed,
             keep=(TOF.Done, TOF.Acc),
