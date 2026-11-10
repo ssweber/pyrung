@@ -22,12 +22,13 @@
   - `%` by 0, and 0 raised to 0 or to a negative power, give 0 with no flag (they set `fault.division_error`, and `0 ** 0` was 1)
   - `abs()` of an `Int` holding -32768 or a `Dint` holding -2147483648 is 0 with `fault.out_of_range`
   - a hex shift that pushes a bit out of the Word sets no flag
-  - `randint()` with two equal tag bounds is a math error, as with two equal constants
   - a math error zeroes only the operation that failed and sets its flag. The rest of the formula still runs, so `X / 0 + 5` now stores 5 with `fault.division_error` (the whole formula was 0)
-- `run_for()` and `run_until()` take `jit=` in place of `fold=`, and `fold=` raises `TypeError`. `jit=True`, the default, runs scans compiled. `jit=False` runs every scan interpreted.
+  - each whole-number constant is cut to 16 bits, whatever the destination. So `math(DD1 / 65536, DD2)` divides by 0 (0 with `fault.division_error`), and `math(2 * 40000, DD2)` writes -51072. Values read from tags keep their width
+  - dividing by a constant that cuts to 0 is an error-level `MATH_DIV_ZERO` finding, and CLICK validation reports any constant past 16 bits as `CLK_MATH_WIDE_CONSTANT`. Copy the constant into a `DD` tag on a rung above and use the tag
+- `run_for()` and `run_until()` take `jit=` in place of `fold=`, and `fold=` raises `TypeError`. `jit=False` runs every scan interpreted.
 - `how()` no longer reports skipped scans, because its waits now run every scan:
   - plans no longer carry a "Jump ahead" line, and `PlanStep` loses `accelerators`. The step's "Wait ~Ns (N scans)" line stays
-  - a wait's `CoastReceipt` reports `stretches` and `stretched_scans` in place of `macro_folds` and `skipped_scans`, and recordings log them as `coast_stretches` and `coast_stretched_scans`
+  - a wait's `CoastReceipt` reports `stretches` and `stretched_scans` in place of `macro_folds` and `skipped_scans`, and recordings log them as `coast_stretches` and `coast_stretched_scans`. `stretches` counts the runs of scans the compiled loop ran without stopping, and `stretched_scans` counts the scans in them
   - `advances` and `timer_quanta_replayed` are gone from `CoastReceipt`
 - `Program` now raises `OwnedBitCoilError` (a `ValueError`) when it closes if a coil (`out()`, `latch()`, `reset()`, `toggle()` or another Out coil) writes a timer's or counter's Done bit, or a range that includes one such as `reset(C.select(1, 8))`. Clear the bit with the instruction's `.reset()` pin instead.
 - Rungs evaluate as they do on a CLICK, in `PLC`, `CompiledPLC` and generated CircuitPython. Each instruction reads only the contacts on its own path from the rail:
@@ -37,8 +38,7 @@
   - a box reads its enable and its pins (`.reset()`, `.down()`, `.clock()`, `.jump()`, `.jog()`, drum events) once, when execution reaches it, before it writes anything
 
   A branch, continued rung or box pin now sees the new value of a tag written earlier in the same rung (it saw the value from rung entry). `pyrung check` flags these rungs as `RUNG_ORDER_DEPENDENT`.
-
-  The exporter no longer puts outputs under one shared contact when an output between them writes that contact's tag. CLICK import brings each wire of a CLICK rung back as a rung of its own, with `.continued()` on every wire after the first. It puts outputs under one `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. So `R,C5,...,reset(C5)` / `,C5,...,out(Y001)` imports as a rung and a continued rung (it became one `with rung(C5)` that read C5 before the reset).
+- CLICK import brings each wire of a CLICK rung back as a rung of its own, with `.continued()` on every wire after the first. Outputs share one `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. The exporter no longer puts outputs under one shared contact when an output between them writes that contact's tag.
 - A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung, because CLICK won't compile it otherwise (error C000A). Building a program raises `RuntimeError` when another output or branch shares the box's rung, as in `with Rung(X1): out(Y1); on_delay(T1, ...).reset(X2)`. Move what comes before the box into a rung above it, and what follows into `with Rung(...).continued():`.
 - The built-in `Timer` and `Counter` follow CLICK's bank defaults. A timer's `Acc` now resets on STOP->RUN (TD is non-retentive), and a counter's `Done` survives it (CT is retentive). To keep a timer's elapsed time across a restart, use `Timer.clone(..., retentive={"Acc": True})`. `clone(retentive=...)` overrides either field.
 - CLICK import no longer makes up timer and counter nicknames. A T/TD (or CT/CTD) address with no nickname keeps its address as its name (it became `T1_Done`/`TD1_Acc`). A tag named after its own address exports with no nickname, so importing and exporting a project leaves its nickname file unchanged.
@@ -58,9 +58,10 @@
   - an input held through a reset does not count again
   - an up and a down edge on the same scan cancel
   - a down counter is done at `Acc <= preset` (it was `Acc <= -preset`), so with a positive preset it is done from its first scan
+  - `how()` drives a counter to its preset one rising edge at a time. When the counter's input is a timer's `Done` that is already on, the plan stops instead of waiting
 
-  A `rise()` on a counter's rung still works but is no longer needed. To count scans while a condition holds, use `math(N + 1, N)`. `how()` drives a counter to its preset one rising edge at a time. When the counter's input is a timer's `Done` that is already on, `how()` can't cycle it, and the plan stops instead of waiting.
-- `rise()` and `fall()` work like CLICK's edge contacts. Each contact keeps its own copy of the bit from the last scan that evaluated it, powered or not, and starts off at RUN and at STOP->RUN. Every edge on a tag used to compare with the tag's value at the end of the previous scan. So:
+  A `rise()` on a counter's rung still works but is no longer needed. To count scans while a condition holds, use `math(N + 1, N)`.
+- `rise()` and `fall()` work like CLICK's edge contacts. Each contact keeps its own copy of the bit from the last scan that evaluated it, powered or not (every edge on a tag compared with the tag's value at the end of the previous scan). The copy starts off at RUN and at STOP->RUN. So:
   - a bit set and cleared within every scan rises once, not every scan
   - a `rise()` in a subroutine called twice in a scan fires on one call only
   - an edge in a `forloop()` body compares with the previous iteration
@@ -73,8 +74,7 @@
   - `pack_text()` into an `Int` or `Dint` clamps an out-of-range value and sets `fault.out_of_range`
   - `pack_text()` stops at a decimal point (`"12.5"` is 12), and rejects any other non-digit
   - `to_value` of a blank TXT writes 0
-  - `MDN` of an even count of integers is the mean of the middle two, truncated toward zero
-  - a continuous `search()` resumes after its last result if that result is inside the range, and otherwise returns -1
+  - a continuous `search()` resumes after its last result if that result is inside the range. A result of 0 starts again from the first address, and any other value finds nothing and writes -1
 - Drums (`event_drum`, `time_drum`, `time_event_drum`) run CLICK's scan routine:
   - each scan takes one action, the first that applies of reset (a level), a jump edge, a jog edge, and the drum's own time or event
   - jump and jog act even with the rung false
@@ -116,18 +116,9 @@
   - a literal, default or constant outside it (or Inf or NaN) raises `ValueError`, and so does a patch or force of a finite value outside it
   - a `math()` or copy result outside it stores +/-Inf, and `math()` also sets `fault.out_of_range` (SC43)
   - `math()` of +/-Inf into an `Int` or `Dint` gives 0 with SC43, and `copy()` clamps it to the limit
-  - math still runs at 64-bit precision, and only the stored result is range-checked
 - `generate_circuitpy()` and `write_circuitpy()` lose `mapped_tag_scope`. Drop the argument. The generated Modbus server now serves:
   - every register the TagMap maps, whether a rung uses it or not (what `"all_mapped"` did)
   - every raw CLICK register a rung uses (`ds[3901]`), which it refused with an illegal-address exception
-- Out coils (`debounce`, `flasher`, `timed`) keep their timers as a CLICK does:
-  - their timers' `Done` bits (CLICK's `T<n>`) never turn on
-  - a `timed` coil's `Acc` and a `debounce`'s on `Acc` keep their value when the rung goes false, and restart from 0 when it goes true again
-  - a `debounce`'s off `Acc` stays 0 while its rung is true, and times while it is false. The coil drops one scan after the off `Acc` reaches its preset, a scan later than a TOF with that preset. So a 0/0 `debounce` rides through a one-scan dropout
-  - when a `flasher`'s rung goes false, both `Acc` values freeze (they were cleared). When the rung goes true again, the flasher restarts with a full on phase and both `Acc` values from 0
-  - a `flasher` tracks its phase itself rather than working it out from its `Acc` values. If the ladder writes the running phase's `Acc` past its preset, that phase ends on the next tick, and the other phase's `Acc` keeps its value
-  - an on or off preset of 0 or less (including a register holding -5) keeps a `flasher` off with both `Acc` values at 0, and a `timed` coil gives no pulse
-  - the rung's first scan counts toward the first phase, as with `on_delay`, so a `timed` pulse or a first `flasher` on phase of one scan or less no longer shows
 - Harness bool feedback runs as the CLICK coil it behaves like, so a feedback edge can come a scan or more earlier or later:
   - `Physical(on_delay=, off_delay=)` runs as a `debounce` on its link:
     - a command dip shorter than `off_delay` keeps `Fb` on (it dropped `Fb`)
@@ -137,12 +128,10 @@
     - its first high phase is one scan short
     - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
   - both delays of one `Physical` count in the same unit, and so do `flasher_on` and `flasher_off`
-  - an `off_delay` over 32.767 s rounds `on_delay` up to whole seconds too
   - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
 
   Update tests that count scans to a feedback edge.
 - `system.sys.scan_clock_toggle` (SC3) is on when the scan counter (SD9) is even, starting on the first scan. It was a scan behind, off on the first scan. `rise()` of it now fires on scan 0 and `fall()` on scan 1.
-- `math()` cuts each whole-number constant in its formula to 16 bits, whatever the destination, as CLICK's Math does. So `math(DD1 / 65536, DD2)` divides by 0 (writing 0 with `fault.division_error`), and `math(2 * 40000, DD2)` writes -51072. Values read from tags aren't affected. Dividing by a constant that cuts to 0 is an error-level `MATH_DIV_ZERO` finding, and CLICK validation reports any constant past 16 bits as `CLK_MATH_WIDE_CONSTANT`. Copy the constant into a `DD` tag on a rung above and use the tag.
 - The verifier treats timers as black boxes. `always()`, `never()` and `reachable_states()` let an enabled on-delay, a disabled off-delay, a drum step or an Out coil's phase finish on any scan. So a `Proven` holds for any scan time and any preset. Every `Counterexample` is replayed on a `PLC` before it is reported, except one that only needs the clocks, the scan counter or the RTC to change, which carries a caveat instead. What changes:
   - a property that holds only because one timer finishes before another, or before enough pulses arrive, now comes back `Intractable` with `kind="timing"`. Check that timing with a `run_for()` test
   - `settled=True` checks only states where no timer is still timing
@@ -156,6 +145,7 @@
   - a tag the property reads stays in the search unless an `out()` writes it every scan
   - a `Real` past 2**53 is tried on both sides of each literal it is compared with
 - A block pointer must be an `Int` or `Dint` tag. `DS[Ptr]` with a `Real`, `Word`, `Bool` or `Char` `Ptr` now raises `TypeError` when the program is built. So does an index expression that could be a float (`DS[W + 1]` with a `Word` `W`, `DS[R + 1]`, `DS[I / 2]`), and a `select()` bound that breaks the same rule. Copy a `Real` or `Word` pointer into an `Int` or `Dint` first, and use `//` for division in an index.
+- `math()` into a pointer destination (`math(X + 1, DS[Ptr])`) raises `TypeError` when the program is built. Store into a tag with `math()`, then `copy()` it to `DS[Ptr]`.
 - An expression outside `math()` (a rung condition, a `copy()` source, a `forloop()` count or an index) never stops the scan. An operation in it with a math error gives 0 and sets no fault flag, in `PLC`, `CompiledPLC` and generated CircuitPython. Inside `math()` the flags are still set.
 - A pointer or index outside its block no longer stops the scan with `IndexError`, everywhere:
   - in a rung condition, it reads its type's zero with no flag
@@ -173,6 +163,7 @@
   - when the text always runs past the end of its bank (`CLK_TEXT_PAST_BANK`)
   - when the text runs past the end of a block mapped inside the bank, since a CLICK keeps writing past it (`CLK_TEXT_PAST_BLOCK`)
 - `Physical` takes one flat keyword per value, and each keyword is also its nickname-comment key:
+  - every argument after `name` is keyword-only, so `Physical("Fb", "2s")` raises `TypeError`
   - `Pulse`, `Ramp` and `Approach` are removed. Write `Physical(name, flasher_on="8ms", flasher_off="8ms")` for a `Pulse`, `Physical(name, ramp_on=0.8, ramp_off=-0.05)` for a `Ramp` and `Physical(name, approach_to=180, approach_rate=0.3)` for an `Approach`.
   - `Physical(profile=...)` raises `TypeError`. Give the keywords of one kind instead.
   - `ramp_off` left out is 0, which holds the value when the enable drops
@@ -270,10 +261,12 @@
 - `rng.max()`, `rng.min()`, `rng.median()` and `rng.mean()` on block ranges work inside `math()`, like `rng.sum()`:
   - they export to CLICK as `MAX`, `MIN`, `MDN` and `AVG`, and import back
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython
+  - `MDN` of an even count of integers is the mean of the middle two, truncated toward zero
   - CLICK validation checks range order, bank, bit ranges and `MDN` size (`CLK_MATH_RANGE_NOT_CONTIGUOUS`, `CLK_MATH_RANGE_MIXED_BANKS`, `CLK_MATH_BIT_RANGE_AGGREGATE`, `CLK_MATH_MEDIAN_RANGE_TOO_LARGE`)
 - `toggle()`, `debounce()`, `flasher()` and `timed()` are CLICK v4's Out coil types. Each owns its `(timer, preset)` phases, and `debounce()` needs both sides, as in CLICK:
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive them
   - they export to CLICK and import back, and CLICK validation checks their timer banks and units
+  - their timers' `Done` bits never turn on, and a `debounce`, `flasher` or `timed` coil's timing follows CLICK's
   - the verifier models `toggle` exactly and the timed ones as black-box timers
 - `time_event_drum()` is CLICK v4's Time & Event drum. A step ends when its time is up and its event is on, and either half may be `None`:
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive it
@@ -290,7 +283,7 @@
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython (as `random.randint`), and exports to CLICK as `RAND ( lo , hi )` and imports back
   - `run_for()` and `run_until()` step every scan of a program that uses it, and the verifier explores every value in range
   - it is refused inside a `forloop()`
-  - two equal constants are a math error (0 with SC46)
+  - two equal bounds are a math error (0 with SC46), whether constants or tags holding one value
   - into an `Int`, each constant bound is cut to 16 bits (`randint(70000, 70002)` draws 4464..4466)
   - a bare `Real` tag as a bound reads as 0 with no flag
 - A `time_drum` preset may be a register (CLICK v4), and exports to CLICK. `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` is removed.
@@ -425,7 +418,7 @@
 - A tag holds a value of its own type:
   - it reads back what was last written, converted to its type and keeping the sign of zero. So a coil on an `Int` reads `False` from its first scan, and `math(0.0 * -1.0, x)` stores `-0.0`
   - `patch()` and `force()` store what `copy()` would. So `patch({"I1": 0.0})` on an `Int` holds `0`, and `patch({"Run": 1})` on a `Bool` holds `True` (a float left in an `Int` raised `struct.error` on the next Modbus read)
-  - a string on a numeric tag, a number on a `Char` and a finite `Real` out of range are refused. The debug console answers `cannot patch: ...` or `cannot force: ...`
+  - a string on a numeric tag and a number on a `Char` are refused. The debug console answers `cannot patch: ...` or `cannot force: ...`
   - a `Real` given an int default (`Real("R", default=5)`) holds and shows `5.0` everywhere
   - an Inf or NaN stored on a `Bool` is `False`, not `0`
 - A coupling's tags are in `plc.state.tags` from `Harness.install()` on, at their defaults. So `plc.diff(0, n)` shows a feedback's first value as `(0, x)`, and a reset keeps them. Only an analog plant's scans run compiled, because a bool coupling's monitor keeps every scan of its run interpreted.
@@ -532,7 +525,7 @@
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit (scans under 1 ms at `"Tms"`). Its accumulator stayed at 0 for good.
 - A `select()` with tag bounds (`DS.select(Start, End)`) sets `fault.address_error` and writes nothing, everywhere, when a bound is outside its block at either end. A `search()` over one now compiles (it generated an `IndentationError`).
 - A `select()` with tag bounds that spans a gap in a sparse block skips the gap everywhere, as a static `select()` does (compiled runs and generated CircuitPython set `fault.address_error`). So `always()` and `never()` no longer report `Proven` on what `PLC` didn't do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan, everywhere.
-- A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses (the feedback never flipped, because its millisecond timer stopped at 32767). Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
+- A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses (the feedback never flipped, because its millisecond timer stopped at 32767). Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on). Both delays of one `Physical` then count in that unit.
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`. They showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
 
