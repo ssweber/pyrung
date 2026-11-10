@@ -7,7 +7,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make install` — install deps (or `uv sync --all-extras --dev`)
 - `make` — install + lint + test
 - `make lint` — codespell, ruff (check + format), ty
-- `make test` — pytest, excludes slow markers (ALWAYS use make, not `uv run pytest`). It, `make test-pilot` and `make test-fold` run on `PYTEST_WORKERS` xdist workers (default 6; `PYTEST_WORKERS=0` for one process, a file stays on one worker)
+- `make test` — pytest without the integration, hypothesis, soundness, fuzz, tumbler and conformance markers (ALWAYS use make, not `uv run pytest`). It, `make test-pilot` and `make test-fold` run on `PYTEST_WORKERS` xdist workers (default 6; `PYTEST_WORKERS=0` for one process, a file stays on one worker)
 - `make test-prove` — prover (verifier) subsystem only
 - `make test-pilot` — pilot (`how()` planner) tests
 - `make test-tumbler` — generated-program PILOT fixtures; run after `make test-pilot`
