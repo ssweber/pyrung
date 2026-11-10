@@ -41,8 +41,8 @@ PENDING_STEPS: Mapping[str, str] = {
         " from a Real, non-finite function results)"
     ),
     "SC43": (
-        "which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer;"
-        " not a Math or a Copy of NaN)"
+        "which stores raise SC43 (a clamping Copy, a Math that wraps, a Copy of +/-Inf"
+        " into an integer, but not a Copy of NaN)"
     ),
     "F32": "REAL stores and compares at float32",
     "PASTBANK": (

@@ -18,7 +18,7 @@ The expectations are what a CLICK does (hardware round 1, 2026-10-29): TXT
 is 8-bit (Copy Binary of 200 stores 200), Pack Copy into an INT or DINT clamps
 a value past its range and stops at a decimal point ("12.5" is 12), and
 Character Value of NUL writes 0.  A fault flag is read on the rung right after the
-instruction it asks about: a CLICK flag may follow the last instruction (see
+instruction it asks about: a CLICK flag follows the last Copy-family instruction or Math (see
 ``test_system.py``), so anything between would confound it.  What each case
 tells apart:
 

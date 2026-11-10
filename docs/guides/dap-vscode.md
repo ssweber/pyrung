@@ -448,7 +448,7 @@ Custom requests:
 | `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
 | `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
 
-`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again. Writing the STOP command bit (SC50) over Modbus pauses Continue and enters STOP the same way.
+`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again. The Modbus server refuses a write to the STOP command bit (SC50) with exception code 2 (illegal data address). The mode does not change. A rung that turns SC50 on still stops the PLC.
 
 Wherever a request or console command takes a tag (`pyrungForce`, `pyrungUnforce`, `pyrungPatch`, `pyrungSetMode`, and the `force` / `unforce` / `patch` verbs), a CLICK address such as `X001` or `DS10` works too. Tag names are tried first, so a tag literally named `X003` keeps working. A target that is neither a tag nor a mapped address is an error.
 
@@ -523,7 +523,7 @@ The History panel (in the debug sidebar) has two tabs: **Tags** and **Chain**.
 
 Shows tag values at each retained scan. The slider scrubs through the scan cache, and tag values update live as you drag. Values update automatically during `continue` runs. Right-click a tag in the Data View or Graph View to add it here.
 
-Each entry is the scan a tag changed on. A long `run_for()` leaves scans with no record of that. The panel therefore steps those scans again when you open it, newest first, for up to about 3 seconds a request. What it hasn't read yet shows as a range with the net change across it. The range does not say which scan made the change. **Load older** reads further back.
+Each entry is a scan on which a tag changed. A long `run_for()` does not record which scans those are. When you open the panel, it steps the run's scans again, newest first. Each request steps for up to about 3 seconds. A block of scans it has not stepped yet shows as one range with the net change across it. The range does not say which scan made the change. **Load older** reads further back.
 
 ### Chain tab
 

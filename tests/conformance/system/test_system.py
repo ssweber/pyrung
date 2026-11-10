@@ -19,7 +19,7 @@ digits over scans 2..8, the scans each probe was on (346 means scans 3, 4 and
 another kind (one that cannot raise the flag), Result3 after a successful
 instruction of the faulting kind.  Hardware round 1 read 346 right after the
 fault and 0 after a later successful one, so a CLICK flag does not hold to the
-end of the scan.  The adopted model: a flag follows the last instruction, any
+end of the scan.  The model first adopted: a flag follows the last instruction, any
 instruction (Result1..3 = 0, 0, 0).  The others: any Math clears it (346, 0,
 0); only an instruction of its own kind (346, 346, 0); a flag on from the
 fault to the end of the scan (346, 346, 346).  hardware round 2, 2026-10-30:

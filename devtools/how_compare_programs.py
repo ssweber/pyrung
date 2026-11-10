@@ -1619,8 +1619,11 @@ for _kind in _forloop_counts():
 
 
 def _forloop_producer_envelope(make_count):
-    """Run drops when the fault subroutine, called from the For, latches Alarm with the door
-    open: reaching Done holds the door shut while that producer's caller guard is live."""
+    """Run drops when the fault subroutine, called from the For, latches Alarm with the door open.
+
+    The two rows compare a Dint count with an Int count on the caller-guard path.  Both reach
+    Done through the last resort and never call the pilot's ``_producer_caller_scope``.
+    """
 
     def build():
         count = make_count()

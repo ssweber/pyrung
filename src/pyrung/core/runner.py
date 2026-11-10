@@ -2895,8 +2895,8 @@ class PLC:
                 self._constrained_tags,
             ),
         )
-        # A new PLC starts in RUN with the battery in.  A fork of a stopped state, or of one
-        # without the battery, steps on as that state would.
+        # A new PLC starts in RUN with battery_present True.  A fork of a stopped state, or of
+        # one with battery_present False, steps on as that state would.
         memory = historical_state.memory
         if not (memory.get(_MODE_RUN_KEY, True) and memory.get(_BATTERY_PRESENT_KEY, True)):
             fork._start_from_state(seeded)
@@ -4241,12 +4241,11 @@ class PLC:
 
     @property
     def battery_present(self) -> bool:
-        """Whether the PLC has its backup battery (default True).
+        """Whether the project's Battery Backup Setup box is checked (default True).
 
-        It decides what :meth:`reboot` keeps, and ``sys.battery_present`` reads it.
-        On a CLICK that point is SC203, ``_Battery_Installed``, which mirrors the
-        project's Battery Backup Setup box, a setting that travels with the project:
-        a CLICK cannot detect its battery.
+        ``sys.battery_present`` (SC203 on a CLICK) reads it.  The property
+        mirrors that setting and does not detect a battery.  With it True, :meth:`reboot`
+        keeps the retentive tags.  With it False, :meth:`reboot` resets every tag.
         """
         return self._battery_present
 
@@ -4267,10 +4266,9 @@ class PLC:
     def reboot(self) -> SystemState:
         """Power-cycle the runner and return the reset state.
 
-        Reboot is destructive: with a battery the retentive tags keep their
-        values and the rest return to their defaults, as over STOP -> RUN (a
-        CLICK power cycle reads the same); without one every tag returns to its
-        default, the worst case, a CLICK whose capacitor ran out too.  Forces
+        Reboot is destructive.  With :attr:`battery_present` True the retentive
+        tags keep their values and the rest return to their defaults, as over
+        STOP -> RUN.  With it False every tag returns to its default.  Forces
         are cleared either way.  ``state.scan_id`` and
         ``state.timestamp`` return to 0.  Because post-reboot scan_ids
         would alias pre-reboot entries in every sparse channel

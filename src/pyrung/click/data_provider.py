@@ -75,9 +75,10 @@ class ClickDataProvider:
             ``ds[5]``).  Accepts a ``ClickBlockSet`` or any iterable of
             blocks; only the plain data banks (X, Y, C, DS, DD, DH, DF, TXT)
             are used.
-        on_stop: Called instead of ``runner.stop()`` when a client writes the
-            STOP command bit (SC50).  A debug session uses it to pause its
-            executor before entering STOP.
+        on_stop: Called instead of ``runner.stop()`` when a write to the STOP
+            command bit (SC50) reaches the provider.  pyclickplc's Modbus
+            server refuses that write (exception code 2), so a Modbus client
+            never gets here.
 
     Example:
         .. code-block:: python

@@ -288,9 +288,9 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     for slot in coil_slots:
         if slot.source == "system" and slot.logical_name == system.sys.cmd_mode_stop.name:
             # SC50 on stops the code before the next scan and holds STOP until
-            # the switch goes to STOP and back (or a restart), as core's data
-            # provider calls stop(); SC50 itself is not stored, so it reads
-            # off, as there.  The scan loop makes the STOP transition.
+            # the switch goes to STOP and back (or a restart).  SC50 itself is
+            # not stored, so it reads off.  pyrung's soft PLC refuses this
+            # write.  The scan loop makes the STOP transition.
             lines.extend(
                 [
                     f'    if bank == "{slot.bank}" and index == {slot.index}:',

@@ -59,7 +59,7 @@
   - an up and a down edge on the same scan cancel
   - a down counter is done at `Acc <= preset` (it was `Acc <= -preset`), so with a positive preset it is done from its first scan
 
-  A `rise()` on a counter's rung still works but is no longer needed. To count scans while a condition holds, use `math(N + 1, N)`. `how()` drives a counter to its preset one rising edge at a time. When the counter's input is a timer's `Done` that is already on, `how()` can't yet cycle it, and the plan stops instead of waiting.
+  A `rise()` on a counter's rung still works but is no longer needed. To count scans while a condition holds, use `math(N + 1, N)`. `how()` drives a counter to its preset one rising edge at a time. When the counter's input is a timer's `Done` that is already on, `how()` can't cycle it, and the plan stops instead of waiting.
 - `rise()` and `fall()` work like CLICK's edge contacts. Each contact keeps its own copy of the bit from the last scan that evaluated it, powered or not, and starts off at RUN and at STOP->RUN. Every edge on a tag used to compare with the tag's value at the end of the previous scan. So:
   - a bit set and cleared within every scan rises once, not every scan
   - a `rise()` in a subroutine called twice in a scan fires on one call only
@@ -86,11 +86,11 @@
   - after a jump or jog, the new step starts on the next scan
   - when the drum corrects a bad step, it keeps the accumulator
   - while the completion flag is on, whether the drum set it or something else did, the drum ignores its time and events and its accumulator holds
-- A `time_drum` or `time_event_drum` step reads a tag preset on its first timed scan, and keeps that value until the step changes. A change mid-step takes effect from the next step. A tag preset of 0 or less now never ends its step (it ended it at once). A constant 0 still ends it at once. It isn't yet known when a CLICK reads a DS preset.
-- `reboot()` with a battery keeps only the retentive tags and resets the rest, as STOP->RUN does (it kept every tag). Without a battery it still resets every tag.
-- Copy, Block copy and Fill store as a CLICK does, with no flag, in `PLC`, `CompiledPLC` and generated CircuitPython:
-  - a `Dint` or `Real` into a `Word` stores 65535 above 65535 (it wrapped), and 32768 below -32768. From -1 to -32768 it still wraps, as any constant or `Int` does
-  - a `Word` into an `Int` keeps its bits, so 65535 is -1 (it clamped to 32767)
+- A `time_drum` or `time_event_drum` step reads a tag preset on its first timed scan, and keeps that value until the step changes. A change mid-step takes effect from the next step. A tag preset of 0 or less now never ends its step (it ended it at once). A constant 0 still ends it at once.
+- `reboot()` with `battery_present` True keeps only the retentive tags and resets the rest, as STOP->RUN does (it kept every tag). With `battery_present` False it still resets every tag.
+- Copy, Block copy and Fill store these values as a CLICK does, in `PLC`, `CompiledPLC` and generated CircuitPython:
+  - a `Dint` or `Real` into a `Word` stores 65535 above 65535 (it wrapped), and 32768 below -32768, with no flag. From -1 to -32768 it still wraps, as any constant or `Int` does
+  - a `Word` into an `Int` keeps its bits with no flag, so 65535 is -1 (it clamped to 32767)
   - `blockcopy(..., convert=to_value)` skips a bad character and writes the rest (it wrote none)
   - a `copy()` from past the end of a CLICK `DS`, `DH`, `DF` or `TXT` leaves its destination unchanged (it wrote 0)
   - a plain `copy()` of a `Real` into a TXT writes its digits, like `to_text()`
@@ -129,13 +129,13 @@
   - an on or off preset of 0 or less (including a register holding -5) keeps a `flasher` off with both `Acc` values at 0, and a `timed` coil gives no pulse
   - the rung's first scan counts toward the first phase, as with `on_delay`, so a `timed` pulse or a first `flasher` on phase of one scan or less no longer shows
 - Harness bool feedback runs as the CLICK coil it behaves like, so a feedback edge can come a scan or more earlier or later:
-  - `Physical(on_delay=, off_delay=)` runs as a `debounce` on its link
-  - a command dip shorter than `off_delay` keeps `Fb` on (it dropped `Fb`)
-  - after the command drops, `Fb` turns off one scan later than it did
-  - `Physical(flasher_on=, flasher_off=)` runs as a `flasher`
-  - its `Fb` goes high the scan after its enable turns on (it waited out the off time first)
-  - its first high phase is one scan short
-  - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
+  - `Physical(on_delay=, off_delay=)` runs as a `debounce` on its link:
+    - a command dip shorter than `off_delay` keeps `Fb` on (it dropped `Fb`)
+    - after the command drops, `Fb` turns off one scan later than it did
+  - `Physical(flasher_on=, flasher_off=)` runs as a `flasher`:
+    - its `Fb` goes high the scan after its enable turns on (it waited out the off time first)
+    - its first high phase is one scan short
+    - a `flasher_on` or `flasher_off` of 0 keeps `Fb` low
   - both delays of one `Physical` count in the same unit, and so do `flasher_on` and `flasher_off`
   - an `off_delay` over 32.767 s rounds `on_delay` up to whole seconds too
   - relinking a feedback that is on to a longer `on_delay` keeps it on (it turned off and counted the new delay)
@@ -189,8 +189,7 @@
 
 ### Features
 
-- CLICK validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank.
-  - Keep the pointer inside the bank, or give the tag `choices`, or `min` and `max`. A `max` alone counts as an upper bound.
+- CLICK validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank. Keep the pointer inside the bank, or give the tag `choices`, or `min` and `max`. A `max` alone counts as an upper bound.
 - `pyrung.core` exports the table of physical kinds, the keys each `Physical(...)` kind takes. The names are `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
 - A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`:
   - it is a `ValueError`, so existing `except ValueError` clauses still catch it
@@ -285,7 +284,7 @@
   - `break_loop()` and `continue_loop()` (CLICK's Break and Continue), each in a body rung with a contact
   - nested loops up to three deep, each with its own `loop.idx`
 
-  They run in `PLC`, `CompiledPLC`, generated CircuitPython and the debugger, and export to CLICK and import back. CLICK validation checks loop depth across `call()` (`CLK_FORLOOP_NESTING_DEPTH`), one-shots in an inner loop (`CLK_FORLOOP_INNER_ONESHOT`) and `return_early()` inside a loop (`CLK_FORLOOP_RETURN_INSIDE`). The verifier answers `Intractable` for a program with a rung inside a loop, for now.
+  They run in `PLC`, `CompiledPLC`, generated CircuitPython and the debugger, and export to CLICK and import back. CLICK validation checks loop depth across `call()` (`CLK_FORLOOP_NESTING_DEPTH`), one-shots in an inner loop (`CLK_FORLOOP_INNER_ONESHOT`) and `return_early()` inside a loop (`CLK_FORLOOP_RETURN_INSIDE`). The verifier answers `Intractable` for a program with a rung inside a loop.
 - `randint(lo, hi)` (from `pyrung.core`) is CLICK's `RAND`, a new random value from `lo` to `hi` inclusive each scan:
   - a scan draws the same value every time it runs, so replay, seek and `fork()` see the same values. A test can set it by patching or forcing its tag (`expr.tag`, or `expr.cut_tag` for a value cut into an `Int`)
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython (as `random.randint`), and exports to CLICK as `RAND ( lo , hi )` and imports back
@@ -533,18 +532,17 @@
 - An `off_delay()` with preset 0 keeps timing when a scan adds less than one unit (scans under 1 ms at `"Tms"`). Its accumulator stayed at 0 for good.
 - A `select()` with tag bounds (`DS.select(Start, End)`) sets `fault.address_error` and writes nothing, everywhere, when a bound is outside its block at either end. A `search()` over one now compiles (it generated an `IndentationError`).
 - A `select()` with tag bounds that spans a gap in a sparse block skips the gap everywhere, as a static `select()` does (compiled runs and generated CircuitPython set `fault.address_error`). So `always()` and `never()` no longer report `Proven` on what `PLC` didn't do. A `shift()` whose window lies wholly in a gap raises `ValueError` every scan, everywhere.
-- A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses. The feedback never flipped, because its millisecond timer stopped at 32767. Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
+- A harness `on_delay`, `off_delay`, `flasher_on` or `flasher_off` longer than 32.767 s now elapses (the feedback never flipped, because its millisecond timer stopped at 32767). Such a delay counts in whole seconds, rounded up (whole minutes past about 9 hours, and so on).
 - `how()` on a harness feedback partway through its delay plans the wait from the count so far (it answered `REACHED` with no scans).
 - Findings show code you can write: `math(expr, dest)`, `event_drum(...)`, `time_drum(...)`, `time_event_drum(...)`, `unpack_to_bits(...)`, `unpack_to_words(...)`, `forloop(...)` and `run_function(...)`. They showed `math(dest, expr)`, `eventdrum(...)` and similar names, or a class name.
 
 ### Performance
 
 - `run_for()`, `run_until()` and `how()` run compiled on a program with `nop()`, `raw()`, or a `send()` or `receive()` whose target is a name such as `"panel"` (every scan ran interpreted). `how()` also runs compiled when the target is a `ModbusTcpTarget` or `ModbusRtuTarget`.
-- `how()` starts faster.
-  - A second `how()` on an unchanged program skips several seconds of setup.
-  - The first `how()` takes about half as long to set up.
-- `effect()`, and `history.at()` reading one scan after another, run much faster on scans older than `cache=`.
-  - An `effect()` over 1,000 such scans runs about 40 times faster.
+- `how()` starts faster:
+  - a second `how()` on an unchanged program skips several seconds of setup
+  - the first `how()` takes about half as long to set up
+- `effect()`, and `history.at()` reading one scan after another, run much faster on scans older than `cache=`. An `effect()` over 1,000 such scans runs about 40 times faster.
 
 ## v0.15.2 (2026-10-11)
 

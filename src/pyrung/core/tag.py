@@ -652,10 +652,10 @@ class LiveTag(Tag):
 
 @dataclass(frozen=True)
 class ImmediateRef:
-    """Reference to the immediate (physical) value of an I/O tag.
+    """An I/O tag or range used as CLICK immediate I/O.
 
-    Wraps an InputTag or OutputTag to access the physical I/O value
-    directly, bypassing the scan-cycle image table.
+    The Click export writes it as an immediate contact or coil.  pyrung's
+    simulation and the generated CircuitPython code use the plain tag.
     """
 
     value: Tag | BlockRange
@@ -702,14 +702,15 @@ class InputTag(Tag):
     """Tag representing a physical input channel.
 
     `InputTag` instances are produced exclusively by indexing an `InputBlock`.
-    They add the `.immediate` property for bypassing the scan-cycle image table.
+    They add the `.immediate` property for CLICK's immediate I/O.
 
     `.immediate` semantics by context:
 
-    - **Simulation (pure):** validation-time annotation only; no runtime effect.
-    - **Click dialect:** transcription hint for Click software export.
-    - **CircuitPython dialect:** generates direct hardware-read code.
-    - **Hardware-in-the-loop:** triggers a real hardware read mid-scan.
+    - **Simulation:** no runtime effect.
+    - **Click dialect:** the ladder export writes an immediate contact. Click
+      validation checks its placement.
+    - **CircuitPython dialect:** no effect. The generated code reads the input
+      at the start of the scan, as for a plain tag.
 
     You cannot create an `InputTag` directly; use `InputBlock[n]` instead.
 
@@ -717,13 +718,13 @@ class InputTag(Tag):
         ```python
         X = InputBlock("X", TagType.BOOL, 1, 16)
         sensor = X[3]          # LiveInputTag
-        sensor.immediate       # ImmediateRef — bypass image table
+        sensor.immediate       # ImmediateRef: immediate I/O on a CLICK
         ```
     """
 
     @property
     def immediate(self) -> ImmediateRef:
-        """Return an ImmediateRef that bypasses the input image table."""
+        """Return an ImmediateRef, which the Click export writes as immediate I/O."""
         return ImmediateRef(self)
 
 
@@ -732,14 +733,15 @@ class OutputTag(Tag):
     """Tag representing a physical output channel.
 
     `OutputTag` instances are produced exclusively by indexing an `OutputBlock`.
-    They add the `.immediate` property for bypassing the scan-cycle image table.
+    They add the `.immediate` property for CLICK's immediate I/O.
 
     `.immediate` semantics by context:
 
-    - **Simulation (pure):** validation-time annotation only; no runtime effect.
-    - **Click dialect:** transcription hint for Click software export.
-    - **CircuitPython dialect:** generates direct hardware-write code.
-    - **Hardware-in-the-loop:** triggers a real hardware write mid-scan.
+    - **Simulation:** no runtime effect.
+    - **Click dialect:** the ladder export writes an immediate coil. Click
+      validation checks its placement.
+    - **CircuitPython dialect:** no effect. The generated code writes the output
+      at the end of the scan, as for a plain tag.
 
     You cannot create an `OutputTag` directly; use `OutputBlock[n]` instead.
 
@@ -747,13 +749,13 @@ class OutputTag(Tag):
         ```python
         Y = OutputBlock("Y", TagType.BOOL, 1, 16)
         valve = Y[1]           # LiveOutputTag
-        valve.immediate        # ImmediateRef — bypass image table
+        valve.immediate        # ImmediateRef: immediate I/O on a CLICK
         ```
     """
 
     @property
     def immediate(self) -> ImmediateRef:
-        """Return an ImmediateRef that bypasses the output image table."""
+        """Return an ImmediateRef, which the Click export writes as immediate I/O."""
         return ImmediateRef(self)
 
 

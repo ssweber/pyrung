@@ -120,9 +120,10 @@ class SimServer:
     for the CPU) does not become a scan longer than any CLICK's, which would
     step over a case's timing windows.  ``None`` lets the whole gap through.
     Modbus writes become patches applied at the start of the next
-    scan.  A PLC in STOP (SC50, the STOP command, stopped it) does not scan:
-    the sim keeps serving Modbus and stays in STOP, as a CLICK does.  Use as a
-    context manager; :attr:`endpoint` is where to connect.
+    scan.  The Modbus server refuses a write to SC50 (the STOP command) with
+    exception code 2, so only a case's rung can stop the PLC.  A PLC in
+    STOP does not scan.  The sim keeps serving Modbus and stays in STOP.  Use
+    as a context manager.  :attr:`endpoint` is where to connect.
     """
 
     def __init__(

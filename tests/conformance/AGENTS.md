@@ -68,9 +68,9 @@ def test_rungs():
 - `DRUM`: drum ordering.
 - `INF`: REAL overflow stores +/-Inf.
 - `TEXT`: text, pack, NUL and search-cursor fixes.
-- `SYS`: the fault-flag model (SC40 follows the last Math, SC43 and SC44 the last instruction).
+- `SYS`: the fault-flag model (SC40 follows the last Math, SC43 and SC44 the last Copy-family instruction or Math).
 - `MATH`: Math results CLICK stores differently (RAND with equal bounds, past an Int or from a Real, non-finite function results).
-- `SC43`: which stores raise SC43 (a clamping Copy, a Copy of +/-Inf into an integer, not a Math or a Copy of NaN).
+- `SC43`: which stores raise SC43 (a clamping Copy, a Math that wraps, a Copy of +/-Inf into an integer, but not a Copy of NaN).
 - `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`).
 - `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). No case reads the bank's flag (the flag side is `SYS`).
 - `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times). A CLICK does not.

@@ -1,8 +1,7 @@
 """What a Copy of a Real into a TXT writes: the ``real_text`` group (part ``follow_values``).
 
 ``store_probe/real_into_text_and_fill`` read "66.6999969" from TXT541 for a DF of 66.7, then '0'
-in TXT551..TXT555: written or left over, not known.  One value does not give the format.  The fix
-step ``store-click`` 3b (``conform-fix`` arc) waits on this.
+in TXT551..TXT555.  Those '0's were left over, since a CLICK leaves the TXTs past the digits alone.
 
 Each case has a DF and 20 TXT of its own.  On one scan it fills the 20 with 'Z', copies its value
 into the DF and the DF into the first TXT, and reads 10 of the 20: two characters a field, as ASCII
@@ -20,8 +19,9 @@ shows ("10000.0000000"), on the float32 value, writes:
 
 pyrung writes the digits as ``to_text()`` does, from the Real's 64-bit value.  That gives CLICK's text
 where the float32 and float64 digits agree, and "123456.7000000" and "66.7000000" where they
-do not.  The fields hold every pair of codes (``probe_kit.between``), so a pass answers nothing
-and a run on a CLICK records what it read.
+do not.  A CLICK read every case (``readings.toml``, 2026-11-06).  It wrote "123456.7031250" for
+123456.7 and left the TXTs past the digits alone.  The fields hold every pair of codes
+(``probe_kit.between``), so a pass answers nothing.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

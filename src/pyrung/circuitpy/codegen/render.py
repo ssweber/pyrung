@@ -134,8 +134,8 @@ def _render_stop_command_take_lines(ctx: CodegenContext, indent: int) -> list[st
     As core's ``_process_mode_commands``: SC50 clears, this scan runs with
     SC11 off, and the code is in STOP at its end
     (:func:`_render_stop_command_end_lines`).  SC50 written over Modbus stops
-    the code before the next scan instead, as core's data provider calls
-    ``stop()`` (``_mb_write_coil_plc``).
+    the code before the next scan instead (``_mb_write_coil_plc``).  pyrung's
+    soft PLC refuses that write.
     """
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
     if cmd_mode_stop_symbol is None:

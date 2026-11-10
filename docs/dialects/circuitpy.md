@@ -195,7 +195,7 @@ Pass `RunStopConfig(...)` to `generate_circuitpy()` to map `board.switch` to run
 The STOP command (SC50) also puts the code in STOP, as in core.
 
 - When a rung turns SC50 on, the next scan takes the command (SC50 turns off, SC11 reads off for that scan) and runs. The code is in STOP at the end of that scan.
-- When SC50 is written on over Modbus, the code is in STOP before the next scan. SC50 is not stored, so it reads off, as with pyrung's soft PLC.
+- When a Modbus client writes SC50 on, the code is in STOP before the next scan. SC50 is not stored, so it reads off. pyrung's soft PLC differs here. Its Modbus server refuses a write to SC50 with exception code 2.
 
 STOP then holds while the switch reads RUN. Moving the switch to STOP and back to RUN restarts the code (STOP->RUN). Without a `RunStopConfig`, nothing but a restart of the board returns the code to RUN.
 
