@@ -99,8 +99,6 @@ CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `l
 | Indexed source below its block (`math(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
 | Indexed source past its block | Reads the type's zero value, no flag |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | That function = 0, the rest of the formula runs, `system.fault.math_operation_error` set for the scan |
-| MOD by zero, `0 ** 0` | That operation = 0, the rest of the formula runs, no flag |
-| Zero to a negative power (`0 ** -1`) | +Inf, so the formula stores 0 into an `Int`, `Dint` or `Word` with `system.fault.out_of_range` |
 
 ## Range aggregates
 

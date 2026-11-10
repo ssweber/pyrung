@@ -207,9 +207,9 @@ def test_forloop_idx_supports_indirect_addressing():
     assert state.tags["Dst3"] == 33
 
 
-@pytest.mark.parametrize("count", [0, -5])
-def test_forloop_zero_or_negative_literal_count_raises(count):
-    with pytest.raises(ValueError, match="forloop count must be >= 1"):
+@pytest.mark.parametrize("count", [0, -5, 2**31])
+def test_forloop_literal_count_outside_signed_32_bit_raises(count):
+    with pytest.raises(ValueError, match=r"forloop count must be 1\.\.2147483647"):
         forloop(count)
 
 

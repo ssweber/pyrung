@@ -2006,7 +2006,8 @@ def _interval_bounds(
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
     except (ArithmeticError, ValueError):
         return None
-    # A calc's 0 ** -1 is +Inf, which stores 0 into an integer, outside these corners.
+    # A corner that is +Inf or NaN (a calc's 0 ** -1) stores 0 into an integer,
+    # which the corners do not bound.
     if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
         return None
     return (min(corners), max(corners))

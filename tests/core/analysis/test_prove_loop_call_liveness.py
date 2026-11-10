@@ -269,11 +269,12 @@ def _always_called_loop():
 
 
 def _zero_count_loop():
-    # A constant count is read as signed 32-bit: 2 ** 31 is a negative count,
-    # which runs no iteration, so work is never called.
+    # A REAL constant is read through 16 bits, so 65536.0 runs no iteration
+    # and work is never called.  An integer constant always runs (forloop()
+    # refuses one outside 1..2 ** 31 - 1).
     with Program(strict=False) as logic:
         with Rung():
-            with forloop(2**31):
+            with forloop(65536.0):
                 call("work")
         _read_y2()
         _coil_work()

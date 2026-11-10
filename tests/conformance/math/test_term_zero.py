@@ -6,8 +6,8 @@ of ``0 ^ 0`` and of ABS of the least Int too (hardware, 2026-11-10).  0 to a neg
 error there.  It is +Inf.  Each formula here runs once, on a scan whose first rung stages its
 operands, into a register preset to 99 (no store reads 99).
 
-``quiet_terms`` stores each ``... + 5`` into a DS.  Every operand is a DS, since pyrung folds no
-DS and the editor is not asked to take a constant divisor of 0.
+``quiet_terms`` stores each ``... + 5`` into a DS.  Every operand is a DS, since pyrung never
+treats a DS as a constant and the editor is not asked to take a constant divisor of 0.
 
 - Result1 ``MOD(DS 7, DS 0) + 5`` reads 5, the MOD's term zeroed (0 would be the formula zeroed).
 - Result2 ``DS 0 ^ DS 0 + 5`` reads 5, the power's term zeroed (6 would be ``0 ^ 0`` taken as 1).

@@ -8,6 +8,7 @@ from typing import Any
 from pyrung.core._source import _capture_source, _capture_with_call_arg_lines
 from pyrung.core.condition import ConditionTerm
 from pyrung.core.instruction import ForLoopInstruction
+from pyrung.core.instruction.control import FOR_COUNT_MAX_32
 from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.tag import Tag, TagType
 
@@ -139,8 +140,9 @@ class ForLoop:
         source_file: str | None = None,
         source_line: int | None = None,
     ) -> None:
-        if isinstance(count, int) and count <= 0:
-            raise ValueError(f"forloop count must be >= 1, got {count}")
+        if isinstance(count, int) and not 1 <= count <= FOR_COUNT_MAX_32:
+            # CLICK reads a constant as signed 32-bit, so one past this would run none.
+            raise ValueError(f"forloop count must be 1..{FOR_COUNT_MAX_32}, got {count}")
         self.count = count
         self.oneshot = oneshot
         # Nested loops each need their own index; the outermost keeps the

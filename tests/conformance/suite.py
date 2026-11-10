@@ -337,7 +337,7 @@ APART_GROUPS = [
     test_coil_phase.deb_fall,
     test_coil_phase.flash_zero,
     test_tof_rewrite.group,
-    # May stop the PLC: run alone, with C411 set by hand.
+    # Stops the PLC on a 200 ms watchdog: run alone, with the watchdog at 10000 ms.
     test_for_signed.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
@@ -380,7 +380,7 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow2_drums": ApartPart(("drum_ds", "jump_return")),
     # a debounce's off count at its fall, flashers on presets of 0, a TOF's TD written to 0.
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
-    # For counts that may stop the PLC on its watchdog, alone: C411 set by hand arms it.
+    # For counts whose runs stop the PLC on a 200 ms watchdog, alone.
     "follow2_for": ApartPart(("for_signed",)),
     # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
     "modbus_raw": ApartPart(("modbus_raw",)),

@@ -514,9 +514,9 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "deb_fall": {"C": range(661, 663), "T": range(271, 273)},
     "flash_zero": {"C": range(671, 678), "DS": range(4031, 4037), "T": range(273, 283)},
     "tof_rewrite": {"T": range(291, 292)},
-    # C411 is set by hand, as for_dd_minus has C401.
+    # C411 arms the loops from the reset, and STOP -> RUN clears it.
     "for_signed": {
-        "C": range(411, 413),
+        "C": range(411, 412),
         "DS": range(4051, 4053),
         "DD": range(141, 148),
         "CT": range(6, 7),

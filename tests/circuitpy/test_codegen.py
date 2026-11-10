@@ -2475,7 +2475,7 @@ class TestBoardPeripheralsAndRunStop:
         ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
         ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
         ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
-        # These two read 2026-11-10.  Their SC43 is pyrung's, the flag of any Inf result.
+        # A CLICK read both values on 2026-11-10.  Their SC43 is pyrung's, as for any Inf result.
         ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, pymath.inf, (0, 1, 0)),
         ("zero_to_minus_one_int", lambda n, d, z, w, r: z ** (z - 1) + 5, Int, 0, (0, 1, 0)),
         ("zero_to_literal_zero", lambda n, d, z, w, r: z**0, Int, 0, (0, 0, 0)),

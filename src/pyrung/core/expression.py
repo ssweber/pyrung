@@ -152,8 +152,8 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
     """``a ** b`` in a ``calc``: ``0 ^ 0`` is a :class:`QuietMathError`, and 0 to
     a negative power is +Inf.
 
-    A CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF, and 0 for ``0 ^ -1
-    + 5`` into a DS, the Inf of the whole formula stored into an Int (hardware,
+    A CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF.  It stores 0 for
+    ``0 ^ -1 + 5`` into a DS, since the whole formula is +Inf (hardware,
     2026-11-10).  Python raises ``ZeroDivisionError`` for both.
     """
     if a == 0 and b <= 0:
