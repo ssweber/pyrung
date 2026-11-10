@@ -523,7 +523,8 @@
     - SD9 counts scans
     - SC1, SC2, SC3 and the clocks SC4..SC9 move
     - SC10 reports the RUN/STOP switch, SD10 the scan time, and SD19..SD26 the real-time clock
-  - when a rung or Modbus writes SC50, the code goes to STOP with SC11 off, with or without a RUN/STOP switch. It stays there until the switch goes to STOP and back to RUN, or until a restart when there is no switch (a program without a switch kept scanning, and a Modbus stop lasted two scans)
+  - when a rung writes SC50, the code goes to STOP with SC11 off, with or without a RUN/STOP switch. It stays there until the switch goes to STOP and back to RUN, or until a restart when there is no switch (a program without a switch kept scanning)
+  - its Modbus server refuses a write to SC50 or SC51 with exception code 2 and changes nothing, as pyrung's soft PLC does (it stored the write, and with a RUN/STOP switch SC50 stopped the code for two scans). Only a rung can stop the code.
   - timers take their time from `time.monotonic_ns()`, so they no longer drift after hours of uptime, and the first scan after STOP->RUN counts its time
 - A TXT blanked by `fill("")` or `reset()` holds NUL, as an unwritten TXT and CLICK's text registers do:
   - its `to_ascii` copy writes 0 (it left the destination unchanged)

@@ -76,9 +76,11 @@ class CircuitPySim:
     ``code.py`` runs in a child Python with stand-ins for the board's hardware
     (:mod:`pyrung.circuitpy.host`): its own scan loop, wall-clock timers, and
     its own generated Modbus server between scans.  The RUN/STOP switch reads
-    RUN; the STOP command (SC50) puts the code in STOP, where it keeps serving
-    Modbus.  Same interface as :class:`~pyrung.conformance.SimServer`: a context
-    manager with :attr:`endpoint` and :meth:`raise_if_failed`.
+    RUN.  A rung's STOP command (SC50) puts the code in STOP, and the code
+    keeps serving Modbus in STOP.  The Modbus server refuses a write to SC50
+    with exception code 2, as the soft PLC does.  Same interface as
+    :class:`~pyrung.conformance.SimServer`: a context manager with
+    :attr:`endpoint` and :meth:`raise_if_failed`.
     """
 
     def __init__(self, build: ConformanceProgram, *, host: str = "127.0.0.1", port: int = 0):

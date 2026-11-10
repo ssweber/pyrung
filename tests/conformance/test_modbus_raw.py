@@ -11,10 +11,13 @@ memory matters.  These are the writes outside the part's memory:
 - SD29, SD31 and SD32 get today's date.  Then SC53 goes on and sets the PLC's date from them.
   SD29 also gets the year after the one it holds.  Each is written back.
 - C1..C1969, written with the values they read just before.
+- SC1 gets OFF, and SD5 gets one more than it holds.  A CLICK should refuse both.  If either
+  changes, it is written back.
 - YD register 3, only with ``PYRUNG_CONFORMANCE_OUTPUTS=1``.  It may turn Y116 on until it is
   written back.
 - SC51 and SC50, only with ``PYRUNG_CONFORMANCE_STOP=1``.  The SC50 write asks whether a CLICK
-  takes it and stops.  The simulator refuses it with exception code 2.
+  takes it and stops.  The simulator and the P1AM code refuse both writes with exception
+  code 2.
 
 The simulator and the P1AM code have no memory past the DD bank.
 
@@ -63,6 +66,10 @@ The probes, each one entry (``modbus_raw/<probe>``):
   applies) to today's date from SD19, SD21 and SD22.  It does so only if SC53 reads 0 and the
   old date reads, so it can write the old date back.  Otherwise, or if the date does not read
   back as today, it writes SC53 off, and the probe can only show the exception.
+- ``fc05_sc1``: FC05 of OFF to SC1 (always ON), then SC1 read back.  ``fc06_sd_read_only``:
+  FC06 of one more than SD5 holds (the firmware version's low word), then SD5 read back.  Each
+  records the answer to a lone write to a read-only bit or register.  The harness writes back
+  any value that changed.
 - ``fc03_past_ds``, ``fc03_across_ds_end``, ``fc01_past_c2000``, ``fc01_y_gap``: reads past a bank
   or in a gap (the register past DS4500, DS4500 and that register, C2001, between Y116 and Y201).
   ``fc15_across_c_end``: FC15 of four ON over C1999..C2002.
@@ -88,9 +95,9 @@ The probes, each one entry (``modbus_raw/<probe>``):
   1968 coils), which a server should refuse with exception 03.  The FC15 writes C1..C1969 with
   what they read just before.
 - ``sc51_watchdog_reset``, ``sc50_stop``: only with ``PYRUNG_CONFORMANCE_STOP=1``, last.
-  ``sc50_stop`` asks whether a CLICK takes the SC50 write and stops.  The simulator refuses it
-  with exception code 2.  The probe records the exception, then SC11.  If the PLC stopped, put
-  it back in RUN.
+  ``sc50_stop`` asks whether a CLICK takes the SC50 write and stops.  The simulator and the P1AM
+  code refuse it with exception code 2.  The probe records the exception, then SC11.  If the
+  PLC stopped, put it back in RUN.
 
 Each probe writes only the part's own memory, or restores what it wrote in a ``finally``.  The
 exceptions are the writes a CLICK should refuse, and DD1531.  The reset (``Cmd = 0``) clears the
@@ -831,6 +838,44 @@ async def _sc53_sc54(s: _Session) -> None:
         await s.settle("fc15_sc53_sc54")
 
 
+async def _read_only_writes(s: _Session) -> None:
+    """A lone write to a read-only SC and to a read-only SD, each put back if it changed.
+
+    SD5 holds the low word of the firmware version.  It does not move, so a read back shows
+    whether the write was stored.  No ladder or harness reads it, so a stored value does no
+    harm before it is put back.
+    """
+    w = s.w
+    r = s.entry("fc05_sc1")
+    r["request"] = "FC05 OFF to SC1"
+    r["before"] = await s.sc(1, 1)
+    try:
+        r["answer"] = await w.write_coil(_sc(1), False)
+        r["settled"] = int(await s.settle("fc05_sc1"))
+        r["after"] = await s.sc(1, 1)
+    finally:
+        if r.get("after", {}).get("raw") != [1]:
+            r["restored"] = await w.write_coil(_sc(1), True)
+            await s.settle("fc05_sc1")
+
+    r = s.entry("fc06_sd_read_only")
+    r["before"] = await s.sd(5)
+    old = _word(r["before"]["raw"])
+    if old is None:
+        r["skipped"] = "not sent: SD5 did not read, so it could not be written back"
+        return
+    new = (old + 1) & 0xFFFF
+    r["request"] = f"FC06 SD5 = 0x{new:04X}"
+    try:
+        r["answer"] = await w.write_register(_sd(5), new)
+        r["settled"] = int(await s.settle("fc06_sd_read_only"))
+        r["after"] = await s.sd(5)
+    finally:
+        if _word(r.get("after", {}).get("raw")) != old:
+            r["restored"] = await w.write_register(_sd(5), old)
+            await s.settle("fc06_sd_read_only")
+
+
 async def _past_banks(s: _Session) -> None:
     w = s.w
     s.readings["fc03_past_ds"] = await s.pair(
@@ -1032,6 +1077,7 @@ _PROBES = (
     _value_writes,
     _fc16_past_ds,
     _sc53_sc54,
+    _read_only_writes,
     _past_banks,
     _function_codes,
     _xd_yd,

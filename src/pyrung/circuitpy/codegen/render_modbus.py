@@ -18,6 +18,9 @@ _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
 #: Banks a rung can use raw (``ds[3901]``), served as used.  System points and
 #: the XD/YD word images have their own paths.
 _RAW_BANKS = frozenset(MODBUS_MAPPINGS) - {"SC", "SD", "XD", "YD"}
+#: SC50 (the STOP command) and SC51 (watchdog reset) are ladder only.
+#: pyclickplc leaves them out of the Modbus-writable SC bits.
+_LADDER_ONLY_COILS = frozenset({("SC", 50), ("SC", 51)})
 
 
 def _df_words(value: str) -> str:
@@ -177,14 +180,14 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     backed = _modbus_backed_slots(ctx)
     coil_slots = [slot for slot in backed if slot.bank in _COIL_BANKS]
     reg_slots = [slot for slot in backed if slot.bank in _WORD_BANKS]
-    coil_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in coil_slots})
+    coil_write_globals = sorted(
+        {
+            _backing_global_for_slot(ctx, slot)
+            for slot in coil_slots
+            if (slot.bank, slot.index) not in _LADDER_ONLY_COILS
+        }
+    )
     reg_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in reg_slots})
-    if any(
-        slot.source == "system" and slot.logical_name == system.sys.cmd_mode_stop.name
-        for slot in coil_slots
-    ):
-        # The SC50 write below holds STOP; it does not store SC50.
-        coil_write_globals = sorted({*coil_write_globals, "_stop_hold"})
     # Build sparse reverse-lookup dicts from only the backed slots.
     coil_map: dict[int, tuple[str, int]] = {}
     for slot in coil_slots:
@@ -286,17 +289,13 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         ]
     )
     for slot in coil_slots:
-        if slot.source == "system" and slot.logical_name == system.sys.cmd_mode_stop.name:
-            # SC50 on stops the code before the next scan and holds STOP until
-            # the switch goes to STOP and back (or a restart).  SC50 itself is
-            # not stored, so it reads off.  pyrung's soft PLC refuses this
-            # write.  The scan loop makes the STOP transition.
+        if (slot.bank, slot.index) in _LADDER_ONLY_COILS:
+            # The server answers exception 02 and stores nothing, as pyrung's
+            # soft PLC does.  So only a rung can stop the code.
             lines.extend(
                 [
                     f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                    "        if _value:",
-                    "            _stop_hold = True",
-                    "        return True",
+                    "        return False",
                 ]
             )
             continue
@@ -432,7 +431,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             ]
         )
     for slot in reg_slots:
-        if slot.read_only and slot.logical_name != system.sys.cmd_mode_stop.name:
+        if slot.read_only:
             lines.extend(
                 [
                     f'    if bank == "{slot.bank}" and index == {slot.index}:',
