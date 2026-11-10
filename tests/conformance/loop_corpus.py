@@ -237,6 +237,16 @@ def assert_the_loop_ran(tally: Tally, at_least: float) -> None:
 #: scans).  Alone they would cost as much as their whole part, which runs them anyway.
 LEFT_TO_THEIR_PART = {"out_more/preset_mid_phase", "for_more/timers_at_limits"}
 
+#: Parts the corpus leaves out, and why.  The loop traces a For's body once for each time it runs.
+PARTS_LEFT_OUT = {
+    "follow2_for": "for_signed runs For bodies 135535 times in five scans (over 4 GB and 100 s)",
+}
+
+#: Every part the corpus runs.
+CORPUS_PARTS = tuple(
+    part for part in (*suite.PARTS, *suite.APART_PARTS) if part not in PARTS_LEFT_OUT
+)
+
 #: What each case alone reaches in the loop, by part.
 MIN_LOOP_SHARE_ALONE = 0.5
 

@@ -179,8 +179,8 @@ def _compile_expression_impl(
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
         if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
-            # A calc's ** (core _op_pow_calc): a zero base to a power of 0 or
-            # below is 0 with no flag, a complex result 0 with SC46.
+            # A calc's ** (core _op_pow_calc): 0 ^ 0 is 0 with no flag, 0 to a
+            # negative power is +Inf, and a complex result is 0 with SC46.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")

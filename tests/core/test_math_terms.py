@@ -2,8 +2,8 @@
 
 Read on a CLICK (2026-11-06, conformance ``math_terms``): ``7 / 0 + 5`` and
 ``(7 / 0 + 1) * 5`` are 5 with SC40, ``SQRT(-4.0) + 5`` is 5 with SC46, into a DF
-too (5.0).  The quiet errors (``0 ^ 0``, ``0 ^ -1``, MOD by 0) and ABS of a type's
-bottom follow the same model, read alone only.  Every engine must agree: the
+too (5.0).  The quiet errors (``0 ^ 0``, MOD by 0) and ABS of a type's bottom follow
+the same model (2026-11-10, ``term_zero``), and ``0 ^ -1`` is +Inf.  Every engine must agree: the
 interpreted runtime, the compiled kernel (legacy and blockless) and the generated
 CircuitPython code, and the prover must see the rest of the formula live.
 """
@@ -88,7 +88,10 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "fractional_power": (lambda: MINUS_EIGHT**0.5 + 2, Real, 2.0, {46}),
     "mod_zero": (lambda: SEVEN_INT % ZERO_INT + 5, Int, 5, set()),
     "zero_to_zero": (lambda: ZERO**ZERO + 5, Dint, 5, set()),
-    "zero_to_minus_one": (lambda: ZERO**-1 + 5, Dint, 5, set()),
+    # 0 to a negative power is +Inf, not an error, so the formula is +Inf: 0 into
+    # an integer register with SC43, +Inf into a Real (read 2026-11-10).
+    "zero_to_minus_one": (lambda: ZERO**-1 + 5, Dint, 0, {43}),
+    "zero_to_minus_one_real": (lambda: ZERO**-1 + 5, Real, float("inf"), {43}),
     "abs_int_bottom": (lambda: abs(INT_BOTTOM) + 1, Int, 1, {43}),
     "abs_dint_bottom": (lambda: abs(DINT_BOTTOM) + 1, Dint, 1, {43}),
     "negative_shift": (lambda: lsh(SEVEN_INT, NEGATIVE) + 1, Int, 1, {43}),
