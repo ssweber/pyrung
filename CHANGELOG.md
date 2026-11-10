@@ -359,6 +359,7 @@
 
 ### Fixes
 
+- The ladder export draws a rung with an Or of 3 or more rows and several outputs the way the CLICK keeps it, so a pasted project shows no redraw (it put the second output on row 2).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
