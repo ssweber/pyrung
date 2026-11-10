@@ -560,7 +560,6 @@ def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
     assert {
         "boot_read/what_survives",
         "rtc_set/date_and_time_apply",
-        "real_sum/f64_row",
         "fixed_scan/seconds_and_ms",
     } <= asked
 

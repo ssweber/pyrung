@@ -24,8 +24,9 @@ compensated (Neumaier, fsum)      1, 1, 1      1, 1, 1      2
   the 1, so left to right is 0, 0, 1 and right to left 0, 1, 0.  At double the 1
   survives every order.  pyrung reads 1, 1, 1 on every backend.
 - ``f64_row``: the same orderings of {1e30, 1, -1e30}, where double absorbs the 1 too.
-  Only a compensated sum reads 1, 1, 1 at a width a CLICK could have.  pyrung reads
-  0, 0, 1 on every backend, and the case expects a range and ``make test-conformance`` prints its reading on a PASS.
+  Only a compensated sum reads 1, 1, 1 at a width a CLICK could have.  A CLICK reads
+  0, 0, 1 (2026-11-05 and 2026-11-09), and so does pyrung on every backend.  With
+  ``f32_row`` at 1, 1, 1, a CLICK's SUM is a double added left to right.
 - ``sum_absorbs``: {16777216, 1, 1}, read as the sum less 16777216.  float32 left to right
   or largest first absorbs each 1 (0); anything else reads 2.  It alone tells float32
   largest first from compensated.  pyrung reads 2.
@@ -42,7 +43,7 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Rung, copy, fill, math
 from tests.conformance.memory import df
-from tests.conformance.probe_kit import between, finish, once
+from tests.conformance.probe_kit import finish, once
 
 
 def _orderings(slot, first, big, fields):
@@ -116,12 +117,11 @@ group = Group(
             probe="the order and width of a Real SUM (see the table)",
         ),
         case(
-            "SUM of the same orderings of {1e30, 1, -1e30}: a double left to right reads 0, 0, "
-            "1, compensated 1, 1, 1 (Result1..3)",
+            "SUM of the same orderings of {1e30, 1, -1e30} adds a double left to right: they "
+            "read 0, 0, 1 (Result1..3), and a compensated SUM would read 1, 1, 1",
             ladder=prove_f64_row,
             init=init_f64_row,
-            expect={"Result1": between(0, 1), "Result2": between(0, 1), "Result3": between(0, 1)},
-            probe="a compensated SUM or a plain one (pyrung adds plain)",
+            expect={"Result1": 0, "Result2": 0, "Result3": 1},
         ),
         case(
             "SUM of {16777216, 1, 1} keeps both 1s: the sum less 16777216 is 2 (Result1), 0 if "
