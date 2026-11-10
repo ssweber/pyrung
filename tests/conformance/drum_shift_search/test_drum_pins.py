@@ -85,43 +85,44 @@ Reading at the return   2626          2626           2424
 - ``correction_with_flag``: a completed drum with step 5 staged: corrects with the flag on,
   1414, or the flag stops it, 5454 (Result2, Result3).  Staged while paused, read paused,
   5454 (Result4), and on the return, 1414 (ErrorCode).  The CLICK read 1414, 1414, 5454 and
-  1414: the correction runs with the flag on.
+  1414, so the correction runs with the flag on.
 - ``flag_cleared``: a jumped completed drum's flag reset from outside writes no row, 1010, or
   does, 1111 (Result2); its own end on the next scan moves it, 2222 (Result3).  A completed
   drum's flag reset while paused: the return writes the row, 2222, or leaves it, 2020
-  (Result4).  The CLICK read 1010, 2222 and 2222: clearing the flag writes no row, and the
+  (Result4).  The CLICK read 1010, 2222 and 2222.  Clearing the flag writes no row, and the
   return writes it.
 - ``reset_paths``: a reset while paused on a completed drum, 1010 at the reset (Result2),
   and the return writes the row, 1111 (Result3).  A jump that rises on a reset's scan and
   holds is spent (Result4 on the next scan, ErrorCode on the one after), 1111, or lands
   when the reset ends, 3333.  The jog's twin is recorded (``drum/reset_swallows_held_jog``).
-  The CLICK read 1010, 1111, 1111 and 1111: the held jump is spent.
+  The CLICK read 1010, 1111, 1111 and 1111, so the held jump is spent.
 - ``written_and_paused_acc``: a step written with a jog on one scan moves from what was
   written, 3333, or from what the drum held, 2222 (Result2).  A paused drum's Acc holds, 9
   hundreds, or clears, 0 (Result3); a paused jog (Result4) and a paused jump (ErrorCode)
-  clear it, 0, or leave it, 9.  The CLICK read 3333, 9, 0 and 0: the jog moves from what was
-  written, a pause keeps Acc, and a paused jog or jump clears it.
+  clear it, 0, or leave it, 9.  The CLICK read 3333, 9, 0 and 0.  The jog moves from what was
+  written.  A pause keeps Acc, and a paused jog or jump clears it.
 - ``event_rises_in_pause``: step 1's event rises during a pause and holds through the return.
   An event drum that kept tracking its event never moves (1 in the top digit); one whose
   memory stood still moves after the return (2).  The time & event drum below takes the
   level on the scan after the return (2) as ``te_level_from_scan_1`` says.  Result2 on the
-  return, Result3 and Result4 after it.  The CLICK read 1111, 1122 and 1122: the event drum
+  return, Result3 and Result4 after it.  The CLICK read 1111, 1122 and 1122, so the event drum
   keeps tracking its event while paused.
 - ``te_event_before_time``: on a timed time & event step, an event pulse before the time is up
   is lost, and with the time up later and no event the drum stays, 11; one latched moves,
   22 (top drum, Result2).  The drum below has the time up first and takes a later pulse, 22
   (Result3).  Recorded: a level event, and a held event (``te_level_event_already_on``).
   Result4: Acc 32760 on a time & event step waiting for its event, 5 scans on: 32767 (1,
-  stops), negative (2, wraps), or 0 for neither.  The CLICK read 1111, 1122 and 1: the early
+  stops), negative (2, wraps), or 0 for neither.  The CLICK read 1111, 1122 and 1.  The early
   pulse is lost, and Acc stops at 32767.
 - ``drum_in_loop``: a time drum in a For of 3 beside the same drum outside it, both from Acc
   0 for 150 ms by a free TON.  Result2 = 10 * inside / outside: 30 if the body's time adds up
   per pass, 10 if a scan's time is once.  Result3: a jog bit up once, in the loop: 2 (one
   move; the edge is spent on the first pass) or 4 (every pass).  An event drum with an
-  event up on one scan (Result4) likewise.  The CLICK read 30, 2 and 2: each pass adds the
+  event up on one scan (Result4) likewise.  The CLICK read 30, 2 and 2.  Each pass adds the
   scan's time, and an edge acts on the first pass only.  Result2 keeps the range 20..60,
-  since it moves with the scan time.  pyrung's first scan adds the time on the second and
-  third passes only, so a 10 ms scan reads 31 and the soft PLC's 30-40 ms scans read more.
+  since it moves with the scan time.  On the first scan, pyrung's drum in the loop adds the
+  scan's time on its second and third passes, and the drum outside adds none.  So a 10 ms scan
+  reads 31, and the soft PLC's 30-40 ms scans read more.
 
 ``drum_limits``, last in the part since a paste may refuse one:
 
