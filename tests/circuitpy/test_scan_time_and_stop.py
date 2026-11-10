@@ -183,7 +183,6 @@ def test_first_scan_after_stop_to_run_times_a_full_scan(monkeypatch):
 
 RunScans = Int("RunScans", retentive=True)
 ModeScans = Int("ModeScans", retentive=True)
-_SC50_WRITE = "_mb_write_coil_plc('SC', 50, True)"
 
 
 def _count_program() -> Program:
@@ -196,48 +195,66 @@ def _count_program() -> Program:
 
 
 _SWITCH_IN_RUN = RunStopConfig(debounce_ms=0, run_when_high=False)
+_SC50_COIL = 0xF000 + 49
+_SC51_COIL = 0xF000 + 50
+
+
+def _fc05(coil: int) -> bytes:
+    return struct.pack(">HHHBBHH", 1, 0, 6, 1, 5, coil, 0xFF00)
+
+
+def _fc15_on(start: int, count: int) -> bytes:
+    payload = bytes([(1 << count) - 1])
+    return struct.pack(">HHHBBHHB", 2, 0, 7 + len(payload), 1, 15, start, count, 1) + payload
 
 
 @pytest.mark.parametrize("runstop", [None, _SWITCH_IN_RUN], ids=["no-runstop", "switch-in-run"])
-def test_sc50_over_modbus_holds_stop(monkeypatch, runstop):
-    # The generated code stops on the write: no scan after it, SC50 not
-    # stored, SC11 off.  Written after scan 1, held for the rest.  pyrung's
-    # soft PLC refuses this write instead.
+@pytest.mark.parametrize(
+    "request_frame",
+    [_fc05(_SC50_COIL), _fc05(_SC51_COIL), _fc15_on(_SC50_COIL, 2)],
+    ids=["fc05-sc50", "fc05-sc51", "fc15-sc50-sc51"],
+)
+def test_sc50_and_sc51_over_modbus_are_refused(monkeypatch, runstop, request_frame):
+    # SC50 and SC51 are ladder only.  The server answers exception 02, as
+    # pyrung's soft PLC does, stores nothing, and the code keeps scanning.
+    request = bytearray(request_frame)
     namespace, read = _run(
         _count_program(),
         monkeypatch,
         scans=6,
         runstop=runstop,
         modbus=True,
-        at_loop_top=f"if __scan_once == 2: {_SC50_WRITE}",
+        at_loop_top=f"if __scan_once == 2: _t_answer = _rt._mb_handle({request!r}, {len(request)})",
     )
 
-    assert namespace["_mode_run"] is False
-    assert read(RunScans) == 2
-    # The TagMap brings SC11 and SC50 in; the program alone does not.
-    assert namespace["_t_sys_mode_run"] is False
+    tid, fc = struct.unpack(">H", request[:2])[0], request[7]
+    assert namespace["_t_answer"] == struct.pack(">HHHBBB", tid, 0, 3, 1, fc | 0x80, 2)
+    assert namespace["_mode_run"] is True
+    assert read(RunScans) == 6
+    # The TagMap brings SC11, SC50 and SC51 in; the program alone does not.
+    assert namespace["_t_sys_mode_run"] is True
     assert namespace["_t_sys_cmd_mode_stop"] is False
+    assert namespace["_t_sys_cmd_watchdog_reset"] is False
 
 
 @pytest.mark.parametrize(
     ("scans", "run_scans"),
     [
         # Held through the switch's RUN; switch at STOP on 4..5, STOP on 5.
-        (6, 2),
+        (6, 3),
         # Back at RUN on 6, debounced on 7: STOP->RUN, and 7..9 run.
-        (10, 5),
+        (10, 6),
     ],
     ids=["held", "switch-stop-then-run"],
 )
-def test_sc50_over_modbus_releases_at_switch_stop_then_run(monkeypatch, scans, run_scans):
+def test_sc50_from_a_rung_releases_at_switch_stop_then_run(monkeypatch, scans, run_scans):
+    # The rung's STOP command stops the code at the end of pass 2.
     namespace, read = _run(
-        _count_program(),
+        _rung_stop_program(),
         monkeypatch,
         scans=scans,
         runstop=_SWITCH_IN_RUN,
         stop_scans=range(4, 6),
-        modbus=True,
-        at_loop_top=f"if __scan_once == 2: {_SC50_WRITE}",
     )
 
     mode_run = scans == 10

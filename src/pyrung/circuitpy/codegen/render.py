@@ -102,25 +102,34 @@ def _system_first_needed(ctx: CodegenContext) -> bool:
     return system.sys.first_scan.name in ctx.referenced_tags or bool(_system_clock_symbols(ctx))
 
 
-def _stop_hold_needed(ctx: CodegenContext) -> bool:
-    """Whether something besides the switch can put the code in STOP.
+def _stop_command_used(ctx: CodegenContext) -> bool:
+    """Whether a rung can put the code in STOP with the STOP command (SC50).
 
-    The STOP command (SC50, from a rung or over Modbus) stops the code and
-    ``_stop_hold`` keeps it there: with a RUN/STOP switch, until the switch
-    reads STOP; without one, until a restart.  A math error (SC46) does not
-    stop the code, as it does not stop a CLICK.
+    A Modbus write to SC50 is refused, so only a rung stops the code.  A math
+    error (SC46) does not stop the code, as it does not stop a CLICK.
     """
     return ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is not None
 
 
+def _stop_hold_needed(ctx: CodegenContext) -> bool:
+    """Whether the code needs ``_stop_hold`` to stay in STOP after the STOP command.
+
+    The hold keeps STOP while the RUN/STOP switch reads RUN, until the switch
+    reads STOP.  Without a switch, nothing but a restart leaves STOP.
+    """
+    return ctx.runstop is not None and _stop_command_used(ctx)
+
+
 def _mode_state_needed(ctx: CodegenContext) -> bool:
     """Whether the code has a STOP mode (``_mode_run``, ``_force_outputs_off``)."""
-    return ctx.runstop is not None or _stop_hold_needed(ctx)
+    return ctx.runstop is not None or _stop_command_used(ctx)
 
 
 def _render_stop_lines(ctx: CodegenContext, sp: str) -> list[str]:
     """Put the code in STOP and hold it there (see :func:`_stop_hold_needed`)."""
-    lines = [f"{sp}_mode_run = False", f"{sp}_stop_hold = True"]
+    lines = [f"{sp}_mode_run = False"]
+    if _stop_hold_needed(ctx):
+        lines.append(f"{sp}_stop_hold = True")
     mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
     if mode_run_symbol is not None:
         lines.append(f"{sp}{mode_run_symbol} = False")
@@ -133,9 +142,7 @@ def _render_stop_command_take_lines(ctx: CodegenContext, indent: int) -> list[st
 
     As core's ``_process_mode_commands``: SC50 clears, this scan runs with
     SC11 off, and the code is in STOP at its end
-    (:func:`_render_stop_command_end_lines`).  SC50 written over Modbus stops
-    the code before the next scan instead (``_mb_write_coil_plc``).  pyrung's
-    soft PLC refuses that write.
+    (:func:`_render_stop_command_end_lines`).
     """
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
     if cmd_mode_stop_symbol is None:
@@ -1179,7 +1186,6 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         ctx.symbol_if_referenced(ctx.runstop.source) if ctx.runstop is not None else None
     )
     mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
-    cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
     mode_switch_symbol = ctx.symbol_if_referenced(system.sys.mode_switch_run.name)
 
     lines = [
@@ -1310,7 +1316,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "",
             ]
         )
-    elif not _stop_hold_needed(ctx):
+    elif not _stop_command_used(ctx):
         # No RUN/STOP switch: the code is always in RUN, as core's mode bits
         # read with no mode change (SC10 and SC11 on).
         for symbol in (mode_switch_symbol, mode_run_symbol):
@@ -1328,10 +1334,6 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
     else:
         # No RUN/STOP switch, but the STOP command still stops the code, as on
         # a CLICK; with no switch to turn back to RUN, only a restart does.
-        if cmd_mode_stop_symbol is not None:
-            # SC50 written over Modbus (_mb_write_coil_plc) stops the code
-            # before the next scan.
-            lines.extend(["    if _stop_hold and _mode_run:", *_render_stop_lines(ctx, " " * 8)])
         if mode_switch_symbol is not None:
             lines.append(f"    {mode_switch_symbol} = True")
         lines.append("    if _mode_run:")
