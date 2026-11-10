@@ -796,8 +796,8 @@ def _compile_for_loop_instruction(
     finally:
         ctx._for_loop_depth = depth
     # CLICK reads a Dint count or a constant whole and signed, so 0 or below
-    # runs none, and the rest as unsigned 16-bit (control.for_loop_iterations);
-    # a count of 0 runs FOR_ZERO_COUNT_ITERATIONS iterations.
+    # runs none.  It reads any other count as unsigned 16-bit, and a count of 0
+    # runs FOR_ZERO_COUNT_ITERATIONS iterations (control.for_loop_iterations).
     mask = control.for_count_mask(instr.count)
     if isinstance(instr.count, int) and not isinstance(instr.count, bool):
         # A constant's iterations are known now.

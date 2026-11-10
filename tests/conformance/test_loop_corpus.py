@@ -28,7 +28,7 @@ def test_each_case_alone(part: str) -> None:
 
 
 @pytest.mark.skipif(DEEP not in os.environ, reason=f"{DEEP} is not set")
-@pytest.mark.parametrize("part", [*suite.PARTS, *suite.APART_PARTS])
+@pytest.mark.parametrize("part", loop_corpus.CORPUS_PARTS)
 def test_every_drill_on_each_case(part: str) -> None:
     tally = Tally()
     for group, case in loop_corpus.cases_of(part):

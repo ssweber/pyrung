@@ -80,12 +80,14 @@ def test_forloop_tag_count_zero_runs_no_iteration():
         (Int("Loops"), -32768, 32768),
         (Int("Loops"), 0, 0),
         # and a DD count whole: 65537 runs 65537, 65536 runs 65536 (hardware 2026-11-05),
-        # and signed: -1 runs none (hardware 2026-11-06).
+        # and signed: -1, -65535 and -2 run none (hardware 2026-11-06 and 2026-11-10).
         (Dint("Loops"), 65537, 65537),
         (Dint("Loops"), 65536, 65536),
         (Dint("Loops"), 3, 3),
         (Dint("Loops"), 0, 0),
         (Dint("Loops"), -1, 0),
+        (Dint("Loops"), -65535, 0),
+        (Dint("Loops"), -2, 0),
         (Dint("Loops"), -2147483648, 0),
     ],
     ids=[
@@ -97,6 +99,8 @@ def test_forloop_tag_count_zero_runs_no_iteration():
         "dint3",
         "dint0",
         "dint-1",
+        "dint-65535",
+        "dint-2",
         "dint-min",
     ],
 )
@@ -141,7 +145,22 @@ def test_for_count_mask_follows_the_count_width():
     assert control.for_count_mask(Dint("B")) == 0xFFFFFFFF
     assert control.for_count_mask(words[pointer]) == 0xFFFF
     assert control.for_count_mask(longs[pointer]) == 0xFFFFFFFF
-    assert control.for_count_mask(7) == 0xFFFF
+    assert control.for_count_mask(7) == 0xFFFFFFFF
+    assert control.for_count_mask(7.0) == 0xFFFF
+
+
+def test_forloop_constant_count_is_read_whole(runner_factory):
+    """A constant 70000 runs 70000 (hardware 2026-11-10), not 4464, its low 16 bits."""
+    counter = Dint("Counter")
+
+    with Program() as prog:
+        with Rung():
+            with forloop(70000):
+                copy(counter + 1, counter)
+
+    runner = runner_factory(prog)
+    runner.step()
+    assert runner.current_state.tags["Counter"] == 70000
 
 
 def test_for_zero_count_switch(monkeypatch):

@@ -269,11 +269,11 @@ def _always_called_loop():
 
 
 def _zero_count_loop():
-    # The count is read as unsigned 16-bit: 65536 runs no iteration, so work
-    # is never called.
+    # A constant count is read as signed 32-bit: 2 ** 31 is a negative count,
+    # which runs no iteration, so work is never called.
     with Program(strict=False) as logic:
         with Rung():
-            with forloop(65536):
+            with forloop(2**31):
                 call("work")
         _read_y2()
         _coil_work()

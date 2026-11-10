@@ -279,10 +279,9 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
       70000..70002).
     - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
-    - ``%`` truncates, ``%`` by 0 and ``0 ^ 0`` are an error that is 0 with no
-      flag, and 0 to a negative power is +Inf
-      (:data:`~pyrung.core.expression.CALC_OPS`); outside ``calc`` they stay
-      Python's.
+    - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
+      a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
+      Outside ``calc`` they stay Python's.
     - ``abs()`` of an Int or Dint tag cannot take the bottom of its range:
       ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43, and so is ``abs(DD1)``
       with DD1 = -2147483648.  Keyed on the operand's type, so into a wider

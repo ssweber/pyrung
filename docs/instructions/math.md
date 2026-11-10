@@ -57,7 +57,7 @@ pyrung checks the range when `math()` stores its result, not at each step of the
 
 - A division by zero is 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5. The next `math()` to run sets the flag again only if it divides by zero too, so read the flag on the next rung. A `copy()` leaves it.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
-- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero is 0 with no flag. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
+- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero is 0 with no flag, and the rest of the formula runs. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
 ## Math errors
 
@@ -99,6 +99,8 @@ CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `l
 | Indexed source below its block (`math(DS[Ptr], D)`) | Nothing written, `system.fault.address_error` set |
 | Indexed source past its block | Reads the type's zero value, no flag |
 | Math domain error (`sqrt(-1)`, `log(0)`, `asin(2)`) | That function = 0, the rest of the formula runs, `system.fault.math_operation_error` set for the scan |
+| MOD by zero, `0 ** 0` | That operation = 0, the rest of the formula runs, no flag |
+| Zero to a negative power (`0 ** -1`) | +Inf, so the formula stores 0 into an `Int`, `Dint` or `Word` with `system.fault.out_of_range` |
 
 ## Range aggregates
 

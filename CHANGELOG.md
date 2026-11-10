@@ -19,7 +19,8 @@
 - `math()` follows CLICK's Math, in `PLC`, `CompiledPLC` and generated CircuitPython:
   - each intermediate result in a formula is a 64-bit float, so a whole number past 2**53 loses its last digits
   - `%` takes the sign of the dividend, so `-7 % 2` is now -1 (it was 1). Outside `math()`, `%` and `**` still work as in Python
-  - `%` by 0, and 0 raised to 0 or to a negative power, give 0 with no flag (they set `fault.division_error`, and `0 ** 0` was 1)
+  - `%` by 0 and `0 ** 0` give 0 with no flag (they set `fault.division_error`, and `0 ** 0` was 1)
+  - 0 raised to a negative power is +Inf, so into an `Int`, `Dint` or `Word` the formula stores 0 and sets `fault.out_of_range` (it set `fault.division_error`)
   - `abs()` of an `Int` holding -32768 or a `Dint` holding -2147483648 is 0 with `fault.out_of_range`
   - a hex shift that pushes a bit out of the Word sets no flag
   - a math error zeroes only the operation that failed and sets its flag. The rest of the formula still runs, so `X / 0 + 5` now stores 5 with `fault.division_error` (the whole formula was 0)

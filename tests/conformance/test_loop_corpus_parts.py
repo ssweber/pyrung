@@ -27,7 +27,7 @@ LOW_LOOP_SHARE: dict[str, tuple[float, str]] = {}
 #: A case's scans are few: the loop's share of a part comes from the stretches around them.
 IDLE = 20
 
-_EVERY_PART = [*suite.PARTS, *suite.APART_PARTS]
+_EVERY_PART = loop_corpus.CORPUS_PARTS
 
 
 def _part_as_built(part: str) -> Subject:

@@ -77,7 +77,7 @@ def _permissive(error: Exception) -> int:
 class QuietMathError(ArithmeticError):
     """A math error CLICK's Math answers with 0 and no fault flag.
 
-    A MOD by 0 and ``0 ** 0`` (measured on a CLICK: 0, no flag).  Raised only by
+    A MOD by 0 and ``0 ** 0`` (a CLICK read 0 and no flag).  Raised only by
     the ops :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc``
     (:func:`_op_mod`, :func:`_op_pow_calc`): the operation is 0 and the formula
     carries on, as for every math error (:data:`CALC_FAULTS`), so ``MOD(DS7, 0)

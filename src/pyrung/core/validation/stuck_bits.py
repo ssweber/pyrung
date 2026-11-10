@@ -254,9 +254,7 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
         count = loop.count
         literal = isinstance(count, int) and not isinstance(count, bool)
         runs = (
-            literal
-            and for_loop_iterations(count, for_count_mask(count)) > 0
-            and not loop._oneshot
+            literal and for_loop_iterations(count, for_count_mask(count)) > 0 and not loop._oneshot
         )
         for instr in _flat(loop):
             outer = run.get(id(loop), ())
