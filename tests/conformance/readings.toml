@@ -1436,3 +1436,9 @@ case = "flag_steps/sc40_steps"
 hash = "d2643c0b871e"
 on = "2026-11-10"
 read = { Result1 = 1, Result2 = 1, Result3 = 0 }
+
+[[reading]]
+case = "for_signed/minus_counts"
+hash = "3a508c407b9b"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1, ErrorCode = 1 }
