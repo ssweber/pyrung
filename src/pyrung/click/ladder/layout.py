@@ -381,7 +381,6 @@ class _LayoutMixin:
                 source=None,
             )
 
-        row_count = max(len(condition_rows), len(slots))
         if split_col == 0 and len(slots) > 1:
             # No trunk contact: a plain wire in column A stands in for it, and
             # the split goes in column B (column A is the rail and takes no
@@ -390,6 +389,11 @@ class _LayoutMixin:
             condition_rows[0].cells[0] = "-"
             condition_rows[0].cursor = 1
             split_col = 1
+        # Under an Or the CLICK keeps the first output on the top row and puts the
+        # rest on the last Or row and below it, so a middle Or row only carries
+        # the output bus down.
+        slot_rows = _slot_rows(len(slots), len(condition_rows))
+        row_count = max(len(condition_rows), slot_rows[-1] + 1)
         rows: list[list[str]] = []
         for row_index in range(row_count):
             cells = (
@@ -400,18 +404,25 @@ class _LayoutMixin:
             rows.append([first_marker if row_index == 0 else "", *cells, ""])
 
         if len(slots) > 1:
-            for slot_index in range(len(slots)):
+            for row_index in range(slot_rows[-1] + 1):
+                if row_index == 0:
+                    marker = "T"
+                elif row_index == slot_rows[-1]:
+                    marker = "-"
+                elif row_index in slot_rows:
+                    marker = "T"
+                else:
+                    marker = "|"
                 # Split node markers on the parent branch column (T / -).
-                marker = _vertical_marker(index=slot_index, total=len(slots))
                 cell_index = split_col + 1
-                existing = rows[slot_index][cell_index]
+                existing = rows[row_index][cell_index]
                 if existing in {"", "-", "T", "|"}:
                     if marker == "T" or existing == "T":
-                        rows[slot_index][cell_index] = "T"
+                        rows[row_index][cell_index] = "T"
                     elif existing == "|":
-                        rows[slot_index][cell_index] = "|"
+                        rows[row_index][cell_index] = "|"
                     else:
-                        rows[slot_index][cell_index] = marker
+                        rows[row_index][cell_index] = marker
                 else:
                     self._raise_issue(
                         path=path,
@@ -423,7 +434,7 @@ class _LayoutMixin:
                     )
 
         for slot_index, slot in enumerate(slots):
-            row = rows[slot_index]
+            row = rows[slot_rows[slot_index]]
             row[-1] = slot.output_token
 
             local_tokens = self._local_condition_tokens(
@@ -765,6 +776,11 @@ def assert_no_column_a_vertical(rows: list[tuple[str, ...]] | tuple[tuple[str, .
 
 
 # ---- Marker helpers ----
+def _slot_rows(slot_count: int, or_rows: int) -> list[int]:
+    """Row of each output slot: the first on the top row, the rest from the last Or row down."""
+    return [0, *[max(index, or_rows + index - 2) for index in range(1, slot_count)]][:slot_count]
+
+
 def _vertical_marker(*, index: int, total: int) -> str:
     if total <= 1:
         return "-"
