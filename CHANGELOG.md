@@ -527,9 +527,11 @@
   - its Modbus server answers as a CLICK does:
     - a write to an SC or SD that CLICK's Data View shows as Read Only answers with exception code 2 and changes nothing (it acknowledged the write, and stored one to SC50 or SC51). Only a rung can stop the code.
     - an FC 15 or FC 16 write that reaches one refused address stores nothing (it stored the addresses before that one)
+    - a coil write to X, T or CT answers with exception code 2 (it stored the write)
     - a read of an address in a CLICK bank that no tag or rung uses returns 0 (it answered with exception code 2). A write there still answers with exception code 2.
-    - XD and YD serve CLICK's 17 registers each, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits, and a YD register with no Y bits keeps the word written to it.
-    - a read of a Y address between two slots returns 0 (it answered with exception code 2)
+    - it serves every cell of a bank that a rung reaches by pointer or block instruction, as in `ds[ptr]` (a cell no tag named answered with exception code 2)
+    - XD and YD serve CLICK's 17 registers each, built from the X and Y bits. A write to YD sets those Y bits, and a YD register with no Y bits keeps the word written to it.
+    - a read of units 17..32 of an X or Y slot returns 0 (it answered with exception code 2)
   - timers take their time from `time.monotonic_ns()`, so they no longer drift after hours of uptime, and the first scan after STOP->RUN counts its time
 - A TXT blanked by `fill("")` or `reset()` holds NUL, as an unwritten TXT and CLICK's text registers do:
   - its `to_ascii` copy writes 0 (it left the destination unchanged)
