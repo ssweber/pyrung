@@ -389,9 +389,19 @@ class _LayoutMixin:
             condition_rows[0].cells[0] = "-"
             condition_rows[0].cursor = 1
             split_col = 1
+        if (
+            len(condition_rows) > 2
+            and condition_rows[0].merge_open
+            and split_col >= 1
+            and condition_rows[0].cells[split_col - 1] == "T"
+            and not any(slot.local_conditions for slot in slots)
+        ):
+            # An Or of 3 rows or more: its own merge column carries the output bus, as the
+            # CLICK keeps it.  An Or of 2 rows keeps the bus one column on, as CLICK saved it.
+            split_col -= 1
         # Under an Or the CLICK keeps the first output on the top row and puts the
         # rest on the last Or row and below it, so a middle Or row only carries
-        # the output bus down.
+        # the bus down.
         slot_rows = _slot_rows(len(slots), len(condition_rows))
         row_count = max(len(condition_rows), slot_rows[-1] + 1)
         rows: list[list[str]] = []
