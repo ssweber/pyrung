@@ -32,10 +32,9 @@ and each case expects what it read.
   Result3 the CTU.  Result1 is the control.  The CLICK read 1, 1 and 1.  In this layout the
   raise by pointer -1 alone reads SC44 off, so bit 2 says nothing about the TON or the CTU.
   Bit 1 says both leave SC44 raised by pointer 0 on, as ``address_flag_vs_other_instructions``
-  reads, where SC44 is off after each box of ``boxes_by_pointer``.  ``test_flag_steps.py``
-  asks why.  Each SC44 read off has a false read rung of an earlier scan between the raise and
-  the read, and a Math on a false rung may clear SC44.  pyrung reads 3, 3 and 3, so the case is
-  pending ``SYS``.
+  reads.  In ``boxes_by_pointer`` SC44 is off after each box.  Why the two layouts differ is
+  open, and ``flag_steps`` (part ``follow2_flags``) asks it.  pyrung reads 3, 3 and 3, so the
+  case is pending ``SYS``.
 
 ``flag_halves``, the SC43 halves of ``flag_probe`` with a raise that takes:
 
@@ -203,9 +202,9 @@ flag_boxes = Group(
     "flag_boxes",
     [
         case(
-            "After a Search, Shift, event Drum, TON and CTU, SC43 is still on, 31 (Result1), and "
-            "SC44 is off, raised by pointer 0 (Result2 = 0) or by pointer -1 (Result3 = 0); each "
-            "raise alone leaves its flag on (Result4 = 7)",
+            "SC43 is still on after a Search, Shift, event Drum, TON and CTU, 31 (Result1).  "
+            "SC44 is off after each, raised by pointer 0 (Result2 = 0) or by pointer -1 "
+            "(Result3 = 0).  Each raise alone leaves its flag on (Result4 = 7)",
             ladder=prove_boxes_by_pointer,
             init=init_boxes_by_pointer,
             expect={"Result1": 31, "Result2": 0, "Result3": 0, "Result4": 7},
@@ -214,8 +213,8 @@ flag_boxes = Group(
         ),
         case(
             "A TON and a CTU enabled every scan, as address_flag_vs_other_instructions has them, "
-            "leave SC44 raised by pointer 0 on (bit 1), and SC44 reads off after a raise by "
-            "pointer -1 (bit 2): Result2, Result3 = 1; the raises alone read 1 too (Result1)",
+            "leave SC44 raised by pointer 0 on (bit 1).  SC44 reads off after a raise by pointer "
+            "-1 (bit 2).  So Result2 and Result3 are 1.  The raises alone read 1 too (Result1)",
             ladder=prove_ton_ctu_by_pointer,
             init=init_ton_ctu_by_pointer,
             expect={"Result1": 1, "Result2": 1, "Result3": 1},
@@ -357,25 +356,25 @@ flag_halves = Group(
     [
         case(
             "A Block copy, Fill, Pack (bits, words, text) or Unpack (bits, words) right after a "
-            "Copy that raises SC43 settles it: a bit per op with SC43 off after it, 127 for all "
-            "seven (Result1); the raise alone leaves it on (Result2 = 1)",
+            "Copy that raises SC43 settles it.  Result1 has a bit per op with SC43 off after it, "
+            "127 for all seven.  The raise alone leaves SC43 on (Result2 = 1)",
             ladder=prove_bulk_ops_settle_sc43,
             init=init_bulk_ops_settle_sc43,
             expect={"Result1": 127, "Result2": 1},
             scans=scans_for(HALF_WINDOW),
         ),
         case(
-            "A oneshot Copy (bit 1) and Math (bit 2) after SC43 settle it on the scan they fire, "
-            "a bit per op with SC43 off, 3 (Result2), and on the scan they do not fire, no bit "
-            "with SC43 still on, 0 (Result1); the raise alone leaves SC43 on (Result3 = 1)",
+            "A oneshot Copy (bit 1) and Math (bit 2) after SC43 settle it on the scan they "
+            "fire, 3 (Result2).  They settle it on the scan they do not fire too, so no bit reads "
+            "SC43 still on, 0 (Result1).  The raise alone leaves SC43 on (Result3 = 1)",
             ladder=prove_oneshot_settles_sc43,
             init=init_oneshot_settles_sc43,
             expect={"Result1": 0, "Result2": 3, "Result3": 1},
             scans=scans_for(HALF_WINDOW),
         ),
         case(
-            "A Copy whose source is SC43, right after a raise, settles SC43 before it reads it: "
-            "it reads SC43 off (Result1 = 0), and SC43 is off after it (Result2 = 1); the raise "
+            "A Copy whose source is SC43, right after a raise, settles SC43 before it reads it.  "
+            "It reads SC43 off (Result1 = 0), and SC43 is off after it (Result2 = 1).  The raise "
             "alone leaves SC43 on (Result3 = 1)",
             ladder=prove_source_sc43,
             init=init_source_sc43,
