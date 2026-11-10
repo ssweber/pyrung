@@ -55,10 +55,9 @@ def generate(build: ConformanceProgram, *, ip: str = "127.0.0.1", port: int = 50
     """``generate_circuitpy()`` output for *build*: the P1AM-200 project to load.
 
     The generated server serves every register *build*'s TagMap maps (slots,
-    their spares, the hashes) and every raw register a case uses.  A read of any
-    other address in a CLICK bank returns 0, as on a CLICK.  A cell of a range
-    that a rung reaches by pointer or block instruction answers with exception
-    code 2 unless a tag names it.
+    their spares, the hashes), every raw register a case uses, and every cell of
+    a bank a case reaches by pointer or block instruction.  A read of any other
+    address in a CLICK bank returns 0, as on a CLICK.
     """
     from pyrung.circuitpy import P1AM, ModbusServerConfig, generate_circuitpy
 

@@ -11,7 +11,7 @@ import struct
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Dint, Int, Program, Rung, TagType, copy, fill
+from pyrung import Block, Bool, Int, Program, Rung, TagType, copy, fill
 from pyrung.click import ClickBlocks, TagMap
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.circuitpy.test_modbus_codegen import _ctx_and_source, _IdleBase, _mbap
@@ -207,6 +207,22 @@ def test_a_cell_a_rung_reaches_by_pointer_is_served(monkeypatch):
     assert ns["_b_DS"][7:9] == [5, -1]
     assert _exception(send(_fc16(_addr("DD", 8), [1, 1]))) is None
     assert ns["_b_DD"][7] == 65537
+
+
+def test_a_float_and_a_text_cell_reached_by_pointer_are_served(monkeypatch):
+    ptr = Int("Ptr", default=3)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(1.5, df[ptr])
+            copy("A", txt[ptr])
+    ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
+    assert _read_regs(send, 3, _addr("DF", 3), 2) == list(
+        struct.unpack("<HH", struct.pack("<f", 1.5))
+    )
+    # TXT3 is the low byte of the register it shares with TXT4.
+    assert _read_regs(send, 3, _addr("TXT", 3), 1) == [ord("A")]
+    assert _exception(send(_fc16(_addr("TXT", 5), [ord("B") | ord("C") << 8]))) is None
+    assert ns["_b_TXT"][4:6] == ["B", "C"]
 
 
 def test_a_cell_a_block_instruction_reaches_is_served(monkeypatch):
