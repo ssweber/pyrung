@@ -2687,8 +2687,8 @@ class PLC:
                 one, and so do the first two scans and the last scan of each wait.  The
                 other scans of a wait count a hundredth each, so a long timer fits a small
                 budget.  A wait pyrung cannot run compiled counts one for every scan.  That
-                happens when the program writes a read-only system tag, has a
-                ``run_function()`` that keeps state between calls, or has a forced tag.
+                happens when the program writes a read-only system tag or has a
+                ``run_function()`` that keeps state between calls, or when a tag is forced.
             wall_clock_s: Seconds of real time before the search stops and says so, or
                 ``None`` for no limit.  A search this ends may have reached on a faster
                 machine.

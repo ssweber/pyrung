@@ -286,7 +286,10 @@
   - a bare `Real` tag as a bound reads as 0 with no flag
 - A `time_drum` preset may be a register (CLICK v4), and exports to CLICK. `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` is removed.
 - `pyrung.click.estimate_steps()` estimates an exported ladder's CLICK program steps, within about 1% on a 6,000-step project. Validation reports `CLK_STEP_LIMIT` as a program nears or passes CLICK's 8000, and `pyrung_to_ladder` warns with it but still exports. The new CLICK Internals page lists the costs.
-- `run_for()` and `run_until()` no longer skip scans. After the first 1,000 scans of a run, every scan runs compiled, and scans that repeat the one before run faster still. An hour of a plain timer takes about half a second. A run steps every scan interpreted when it has a callable stop predicate, a monitor, a breakpoint or a `when()`, when the PLC runs in realtime mode, or when the program can't be compiled.
+- `run_for()` and `run_until()` no longer skip scans. After the first 1,000 scans of a run, every scan runs compiled, and scans that repeat the one before run faster still. An hour of a plain timer takes about half a second. A run steps every scan interpreted when:
+  - it has a callable stop predicate, a monitor, a breakpoint or a `when()`
+  - the PLC runs in realtime mode
+  - the program can't be compiled
 - History answers questions about the scans of a compiled `run_for()` or `run_until()` as if they had been stepped, by stepping them again from the nearest checkpoint:
   - `cause()`, `effect()`, `rung_firings()`, `history.previous_transition()`, `cold_rungs()` and `hot_rungs()` (`cause()` raised `ValueError` on any scan the run skipped)
   - `pyrung_coverage.collect(plc)` reads the whole run, however long it was
@@ -311,7 +314,10 @@
 - `how(max_scans=)` charges a scan the same whether pyrung runs it compiled or not:
   - each scan `how()` steps counts one against `max_scans`, and so do the first two scans and the last scan of each wait
   - the other scans of a wait count a hundredth each, so a long timer fits a small budget
-  - a wait pyrung cannot run compiled counts one for every scan. That happens when the program writes a read-only system tag, has a `run_function()` that keeps state between calls (a callable object, a closure, a global or a mutable default), or has a forced tag
+  - a wait pyrung cannot run compiled counts one for every scan. That happens when:
+    - the program writes a read-only system tag
+    - the program has a `run_function()` that keeps state between calls (a callable object, a closure, a global or a mutable default)
+    - a tag is forced
 - A reached `how()` plan uses temporary logic only where the plan needs it, so `Rung(En): on_delay(W, 3000)` plans "Set En=True, wait ~3s" (it latched `En` with temporary logic until `W.Done`):
   - `how()` reruns the plan with each piece of temporary logic left out, then with a Set of its value instead
   - it keeps the simpler plan only when that plan reaches the goal on the same scan and meets nothing in `avoid=`
@@ -396,7 +402,7 @@
 - A `Real` that holds NaN and stays NaN no longer changes on every scan:
   - `cause()`, `effect()` and `history.previous_transition()` answer for it (they returned `None`). It last changed on the scan it became NaN, even when `math()` computes the NaN again.
   - `plc.diff()`, `monitor()` callbacks and the debugger's tag changes no longer report a change for it (they reported one on every scan).
-- A `Real` holding any NaN is 0xFFFF:0xFFFF, as on a CLICK, over Modbus and in `unpack_to_words()` or `unpack_to_bits()` (it was its own bits, such as 0x7FC0:0x0000). This holds for the soft PLC, for generated CircuitPython and for a `send()` to a `ModbusAddress`.
+- Over Modbus and in `unpack_to_words()` or `unpack_to_bits()`, a `Real` holding any NaN is 0xFFFF:0xFFFF as on a CLICK (it was its own bits, such as 0x7FC0:0x0000). This holds for the soft PLC, for generated CircuitPython and for a `send()` to a `ModbusAddress`.
 - `how(avoid=...)` no longer treats an avoid check that raises as clear, which let it plan through the avoided state. When the check raises on the start state, or on a scan of a command `how()` tries, `how()` raises `AvoidCheckError` with the check's exception as its cause.
 - A long `how()` wait keeps its memory bounded. It keeps at most two compiled kernels and 512 checkpoints, and records a long run's scans only when a later `cause()` or a survey such as `cold_rungs()` reaches them.
 - A kernel that fails to compile for a reason pyrung doesn't expect gives a `RuntimeWarning`, and the scans run interpreted, instead of raising out of `run_for()` or `how()`.
