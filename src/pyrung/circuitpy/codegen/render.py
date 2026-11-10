@@ -871,10 +871,10 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     if modbus_accessor_lines:
         lines.append(_section("Modbus address mapping"))
         lines.extend(modbus_accessor_lines)
-        if has_runtime:
-            lines.extend(_render_runtime_wiring(ctx))
-        else:
-            lines.extend(modbus_protocol_lines)
+    if has_runtime and (modbus_accessor_lines or ctx.modbus_client is not None):
+        lines.extend(_render_runtime_wiring(ctx))
+    elif modbus_accessor_lines:
+        lines.extend(modbus_protocol_lines)
 
     # 9) embedded user function sources
     lines.extend(function_source_lines)

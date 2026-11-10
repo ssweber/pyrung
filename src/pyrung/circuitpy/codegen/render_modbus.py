@@ -21,9 +21,12 @@ _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
 _RAW_BANKS = frozenset(MODBUS_MAPPINGS) - {"SC", "SD", "XD", "YD"}
 _XD0 = MODBUS_MAPPINGS["XD"].base
 _YD0 = MODBUS_MAPPINGS["YD"].base
-#: Registers in each of XD and YD: XD0, XD0u, then XD1..XD8 with a spare word after each.
+#: XD and YD each hold 17 registers.  XD0 and XD0u come first, then XD1..XD8, each followed
+#: by a spare word.
 _XY_WORDS = BANKS["XD"].max_addr - BANKS["XD"].min_addr + 1
 _Y0 = MODBUS_MAPPINGS["Y"].base
+#: Banks of two-register cells (Dint, Real), whose half-word write reads the other half.
+_WIDE_BANKS = tuple(sorted(bank for bank, mapping in MODBUS_MAPPINGS.items() if mapping.width == 2))
 #: Coil banks a client may only read (FC 2), so a coil write there answers 02.
 _COIL_READ_ONLY = tuple(
     sorted(
@@ -338,6 +341,7 @@ def _coil_write_chain(ctx: CodegenContext, coil_slots: list[_ModbusBackedSlot]) 
             [
                 f'    if bank == "{slot.bank}" and index == {slot.index}:',
                 f"        {slot.symbol} = _value",
+                "        return",
             ]
         )
     lines.append("")
@@ -385,6 +389,7 @@ def _reg_write_chain(ctx: CodegenContext, reg_slots: list[_ModbusBackedSlot]) ->
                 lines.append(f"        {low.symbol} = chr(_word & 0xFF)")
             if high is not None:
                 lines.append(f"        {high.symbol} = chr((_word >> 8) & 0xFF)")
+            lines.append("        return")
             continue
         store = _store_expr(slot.data_type, slot.symbol, "int(reg_pos)")
         if store is None:
@@ -393,6 +398,7 @@ def _reg_write_chain(ctx: CodegenContext, reg_slots: list[_ModbusBackedSlot]) ->
             [
                 f'    if bank == "{slot.bank}" and index == {slot.index}:',
                 f"        {slot.symbol} = {store}",
+                "        return",
             ]
         )
     lines.append("")
@@ -439,6 +445,9 @@ def _cell_lines(ctx: CodegenContext) -> list[str]:
 
 
 def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
+    """The server's address map and accessors, or nothing for a program with no server."""
+    if ctx.modbus_server is None:
+        return []
     backed = _modbus_backed_slots(ctx)
     coil_slots = [slot for slot in backed if slot.bank in _COIL_BANKS]
     reg_slots = [slot for slot in backed if slot.bank in _WORD_BANKS]
@@ -465,6 +474,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         f"_MB_COIL_READ_ONLY = {_COIL_READ_ONLY!r}",
         f"_MB_SC_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SC'].writable or ()))!r}",
         f"_MB_SD_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SD'].writable or ()))!r}",
+        f"_MB_WIDE = {_WIDE_BANKS!r}",
         # A YD register keeps what a client wrote, for Y bits no tag holds and the spare words.
         f"_mb_yd = [0] * {_XY_WORDS}",
         "",
@@ -481,7 +491,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         *_reg_read_chain(reg_slots),
         *_reg_write_chain(ctx, reg_slots),
         "def _mb_xy_start(base, word):",
-        # XD0 holds X001..X016, XD0u X021..X036, and register 2n (XDn) slot n.
+        # XD0 holds X001..X016 and XD0u X021..X036.  Register 2n is XDn and holds slot n.
         # The odd register after each XDn is a spare word.
         "    if word > 1 and word % 2:",
         "        return None",
@@ -566,7 +576,19 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         f"    if {_YD0} <= addr < {yd_end}:",
         "        return True",
         "    _mapped = _MB_REG_MAP.get(addr) or _mb_reg_cell(addr)",
-        '    return _mapped is not None and (_mapped[0] != "SD" or _mapped[1] in _MB_SD_WRITABLE)',
+        "    if _mapped is None:",
+        "        return False",
+        '    if _mapped[0] == "SD" and _mapped[1] not in _MB_SD_WRITABLE:',
+        "        return False",
+        # A write to half of a Dint or Real keeps the other half, and a cell holding what no
+        # register can (a Dint past 32 bits) has no other half to keep.  Reading the cell
+        # first finds that, so a multi-write refuses it before storing anything.
+        "    if _mapped[0] in _MB_WIDE:",
+        "        try:",
+        "            _mb_reg_get(addr)",
+        "        except Exception:",
+        "            return False",
+        "    return True",
         "",
         "def _mb_write_regs(start, values):",
         "    for _offset in range(len(values)):",
@@ -583,6 +605,8 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "                    _mb_coil_set(_start + _bit, (_word >> _bit) & 1)",
         "            continue",
         "        _mapped = _MB_REG_MAP.get(_addr)",
+        # _mb_reg_ok already read each cell that a store reads, so no store raises here.
+        # The try only keeps an unexpected error from stopping the scan.
         "        try:",
         "            if _mapped is not None:",
         "                _mb_write_reg_plc(_mapped[0], _mapped[1], _mapped[2], _word)",

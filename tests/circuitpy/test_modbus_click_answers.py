@@ -11,10 +11,11 @@ import struct
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Int, Program, Rung, TagType, copy, fill
+from pyrung import Block, Bool, Dint, Int, Program, Rung, TagType, copy, fill
+from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.click import ClickBlocks, TagMap
 from tests.circuitpy.test_codegen import _run_single_scan_source
-from tests.circuitpy.test_modbus_codegen import _ctx_and_source, _IdleBase, _mbap
+from tests.circuitpy.test_modbus_codegen import _client_source, _ctx_and_source, _IdleBase, _mbap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -83,6 +84,26 @@ def test_fc16_past_the_ds_bank_stores_nothing(monkeypatch):
     _ns, send = _server(monkeypatch, TagMap({last: ds[4500]}))
     assert _exception(send(_fc16(_addr("DS", 4500), [7, 8]))) == 2
     assert _read_regs(send, 3, _addr("DS", 4500), 1) == [0]
+
+
+def test_fc16_over_a_cell_no_register_can_hold_stores_nothing(monkeypatch):
+    ptr = Int("Ptr", default=1)
+    with Program(strict=False) as prog:
+        with Rung():
+            copy(5, dd[ptr])
+    ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
+    # A Dint past 32 bits in DD2, an array cell.
+    ns["_b_DD"][1] = 2**40
+    assert _exception(send(_fc16(_addr("DD", 1), [1, 0, 2, 0]))) == 2
+    assert ns["_b_DD"][0] == 5
+
+
+def test_fc16_over_a_tag_no_register_can_hold_stores_nothing(monkeypatch):
+    low, wide = Dint("Low"), Dint("Wide")
+    ns, send = _server(monkeypatch, TagMap({low: dd[2], wide: dd[3]}))
+    ns["_t_Wide"] = 2**40
+    assert _exception(send(_fc16(_addr("DD", 2), [1, 0, 2, 0]))) == 2
+    assert ns["_t_Low"] == 0
 
 
 def test_fc15_past_the_c_bank_stores_nothing(monkeypatch):
@@ -259,3 +280,18 @@ def test_a_coil_write_to_a_read_only_bank_answers_02(monkeypatch, bank):
     assert _exception(send(struct.pack(">BHH", 5, _addr(bank, 1), 0xFF00))) == 2
     assert _exception(send(_fc15(_addr(bank, 1), [True]))) == 2
     assert _read_bits(send, 2, _addr(bank, 1), 1) == [0]
+
+
+# -- Code size -----------------------------------------------------------------------------
+
+
+def test_a_program_with_no_server_has_no_server_code():
+    with Program(strict=False) as prog:
+        pass
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    plain = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+    client = _client_source(prog)
+    for code in (plain if isinstance(plain, str) else plain.code, client.code):
+        assert "_MB_COIL_MAP" not in code
+        assert "def _mb_write_regs" not in code
