@@ -279,14 +279,14 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
       70000..70002).
     - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
-    - ``%`` truncates and ``**`` takes ``0 ^ 0`` and ``0 ^ -1`` for an error that
-      is 0 with no flag (:data:`~pyrung.core.expression.CALC_OPS`); outside
-      ``calc`` they stay Python's.
+    - ``%`` truncates, ``%`` by 0 and ``0 ^ 0`` are an error that is 0 with no
+      flag, and 0 to a negative power is +Inf
+      (:data:`~pyrung.core.expression.CALC_OPS`); outside ``calc`` they stay
+      Python's.
     - ``abs()`` of an Int or Dint tag cannot take the bottom of its range:
-      ``abs(DS1)`` with DS1 = -32768 into an Int stores 0 and sets SC43, and so
-      does ``abs(DD1)`` with DD1 = -2147483648 into a Dint (both read).  Keyed
-      on the operand's type, so into a wider destination too: that half is
-      unread (``abs(DS1)`` into a Dint could be 32768 on a CLICK).
+      ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43, and so is ``abs(DD1)``
+      with DD1 = -2147483648.  Keyed on the operand's type, so into a wider
+      destination too (``abs(DS1)`` into a Dint read 0 on a CLICK).
     - In hex mode a left shift keeps 16 bits: the bits shifted out are gone, so
       ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
@@ -362,9 +362,10 @@ class CalcInstruction(OneShotMixin, Instruction):
     (``system.fault.math_operation_error``, CLICK's SC46) is set for the rest of
     the scan; the next scan starts with it off.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
-    hardware does not).  ``0 ** 0``, ``0 ** -1`` and a MOD by 0 are 0 and set
-    no flag (into a REAL 0.0: unread, the reading went through an Int).
-    MOD truncates: the result has the dividend's sign.
+    hardware does not).  ``0 ** 0`` and a MOD by 0 are 0 and set no flag (into
+    a REAL 0.0).  0 to a negative power is +Inf, so into an INT, DINT or WORD
+    the formula stores 0 and sets the out-of-range flag.  MOD truncates: the
+    result has the dividend's sign.
 
     **Constants:** each integer constant in `expression` is cut to 16 bits, as
     a CLICK Math stores it, whatever the destination: ``math(DD1 / 65536, DD2)``

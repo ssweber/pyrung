@@ -795,35 +795,19 @@ def _compile_for_loop_instruction(
         children = _compile_loop_body(instr, ctx)
     finally:
         ctx._for_loop_depth = depth
-    # CLICK reads a Dint count whole and signed, so 0 or below runs none, and
-    # the rest as unsigned 16-bit (control.for_loop_iterations); a count of 0
-    # runs FOR_ZERO_COUNT_ITERATIONS iterations.
-    non_finite = "fault.out_of_range" in instr._fault_writes
-    if non_finite:
-        # A REAL count holding Inf or NaN runs no iteration and sets SC43
-        # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
-        ctx.mark_helper("_bit_int")
-        count_expr = f"_bit_int({count_expr})"
+    # CLICK reads a Dint count or a constant whole and signed, so 0 or below
+    # runs none, and the rest as unsigned 16-bit (control.for_loop_iterations);
+    # a count of 0 runs FOR_ZERO_COUNT_ITERATIONS iterations.
     mask = control.for_count_mask(instr.count)
-    iterations_lines = [f"{iterations_var} = int({count_expr}) & 0x{mask:X}"]
-    zero_runs = int(control.FOR_ZERO_COUNT_ITERATIONS)
-    if mask == control.FOR_COUNT_MASK_32:
-        # Past FOR_COUNT_MAX_32 the bits are a negative count: none.
-        kept = f"({iterations_var} or {zero_runs})" if zero_runs else iterations_var
-        iterations_lines.append(
-            f"{iterations_var} = 0 if {iterations_var} > 0x{control.FOR_COUNT_MAX_32:X} else {kept}"
-        )
-    elif zero_runs:
-        iterations_lines.append(f"{iterations_var} = {iterations_var} or {zero_runs}")
-    if non_finite:
-        iterations_lines = [
-            "try:",
-            *_indent_body(iterations_lines, 4),
-            "except OverflowError:",
-            f"    {iterations_var} = 0",
-            *_indent_body(_compile_set_out_of_range_fault_body(ctx), 4),
-        ]
-    if ctx.proof_metadata and mask > control.FOR_COUNT_MASK_16:
+    if isinstance(instr.count, int) and not isinstance(instr.count, bool):
+        # A constant's iterations are known now.
+        runs = control.for_loop_iterations(instr.count, mask)
+        iterations_lines = [f"{iterations_var} = {runs}"]
+        capped = runs > PROVE_FOR_ITERATION_CAP
+    else:
+        iterations_lines = _for_count_lines(instr, count_expr, iterations_var, mask, ctx)
+        capped = mask > control.FOR_COUNT_MASK_16
+    if ctx.proof_metadata and capped:
         # The verifier's kernel stops a 32-bit count past its cap rather than
         # run it (a Dint up to 2147483647 runs that many iterations).  The source
         # names the loop by index: its file and line stay out of the lock's hash.
@@ -841,6 +825,41 @@ def _compile_for_loop_instruction(
     ]
     # A false For rung skips its body: only the For's own one-shot re-arms.
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
+
+
+def _for_count_lines(
+    instr: ForLoopInstruction,
+    count_expr: str,
+    iterations_var: str,
+    mask: int,
+    ctx: CodegenContext,
+) -> list[str]:
+    """The lines that read a For's count register into *iterations_var*."""
+    non_finite = "fault.out_of_range" in instr._fault_writes
+    if non_finite:
+        # A REAL count holding Inf or NaN runs no iteration and sets SC43
+        # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
+        ctx.mark_helper("_bit_int")
+        count_expr = f"_bit_int({count_expr})"
+    lines = [f"{iterations_var} = int({count_expr}) & 0x{mask:X}"]
+    zero_runs = int(control.FOR_ZERO_COUNT_ITERATIONS)
+    if mask == control.FOR_COUNT_MASK_32:
+        # Past FOR_COUNT_MAX_32 the bits are a negative count: none.
+        kept = f"({iterations_var} or {zero_runs})" if zero_runs else iterations_var
+        lines.append(
+            f"{iterations_var} = 0 if {iterations_var} > 0x{control.FOR_COUNT_MAX_32:X} else {kept}"
+        )
+    elif zero_runs:
+        lines.append(f"{iterations_var} = {iterations_var} or {zero_runs}")
+    if not non_finite:
+        return lines
+    return [
+        "try:",
+        *_indent_body(lines, 4),
+        "except OverflowError:",
+        f"    {iterations_var} = 0",
+        *_indent_body(_compile_set_out_of_range_fault_body(ctx), 4),
+    ]
 
 
 def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...]]:

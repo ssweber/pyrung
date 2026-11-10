@@ -451,10 +451,12 @@ class _SliceElision:
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
         # The checks run scans on the interpreter, which has no iteration cap:
         # a 32-bit For count can run up to 2147483647 times (a positive
-        # Dint), so a program with one gets no enumerated check.
+        # Dint), so a program with one gets no enumerated check.  A constant
+        # count is read whole too, but one a 16-bit count could hold is no wider.
         self.runs_a_wide_for = any(
             isinstance(instr, ForLoopInstruction)
             and for_count_mask(instr.count) > FOR_COUNT_MASK_16
+            and not (isinstance(instr.count, int) and instr.count <= FOR_COUNT_MASK_16)
             for instr in _iter_program_instructions(program)
         )
 

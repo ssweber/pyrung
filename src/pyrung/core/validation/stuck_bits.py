@@ -230,7 +230,11 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
     may run no iteration at all (a count of 0), and a oneshot loop runs its body
     only on its rung's rising edge; their bodies map to ``None``.
     """
-    from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
+    from pyrung.core.instruction.control import (
+        ForLoopInstruction,
+        for_count_mask,
+        for_loop_iterations,
+    )
 
     def _loop_only(instr: Any) -> list[tuple[str, str]]:
         return [("", "ForLoop")] if isinstance(instr, ForLoopInstruction) else []
@@ -249,7 +253,11 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
         loop = site.instruction
         count = loop.count
         literal = isinstance(count, int) and not isinstance(count, bool)
-        runs = literal and for_loop_iterations(count) > 0 and not loop._oneshot
+        runs = (
+            literal
+            and for_loop_iterations(count, for_count_mask(count)) > 0
+            and not loop._oneshot
+        )
         for instr in _flat(loop):
             outer = run.get(id(loop), ())
             run[id(instr)] = None if outer is None or not runs else site.conditions

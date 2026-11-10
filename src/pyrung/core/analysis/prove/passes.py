@@ -1619,7 +1619,11 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any)
     *instructions* is one node's own list (``rung._instructions``); a branch is
     a node of its own.
     """
-    from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
+    from pyrung.core.instruction.control import (
+        ForLoopInstruction,
+        for_count_mask,
+        for_loop_iterations,
+    )
 
     for instr in instructions:
         if isinstance(instr, ForLoopInstruction):
@@ -1629,7 +1633,7 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any)
             literal = isinstance(count, int) and not isinstance(count, bool)
             if instr._oneshot or instr.body_rungs or not literal:
                 return False
-            if for_loop_iterations(count) == 0:
+            if for_loop_iterations(count, for_count_mask(count)) == 0:
                 return False
             if not _writes_run_when_powered(instr.instructions, name, reach):
                 return False
