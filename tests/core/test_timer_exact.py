@@ -756,4 +756,5 @@ def test_flasher_changes_phase_at_ceil_in_seconds(engine: Any) -> None:
         with Rung(~Target, ~Seen):
             copy(Scans, First)
             latch(Seen)
-    assert engine(prog, 0.1, 13) == 10
+    # The on phase ends on its 10th tick, and the coil shows it through that scan.
+    assert engine(prog, 0.1, 13) == 11

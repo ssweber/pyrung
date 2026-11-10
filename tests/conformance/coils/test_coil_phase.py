@@ -1,44 +1,43 @@
 """A debounce's off TD at its fall, and flashers with a phase of 0: ``deb_fall`` and ``flash_zero``.
 
-Part ``follow2_coils``.
+Part ``follow2_coils``.  A CLICK answered every case on 2026-11-10, twice.
 
-``deb_fall/off_td_at_fall`` (B1): ``coil_timing/off_td_held`` (1, 2, 101) and
-``deb_off_against_tof`` (6, 5: a debounce's off side drops a scan after a TOF of its preset) leave
-open where the scan goes: the off count may start a scan late, or count from the fall and lag in
-the compare.  A debounce of 0 / 100 ms on a rung on scans 2 and 3, off from scan 4.  Result1 is
-the off TD copied on scan 4, the fall, on the rung right after the debounce: 0 where the off count
-starts a scan late, about a scan's ms where it counts on the fall (the lag in the compare, as
-pyrung has it).  Result2 is the off TD on scan 5, for scale.  Result3 is 1 where the off TD is 0
-on scan 3, with the rung true: the rise cleared it, as ``off_td_held`` read (Result2 = 2); 0 where
-it holds what it counted through the reset.  pyrung reads 10, 20, 0 (it holds the off TD).
+``deb_fall/off_td_at_fall`` (B1): a debounce of 0 / 100 ms on a rung on scans 2 and 3, off from
+scan 4.  Result1 is the off TD copied on scan 4, the fall, on the rung right after the debounce.
+Result2 is the off TD on scan 5.  Result3 is 1 where the off TD is 0 on scan 3, with the rung
+true.  A CLICK read 1..2, 3, 1.  The off count starts on the scan of the fall (0 would be a count
+that starts a scan late), so the off side's scan of lag is in the compare
+(``DebounceInstruction``).  The rise cleared the off TD, as ``coil_timing/off_td_held`` read.
+pyrung reads the same: 10, 20, 1 at the in-process 10 ms scan.  Result1 and Result2 are
+milliseconds and follow the target's scan, so they are ranges for any scan up to 50 ms.
 
-``flash_zero``, the flasher readings the audit left (``out_more/zero_and_below`` R3 0,
-``coil_timing/flasher_on_zero`` 0, ``flasher_off`` dark).  One rule fits them all, "either preset
-of 0 or below: dark, both TDs 0", and so do others.  Each flasher's presets of 0 are DS (CLICK's
-editor takes no constant of 0); its rung is on from ``Cmd``.  Over a window of 14 scans Result1 is
-the scans its coil is on, Result2 the first and Result3 the last (``scans.trace``).
+``flash_zero``: each flasher's presets of 0 are DS (CLICK's editor takes no constant of 0), and
+its rung is on from ``Cmd``.  Over a window of 14 scans Result1 is the scans its coil is on,
+Result2 the first and Result3 the last (``scans.trace``).  The readings fit one rule.  A flasher
+with a preset of 0 or below is dark and its TDs stand where they are (``FlasherInstruction``).
 
-- ``off_zero_first_phase`` (L1): 1000 ms on, a DS off preset of 0, read from scan 1.  Result1 = 14,
-  Result2 = 1: the first on phase lights; 0, 0, 0: dark from the start, as "either preset <= 0"
-  has it.  Result4 the on TD and ErrorCode the off TD on scan 14: about 14 scans' ms and 0 for an
-  on phase timing; 0, 0 held in reset.  pyrung reads 14, 1, 14, 140, 0.
-- ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off.  Result4 the on TD and ErrorCode the off
-  TD on scan 14: 0, 0 held in reset ("either preset <= 0"); the off TD about 14 scans' ms where the
-  empty on phase passes to the off phase (pyrung: 0, 0, 0, then 0 and 140, dark); the on TD
-  running where the on phase never ends.
+- ``off_zero_first_phase`` (L1): 1000 ms on, a DS off preset of 0.  Result4 the on TD and
+  ErrorCode the off TD on scan 14.  A CLICK read 0, 0, 0, 0, 0: dark from the start, no first on
+  phase, both TDs 0.
+- ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK read 0, 0, 0, 0, 0:
+  dark, both TDs held at 0.  An off TD running would be the empty on phase passing to the off
+  phase.
 - ``lowered_to_zero`` (L3): two flashers on DS presets.  A, 1000 / 1000 ms, has its on preset
-  lowered to 0 on scan 6, in its on phase; B, 5 / 1000 ms, its off preset on scan 10, in its off
-  phase.  Each reading is ``on TD * 180 + off TD`` (each TD under 180 here, so it reads back as
-  ``divmod(x, 180)``): A on scan 5 (Result1) and 14 (Result2), B on scan 9 (Result3) and 14
-  (Result4).  Result2 = 0: both TDs zero; Result2 about Result1: they freeze; an off TD in Result2:
-  A's on phase ended and its off phase runs.  The same for B, an on TD in Result4 a new on phase.
-  ErrorCode is A's lit scans from 6 on * 100 + B's from 10 on.  pyrung reads 9000, 9090, 1880,
-  10800, 0: A's on phase ends at its 0 (on TD 50, off TD 90 on scan 14), B's off phase ends at
-  its 0 and its on TD runs past its 5 ms (60), and both stay dark.
-- ``short_first_phase`` (L4): 1 ms on, 1000 ms off: is the coil on on the rung's first true
-  scan?  Result2 = 1: yes (Result1 the scans lit, 1 or a few); 0 with Result1 = 0: an on phase of
-  a scan or less does not show.  Result4 the on TD on scan 1.  pyrung reads 0, 0, 0, 10: the
-  on phase ends on the scan it starts, dark.
+  lowered to 0 on scan 6, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on scan 10,
+  in its off phase.  Each reading is ``on TD * 180 + off TD``.  Result1 is A's on scan 5, and
+  Result2 A's on scan 14 less Result1.  Result3 is B's on scan 9, and Result4 B's on scan 14 less
+  Result3.  ErrorCode is A's lit scans from 6 on * 100 + B's from 10 on.  A CLICK read 1260 and
+  1260 for A, 907..908 and 907..908 for B, and ErrorCode 0, so Result2 and Result4 are 0: both
+  flashers go dark, and their TDs freeze where the 0 found them.  pyrung zeroed both TDs before
+  (Result2 -9000 and Result4 -1880 here).  Result1 and Result3 follow the target's scan, so they
+  are ranges.  Result1 is an on TD of at least 1 ms with the off TD 0.  Result3 is an on TD at
+  its 5 ms preset or past it with the off TD running.  Each TD stays under 180 for any scan under
+  about 35 ms, which keeps each reading in an Int.
+- ``short_first_phase`` (L4): 1 ms on, 1000 ms off.  Result4 the on TD on scan 1.  A CLICK read 1,
+  1, 1, 1..2: the coil is on on the rung's first true scan, though the on TD reached its preset
+  on that scan.  The coil shows the phase that ran on a scan, and the next phase shows from the
+  scan after.  pyrung read 0, 0, 0, 10 before: its coil showed the next phase at once, so an on
+  phase of a scan or less stayed dark.  Result4 follows the target's scan, so it is a range.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """
@@ -50,7 +49,6 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Or, Rung, copy, debounce, flasher, math, out
 from tests.conformance.memory import ClickTimer, c, ds, td
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for, trace
 
 # --- deb_fall ------------------------------------------------------------------------
@@ -79,21 +77,19 @@ deb_fall = Group(
     "deb_fall",
     [
         case(
-            "A debounce's off TD counts on the scan its rung falls (Result1 about a scan's ms, "
-            "0 if it starts a scan late), a scan more on the next (Result2); the rise cleared it "
-            "(Result3 = 1, 0 if held)",
+            "A debounce's off TD counts on the scan its rung falls (Result1, a scan's ms) and a "
+            "scan more on the next (Result2); the rise cleared it (Result3 = 1)",
             ladder=prove_off_td_at_fall,
             ready=lambda slot: ~DEB,
             # The off TD counts from power-up while the rung is off, and the on TD is kept after the
             # rung falls; the rise clears the off TD and starts the on TD from 0.
             keep=(DEB_ON.Acc, DEB_OFF.Acc),
             expect={
-                "Result1": between(0, 32767),
-                "Result2": between(0, 32767),
-                "Result3": between(0, 1),
+                "Result1": range(1, 51),
+                "Result2": range(2, 101),
+                "Result3": 1,
             },
             scans=scans_for(),
-            probe="a debounce's off count: from the fall, or a scan late (5)",
         ),
     ],
 )
@@ -163,14 +159,15 @@ def prove_lowered_to_zero(slot: Any) -> None:
         flasher(a, on=(ClickTimer(277), a_on), off=(ClickTimer(278), a_off))
     with Rung(slot.Cmd != 0):
         flasher(b, on=(ClickTimer(279), b_on), off=(ClickTimer(280), b_off))
-    for scan, (on_td, off_td), field in (
-        (A_LOWER - 1, (td[277], td[278]), slot.Result1),
-        (FLASH_WINDOW, (td[277], td[278]), slot.Result2),
-        (B_LOWER - 1, (td[279], td[280]), slot.Result3),
-        (FLASH_WINDOW, (td[279], td[280]), slot.Result4),
+    for (on_td, off_td), before, after, scan in (
+        ((td[277], td[278]), slot.Result1, slot.Result2, A_LOWER - 1),
+        ((td[279], td[280]), slot.Result3, slot.Result4, B_LOWER - 1),
     ):
         with Rung(slot.Cmd != 0, slot.Scratch == scan):
-            math(on_td * 180 + off_td, field)
+            math(on_td * 180 + off_td, before)
+        # 0 where the TDs stand where they were before the preset went to 0.
+        with Rung(slot.Cmd != 0, slot.Scratch == FLASH_WINDOW):
+            math(on_td * 180 + off_td - before, after)
     for coil, after, add in ((a, A_LOWER, 100), (b, B_LOWER, 1)):
         with Rung(slot.Cmd != 0, slot.Scratch >= after, slot.Scratch <= FLASH_WINDOW, coil):
             math(slot.ErrorCode + add, slot.ErrorCode)
@@ -203,72 +200,57 @@ def _flash_case(sentence: str, ladder: Any, coils: tuple[int, ...], **kwargs: An
     )
 
 
-_TRACE = {
-    "Result1": between(0, FLASH_WINDOW),
-    "Result2": between(0, FLASH_WINDOW),
-    "Result3": between(0, FLASH_WINDOW),
-}
+#: Dark over the whole window.
+_DARK = {"Result1": 0, "Result2": 0, "Result3": 0}
 
 flash_zero = Group(
     "flash_zero",
     [
         _flash_case(
-            "A flasher of 1000 ms on and a DS off preset of 0 lights its first on phase from "
-            "scan 1 (Result1 = 14 scans, Result2 = 1 the first, Result3 the last; 0 dark), its "
-            "on TD (Result4) and off TD (ErrorCode) on scan 14",
+            "A flasher of 1000 ms on and a DS off preset of 0 is dark from scan 1 (Result1 = 0 "
+            "scans lit, Result2 = 0 the first, Result3 = 0 the last), its on TD (Result4 = 0) and "
+            "off TD (ErrorCode = 0) on scan 14",
             prove_off_zero_first_phase,
             (671,),
             timers=(273, 274),
             init=init_off_zero_first_phase,
-            expect={
-                **_TRACE,
-                "Result4": between(0, 32767),
-                "ErrorCode": between(0, 32767),
-            },
-            probe="a flasher's off preset of 0: is its first on phase lit (5)",
+            expect={**_DARK, "Result4": 0, "ErrorCode": 0},
         ),
         _flash_case(
-            "A flasher with a DS on preset of 0 and 1000 ms off: its on TD (Result4) and off TD "
-            "(ErrorCode) on scan 14, 0 and 0 held, an off TD running if the on phase passes; "
-            "scans lit (Result1), the first (Result2), the last (Result3)",
+            "A flasher with a DS on preset of 0 and 1000 ms off holds its on TD (Result4 = 0) "
+            "and off TD (ErrorCode = 0) at 0 on scan 14, dark (Result1 = 0 scans lit, Result2 = "
+            "0 the first, Result3 = 0 the last)",
             prove_on_zero_tds,
             (672,),
             timers=(275, 276),
             init=init_on_zero_tds,
-            expect={
-                **_TRACE,
-                "Result4": between(0, 32767),
-                "ErrorCode": between(0, 32767),
-            },
-            probe="a flasher's on preset of 0: its TDs held at 0 or running (5)",
+            expect={**_DARK, "Result4": 0, "ErrorCode": 0},
         ),
         _flash_case(
-            "A flasher's DS preset lowered to 0 while its TDs run: on TD * 180 + off TD before "
-            "and after, for the on preset in the on phase (Result1, Result2) and the off preset "
-            "in the off phase (Result3, Result4), 0 after where both TDs zero; lit scans after "
-            "(ErrorCode = on phase * 100 + off phase)",
+            "A flasher's DS preset lowered to 0 while its TDs run freezes them, as on TD * 180 + "
+            "off TD: before (Result1) and the change after (Result2 = 0) for the on preset in "
+            "the on phase, before (Result3) and the change after (Result4 = 0) for the off "
+            "preset in the off phase; dark after (ErrorCode = 0 lit scans)",
             prove_lowered_to_zero,
             (673, 674),
             timers=(277, 278, 279, 280),
             init=init_lowered_to_zero,
             expect={
-                "Result1": between(-32768, 32767),
-                "Result2": between(-32768, 32767),
-                "Result3": between(-32768, 32767),
-                "Result4": between(-32768, 32767),
-                "ErrorCode": between(0, FLASH_WINDOW * 101),
+                "Result1": range(180, 32768),
+                "Result2": 0,
+                "Result3": range(901, 32768),
+                "Result4": 0,
+                "ErrorCode": 0,
             },
-            probe="a flasher preset lowered to 0 mid-cycle: TDs zero, freeze or run (5)",
         ),
         _flash_case(
-            "A flasher of 1 ms on and 1000 ms off is on on its rung's first true scan "
-            "(Result2 = 1, Result1 the scans lit, Result3 the last; 0 if a phase of a scan or "
-            "less does not show), its on TD on scan 1 (Result4)",
+            "A flasher of 1 ms on and 1000 ms off is on on its rung's first true scan only "
+            "(Result1 = 1 scan lit, Result2 = 1 the first, Result3 = 1 the last), its on TD past "
+            "its preset on that scan (Result4, a scan's ms)",
             prove_short_first_phase,
             (677,),
             timers=(281, 282),
-            expect={**_TRACE, "Result4": between(0, 32767)},
-            probe="a flasher's 1 ms first on phase: lit on the first scan (5)",
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": range(1, 51)},
         ),
     ],
 )

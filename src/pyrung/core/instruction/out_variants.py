@@ -216,21 +216,20 @@ class FlasherInstruction(Instruction):
     target off and freezes both accumulators.  A true rung on an idle phase
     starts an on phase, both accumulators from 0 (the off TD does not run on
     from where it froze, hardware round of 2026-11-05).  Each scan ticks the
-    running phase's accumulator; at or past its preset the other phase starts
-    and its accumulator is cleared.  The accumulator of the phase not running
-    holds.  A TD the ladder writes past the running phase's preset ends that
-    phase on its next tick (``td_write`` read it for both phases).  One
-    written to the phase not running stands until that phase starts again
-    and clears it: what the model implies, not read on a CLICK.  The target
-    is on in the on phase.  The first on phase counts the rung's first scan,
-    as on_delay does, so an on time of a scan or less does not show then.
+    running phase's accumulator, and the target shows that phase.  At or past
+    its preset, the other phase's accumulator is cleared and that phase runs
+    from the next scan.  So every phase shows for at least one scan: a 1 ms
+    first on phase lights the rung's first scan
+    (``flash_zero/short_first_phase``).  The accumulator of the phase not
+    running holds.  A TD the ladder writes past the running phase's preset
+    ends that phase on its next tick (``td_write`` read it for both phases).
+    One written to the phase not running stands until that phase starts
+    again and clears it: what the model implies, not read on a CLICK.
 
-    An on or off preset of 0 or below holds the flasher reset: idle, dark,
-    both accumulators 0, from the first scan that reads it.  A CLICK read
-    that only after the fact: ``flasher_off`` read an off preset of 0 and -5
-    dark with both TDs 0 from 50 ms on, and ``coil_timing/flasher_on_zero``
-    the coil of an on preset of 0 dark.  That no first on phase shows before
-    the reset takes hold is pyrung's choice, not yet read on a CLICK.
+    An on or off preset of 0 or below sets the phase idle, turns the target
+    off and freezes both accumulators, as a false rung does
+    (``flash_zero/lowered_to_zero``).  A flasher whose rung comes true on such
+    a preset shows no first on phase (``flash_zero/off_zero_first_phase``).
     Neither Timer's ``Done`` is written.
     """
 
@@ -279,11 +278,9 @@ class FlasherInstruction(Instruction):
         on_preset = resolve_preset_ctx(self.on_preset, ctx)
         off_preset = resolve_preset_ctx(self.off_preset, ctx)
         if on_preset <= 0 or off_preset <= 0:
-            # Held reset: idle, dark, both accumulators 0.
+            # Held reset: idle and dark, both accumulators frozen.
             ctx.set_memory(phase_key, _FLASH_IDLE)
-            ctx.set_memory(on_frac, 0)
-            ctx.set_memory(off_frac, 0)
-            ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0, self.target.name: False})
+            ctx.set_tags({self.target.name: False})
             return
         phase = ctx.get_memory(phase_key, _FLASH_IDLE)
         if phase == _FLASH_IDLE:
@@ -292,12 +289,14 @@ class FlasherInstruction(Instruction):
             ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0})
             ctx.set_memory(on_frac, 0)
             ctx.set_memory(off_frac, 0)
+        # The coil shows the phase that runs this scan, even one that ends on it.
+        tags: dict[str, Any] = {self.target.name: phase == _FLASH_ON}
         if phase == _FLASH_ON:
             acc, preset, other = self.on_acc, on_preset, self.off_acc
         else:
             acc, preset, other = self.off_acc, off_preset, self.on_acc
         acc_value, frac = _tick(ctx, acc, self.unit)
-        tags: dict[str, Any] = {acc.name: acc_value}
+        tags[acc.name] = acc_value
         if acc_value >= preset:
             # The other phase starts, from 0.
             phase = _FLASH_OFF if phase == _FLASH_ON else _FLASH_ON
@@ -309,7 +308,6 @@ class FlasherInstruction(Instruction):
             other_frac = f"_frac:{other.name}"
             ctx.set_memory(other_frac, ctx.get_memory(other_frac, 0))
         ctx.set_memory(phase_key, phase)
-        tags[self.target.name] = phase == _FLASH_ON
         ctx.set_tags(tags)
 
     def advance_profile(self) -> AdvanceProfile | None:

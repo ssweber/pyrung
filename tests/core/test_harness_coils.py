@@ -126,14 +126,14 @@ class TestFlasherFeedbackIsAFlasher:
     def test_the_feedback_starts_on_the_scan_after_the_enable(self) -> None:
         plc, btn = _pair(Physical("Enc", flasher_on="30ms", flasher_off="20ms"), flasher, 30, 20)
         fb, _coil = _drive(plc, btn, [True] * 18)
-        # Cmd is on from scan 1 and the plant reads it on scan 2.  The first on phase
-        # counts that scan, so it is a scan short: 2 scans, then 2 off and 3 on.
-        assert _bits(fb) == ".##..###..###..###"
+        # Cmd is on from scan 1 and the plant reads it on scan 2.  Each phase shows
+        # through the scan its time runs out: 3 scans on, then 2 off.
+        assert _bits(fb) == ".###..###..###..##"
 
     def test_the_feedback_is_off_while_disabled(self) -> None:
         plc, btn = _pair(Physical("Enc", flasher_on="30ms", flasher_off="20ms"), flasher, 30, 20)
         fb, _coil = _drive(plc, btn, [True] * 4 + [False] * 4)
-        assert _bits(fb) == ".##.." + "..."
+        assert _bits(fb) == ".###." + "..."
 
     @pytest.mark.parametrize("dt", [0.010, 0.007])
     @pytest.mark.parametrize(("on_ms", "off_ms"), [(30, 20), (25, 25), (10, 40), (0, 20)])
@@ -253,8 +253,8 @@ class TestPlansThroughTheCoils:
             assert plc.current_state.tags["Fb"] is True
         (step,) = _profile_for(plc, "Fb", value)
         assert [(d.condition.tag.name, d.value) for d in step.holds] == [("En", True)]
-        # On the scan after the enable, and off after a first on phase a scan short.
-        assert _hold_until(plc, step, "Fb", value) == 2
+        # On the scan after the enable, and off after a whole first on phase.
+        assert _hold_until(plc, step, "Fb", value) == (2 if value else 3)
 
     def test_a_flasher_with_a_dwell_of_0_offers_no_way_on(self) -> None:
         plc, _En, _Fb = _linked(Physical("Enc", flasher_on="0ms", flasher_off="20ms"))

@@ -1,30 +1,23 @@
 """A drum step's DS preset, and a bad jump on the rung's return: ``drum_ds`` and ``jump_return``.
 
-Part ``follow2_drums``.
-
-No reading has shown a DS preset ending a drum step.  ``drum_limits/preset_from_ds`` and
-``drum_preset/entry_or_first_timing_scan`` both zeroed the preset DS on every reset scan and set
-its value only from scan 1, and every one of their DS steps "did not end".  Two models fit all
-five readings: (a) the preset is read while the drum is held in reset, so it read 0, and a DS 0
-never ends; (b) a DS preset, as pasted, never ends.  pyrung reads the preset when a step starts
-timing, which fails ``entry_or_first_timing_scan``'s Result2 (3 against CLICK's 2).  Here each DS
-holds the value the case means from the reset on, as the init writes it.
+Part ``follow2_drums``.  A CLICK answered both on 2026-11-10, once.
 
 ``drum_ds/ds_preset_ends``: four time drums of three steps, each read on scan 20 (its step: 1 for
 step 1 still timing, 2 when step 1 has ended), so that a 1 ms step has ended on any scan.  Every
-step but the one asked about is a constant 30 s.
+step but the one asked about is a constant 30 s.  Each DS holds the value the case means from the
+reset on, as the init writes it.
 
-- Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again: 2 where
-  a DS preset ends a step (pyrung), 1 where it never does (b).
+- Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again.
 - Result2 (D2): step 1's preset a DS holding 1 ms through the reset and 30 s from scan 1 (written
-  on a rung above the drum): 2 where the preset is read while the drum is held in reset (a), 1
-  where it is read when the step starts timing (pyrung) or never ends (b).
-- Result3 (D3): step 1 a constant 5 ms, step 2 a DS holding 0, step 3 30 s.  Read as the step:
-  2 where a DS of 0 never ends a step entered by a move (pyrung), 3 where it ends at once, as a
-  constant 0 does (``drum_preset/literal_zero`` read 2).  1 where the constant 5 ms did not end.
-- Result4, the control: step 1 a constant 1 ms, 2.
+  on a rung above the drum).
+- Result3 (D3): step 1 a constant 5 ms, step 2 a DS holding 0, step 3 30 s.
+- Result4, the control: step 1 a constant 1 ms.
 
-pyrung reads 2, 1, 2, 2.
+A CLICK read 1, 1, 2, 2.  No DS preset ended a step, not even one that held 1 ms from the reset
+on, while a constant 1 ms did.  So the drum does not read its preset while it is held in reset
+(that reads 2 in Result2), and a DS of 0 entered by a move does not end at once (that reads 3 in
+Result3).  No reading yet shows a DS preset ending a drum step.  pyrung reads 2, 1, 2, 2: it reads
+a DS preset when the step starts timing, so D1 ends, and the case is pending ``PRESET``.
 
 ``jump_return/bad_jump_on_return``: does a jump to a bad step on the scan the drum's rung comes
 back keep the drum from writing its row?  ``bad_jump`` read on a CLICK that a jump to a bad step
@@ -35,14 +28,13 @@ writes a row on a move or on the rung's return.  Two pairs of a time drum and a 
 4 and 5, their outputs reset by hand on scan 4 (20), back on scan 6.  Pair Q has a jump to step 9
 of 3 on scan 6; pair P none.
 
-- Result1, P on scan 6: 2222 where the return writes its row, 2020 where it does not.
-- Result2, Q on scan 5, paused: 2020 (a paused drum leaves its outputs).
-- Result3, Q on scan 6: 2222 where the return writes its row anyway, 2020 where the bad jump takes
-  the scan and nothing is written.
-- Result4, Q on scan 7: 2020 where the row waits for a move, 2222 where it comes a scan late.
-- ErrorCode, P on scan 7: as Result1, the row held.
+- Result1, P on scan 6: the return writes its row (2222).
+- Result2, Q on scan 5, paused: a paused drum leaves its outputs (2020).
+- Result3, Q on scan 6: the bad jump takes the scan, and the drum writes no row (2020).
+- Result4, Q on scan 7: the row waits for a move (2020), and does not come a scan late.
+- ErrorCode, P on scan 7: the row held (2222).
 
-pyrung reads 2222, 2020, 2222, 2222, 2222.
+A CLICK read 2222, 2020, 2020, 2020, 2222, and pyrung reads the same.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """
@@ -56,7 +48,6 @@ from pyrung.core import Rung, copy, fill, reset
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put, track
 from tests.conformance.drum_shift_search.test_drum_pins import snap, te_box, time_box
 from tests.conformance.memory import c, dd, ds, td
-from tests.conformance.probe_kit import between
 from tests.conformance.scans import count_scans, done, scans_for
 
 # --- drum_ds -------------------------------------------------------------------------
@@ -104,20 +95,15 @@ drum_ds = Group(
     "drum_ds",
     [
         case(
-            "A time drum ends a step on a DS preset of 1 ms held from the reset (Result1 = 2), "
-            "not on one of 1 ms through the reset and 30 s from scan 1 (Result2 = 1); a DS of 0 "
-            "entered by a move never ends (Result3 = 2, 3 it ends); a constant 1 ms ends "
-            "(Result4 = 2)",
+            "A time drum's DS preset of 1 ms held from the reset does not end its step "
+            "(Result1 = 1), nor one of 1 ms through the reset and 30 s from scan 1 "
+            "(Result2 = 1); a DS of 0 entered by a move never ends (Result3 = 2); a constant "
+            "1 ms ends (Result4 = 2)",
             ladder=prove_ds_preset_ends,
             init=init_ds_preset_ends,
-            expect={
-                "Result1": between(1, 2),
-                "Result2": between(1, 2),
-                "Result3": between(1, 3),
-                "Result4": 2,
-            },
+            expect={"Result1": 1, "Result2": 1, "Result3": 2, "Result4": 2},
             scans=scans_for(DS_WINDOW),
-            probe="does a DS preset end a drum step, and when is it read (6)",
+            pending="PRESET",
         ),
     ],
 )
@@ -181,20 +167,19 @@ jump_return = Group(
     [
         case(
             "A drum paused with its outputs reset by hand writes its row as its rung comes back "
-            "(Result1 = 2222, ErrorCode = 2222), with a jump to step 9 of 3 on that scan too "
-            "(Result3 = 2222, 2020 if the jump takes the scan; Result4 the scan after); paused, "
+            "(Result1 = 2222, ErrorCode = 2222 the scan after), but not with a jump to step 9 "
+            "of 3 on that scan (Result3 = 2020), nor on the scan after (Result4 = 2020); paused, "
             "it leaves them off (Result2 = 2020)",
             ladder=prove_bad_jump_on_return,
             init=init_bad_jump_on_return,
             expect={
-                "Result1": between(2020, 2222),
-                "Result2": between(2020, 2222),
-                "Result3": between(1111, 2222),
-                "Result4": between(1111, 2222),
-                "ErrorCode": between(2020, 2222),
+                "Result1": 2222,
+                "Result2": 2020,
+                "Result3": 2020,
+                "Result4": 2020,
+                "ErrorCode": 2222,
             },
             scans=scans_for(),
-            probe="a bad jump on the rung's return: is the return row written (6b)",
         ),
     ],
 )

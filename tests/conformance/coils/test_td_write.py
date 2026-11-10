@@ -185,9 +185,9 @@ def test_pyrung_follows_a_written_td():
     read = {r.case.id: r.actual for r in run(group)}
     assert read["debounce_on_td_write"] == {"Result1": 110, "Result2": 550, "Result3": 1100}
     assert read["flasher_on_td_write"] == {
-        "Result1": 110,
+        "Result1": 120,
         "Result2": 40,
         "Result3": 610,
         "ErrorCode": 1,
     }
-    assert read["flasher_off_td_write"] == {"Result1": 360, "Result2": 610, "Result3": 60}
+    assert read["flasher_off_td_write"] == {"Result1": 370, "Result2": 610, "Result3": 60}
