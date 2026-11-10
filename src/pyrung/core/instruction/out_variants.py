@@ -216,9 +216,9 @@ class FlasherInstruction(Instruction):
     target off and freezes both accumulators.  A true rung on an idle phase
     starts an on phase, both accumulators from 0 (the off TD does not run on
     from where it froze, hardware round of 2026-11-05).  Each scan ticks the
-    running phase's accumulator, and the target shows that phase.  At or past
-    its preset, the other phase's accumulator is cleared and that phase runs
-    from the next scan.  So every phase shows for at least one scan, and a
+    running phase's accumulator, and the target shows that phase.  When the
+    running phase's accumulator reaches its preset, the other phase's
+    accumulator is cleared and that phase runs from the next scan.  So every phase shows for at least one scan, and a
     1 ms first on phase lights the rung's first scan
     (``flash_zero/short_first_phase``).  The accumulator of the phase not
     running holds.  A TD the ladder writes past the running phase's preset
@@ -278,7 +278,7 @@ class FlasherInstruction(Instruction):
         on_preset = resolve_preset_ctx(self.on_preset, ctx)
         off_preset = resolve_preset_ctx(self.off_preset, ctx)
         if on_preset <= 0 or off_preset <= 0:
-            # Held reset: idle and dark, both accumulators frozen.
+            # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
             ctx.set_memory(phase_key, _FLASH_IDLE)
             ctx.set_tags({self.target.name: False})
             return

@@ -23,7 +23,8 @@ if TYPE_CHECKING:
 
 
 def tof_armed_key(acc_name: str) -> str:
-    """Memory key set once an off-delay timer has been enabled (or has timed).
+    """Memory key set on the first scan an off-delay timer runs enabled, or runs
+    with Done on or Acc above 0.
 
     A TOF that was never enabled rests at ``Done False, Acc 0`` and does not
     time (``timers/tof_never_enabled``).  Once enabled, it judges ``Acc <

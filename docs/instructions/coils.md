@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset. `Beacon` shows that phase through that scan, and the other phase starts from 0 on the next scan. The other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are. When the rung comes back, both restart from 0 with an on phase. CLICK's editor refuses a constant preset of 0 or below. A DS preset of 0 or below turns `Beacon` off and freezes both `Acc` values where they are.
+The on phase starts when the rung goes true. Each phase runs until its own `Acc` reaches its preset. `Beacon` still shows that phase on the scan its `Acc` reaches the preset, and the other phase starts from 0 on the next scan. The other phase's `Acc` holds meanwhile. The rung going false turns `Beacon` off and freezes both `Acc` values where they are. When the rung comes back, both restart from 0 with an on phase. CLICK's editor refuses a constant preset of 0 or below. A DS preset of 0 or below turns `Beacon` off and freezes both `Acc` values where they are.
 
 ### `timed` — on for a set time
 

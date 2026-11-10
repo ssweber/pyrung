@@ -250,8 +250,7 @@ def pulse_feedback_rungs(
         Rung(enable): flasher(fb_tag, on=(on timer, on_dwell), off=(off timer, off_dwell))
 
     While enabled, ``fb_tag`` is on for ``on_dwell`` and off for ``off_dwell``, starting
-    with the on phase.  It is off while disabled.  As on a CLICK, the first on phase
-    counts the enable's first scan, so it is a scan short, and a dwell of 0 keeps
+    with the on phase.  It is off while disabled.  As on a CLICK, a dwell of 0 keeps
     ``fb_tag`` off.  ``on_done`` and ``off_done`` only name the two timers.  Both
     presets count in the unit :func:`coil_timer` picks.
     """

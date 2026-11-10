@@ -6,9 +6,9 @@ Part ``follow2_coils``.  A CLICK answered every case on 2026-11-10, twice.
 scan 4.  Result1 is the off TD copied on scan 4, the fall, on the rung right after the debounce.
 Result2 is the off TD on scan 5.  Result3 is 1 where the off TD is 0 on scan 3, with the rung
 true.  A CLICK read 1..2, 3, 1.  The off count starts on the scan of the fall (0 would be a count
-that starts a scan late), so the off side's scan of lag is in the compare
+that starts a scan late), so the debounce turns off a scan after its off TD reaches the preset
 (``DebounceInstruction``).  The rise cleared the off TD, as ``coil_timing/off_td_held`` read.
-pyrung reads the same: 10, 20, 1 at the in-process 10 ms scan.  Result1 and Result2 are
+pyrung reads the same, 10, 20, 1 at the in-process 10 ms scan.  Result1 and Result2 are
 milliseconds and follow the target's scan, so they are ranges for any scan up to 50 ms.
 
 ``flash_zero``: each flasher's presets of 0 are DS (CLICK's editor takes no constant of 0), and
@@ -26,11 +26,12 @@ with a preset of 0 or below is dark and its TDs stand where they are (``FlasherI
   lowered to 0 on scan 6, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on scan 10,
   in its off phase.  Each reading is ``on TD * 180 + off TD``.  Result1 is A's on scan 5, and
   Result2 A's on scan 14 less Result1.  Result3 is B's on scan 9, and Result4 B's on scan 14 less
-  Result3.  ErrorCode is A's lit scans from 6 on * 100 + B's from 10 on.  A CLICK read 1260 and
-  1260 for A, 907..908 and 907..908 for B, and ErrorCode 0, so Result2 and Result4 are 0: both
-  flashers go dark, and their TDs freeze where the 0 found them.  pyrung zeroed both TDs before
-  (Result2 -9000 and Result4 -1880 here).  Result1 and Result3 follow the target's scan, so they
-  are ranges.  Result1 is an on TD of at least 1 ms with the off TD 0.  Result3 is an on TD at
+  Result3.  ErrorCode is A's lit scans from 6 on * 100 + B's from 10 on.  A CLICK read the earlier
+  ladder, in which Result2 and Result4 held the scan-14 values themselves.  It read 1260 and 1260
+  for A and 907..908 twice for B.  ErrorCode read 0.  Both flashers went dark, and their TDs froze
+  where the 0 found them.  So Result2 and Result4 are 0 on this ladder.  pyrung zeroed both TDs
+  before (Result2 -9000 and Result4 -1880 here).  Result1 and Result3 follow the target's scan, so
+  they are ranges.  Result1 is an on TD of at least 1 ms with the off TD 0.  Result3 is an on TD at
   its 5 ms preset or past it with the off TD running.  Each TD stays under 180 for any scan under
   about 35 ms, which keeps each reading in an Int.
 - ``short_first_phase`` (L4): 1 ms on, 1000 ms off.  Result4 the on TD on scan 1.  A CLICK read 1,
@@ -236,7 +237,8 @@ flash_zero = Group(
             timers=(277, 278, 279, 280),
             init=init_lowered_to_zero,
             expect={
-                "Result1": range(180, 32768),
+                # An on TD of 1 ms or more, times 180, with the off TD 0.
+                "Result1": range(180, 32761, 180),
                 "Result2": 0,
                 "Result3": range(901, 32768),
                 "Result4": 0,

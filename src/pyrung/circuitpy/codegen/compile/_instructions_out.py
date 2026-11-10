@@ -191,7 +191,7 @@ def _compile_flasher_instruction(
         f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp4}_off_preset = int({_compile_value(instr.off_preset, ctx)})",
         f"{sp4}if _on_preset <= 0 or _off_preset <= 0:",
-        # Held reset: idle and dark, both accumulators frozen.
+        # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
         f'{sp8}_mem["{phase_key}"] = {_FLASH_IDLE}',
         f"{sp8}{target_write} = False",
         f"{sp4}else:",

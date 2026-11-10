@@ -565,6 +565,19 @@ class TestOffDelayPresetReachedUnderOneUnit:
         assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
         assert "_tof_armed:Timer_Acc" not in runner.current_state.memory
 
+    def test_zeroing_a_preset_zero_tof_keeps_timing(self, runner_factory):
+        """At preset 0, Done stays off after the zero write, and Acc counts from 0."""
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 8)
+        assert runner.current_state.tags["Timer_Acc"] == 4
+        runner.patch({"Timer_Acc": 0})
+        runner.step()
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+        runner.run(cycles=9)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 5)
+
     def test_zeroing_a_timed_out_tof_turns_done_back_on(self, runner_factory):
         """Done is judged from Acc on every off scan once the TOF was enabled."""
         runner = runner_factory(self._tof(preset=3), dt=0.0005)

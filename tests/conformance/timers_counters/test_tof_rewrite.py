@@ -12,8 +12,9 @@ rests at Done off, TD 0 (``timers/tof_never_enabled``).  pyrung read 0, 0, 0, 28
 it kept a timed-out TOF at rest once its TD read 0.
 
 Result3 and Result4 are milliseconds, so they follow the target's scan and are ranges.  Result3
-is a scan's tick from 0, under the 20 ms preset (Done on says so).  Result4 is past the preset.
-pyrung reads 10 and 280 at the in-process 10 ms scan.
+is a scan's tick from 0, under the 20 ms preset (Done on says so).  Result4 is past the preset,
+and at most the 28 scans it times (3..30) at the 50 ms scan cap, with a little room.  pyrung reads
+10 and 280 at the in-process 10 ms scan.
 
 The case's reset depends on nothing the TOF does: its rung is false through the reset, and its
 Done and TD are kept (a TOF times on, and its Done may come back on, after the case).  The case owns
@@ -64,7 +65,7 @@ group = Group(
                 "Result1": 0,
                 "Result2": 1,
                 "Result3": range(1, 20),
-                "Result4": range(20, 32768),
+                "Result4": range(20, 1451),
             },
             scans=scans_for(WINDOW),
         ),
