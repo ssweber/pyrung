@@ -28,8 +28,8 @@ referenced system tag:
 ``free``
     Values that follow the scan count, the timestamp or the wall clock: the
     clocks, ``scan_clock_toggle``, ``scan_counter`` and the RTC fields, plus
-    ``battery_present``, which the environment sets (``plc.battery_present``)
-    like any external input.  The state key carries none of these, so they
+    ``battery_present``, which mirrors the project's Battery Backup Setup box
+    (``plc.battery_present``) and so acts as an external input.  The state key carries none of these, so they
     become nondeterministic inputs: any value on any scan, within the RTC
     fields' calendar ranges.  That over-approximates (a counterexample may
     need a timing the PLC never produces, see ``FREE_SYSTEM_CAVEAT``) but never

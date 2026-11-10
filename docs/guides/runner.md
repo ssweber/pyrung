@@ -209,10 +209,10 @@ Off by default. When on, the STOP→RUN transition keeps active forces. Tags and
 runner.reboot()
 ```
 
-Simulates a power cycle. Tag behavior depends on battery:
+Simulates a power cycle. What it keeps depends on `battery_present`:
 
-- Battery present (default): retentive tags preserve, the rest reset to defaults, as on STOP→RUN
-- Battery absent: all tags reset to defaults
+- `True` (default): retentive tags keep their values. The rest reset to defaults, as on STOP→RUN.
+- `False`: every tag resets to its default.
 
 Runtime scope resets the same as STOP→RUN. Runner returns in RUN mode.
 
@@ -221,7 +221,7 @@ runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
 
-Test a reboot with `battery_present = False` too. A CLICK with a dead battery and a discharged capacitor comes back with every tag reset. `sys.battery_present` (SC203) won't warn you of that, because it reports the project's Battery Backup Setup setting, not the battery itself.
+`battery_present` mirrors the project's Battery Backup Setup box, and `sys.battery_present` (SC203) reads it. It does not detect a battery. Test a reboot with `battery_present = False` too.
 
 ## Inspecting state
 

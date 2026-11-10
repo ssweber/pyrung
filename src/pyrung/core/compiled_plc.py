@@ -431,7 +431,7 @@ class CompiledPLC:
 
     @property
     def battery_present(self) -> bool:
-        """Whether the PLC has its backup battery (see ``PLC.battery_present``)."""
+        """Whether Battery Backup Setup is checked (see ``PLC.battery_present``)."""
         return self._battery_present
 
     @battery_present.setter
