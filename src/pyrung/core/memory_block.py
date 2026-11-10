@@ -1168,7 +1168,7 @@ class InputBlock(Block):
         ```python
         X = InputBlock("X", TagType.BOOL, 1, 16)
         X[1]           # → LiveInputTag("X1", BOOL)
-        X[1].immediate # → ImmediateRef — bypass image table
+        X[1].immediate # → ImmediateRef: immediate I/O on a CLICK
         X.select(1, 8) # → BlockRange for bulk operations
         ```
     """
@@ -1274,7 +1274,7 @@ class OutputBlock(Block):
         ```python
         Y = OutputBlock("Y", TagType.BOOL, 1, 16)
         Y[1]           # → LiveOutputTag("Y1", BOOL)
-        Y[1].immediate # → ImmediateRef — bypass image table
+        Y[1].immediate # → ImmediateRef: immediate I/O on a CLICK
         Y.select(1, 8) # → BlockRange for bulk operations
         ```
     """

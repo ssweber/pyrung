@@ -75,9 +75,11 @@ with rung(Stop):
 
 ## Immediate I/O
 
-For `InputTag` / `OutputTag` elements (from `InputBlock` / `OutputBlock`), `.immediate` bypasses the scan-cycle image table:
+For `InputTag` / `OutputTag` elements (from `InputBlock` / `OutputBlock`), `.immediate` marks a contact or coil as immediate in the CLICK export:
 
 ```python
 with rung(SensorA.immediate):
     out(ValveB.immediate)
 ```
+
+pyrung's simulation and the generated CircuitPython code treat it as a plain tag.
