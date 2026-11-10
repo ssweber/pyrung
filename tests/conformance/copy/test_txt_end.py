@@ -108,10 +108,10 @@ group = Group(
     "txt_end",
     [
         case(
-            "A Real copied as text by a DS pointer to TXT995, its digits running past TXT1000, "
-            "writes the digits that fit: TXT995..TXT1000 as pairs of codes read 6318, 6832, 6192 "
-            "(Result1-3, 11610 a pair left alone); no SC43 or SC44 after it, the controls' 12 "
-            "alone (Result4); TXT994 untouched, 90 (ErrorCode)",
+            "A Real copied as text by a DS pointer to TXT995 writes the digits that fit before "
+            "TXT1000.  TXT995..TXT1000 read 6318, 6832, 6192 as pairs of codes (Result1-3).  A "
+            "pair left alone would read 11610.  The Copy raises no SC43 or SC44, so Result4 "
+            "holds the controls' 12 alone.  TXT994 is untouched, 90 (ErrorCode)",
             ladder=prove_by_pointer,
             init=init_txt_end,
             expect={
