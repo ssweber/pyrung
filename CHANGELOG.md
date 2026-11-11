@@ -212,6 +212,7 @@
   - a constant copied or filled into bits (`copy(2, C1)`, `CLK_COPY_CONSTANT_INTO_BIT`). Set bits with `out()`, `latch()` or `reset()`
   - a `search()` over a range outside `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT` (`CLK_SEARCH_RANGE_BANK`), or with its result outside `DS` (`CLK_SEARCH_RESULT_NOT_DS`)
   - a constant preset of 0 or less on a `flasher` or `timed` coil, or below 0 on a `debounce` or a drum step (`CLK_TIMER_PRESET_TOO_LOW`). A tag preset can hold any value
+  - a compare of a hex operand (a `Word` mapped to `DH`, `XD` or `YD`) with a decimal one (`DS`, `DD`, `DF`, `TD`, `CTD` or `SD`), such as `Flags == Count` (`CLK_COMPARE_HEX_MIX`). Copy the `Word` into a `DS` tag first, or compare it with another `Word` or a constant
   - a timer's or counter's Done and Acc mapped to different numbers, such as `T5` with `TD7` (`CLK_TIMER_PAIR_MISMATCH`)
   - a nickname longer than 24 characters (`CLK_NICKNAME_TOO_LONG`)
   - an `immediate(...)` contact on anything but an X input (`CLK_IMMEDIATE_CONTACT_MUST_BE_X`)

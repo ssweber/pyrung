@@ -138,7 +138,7 @@ slots = 4
 
 [groups.coil_timing.cases]
 off_td_held = 1
-flasher_on_zero = 2
+flasher_on_zero = 2 # retired: CLICK's dialog refuses a flasher on preset of 0
 deb_off_against_tof = 3
 
 [groups.td_write]

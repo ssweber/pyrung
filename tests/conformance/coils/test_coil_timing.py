@@ -1,7 +1,6 @@
-"""A debounce's off side and a flasher's empty on phase: the ``coil_timing`` group (part
-``follow_timing``).
+"""A debounce's off side: the ``coil_timing`` group (part ``follow_timing``).
 
-Three questions the fix step ``timed-coils`` (5 in the ``conform-fix`` arc) built on with no
+Two questions the fix step ``timed-coils`` (5 in the ``conform-fix`` arc) built on with no
 reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
 
 - ``off_td_held``: does a debounce's off TD keep its value while the rung is true?  A debounce of
@@ -28,11 +27,6 @@ reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
   A CLICK read an earlier ladder that timed it all on one clock from ``Cmd``.  It read 1, 2, and
   an off TD of 101 at 100 ms after the fall.  That is the first reading.  So the off TD is under
   100 on the scan of the fall, as ``deb_fall/off_td_at_fall`` read (1..2).
-- ``flasher_on_zero``: a flasher of 0 on / 1 ms off, its rung on throughout: scans its coil is on
-  of 14 (Result1), 0 where an on phase of 0 stays dark after each off phase.  The control
-  (Result2) is a flasher of 1 ms / 1 ms, on for some of them.  A CLICK read 0, 7: dark (pyrung read
-  7, 8 before timed-coils).  pyrung holds a flasher with a preset of 0 or below reset
-  (``flasher_off``).
 - ``deb_off_against_tof``: a debounce of 0 / 5 ms and a TOF of 5 ms on one rung, on scans 2 and 3.
   The scan each goes off first (Result1 the debounce, Result2 the TOF, up to 40, 0 for never) and
   ErrorCode = Result1 - Result2: 1 where the debounce's off side takes a scan more than a TOF of
@@ -58,11 +52,10 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, debounce, flasher, math, off_delay, on_delay, out
+from pyrung.core import Or, Rung, copy, debounce, math, off_delay, on_delay, out
 from tests.conformance.memory import ClickTimer, c, t, td
 from tests.conformance.scans import count_scans, done, scans_for
 
-FLASH_WINDOW = 14
 OFF_WINDOW = 40
 
 
@@ -97,24 +90,6 @@ def prove_off_td_held(slot: Any) -> None:
         copy(2, slot.Scratch)
     with Rung(*step(0), clock >= 50):
         copy(1, slot.Scratch)
-
-
-def prove_flasher_on_zero(slot: Any) -> None:
-    dark, control = c[243], c[244]
-    count_scans(slot, FLASH_WINDOW)
-    with Rung(slot.Cmd != 0):
-        flasher(dark, on=(ClickTimer(118), 0), off=(ClickTimer(119), 1))
-    with Rung(slot.Cmd != 0):
-        flasher(control, on=(ClickTimer(120), 1), off=(ClickTimer(121), 1))
-    for bit, field in ((dark, slot.Result1), (control, slot.Result2)):
-        with Rung(slot.Cmd != 0, slot.Scratch <= FLASH_WINDOW, bit):
-            math(field + 1, field)
-    done(slot, FLASH_WINDOW)
-
-
-def init_flasher_on_zero(slot: Any) -> None:
-    for n in range(118, 122):
-        copy(0, td[n])
 
 
 def prove_deb_off_against_tof(slot: Any) -> None:
@@ -153,15 +128,6 @@ group = Group(
             fires_within=1.0,
         ),
         case(
-            "A flasher with an on preset of 0 stays dark (Result1 = 0); a 1 ms / 1 ms flasher "
-            "lights (Result2 = 1..14)",
-            ladder=prove_flasher_on_zero,
-            init=init_flasher_on_zero,
-            ready=lambda slot: (~c[243], ~c[244]),
-            expect={"Result1": 0, "Result2": range(1, FLASH_WINDOW + 1)},
-            scans=scans_for(FLASH_WINDOW),
-        ),
-        case(
             "A debounce's off side goes off a scan after a TOF of its preset: the debounce "
             "(Result1), the TOF (Result2), the debounce's lag (ErrorCode = 1, 0 on one scan)",
             ladder=prove_deb_off_against_tof,
@@ -188,7 +154,6 @@ def test_pyrung_reads_the_debounce_lag():
     read = {r.case.id: r.actual for r in run(group)}
     assert read == {
         "off_td_held": {"Result1": 1, "Result2": 2, "Result3": 1},
-        "flasher_on_zero": {"Result1": 0, "Result2": 7},
         "deb_off_against_tof": {"Result1": 5, "Result2": 4, "ErrorCode": 1},
     }
 

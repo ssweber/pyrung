@@ -32,6 +32,7 @@ from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
+    CLK_COMPARE_HEX_MIX,
     CLK_EXPR_ONLY_IN_MATH,
     CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
@@ -1102,6 +1103,90 @@ def _evaluate_text_windows(
                 continue
             seen.add(id(written))
             _check(written, tags, location_str)
+        for branch in rung._branches:
+            _walk_rung(branch, location_str)
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung, location_str)
+
+    for rung_index, rung in enumerate(program.rungs):
+        _walk_rung(rung, f"main rung {rung_index}")
+    for sub_name in sorted(program.subroutines):
+        for rung_index, rung in enumerate(program.subroutines[sub_name]):
+            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+    return findings
+
+
+_HEX_COMPARE_BANKS = frozenset({"XD", "YD", "DH"})
+_NUMERIC_COMPARE_BANKS = frozenset({"TD", "CTD", "DS", "DD", "DF", "SD"})
+
+
+def _evaluate_compare_hex_mix(
+    program: Any, mode: ValidationMode, resolver: _ResolutionCache
+) -> list[ClickFinding]:
+    """CLICK's Compare dialog pairs a hex operand (XD, YD, DH) only with another hex one.
+
+    CLICK's editor refuses that pair. A pasted rung skips the check.
+    """
+    from pyrung.core.condition import Condition
+    from pyrung.core.validation.render import render_condition
+
+    findings: list[ClickFinding] = []
+
+    def _group(operand: Any) -> str | None:
+        if not isinstance(operand, (Tag, IndirectRef, IndirectExprRef)):
+            return None
+        resolution = resolver.resolve_operand_slots(operand)
+        banks = {slot.memory_type for slot in resolution.slots}
+        if banks and banks <= _HEX_COMPARE_BANKS:
+            return "hex"
+        if banks and banks <= _NUMERIC_COMPARE_BANKS:
+            return "numeric"
+        return None
+
+    def _check(condition: Any, location_str: str) -> None:
+        if not isinstance(condition, Condition):
+            return
+        if type(condition).__name__.startswith(("Compare", "IndirectCompare")):
+            left = getattr(condition, "tag", None)
+            if left is None:
+                left = getattr(condition, "indirect_ref", None)
+            right = getattr(condition, "value", None)
+            groups = {_group(left), _group(right)}
+            if groups == {"hex", "numeric"}:
+                findings.append(
+                    ClickFinding(
+                        code=CLK_COMPARE_HEX_MIX,
+                        severity=_route_severity(CLK_COMPARE_HEX_MIX, mode),
+                        message=(
+                            f"{render_condition(condition)} at {location_str} compares a hex "
+                            "operand (XD, YD, DH) with a decimal one (DS, DD, DF, TD, CTD, SD). "
+                            "CLICK's Compare dialog pairs a hex operand only with another "
+                            "hex operand or an h constant."
+                        ),
+                        location=location_str,
+                        suggestion=(
+                            "Copy the Word into a DS tag first and compare that, or compare "
+                            "it with a DH tag or a constant."
+                        ),
+                    )
+                )
+        for attr_name in ("condition", "conditions"):
+            attr = getattr(condition, attr_name, None)
+            for item in attr if isinstance(attr, (list, tuple)) else [attr]:
+                _check(item, location_str)
+
+    seen: set[int] = set()
+
+    def _walk_rung(rung: Any, location_str: str) -> None:
+        conditions = list(rung._conditions[rung._branch_condition_start :])
+        for instruction in rung._instructions:
+            for field_name in getattr(type(instruction), "_conditions", ()):
+                value = getattr(instruction, field_name, None)
+                conditions.extend(value if isinstance(value, (list, tuple)) else [value])
+        for condition in conditions:
+            if id(condition) not in seen:
+                seen.add(id(condition))
+                _check(condition, location_str)
         for branch in rung._branches:
             _walk_rung(branch, location_str)
         for body_rung in iter_loop_body_rungs(rung._instructions):

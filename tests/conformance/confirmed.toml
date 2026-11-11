@@ -26,7 +26,6 @@
 "call_twice/rise_once_per_scan" = { hash = "779e125c0b83", on = "2026-11-11" }
 "coil_range/ranges_and_search" = { hash = "510b38ad82d9", on = "2026-11-11" }
 "coil_timing/deb_off_against_tof" = { hash = "94a6aee7b988", on = "2026-11-10" }
-"coil_timing/flasher_on_zero" = { hash = "68386baaca1b", on = "2026-11-10" }
 "coil_timing/off_td_held" = { hash = "46e3f6d8f8af", on = "2026-11-10" }
 "coils/edge_before_its_writer" = { hash = "8ad43fc30860", on = "2026-11-11" }
 "coils/edge_behind_open_contact" = { hash = "564aee3036c6", on = "2026-11-11" }
