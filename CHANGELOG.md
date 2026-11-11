@@ -180,6 +180,10 @@
 
 ### Features
 
+- `pyrung.conformance` can tell a real PLC from a local target when it checks scan time:
+  - `run_modbus(local=True)` marks a local target served on an endpoint of its own. A real PLC whose longest scan is past the build's limit raises `ScanTimeError`. A local target prints the longest scan and notes it on each failed case
+  - `build_program(scan_limit_ms=)` sets the longest scan, in ms, the cases assume
+  - `ScanTimeError` is exported from `pyrung.conformance`
 - CLICK validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank. Keep the pointer inside the bank, or give the tag `choices`, or `min` and `max`. A `max` alone counts as an upper bound.
 - `pyrung.core` exports the table of physical kinds, the keys each `Physical(...)` kind takes. The names are `PHYSICAL_KINDS`, `PHYSICAL_KEYS`, `PhysicalKind`, `PhysicalKey`, `FeedbackType`, `kind_of_keys()` and `physical_kind()`.
 - A comment in an old form raises `pyrung.click.tag_map.OldCommentFormError`:

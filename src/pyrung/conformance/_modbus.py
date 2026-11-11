@@ -71,8 +71,8 @@ def scan_limit_note(part: str | None, limit: int | None, longest_ms: int) -> str
     """The line that says *longest_ms* passed the scan limit (``None``: it did not)."""
     if limit is None or longest_ms <= limit:
         return None
-    name = f"part {part}'s" if part else "this program's"
-    return f"longest scan {longest_ms} ms passed {name} limit of {limit} ms"
+    name = f"part {part}" if part else "this program"
+    return f"longest scan {longest_ms} ms passed the {limit} ms limit of {name}"
 
 
 def check_scan_time(build: ConformanceProgram, longest_ms: int) -> None:

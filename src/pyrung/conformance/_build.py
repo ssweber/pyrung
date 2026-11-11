@@ -123,8 +123,8 @@ class ConformanceProgram:
     program_hash: int
     #: The part this program is, for messages (``None``: no part).
     part: str | None = None
-    #: The longest scan, in ms, the cases assume.  A run whose longest scan is past it is void
-    #: (``None``: no limit).
+    #: The longest scan, in ms, the cases assume.  On a real PLC, a run whose longest scan is past it
+    #: is void (``None``: no limit).
     scan_limit_ms: int | None = None
 
     def group(self, name: str) -> GroupBuild:
@@ -215,8 +215,8 @@ def build_program(
 
     Without a manifest the groups are packed in order (:meth:`Manifest.packed`),
     which is fine for a local sim but moves registers whenever a case is added.
-    *part* names the program in messages.  A run whose longest scan is past
-    *scan_limit_ms* is void (``ScanTimeError``).
+    *part* names the program in messages.  On a real PLC, a run whose longest scan is
+    past *scan_limit_ms* is void (``ScanTimeError``).
 
     Raises:
         ManifestError: A wire case or group has no manifest entry; the message

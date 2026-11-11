@@ -331,7 +331,7 @@ def test_a_scan_past_the_parts_limit_voids_a_run_on_a_real_plc() -> None:
 def test_a_scan_past_the_limit_in_process_is_noted_on_each_failure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    line = "longest scan 10 ms passed this program's limit of 5 ms"
+    line = "longest scan 10 ms passed the 5 ms limit of this program"
     wrong = case("Wrong", ladder=_prove_constant, expect={"Result1": 8}, id="wrong")
     results = run(Group("g", [_seven(), wrong]), scan_limit_ms=5)
     assert [r.passed for r in results] == [True, False]

@@ -78,7 +78,7 @@ def test_rungs():
 No case carries `DRUM`, `MATH`, `SC43` or `SYS` now, and the `faults` `TEXT` case is met.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
-- Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
+- Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `local=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
 - `pending` is not part of the exported ladder or the case comment, so removing it changes no group hash.
 
 **`probe="..."`** marks a case that asks an open hardware question, in a few words for the report. Its expectation is the answer pyrung would adopt (and, where pyrung reads something else, the case is also `pending`). Its module docstring lists every candidate answer and what each reads, so a probe that fails on a CLICK is an answer, not a bug: change the expectation to what the CLICK read and say which answer it was; the next CLICK run confirms it.
@@ -287,13 +287,13 @@ more times than its case expects is one cause. If the part needs longer scans, r
 limit in tests/conformance/suite.py.
 ```
 
-On pyrung's own targets a slow host makes long scans, so the run is not void. The run prints a line such as `longest scan 61 ms passed part coils's limit of 50 ms` and adds it to the note of every failed case. `run_modbus` treats a run with no endpoint as local. Pass `local=True` for a local target on an endpoint of its own. In-process, `run(cases, scan_limit_ms=...)` does the same with `DT`.
+On pyrung's own targets a slow host makes long scans, so the run is not void. The run prints a line such as `longest scan 61 ms passed the 50 ms limit of part coils` and adds it to the note of every failed case. `run_modbus` treats a run with no endpoint as local. Pass `local=True` for a local target on an endpoint of its own. In-process, `run(cases, scan_limit_ms=...)` does the same with `DT`.
 
 SD12 (the CLICK's longest scan) would need no rung, but it does not fit. It counts the scans before the run too, and the harness cannot clear it. The P1AM-200 code does not keep it either. The soft PLC's SD10 is the capped scan time (at most 40 ms). The P1AM-200 code reports the time its scan really took.
 
 `test_raw_requests` (part `modbus_raw`) runs its own session. It neither clears nor reads `DS2`, since none of its readings depends on how long a scan takes.
 
-A case that waits for a timer to reach a threshold would wait forever under a model that never gets there. `scans.deadline(slot, timer, limit_ms)` gives the wait a deadline. Its first rung runs *timer*, a TON the case owns, while `Cmd` is on. Once the TON is done, its second rung writes `TIMED_OUT` (200) plus the step in `Scratch` to `Fired`, and the same value to `Scratch`. The harness then fails the case with the note `timed out at step N`. A case that already times itself on a TON of its own calls `scans.time_out(slot, clock >= limit)` instead (`for_more/timers_at_limits`). Set the limit to about 3 times what the case takes, and well under the harness's 10 s wait for `Fired`. A deadline changes no Result a right model reads. A case that waits on a clock, or on a TD inside its preset, needs none.
+A case that waits for a timer to reach a threshold would wait forever under a model that never gets there. `scans.deadline(slot, timer, limit_ms)` gives the wait a deadline. Its first rung runs *timer*, a TON the case owns, while `Cmd` is on. Once the TON is done, its second rung writes `TIMED_OUT` (200) plus the step in `Scratch` to `Fired`, and the same value to `Scratch`. The harness then fails the case with the note `timed out at step N`. A case that already times itself on a TON of its own calls `scans.time_out(slot, clock >= limit)` instead (`for_more/timers_at_limits`). Set the limit to about 3 times what the case takes, and well under the harness's 10 s wait for `Fired`. With `steps=False` it leaves `Scratch` alone, for a case whose `Scratch` counts scans. A deadline changes no Result a right model reads. A case that waits on a clock, or on a TD inside its preset, needs none.
 
 ## The P1AM-200 target
 
