@@ -50,6 +50,7 @@ from .findings import (
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
+    CLK_PTR_BLOCK_OFFSET,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
@@ -337,6 +338,7 @@ def validate_click_program(
 __all__ = [
     "ValidationMode",
     "FindingSeverity",
+    "CLK_PTR_BLOCK_OFFSET",
     "CLK_PTR_CONTEXT_ONLY_COPY",
     "CLK_PTR_POINTER_MUST_BE_DS",
     "CLK_PTR_EXPR_NOT_ALLOWED",

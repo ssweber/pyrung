@@ -104,24 +104,46 @@ def test_a_pointer_bounded_inside_the_bank_by_its_writers_is_no_finding():
     assert _found(prog, mapping) == []
 
 
-def test_a_mapped_block_counts_in_hardware_addresses():
+def test_a_mapped_block_range_counts_in_hardware_addresses():
     table = Block("Table", TagType.INT, 1, 100)
-    out = Int("Out")
+    out = Block("Out", TagType.INT, 1, 200)
 
-    def report(ptr):
+    def report(end):
         with Program(strict=False) as prog:
             with rung():
-                copy(table[ptr], out)
+                copy(table.select(1, end), out.select(1, 150))
         mapping = TagMap(
-            [table.map_to(ds.select(4401, 4500)), ptr.map_to(ds[1]), out.map_to(ds[2])],
+            [
+                table.map_to(ds.select(4401, 4500)),
+                out.map_to(ds.select(11, 210)),
+                end.map_to(ds[1]),
+            ],
             include_system=False,
         )
         return _found(prog, mapping)
 
-    assert report(Int("Ptr", choices={1: "a", 100: "b"})) == []
-    (finding,) = report(Int("Ptr", choices={1: "a", 150: "b"}))
-    assert "Table[Ptr]" in finding.message
-    assert "can reach DS4550. DS ends at DS4500." in finding.message
+    assert report(Int("End", choices={1: "a", 100: "b"})) == []
+    (finding,) = report(Int("End", choices={1: "a", 150: "b"}))
+    assert "The indirect range on Table" in finding.message
+    assert "ends at DS4550. DS ends at DS4500." in finding.message
+
+
+def test_an_offset_block_pointer_gets_only_the_offset_finding():
+    from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+    table = Block("Table", TagType.INT, 1, 100)
+    ptr = Int("Ptr", choices={1: "a", 150: "b"})
+    out = Int("Out")
+    with Program(strict=False) as prog:
+        with rung():
+            copy(table[ptr], out)
+    mapping = TagMap(
+        [table.map_to(ds.select(4401, 4500)), ptr.map_to(ds[1]), out.map_to(ds[2])],
+        include_system=False,
+    )
+    assert _found(prog, mapping) == []
+    report = validate_click_program(prog, mapping, mode="strict")
+    assert [f.code for f in report.errors] == [CLK_PTR_BLOCK_OFFSET]
 
 
 def test_a_range_whose_end_passes_the_bank_warns_though_its_start_does_not():

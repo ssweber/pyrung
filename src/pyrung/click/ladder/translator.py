@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import HEX_CONSTANT_BANKS
+from pyrung.click.validation.findings import _bank_pointer_advice
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -722,10 +723,23 @@ class _TranslatorMixin:
             offset = 0
 
         pointer = self._resolve_tag(indirect.pointer, path=f"{path}.pointer", source=source)
-        if offset == 0:
-            return f"{bank}[{pointer}]"
-        sign = "+" if offset > 0 else "-"
-        return f"{bank}[{pointer}{sign}{abs(offset)}]"
+        if offset != 0:
+            sign = "+" if offset > 0 else "-"
+            advice = _bank_pointer_advice(
+                indirect.block.name,
+                indirect.pointer.name,
+                self._tag_map,
+                dest=path.endswith((".dest", ".target")),
+            )
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"CLK_PTR_BLOCK_OFFSET: CLICK takes only {bank}[pointer], not "
+                    f"{bank}[{pointer}{sign}{abs(offset)}]. {advice}"
+                ),
+                source=source,
+            )
+        return f"{bank}[{pointer}]"
 
     def _require_compact_range(
         self,

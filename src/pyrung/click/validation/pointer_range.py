@@ -139,6 +139,9 @@ def _check_use(
         offset = 0 if entry is None else tag_map._offset_for(entry.logical)
     except (KeyError, ValueError):
         return None
+    if offset and isinstance(ref, IndirectRef):
+        # CLK_PTR_BLOCK_OFFSET already refuses this pointer.
+        return None
     reached = bounds.reach(ref)
     if reached is None:
         return None

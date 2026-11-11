@@ -13,6 +13,7 @@ send/receive, and an indirect compare condition.
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 import pytest
@@ -158,7 +159,7 @@ def _build_program_and_mapping():
         with Rung(Running, Timer[1].Done):
             copy(120, Source)
             math((Source * 2) + (Idx * 2) - 3, CalcOut)
-            copy(SrcBlk[Idx], DstBlk[Idx])
+            copy(ds[Idx], DstBlk[1])
             blockcopy(SrcBlk.select(1, 4), DstBlk.select(1, 4))
             fill(CalcOut, DstBlk.select(1, 5))
 
@@ -504,15 +505,16 @@ def test_realistic_csv_roundtrip(tmp_path: Path):
 
 
 def test_realistic_indirect_ref_tokens():
-    """Indirect refs render as BANK[pointer+offset] in AF tokens."""
+    """Indirect refs render as BANK[pointer] in AF tokens."""
     logic, mapping = _build_program_and_mapping()
     bundle = pyrung_to_ladder(logic, mapping)
 
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    # copy(SrcBlk[Idx], DstBlk[Idx]) → DS pointers with offsets
+    # copy(ds[Idx], DstBlk[1]) -> a bare DS pointer
     indirect_copies = [t for t in tokens if "DS[DS1" in t]
     assert len(indirect_copies) >= 1, "Expected at least one indirect-ref copy token"
+    assert not [t for t in tokens if re.search(r"\[DS\d+[+-]", t)]
 
 
 def test_indirect_ref_prebuilt_click_block_unmapped():
