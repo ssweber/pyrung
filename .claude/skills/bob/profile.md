@@ -165,6 +165,10 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   into one program. Train 23 (2026-11-10) found three failures only there, after five branches
   were READY on `fast`: a confirmed flasher case broken by longer scans, a case whose one-scan tick
   equalled its preset, and a case needing its part alone.
+- A train or branch that changes only conformance cases (`tests/conformance/`, plus comment or
+  docstring text under `src/`) gates on `lint,docs,fold-new,conf,conf-cp`. Add `test` when it
+  changes `src/pyrung/conformance/`. Soundness, tumbler and hypothesis never read those files, and
+  the `train` preset spends about an hour on them (user, 2026-11-10).
 
 ## Ground truth
 
