@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from pyclickplc.banks import BANKS
+
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import OperandFact
@@ -19,6 +21,7 @@ FindingSeverity = Literal["error", "warning", "hint"]
 CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
 CLK_PTR_EXPR_NOT_ALLOWED = "CLK_PTR_EXPR_NOT_ALLOWED"
+CLK_PTR_BLOCK_OFFSET = "CLK_PTR_BLOCK_OFFSET"
 CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
 CLK_TILDE_BOOL_CONTACT_ONLY = "CLK_TILDE_BOOL_CONTACT_ONLY"
 CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
@@ -113,9 +116,43 @@ def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
     return "hint"
 
 
+_DEST_PATHS = {"instruction.dest", "instruction.target"}
+
+
+def _bank_pointer_advice(
+    block_name: str, index_dsl: str, tag_map: TagMap, *, dest: bool = False
+) -> str | None:
+    """How to reach ``block_name[index_dsl]`` through a bare CLICK bank pointer.
+
+    CLICK takes only ``BANK[pointer]``, so the block's offset goes into the pointer.
+    Returns None when the block is not mapped onto one bank.
+    """
+    entry = tag_map._block_entry_by_name(block_name)
+    if entry is None:
+        # A pre-built CLICK block such as ds or dd is its own bank, with no offset.
+        if block_name not in BANKS:
+            return None
+        offset, bank = 0, block_name
+    else:
+        try:
+            offset = tag_map._offset_for(entry.logical)
+            bank = tag_map.resolve(entry.logical, entry.logical_addresses[0]).rstrip("0123456789")
+        except (KeyError, ValueError, IndexError):
+            return None
+    if not bank:
+        return None
+    total = index_dsl if offset == 0 else f"{index_dsl} {'+' if offset > 0 else '-'} {abs(offset)}"
+    copy_text = f"copy(src, {bank.lower()}[Ptr])" if dest else f"copy({bank.lower()}[Ptr], dest)"
+    return (
+        f"Compute the {bank} address into a DS tag and index the bank directly: "
+        f"math({total}, Ptr); {copy_text}"
+    )
+
+
 def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> str:
     """Build a context-aware suggestion string for a finding code."""
     meta = {} if fact is None else fact.metadata
+    is_dest = fact is not None and fact.location.arg_path in _DEST_PATHS
 
     if code == CLK_PTR_CONTEXT_ONLY_COPY:
         block_name = str(meta.get("block_name", ""))
@@ -154,23 +191,25 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         block_name = str(meta.get("block_name", ""))
         expr_dsl = str(meta.get("expr_dsl", ""))
         if block_name and expr_dsl:
-            block_entry = tag_map._block_entry_by_name(block_name)
-            if block_entry is not None:
-                try:
-                    offset = tag_map._offset_for(block_entry.logical)
-                    return (
-                        f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
-                        f"Store the index in a DS tag and use copy(): "
-                        f"math({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
-                    )
-                except (KeyError, ValueError):
-                    pass
+            advice = _bank_pointer_advice(block_name, expr_dsl, tag_map, dest=is_dest)
+            if advice is not None:
+                return f"Click cannot compute {block_name}[{expr_dsl}] at runtime. {advice}"
             return (
                 f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
                 "Pre-compute the index with math() into a DS pointer tag, "
                 "then use block[Ptr]."
             )
         return "Replace computed pointer arithmetic with DS pointer tag updated separately."
+
+    if code == CLK_PTR_BLOCK_OFFSET:
+        block_name = str(meta.get("block_name", ""))
+        pointer_name = str(meta.get("pointer_name", ""))
+        advice = (
+            _bank_pointer_advice(block_name, pointer_name, tag_map, dest=is_dest)
+            if pointer_name
+            else None
+        )
+        return advice or "Index the CLICK bank directly with a DS pointer tag."
 
     if code == CLK_EXPR_ONLY_IN_MATH:
         expr_dsl = str(meta.get("expr_dsl", ""))
@@ -279,6 +318,7 @@ __all__ = [
     "CLK_PTR_CONTEXT_ONLY_COPY",
     "CLK_PTR_POINTER_MUST_BE_DS",
     "CLK_PTR_EXPR_NOT_ALLOWED",
+    "CLK_PTR_BLOCK_OFFSET",
     "CLK_EXPR_ONLY_IN_MATH",
     "CLK_TILDE_BOOL_CONTACT_ONLY",
     "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED",

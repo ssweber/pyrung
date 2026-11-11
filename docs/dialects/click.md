@@ -446,6 +446,20 @@ Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hint
 
 A CLICK project holds at most 8,000 program steps. `estimate_steps(pyrung_to_ladder(logic, mapping))` estimates a program's count, and validation reports `CLK_STEP_LIMIT` as a program nears or passes the limit. Export still writes such a program, with the finding as a `UserWarning`.
 
+### Pointers into a block mapped at an offset
+
+```python
+Blk = Block("Blk", TagType.INT, 1, 10)       # mapped onto ds.select(100, 109)
+copy(Blk[idx], dest)                         # CLK_PTR_BLOCK_OFFSET
+```
+
+CLICK takes only `DS[pointer]`. Validation reports `CLK_PTR_BLOCK_OFFSET` and the ladder export refuses the program. The finding is a hint in the default mode and an error in strict mode, and the export refuses either way. Add the offset in a `DS` tag and index the bank directly:
+
+```python
+math(idx + 99, Ptr)
+copy(ds[Ptr], dest)
+```
+
 ### Pointers past a bank
 
 ```python

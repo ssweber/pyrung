@@ -1393,6 +1393,7 @@ class TestSuggestionContent:
         assert suggestion is not None
         assert "DD" in suggestion
         assert "idx" in suggestion
+        assert "copy(dd[Ptr], dest)" in suggestion
 
     def test_expr_only_in_math_mentions_expression_dsl(self):
         A = Tag("A", TagType.INT)
@@ -2008,3 +2009,156 @@ def test_export_refuses_a_real_rand_bound_unless_allowed():
     else:
         raise AssertionError("export should refuse a Real RAND bound")
     assert pyrung_to_ladder(prog, tag_map, allow=(CLK_RAND_BOUND_TYPE,)).main_rows
+
+
+class TestPointerBlockOffset:
+    def _setup(self, mode="warn"):
+        from pyrung.core import Block
+
+        blk = Block("Blk", TagType.INT, 1, 10)
+        idx = Tag("idx", TagType.INT)
+        dest = Tag("dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                copy(blk[idx], dest)
+
+        tag_map = TagMap(
+            [idx.map_to(ds[1]), dest.map_to(ds[2]), blk.map_to(ds.select(100, 109))],
+            include_system=False,
+        )
+        return validate_click_program(_build_program(logic), tag_map, mode=mode)
+
+    def test_offset_block_pointer_is_flagged_with_bank_advice(self):
+        from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+        report = self._setup(mode="strict")
+        found = [f for f in report.errors if f.code == CLK_PTR_BLOCK_OFFSET]
+        assert found
+        assert found[0].suggestion is not None
+        assert "math(idx + 99, Ptr); copy(ds[Ptr], dest)" in found[0].suggestion
+
+    def test_offset_block_pointer_is_a_hint_in_warn_mode(self):
+        from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+        report = self._setup()
+        assert [f.code for f in report.hints if f.code == CLK_PTR_BLOCK_OFFSET]
+
+    def test_prebuilt_bank_pointer_is_not_flagged(self):
+        from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+        idx = Tag("idx", TagType.INT)
+        dest = Tag("dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                copy(ds[idx], dest)
+
+        tag_map = TagMap([idx.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(_build_program(logic), tag_map, mode="strict")
+        assert CLK_PTR_BLOCK_OFFSET not in _finding_codes(report)
+
+    def test_translator_refuses_offset_pointer(self):
+        from pyrung.click import pyrung_to_ladder
+        from pyrung.click.ladder import LadderExportError
+        from pyrung.core import Block
+
+        blk = Block("Blk", TagType.INT, 1, 10)
+        idx = Tag("idx", TagType.INT)
+        dest = Tag("dest", TagType.INT)
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+        tag_map = TagMap(
+            [idx.map_to(ds[1]), dest.map_to(ds[2]), blk.map_to(ds.select(100, 109))],
+            include_system=False,
+        )
+        with pytest.raises(LadderExportError, match="CLK_PTR_BLOCK_OFFSET"):
+            pyrung_to_ladder(logic, tag_map)
+
+
+class TestPointerBlockOffsetCases:
+    def _mapped(self, start=100):
+        from pyrung.core import Block
+
+        blk = Block("Blk", TagType.INT, 1, 10)
+        idx = Tag("idx", TagType.INT)
+        other = Tag("other", TagType.INT)
+        tag_map = TagMap(
+            [idx.map_to(ds[1]), other.map_to(ds[2]), blk.map_to(ds.select(start, start + 9))],
+            include_system=False,
+        )
+        return blk, idx, other, tag_map
+
+    def _suggestion(self, prog, tag_map):
+        from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        found = [f for f in report.errors if f.code == CLK_PTR_BLOCK_OFFSET]
+        assert found
+        return found[0].suggestion
+
+    def test_negative_offset(self):
+        from pyrung.core import Block
+
+        _blk, idx, other, _map = self._mapped()
+        blk = Block("Blk", TagType.INT, 25, 34)
+        tag_map = TagMap(
+            [idx.map_to(ds[1]), other.map_to(ds[2]), blk.map_to(ds.select(21, 30))],
+            include_system=False,
+        )
+
+        def logic():
+            with Rung():
+                copy(blk[idx], other)
+
+        assert "math(idx - 4, Ptr); copy(ds[Ptr], dest)" in self._suggestion(
+            _build_program(logic), tag_map
+        )
+
+    def test_destination_pointer_advice_writes(self):
+        blk, idx, other, tag_map = self._mapped()
+
+        def logic():
+            with Rung():
+                copy(other, blk[idx])
+
+        assert "copy(src, ds[Ptr])" in self._suggestion(_build_program(logic), tag_map)
+
+    def test_translator_raises_with_code_allowed(self):
+        from pyrung.click import LadderExportError, pyrung_to_ladder
+        from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+        blk, idx, other, tag_map = self._mapped()
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(other, blk[idx])
+        with pytest.raises(LadderExportError, match="CLK_PTR_BLOCK_OFFSET") as exc:
+            pyrung_to_ladder(logic, tag_map, allow=[CLK_PTR_BLOCK_OFFSET])
+        text = str(exc.value)
+        assert "math(idx + 99, Ptr)" in text
+        assert "copy(src, ds[Ptr])" in text
+
+    def test_following_the_suggestion_exports_a_bare_pointer(self):
+        from pyrung.click import pyrung_to_ladder
+        from pyrung.click.validation import CLK_PTR_BLOCK_OFFSET
+
+        blk, idx, other, tag_map = self._mapped()
+        ptr = Tag("Ptr", TagType.INT)
+        tag_map = TagMap(
+            [
+                idx.map_to(ds[1]),
+                other.map_to(ds[2]),
+                ptr.map_to(ds[3]),
+                blk.map_to(ds.select(100, 109)),
+            ],
+            include_system=False,
+        )
+        with Program(strict=False) as logic:
+            with Rung():
+                math(idx + 99, ptr)
+                copy(ds[ptr], other)
+        report = validate_click_program(logic, tag_map, mode="strict")
+        assert CLK_PTR_BLOCK_OFFSET not in _finding_codes(report)
+        tokens = [row[-1] for row in pyrung_to_ladder(logic, tag_map).main_rows[1:]]
+        assert "copy(DS[DS3],DS2)" in tokens

@@ -58,6 +58,7 @@ from .findings import (
     CLK_MATH_SUM_BANK_NOT_AVAILABLE,
     CLK_MATH_WIDE_CONSTANT,
     CLK_NESTED_CALL,
+    CLK_PTR_BLOCK_OFFSET,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
@@ -86,6 +87,17 @@ from .resolve import (
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import OperandFact
+
+
+def _block_offset(block_name: str, tag_map: TagMap) -> int:
+    """The block's start in its bank minus its logical start, 0 for an unmapped block."""
+    entry = tag_map._block_entry_by_name(block_name) if block_name else None
+    if entry is None:
+        return 0
+    try:
+        return tag_map._offset_for(entry.logical)
+    except (KeyError, ValueError):
+        return 0
 
 
 def _evaluate_fact(
@@ -152,6 +164,22 @@ def _evaluate_fact(
                         ),
                         location=location_str,
                         suggestion=_build_suggestion(code, fact, tag_map),
+                    )
+                )
+            offset = _block_offset(str(fact.metadata.get("block_name", "")), tag_map)
+            if offset:
+                block_name = str(fact.metadata.get("block_name", ""))
+                findings.append(
+                    ClickFinding(
+                        code=CLK_PTR_BLOCK_OFFSET,
+                        severity=_route_severity(CLK_PTR_BLOCK_OFFSET, mode),
+                        message=(
+                            f"Pointer {block_name}[{pointer_name}] at {location_str} needs "
+                            f"the block's offset of {offset} added. CLICK takes only "
+                            "BANK[pointer] with no offset."
+                        ),
+                        location=location_str,
+                        suggestion=_build_suggestion(CLK_PTR_BLOCK_OFFSET, fact, tag_map),
                     )
                 )
 

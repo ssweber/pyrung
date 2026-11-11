@@ -365,6 +365,10 @@
 
 ### Fixes
 
+- CLICK validation and ladder export refuse a pointer into a block mapped at a different bank address (`Blk[idx]` onto `ds.select(100, 109)`):
+  - validation reports `CLK_PTR_BLOCK_OFFSET`
+  - add the offset with `math(idx + 99, Ptr)` and copy through `ds[Ptr]`
+- The `CLK_PTR_EXPR_NOT_ALLOWED` suggestion no longer adds the block offset twice.
 - The ladder export draws a rung with an Or of 3 or more rows and several outputs the way the CLICK keeps it, so a pasted project shows no redraw (it put the second output on row 2).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
