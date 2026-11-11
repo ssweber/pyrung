@@ -275,3 +275,10 @@ down_reset_positive = 1
 down_reset_negative = 2
 rton_reset_held = 3
 rton_reset_after = 4
+
+[groups.deb_off]
+base = 1641 # Conf_DebOff: DS1641..DS1670
+slots = 2
+
+[groups.deb_off.cases]
+off_td_with_coil_off = 1

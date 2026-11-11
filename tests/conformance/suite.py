@@ -50,6 +50,7 @@ from tests.conformance.coils import (
     test_coil_range,
     test_coil_timing,
     test_coils,
+    test_deb_off,
     test_deb_zero,
     test_flasher_off,
     test_flasher_td,
@@ -342,6 +343,8 @@ APART_GROUPS = [
     test_for_signed.group,
     # A reset held on while its rung is on.
     test_reset_pins.group,
+    # A debounce's off TD while its coil is off.
+    test_deb_off.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -385,8 +388,9 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
     # For counts whose runs stop the PLC on a 200 ms watchdog, alone.
     "follow2_for": ApartPart(("for_signed",)),
-    # The 2026-11-11 round: a down counter's and an RTON's reset held on while its rung is on.
-    "follow3_reset": ApartPart(("reset_pins",)),
+    # The 2026-11-11 round: a down counter's and an RTON's reset held on while its rung is on,
+    # and a debounce's off TD while its coil is off.
+    "follow3_reset": ApartPart(("reset_pins", "deb_off")),
     # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
     "modbus_raw": ApartPart(("modbus_raw",)),
 }
