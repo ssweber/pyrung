@@ -180,3 +180,7 @@ must be re-pasted before a round, so batch case-layout changes.
 
 Agent `isolation: worktree` fails in this repo (cwd `documents` vs git `Documents` case
 mismatch): always use `mergeq worktree new` and brief the builder with the path.
+
+Before submitting a train, run `uv run python devtools/conf_status.py` in its worktree and compare
+it with dev's. A part that is done on dev and "changed since it was confirmed" on the train means a
+branch carries an old `tests/conformance/confirmed.toml`.

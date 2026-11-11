@@ -57,6 +57,11 @@ non-blocking findings may be deferred: log them in the ledger.
 
 A branch is READY when its review has no open BLOCKING finding and its fast gate is green.
 
+To squash a branch, run `git reset --soft $(git merge-base <base> HEAD)`. Never type a parent sha
+from memory: a squash onto the wrong commit silently reverts everything between the two
+(2026-11-11, 151 hardware confirmations). Afterwards `git diff --stat <parent> HEAD` must touch only
+the branch's own files.
+
 ### When the same kind of finding keeps coming back
 
 Routing fix after fix is not enough when the rounds keep finding the same kind of bug. Two
