@@ -78,7 +78,7 @@ def test_rungs():
 No case carries `DRUM`, `MATH`, `SC43` or `SYS` now, and the `faults` `TEXT` case is met.
 
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
-- Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `pending=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
+- Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `local=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
 - `pending` is not part of the exported ladder or the case comment, so removing it changes no group hash.
 
 **`probe="..."`** marks a case that asks an open hardware question, in a few words for the report. Its expectation is the answer pyrung would adopt (and, where pyrung reads something else, the case is also `pending`). Its module docstring lists every candidate answer and what each reads, so a probe that fails on a CLICK is an answer, not a bug: change the expectation to what the CLICK read and say which answer it was; the next CLICK run confirms it.
@@ -164,6 +164,7 @@ The leak check reads pyrung's state, so it only runs in-process. On the wire, `t
 
 ```
 main:           copy(<layout hash>, DS1)         every scan
+                copy(SD10, DS2) if SD10 > DS2    every scan
                 call("Conf_Rungs")               every scan, one rung per group
                                                  (Group(calls=2): two rungs, twice a scan)
                 ...
@@ -177,7 +178,8 @@ Conf_Rungs:     copy(<group hash>, DS101)        every scan, first rung
 | Registers | Holds |
 |---|---|
 | `DS1` | Layout hash (1..32767): the group table (subroutine names and bases) and `LAYOUT_VERSION`. Changes only when a group is added, removed, renamed, or moved. |
-| `DS2`..`DS9` | Spare program header. |
+| `DS2` | The longest scan time (SD10, ms) since the harness last wrote 0 there. |
+| `DS3`..`DS9` | Spare program header. |
 | `DS10` | Part `modbus_raw`'s pointer, which no other group writes. |
 | `DS<base>` | Group hash (1..32767): SHA-256 of the CLICK export of the group's case rungs, folded into a register. Changes whenever that subroutine's exported ladder would. |
 | `DS<base+1>`..`DS<base+9>` | Spare group header. |
@@ -249,19 +251,19 @@ In-process (`run(group)`; a plain case list also works), twice on one fixed-step
 4. Patch `Cmd = 1` on every ready slot.
 5. Run `max(case.scans)` scans, or fewer if a case put the PLC in STOP (a PLC in STOP does not scan; the next reset puts it back in RUN).
 6. Read every slot from `current_state`.
-7. Compare to `expect`. Verify `Fired` went up. Both runs must pass and the reset must leave no state behind (a `pending` case: no run may meet `expect`; see "Pending and probes").
+7. Compare to `expect`. Verify `Fired` went up. Both runs must pass and the reset must leave no state behind (a `pending` case: no run may meet `expect`; see "Pending and probes"). A case that wrote a timed-out code to `Fired` fails (see "Scan-time limit and deadlines").
 8. Report.
 
 Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a register read or write, and only the selected groups' registers are touched:
 
 0. Read `DS1` until it is nonzero (timeout -> `ConformanceError`, "program is not running"). Read `SC11`; if the PLC is in STOP, raise `ConformanceError` ("put the PLC in RUN"). If `DS1` is not this build's layout hash, raise `BuildMismatchError` ("Export the project again and load it") before writing anything. Then read each selected group's hash register. A group whose hash does not match is **stale**: its cases come back with `stale=True` and the note `Conf_Math is stale: repush (DS301 reads ..., this build writes ...)`, its registers are not written, and the other groups carry on.
-1. Zero the used slots of every live group (one block write per group, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
+1. Write 0 to `DS2`. Zero the used slots of every live group (one block write per group, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
 2. -- (no case stages inputs; each case's reset rung initializes it while `Cmd = 0`).
 3. Poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1).
 4. Write `Cmd = 1` to every ready slot, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
 5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s; longer if a case's `fires_within` says so). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans)` scans of 10 ms, leaving out a case with `fires_within`, which has nothing left to settle.
-6. Read every slot (and every system bit a case's `expect_system` names), wait `max(100 ms, settle)`, read them again.
-7. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads. On a local target a `pending` case passes as `XFAIL` only if neither read meets `expect`.
+6. Read every slot (and every system bit a case's `expect_system` names), wait `max(100 ms, settle)`, read them again. Read `DS2`.
+7. On a real PLC a longest scan past the build's limit voids the run (`ScanTimeError`) before any case is judged. A case passes only if it fired and **both** reads meet `expect`. If one read passes and the other does not, the result's `note` says "unstable" with both reads. On a local target a `pending` case passes as `XFAIL` only if neither read meets `expect`.
 8. Report. `assert_all_passed` lists stale groups (`STALE: ...`, once per group) and failures; in-process-only skips do not fail. `format_report` gives the per-case lines.
 
 ## Pacing over the wire
@@ -271,6 +273,27 @@ Over Modbus nothing counts scans, so waits are wall clock: "Fired, then settle, 
 The local sim (`SimServer`) is `ClickDataProvider` behind `pyclickplc.server.ClickServer` on a free localhost port, serving a `PLC(realtime=True)` that free-runs on its own thread at one scan per 10 ms of wall clock (late scans are not burst to catch up). Timers therefore see wall-clock time, as on a CLICK, with one exception: a scan advances them by at most `MAX_SCAN_DT_S` (40 ms; `SimServer(max_scan_dt=None)` lifts it). With the whole suite loaded the sim scans every 30-40 ms, and on a busy machine the scan thread stalls 70-190 ms now and then; let through, a stall becomes a scan no CLICK has (they take milliseconds), steps over a case's 80-100 ms windows, and fails cases that are right (the O4 flasher did, about one run in five). Capped, PLC time lags wall time by what the stall took beyond 40 ms, which the harness never sees: it waits on `Fired`, not on the clock. The P1AM-200 target has no cap: its generated code times itself. Modbus reads and writes take the same lock as the scan, and each write becomes a `patch()` applied at the start of the next scan. A scan exception stops the sim and fails the run.
 
 The default 10 s timeout is far above what the sim needs (a debounce coil's 1 s off side is the longest reset, and no case runs past 1 s); it is sized for a real CLICK on a busy network.
+
+## Scan-time limit and deadlines
+
+Each part's cases assume that no scan takes longer than the part's limit, `suite.scan_limit_ms(part)`. The limit is 50 ms unless `suite.PART_SCAN_LIMITS_MS` names the part. `boot` takes 3000 ms for the loops of `for_wide`. `fixed_scan` takes 150 ms, its 100 ms fixed scan and a margin. `follow2_for` takes 2000 ms, since `for_signed` made a scan of 1287 ms on a CLICK. `make conformance-export` prints the limit beside the layout hash.
+
+Main keeps the longest SD10 (scan time) in `DS2`. The harness writes 0 to `DS2` before it zeroes the slots and reads it after its last read. On a real PLC a scan longer than the limit voids the run. `run_modbus` then raises `ScanTimeError` and judges no Result:
+
+```
+Run void: part coils assumes scans of at most 50 ms, but the longest scan while its cases
+ran took 61 ms. No Result was judged. Find what made the scan long. A For loop that runs
+more times than its case expects is one cause. If the part needs longer scans, raise its
+limit in tests/conformance/suite.py.
+```
+
+On pyrung's own targets a slow host makes long scans, so the run is not void. The run prints a line such as `longest scan 61 ms passed the 50 ms limit of part coils` and adds it to the note of every failed case. `run_modbus` treats a run with no endpoint as local. Pass `local=True` for a local target on an endpoint of its own. In-process, `run(cases, scan_limit_ms=...)` does the same with `DT`.
+
+SD12 (the CLICK's longest scan) would need no rung, but it does not fit. It counts the scans before the run too, and the harness cannot clear it. The P1AM-200 code does not keep it either. The soft PLC's SD10 is the capped scan time (at most 40 ms). The P1AM-200 code reports the time its scan really took.
+
+`test_raw_requests` (part `modbus_raw`) runs its own session. It neither clears nor reads `DS2`, since none of its readings depends on how long a scan takes.
+
+A case that waits for a timer to reach a threshold would wait forever under a model that never gets there. `scans.deadline(slot, timer, limit_ms)` gives the wait a deadline. Its first rung runs *timer*, a TON the case owns, while `Cmd` is on. Once the TON is done, its second rung writes `TIMED_OUT` (200) plus the step in `Scratch` to `Fired`, and the same value to `Scratch`. The harness then fails the case with the note `timed out at step N`. A case that already times itself on a TON of its own calls `scans.time_out(slot, clock >= limit)` instead (`for_more/timers_at_limits`). Set the limit to about 3 times what the case takes, and well under the harness's 10 s wait for `Fired`. With `steps=False` it leaves `Scratch` alone, for a case whose `Scratch` counts scans. A deadline changes no Result a right model reads. A case that waits on a clock, or on a TD inside its preset, needs none.
 
 ## The P1AM-200 target
 
@@ -296,7 +319,7 @@ First load:
 
 `rtc_set` (part `boot`, in a run with no `GROUP=`) sets the PLC's clock to the year 2030 and back, then an hour ahead and back, tries a month 13 and an hour 25, and last sets the date and time it saved on its first scan, all within a few scans. `ErrorCode = 1` reads them back. A run cut off in those scans can leave the clock moved: check it afterwards.
 
-A change to the header protocol (`LAYOUT_VERSION`, now 3 for the `Ready` field) changes the layout hash in `DS1`; every run then bails with `BuildMismatchError` until each part is exported and loaded again.
+A change to the header protocol (`LAYOUT_VERSION`, now 4 for the longest scan in `DS2`) changes the layout hash in `DS1`. Every run then bails with `BuildMismatchError` until each part is exported and loaded again.
 
 Then, per edit:
 

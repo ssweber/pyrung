@@ -13,13 +13,18 @@ expectation is an exact int, the same in-process and on the wire.
 
 Pass ``scans=scans_for(window)`` to ``case()``.  Every helper takes the same
 ``window``; the default is :data:`WINDOW`.
+
+A case that waits for a timer to reach a threshold would wait forever under a model that never
+gets there.  :func:`deadline` ends such a case once a TON of its own reaches a limit.  The harness
+then reports the step the case was on.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core import Rung, copy, math
+from pyrung.conformance import TIMED_OUT
+from pyrung.core import Rung, copy, math, on_delay
 
 #: Scans a case records by default.
 WINDOW = 8
@@ -76,3 +81,28 @@ def done(slot: Any, window: int = WINDOW) -> None:
     """Raise ``Fired`` once the window is recorded.  The case's last rung."""
     with Rung(slot.Cmd != 0, slot.Scratch > window):
         copy(1, slot.Fired)
+
+
+def deadline(slot: Any, timer: Any, limit_ms: int, *, steps: bool = True) -> None:
+    """Time the case out once *timer*, a TON on from ``Cmd``, reaches *limit_ms*.
+
+    *timer* is a ``ClickTimer`` the case owns.  Set *limit_ms* to about 3 times what the
+    case takes.  Put these rungs last.  See :func:`time_out` for what *steps* does.
+    """
+    with Rung(slot.Cmd != 0):
+        on_delay(timer, limit_ms)
+    time_out(slot, timer.Done, steps=steps)
+
+
+def time_out(slot: Any, *when: Any, steps: bool = True) -> None:
+    """Write the timed-out code once *when* holds, unless the case has fired.
+
+    ``Fired`` takes ``TIMED_OUT`` plus ``Scratch``, the step the case is on.  With *steps*
+    on, ``Scratch`` takes that value too, so no ``Scratch == N`` step runs again.  Turn
+    *steps* off for a case whose ``Scratch`` counts scans, since a count past a threshold
+    would run its last rungs.
+    """
+    with Rung(slot.Cmd != 0, slot.Fired == 0, *when):
+        math(slot.Scratch + TIMED_OUT, slot.Fired)
+        if steps:
+            copy(slot.Fired, slot.Scratch)

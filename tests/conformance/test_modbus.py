@@ -10,6 +10,7 @@ real PLC may run one part of the suite (``suite.PARTS``); its ``DS1`` says which
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -26,6 +27,7 @@ from pyrung.conformance import (
     Endpoint,
     Group,
     Manifest,
+    ScanTimeError,
     SimServer,
     assert_all_passed,
     build_program,
@@ -118,10 +120,10 @@ def test_suite_repeats_without_restarting(
     names = conformance_groups or [g.name for g in build.groups]
     with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
         for n in (1, 2):
-            results = run_modbus(build, endpoint, groups=names, pending=local)
+            results = run_modbus(build, endpoint, groups=names, local=local)
             _passes(results, f"suite run {n} of 2")
         for step, name in enumerate(names + names[-2::-1], start=1):
-            results = run_modbus(build, endpoint, groups=[name], pending=local)
+            results = run_modbus(build, endpoint, groups=[name], local=local)
             _passes(results, f"step {step}: {name} alone")
 
 
@@ -257,7 +259,7 @@ def test_mismatched_layout_bails_before_writing() -> None:
         # Nothing was written: the loaded program's slots never fired.
         assert sim.endpoint is not None
         results = run_modbus(
-            loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS], pending=True
+            loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS], local=True
         )
     assert_all_passed(results)
 
@@ -309,6 +311,34 @@ def test_a_stall_advances_the_sim_by_at_most_max_scan_dt(cap: float | None) -> N
         assert dt >= 0.3
     else:
         assert dt == pytest.approx(cap)
+
+
+def test_the_longest_scan_voids_a_plc_run_and_is_noted_on_a_local_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The sim scans every 10 ms or so, past a 5 ms limit."""
+    right = case("Reads 7", ladder=_prove_constant, expect={"Result1": 7}, id="right")
+    wrong = case("Reads 8", ladder=_prove_constant, expect={"Result1": 8}, id="wrong")
+    build = build_program(Group("scan", [right, wrong]), scan_limit_ms=5)
+    with SimServer(build) as sim:
+        assert sim.endpoint is not None
+        # A stale record the harness must clear before the run.
+        with sim._lock:
+            sim.plc.patch({"Conf_LongestScan": 30000})
+        _scans_past(sim, sim.plc.current_state.scan_id + 1)
+        capsys.readouterr()
+        results = run_modbus(build, sim.endpoint, local=True)
+        out = capsys.readouterr().out
+        # The same endpoint, taken for a real PLC.
+        with pytest.raises(ScanTimeError, match="Run void: this program assumes scans of at"):
+            run_modbus(build, sim.endpoint)
+    line = r"longest scan (\d+) ms passed the 5 ms limit of this program"
+    found = re.search(line, out)
+    assert found is not None
+    assert 5 < int(found.group(1)) <= MAX_SCAN_DT_S * 1000
+    assert [r.passed for r in results] == [True, False]
+    assert results[0].note == ""
+    assert results[1].note.endswith(found.group(0))
 
 
 def test_circuitpy_target_runs_the_generated_code() -> None:
@@ -378,7 +408,7 @@ def test_pending_case_is_an_xfail_on_a_local_target_and_judged_on_a_plc() -> Non
     with SimServer(build) as sim:
         # A served endpoint is judged as a CLICK unless told it is pyrung's own.
         (as_plc,) = run_modbus(build, sim.endpoint)
-        (as_local,) = run_modbus(build, sim.endpoint, pending=True)
+        (as_local,) = run_modbus(build, sim.endpoint, local=True)
     assert not as_plc.passed and not as_plc.xfail
     assert as_local.passed and as_local.xfail
 

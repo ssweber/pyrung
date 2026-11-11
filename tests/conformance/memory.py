@@ -141,7 +141,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # A drum's state scan by scan (tests/conformance/drum_shift_search/test_drum_trace.py).
     "drum_trace": {"C": range(51, 101)},
     # C1852..C1900 are drum_settle's (the out cases stop at C1851).
-    "out": {"C": range(1801, 1852), "T": range(301, 313)},
+    "out": {"C": range(1801, 1852), "T": range(299, 313)},
     "loop": {
         "C": (
             range(1701, 1702),
@@ -514,7 +514,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "deb_fall": {"C": range(661, 663), "T": range(271, 273)},
     "flash_zero": {"C": range(671, 678), "DS": range(4031, 4037), "T": range(273, 283)},
-    "tof_rewrite": {"T": range(291, 292)},
+    "tof_rewrite": {"T": range(291, 293)},
     # C411 arms the loops from the reset, and STOP -> RUN clears it.
     "for_signed": {
         "C": range(411, 412),

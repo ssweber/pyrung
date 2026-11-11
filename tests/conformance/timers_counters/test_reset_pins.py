@@ -29,12 +29,13 @@ scan.
   later reset scans, and Result3 counts those where Done is on or Acc is not 0.  Step 3 starts
   on the first scan after the reset.  A TON beside the RTON (T305) starts on that scan.  A
   CLICK's TON counts the time of the scan it starts on (the hardware notes in
-  ``tests/core/test_timers.py``).  Step 3 ends on the scan the TON first reads 20 ms or more.  Result4 is 1 if the RTON's Acc
-  equals the TON's with Done off then, and 2 if it is under the TON's.  Result4 = 0 is an RTON
-  ahead of the TON, or Done on.  pyrung reads 1, 0, 0, 1.  A reset that leaves Done on, or counts
-  while it holds, reads Result2 = 1 or above, or Result3 above 0.  An RTON that starts timing a
-  scan after the drop misses that scan's time.  It reads Result4 = 2 when the drop scan adds 1 ms
-  or more.  A shorter drop scan can leave it level with the TON (Result4 = 1).
+  ``tests/core/test_timers.py``).  Step 3 ends on the scan the TON first reads 20 ms or more.
+  Result4 is 1 if the RTON's Acc equals the TON's with Done off then, and 2 if it is under the
+  TON's.  Result4 = 0 is an RTON ahead of the TON, or Done on.  pyrung reads 1, 0, 0, 1.  A reset
+  that leaves Done on, or counts while it holds, reads Result2 = 1 or above, or Result3 above 0.
+  An RTON that starts timing a scan after the drop misses that scan's time.  It reads Result4 = 2
+  when the drop scan adds 1 ms or more.  A shorter drop scan can leave it level with the TON
+  (Result4 = 1).
 - ``rton_reset_after``: once the clock reads 300 ms, 100 ms after the drop, Result1 is 1 if Acc
   is above 0 and under 200 (timing started once the reset dropped).  Result4 is 1 if Acc is
   still 0 then.  Result2 is 1 if Done is on with Acc under 200 on any scan after the drop.
@@ -90,7 +91,7 @@ def prove_down_reset_negative(slot: Any) -> None:
 
 
 #: The RTON's Acc that ends step 0: its 200 ms preset, so it has timed out.
-TIMED_OUT = 200
+PRESET_REACHED = 200
 #: The clock's reading when the reset drops.
 DROP = 200
 #: rton_reset_held compares the RTON with a TON once the TON reads this, in ms.
@@ -139,9 +140,9 @@ def prove_rton_reset_held(slot: Any) -> None:
         math(slot.Result2 + 10, slot.Result2)
     with Rung(*_step(slot, 1)):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), rton.Acc >= TIMED_OUT, rton.Done):
+    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED, rton.Done):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 0), rton.Acc >= TIMED_OUT):
+    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
         copy(1, slot.Scratch)
 
 
@@ -170,7 +171,7 @@ def prove_rton_reset_after(slot: Any) -> None:
         copy(3, slot.Scratch)
     with Rung(*_step(slot, 1), clock.Acc >= DROP):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), rton.Acc >= TIMED_OUT):
+    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
         copy(1, slot.Scratch)
 
 

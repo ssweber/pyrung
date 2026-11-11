@@ -15,6 +15,10 @@ from pyrung.core.tag import Tag
 #: Use a range for anything wall-clock dependent over the wire (timer Acc).
 Expectation = int | range
 
+#: What a case writes to ``Fired``, plus the step it was on, when a wait runs past its
+#: deadline.  The harness then reports the case timed out at that step.
+TIMED_OUT = 200
+
 #: Slot fields a case may expect: the harness owns ``Cmd`` and the reset owns ``Ready``.
 RESULT_FIELDS = tuple(f for f in SLOT_FIELDS if f not in ("Cmd", "Ready"))
 
@@ -323,6 +327,11 @@ def judge(
     if any(met):
         return False, False, f"{step}, but some runs meet CLICK's expectation and some do not"
     return clean, clean, f"{step}: pyrung reads {dict(actual)}"
+
+
+def timed_out_step(fired: int) -> int | None:
+    """The step a case timed out at, from what it wrote to ``Fired`` (``None``: it did not)."""
+    return fired - TIMED_OUT if fired >= TIMED_OUT else None
 
 
 def format_expect(expect: Mapping[str, Expectation]) -> str:

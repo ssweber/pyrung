@@ -19,14 +19,14 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Coroutine, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pyclickplc.server import PlcValue
 
 from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
-from pyrung.conformance._case import CaseResult, Group, expectation_met, judge
-from pyrung.conformance._slot import PROGRAM_HASH_REGISTER
+from pyrung.conformance._case import CaseResult, Group, expectation_met, judge, timed_out_step
+from pyrung.conformance._slot import LONGEST_SCAN_REGISTER, PROGRAM_HASH_REGISTER
 
 #: Default Modbus TCP port of a CLICK.
 DEFAULT_PORT = 502
@@ -61,6 +61,49 @@ class ConformanceError(RuntimeError):
 
 class BuildMismatchError(ConformanceError):
     """The main program on the endpoint does not have this build's group layout."""
+
+
+class ScanTimeError(ConformanceError):
+    """A scan took longer than the program's cases assume, so the run is void."""
+
+
+def scan_limit_note(part: str | None, limit: int | None, longest_ms: int) -> str | None:
+    """The line that says *longest_ms* passed the scan limit (``None``: it did not)."""
+    if limit is None or longest_ms <= limit:
+        return None
+    name = f"part {part}" if part else "this program"
+    return f"longest scan {longest_ms} ms passed the {limit} ms limit of {name}"
+
+
+def check_scan_time(build: ConformanceProgram, longest_ms: int) -> None:
+    """Raise :class:`ScanTimeError` when *longest_ms* is past *build*'s scan limit.
+
+    The cases of a part assume every scan is at most its limit, so a longer one
+    voids a run on a real PLC.  No Result is judged.
+    """
+    if scan_limit_note(build.part, build.scan_limit_ms, longest_ms) is None:
+        return
+    name = f"part {build.part}" if build.part else "this program"
+    raise ScanTimeError(
+        f"Run void: {name} assumes scans of at most {build.scan_limit_ms} ms, but the longest "
+        f"scan while its cases ran took {longest_ms} ms. No Result was judged. Find what made "
+        "the scan long. A For loop that runs more times than its case expects is one cause. "
+        "If the part needs longer scans, raise its limit in tests/conformance/suite.py."
+    )
+
+
+def note_failures(results: list[CaseResult], note: str) -> list[CaseResult]:
+    """*results* with *note* added to every failed case.
+
+    On pyrung's own targets a slow host makes a long scan, which is no reason to void the
+    run.  The note says why a case may have failed.
+    """
+    return [
+        r
+        if r.passed or r.skipped is not None or r.stale
+        else replace(r, note=f"{r.note}; {note}" if r.note else note)
+        for r in results
+    ]
 
 
 @dataclass(frozen=True)
@@ -287,6 +330,7 @@ def run_modbus(
     timeout: float = 10.0,
     sim: Callable[[ConformanceProgram], Any] | None = None,
     pending: bool | None = None,
+    local: bool | None = None,
 ) -> list[CaseResult]:
     """Run cases over Modbus TCP and return one result per case, in group order.
 
@@ -303,16 +347,23 @@ def run_modbus(
             default) or :class:`~pyrung.conformance.CircuitPySim` (the
             program's generated P1AM-200 code).
         pending: Judge ``pending`` cases as strict xfails, as for pyrung's
-            own targets.  ``None`` (the default) does so when *endpoint* is
-            ``None``; pass ``True`` for a local target served on an endpoint
-            of its own, ``False`` for a real CLICK (which is the default for
-            any *endpoint*).
+            own targets.  ``None`` (the default) follows *local*.
+        local: The endpoint is one of pyrung's own targets, not a real PLC.
+            ``None`` (the default) means *endpoint* is ``None``.  Pass ``True``
+            for a local target served on an endpoint of its own.
 
     A selected group whose subroutine hash does not match is stale: its cases
     come back with ``stale=True`` without running, and the other groups still run.
 
+    The main program keeps the longest scan in ``DS2``.  The harness writes 0
+    there before it zeroes the slots and reads it after the last read.  On a
+    real PLC a scan past the build's ``scan_limit_ms`` voids the run.  On a
+    local target the run prints a line instead and adds it to every failed case.
+
     Raises:
         BuildMismatchError: ``DS1`` does not hold this build's layout hash.
+        ScanTimeError: A scan on a real PLC took longer than the build's
+            ``scan_limit_ms``.
         ConformanceError: The endpoint is unreachable or the phases time out
             before any case can be judged.
         ValueError: *groups* names a group the program does not have.
@@ -322,20 +373,24 @@ def run_modbus(
     wire = [g for g in build.groups if g.name in selected]
     if isinstance(endpoint, str):
         endpoint = parse_endpoint(endpoint)
+    if local is None:
+        local = endpoint is None
     if pending is None:
-        pending = endpoint is None
+        pending = local
 
     by_group: dict[str, list[CaseResult]] = {}
     if wire:
         if endpoint is None:
-            with (sim or SimServer)(build) as local:
-                assert local.endpoint is not None
+            with (sim or SimServer)(build) as target:
+                assert target.endpoint is not None
                 try:
-                    by_group = asyncio.run(_drive(build, wire, local.endpoint, timeout, pending))
+                    by_group = asyncio.run(
+                        _drive(build, wire, target.endpoint, timeout, pending, local)
+                    )
                 finally:
-                    local.raise_if_failed()
+                    target.raise_if_failed()
         else:
-            by_group = asyncio.run(_drive(build, wire, endpoint, timeout, pending))
+            by_group = asyncio.run(_drive(build, wire, endpoint, timeout, pending, local))
 
     results: list[CaseResult] = []
     for name in build.names:
@@ -482,6 +537,7 @@ async def _drive(
     endpoint: Endpoint,
     timeout: float,
     pending: bool,
+    local: bool,
 ) -> dict[str, list[CaseResult]]:
     from pyclickplc.client import ClickClient
 
@@ -534,6 +590,9 @@ async def _drive(
         if not live:
             return results
 
+        # The ladder keeps the longest scan from here on.
+        await client.ds.write(LONGEST_SCAN_REGISTER, 0)
+
         # 1-3. Zero the live groups' slots, then wait for every case's reset:
         # Ready, with Cmd and Fired still 0.  A case whose reset never
         # completes is judged, not fired.
@@ -577,6 +636,11 @@ async def _drive(
         await asyncio.sleep(max(CONFIRM_GAP_S, settle))
         second = _by_register(live, await _read_spans(client, live))
         second_bits = await _read_system_bits(client, live)
+        (longest,) = await _read_ds(client, LONGEST_SCAN_REGISTER, 1)
+
+    # On a real PLC a scan past the cases' limit voids the run before anything is judged.
+    if not local:
+        check_scan_time(build, longest)
 
     # 7. Compare.
     for g in live:
@@ -600,6 +664,10 @@ async def _drive(
             )
             if pending_note:
                 notes.insert(0, pending_note)
+            step = timed_out_step(second[g.register(i, "Fired")])
+            if step is not None:
+                passed, xfail = False, False
+                notes.insert(0, f"timed out at step {step}")
             group_results.append(
                 CaseResult(
                     case=c,
@@ -614,6 +682,10 @@ async def _drive(
                 )
             )
         results[g.name] = group_results
+    note = scan_limit_note(build.part, build.scan_limit_ms, longest) if local else None
+    if note is not None:
+        print(note)
+        results = {name: note_failures(rs, note) for name, rs in results.items()}
     return results
 
 

@@ -112,6 +112,7 @@ group = Group(
             "from 0 (Result3 = 2), a whole off time (Result4 = 0)",
             ladder=prove_frozen_off_td_at_lowered_preset,
             init=init_frozen_off_td_at_lowered_preset,
+            keep=(td[42],),
             scans=250,
             expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 0},
         ),

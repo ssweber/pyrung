@@ -24,7 +24,8 @@ timer of the case's own times a wait that the coil's TDs cannot time.
 
 - ``debounce_td_keeps_counting`` (O2, on side 100 ms): the case ends on the
   scan the on TD reaches 300.  Result2 is 1 if the coil is on then.  An on TD
-  that stopped at its preset would never end the case.
+  that stopped at its preset would never end the case, so T299 times the case
+  out at step 0 after 1000 ms (``scans.deadline``).
 - ``debounce_bounce_restarts_on_side`` (O3, on side 300 ms): the input is on
   until the on TD reads 200, then off until the off TD reads 100, then on.
   T302 times from that last rise.  Result2 is 1 if the coil is on at 200 ms
@@ -49,7 +50,8 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   held, and Result2 is 1 if the coil is on in that time.
 - ``out_coil_sets_timer_done`` (O6, on side 200 ms): Result1 is 1 if T310 is
   on on any scan.  The case ends on the scan the on TD reaches 300, and
-  Result2 is 1 if the coil is on then.
+  Result2 is 1 if the coil is on then.  T300 times it out at step 0 after
+  1000 ms, as T299 does O2.
 
 A CLICK read each expectation on an earlier ladder that read the same things
 at fixed times.  None is new.
@@ -66,6 +68,10 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
 from pyrung.core import Or, Rung, copy, debounce, flasher, on_delay, reset, timed, toggle
 from tests.conformance.memory import ClickTimer, c, t, td
+from tests.conformance.scans import deadline
+
+#: O2 and O6 wait for an on TD to reach 300 ms.  A TON of their own times them out at 1000 ms.
+DEADLINE_MS = 1000
 
 
 def prove_toggle_flips_once_per_edge(slot):
@@ -96,6 +102,7 @@ def prove_debounce_td_keeps_counting(slot):
         copy(1, slot.Result2)
     with Rung(*_step(slot, 0), td[301] >= 300):
         copy(1, slot.Scratch)
+    deadline(slot, ClickTimer(299), DEADLINE_MS)
 
 
 def prove_debounce_bounce_restarts_on_side(slot):
@@ -189,6 +196,7 @@ def prove_out_coil_sets_timer_done(slot):
         copy(1, slot.Result2)
     with Rung(*_step(slot, 0), td[310] >= 300):
         copy(1, slot.Scratch)
+    deadline(slot, ClickTimer(300), DEADLINE_MS)
 
 
 def init_toggle_flips_once_per_edge(slot):
@@ -234,7 +242,7 @@ group = Group(
             ladder=prove_debounce_td_keeps_counting,
             init=init_debounce_td_keeps_counting,
             ready=lambda slot: ~c[1811],
-            keep=[t[311], td[311]],
+            keep=[t[311], td[311], td[301]],
             expect={"Result1": 1, "Result2": 1},
             scans=50,
         ),
@@ -273,7 +281,7 @@ group = Group(
             ladder=prove_out_coil_sets_timer_done,
             init=init_out_coil_sets_timer_done,
             ready=lambda slot: ~c[1851],
-            keep=[t[312], td[312]],
+            keep=[t[312], td[312], td[310]],
             expect={"Result1": 0, "Result2": 1},
             scans=40,
         ),
