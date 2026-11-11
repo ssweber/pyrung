@@ -13,13 +13,17 @@ nicknames (SC/SD rows) that CLICK adds to its own list. Everything else must mat
 A `raw(...)` box in the project is reported as RAW. It means laddercodec could not decode an instruction, which is a
 laddercodec bug to report. Run ClickNick on laddercodec dev from 2026-11-10 or later. Earlier builds decoded a timed,
 debounce or flasher coil in Tms as raw and wrote `for(N,oneshot=0)`.
-Exit 0 when every file matches with no RAW box, 1 otherwise.
+ClickNick also writes legacy_encodings.json beside the CSVs when laddercodec warned about a legacy encoding. Each
+finding prints as a STALE line under its file. The project's text can match the export and still hold an instruction
+CLICK runs differently, so a STALE file counts as a problem until it is pasted again.
+Exit 0 when every file matches with no RAW box and no STALE line, 1 otherwise.
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import re
 import sys
 from pathlib import Path
@@ -47,6 +51,30 @@ def _norm_nicknames(ckp: str, export: str) -> tuple[list[str], list[str]]:
         if ln and (ln in exp_set or not re.match(r"^S[CD]\d+,", ln))
     ]
     return got, exp
+
+
+def _read_legacy(src: Path) -> dict[str, list[str]]:
+    """Map each file name to the lines describing its legacy encodings, from ClickNick's sidecar."""
+    path = src / "legacy_encodings.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError("not a list")
+    except (OSError, ValueError) as exc:
+        print(f"  note: could not read {path.name} ({exc}), so legacy encodings are not checked")
+        return {}
+    found: dict[str, list[str]] = {}
+    for item in payload:
+        if not isinstance(item, dict) or not isinstance(item.get("file"), str):
+            continue
+        rung = item.get("rung")
+        where = f"rung {rung}" if isinstance(rung, int) else "whole file"
+        what = f"{item.get('instruction', '')} {item.get('token', '')}".strip()
+        detail = item.get("detail", "")
+        found.setdefault(item["file"], []).append(f"{where}: {what}, {detail} Paste it again.")
+    return found
 
 
 def _newest_click_dir() -> Path:
@@ -96,6 +124,7 @@ def main() -> int:
     names |= {f"subroutines/{p.name}" for p in (exp_dir / "subroutines").glob("*.csv")}
     names |= {f"subroutines/{p.name}" for p in (src / "subroutines").glob("*.csv")}
     bad = 0
+    legacy = _read_legacy(src)
     for name in sorted(names, key=lambda n: (n.startswith("sub"), n)):
         a, b = src / name, exp_dir / name
         if not a.exists():
@@ -118,22 +147,31 @@ def main() -> int:
             got, exp = _norm_nicknames(ta, tb)
         else:
             got, exp = _norm_ladder(ta), _norm_ladder(tb)
+        stale = legacy.get(name, [])
+        counted = False
         if got == exp:
             print(f"  same      {name}")
-            continue
-        diff = [d for d in difflib.unified_diff(got, exp, "project", "export", n=0, lineterm="")]
-        nlines = sum(1 for d in diff if d[:1] in "+-" and d[:3] not in ("+++", "---"))
-        tag = "nicknames" if name == "nicknames.csv" else "re-paste"
-        print(f"  DIFF      {name}  ({nlines} lines, {tag})")
-        if name != "nicknames.csv":
+        else:
+            diff = [
+                d for d in difflib.unified_diff(got, exp, "project", "export", n=0, lineterm="")
+            ]
+            nlines = sum(1 for d in diff if d[:1] in "+-" and d[:3] not in ("+++", "---"))
+            tag = "nicknames" if name == "nicknames.csv" else "re-paste"
+            print(f"  DIFF      {name}  ({nlines} lines, {tag})")
+            if name != "nicknames.csv":
+                bad += 1
+                counted = True
+            if args.diff:
+                for d in diff:
+                    print("      " + d[:240])
+        for line in stale:
+            print(f"  STALE     {name}  {line}")
+        if stale and not counted:
             bad += 1
-        if args.diff:
-            for d in diff:
-                print("      " + d[:240])
     print(
         "all current"
         if not bad
-        else f"{bad} problem(s): paste each DIFF or MISSING file, fix each RAW box"
+        else f"{bad} problem(s): paste each DIFF, MISSING or STALE file, fix each RAW box"
     )
     return 1 if bad else 0
 
