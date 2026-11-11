@@ -207,7 +207,7 @@
   - a `randint()` bound that is not an integer constant or an `Int` or `Dint` tag (`CLK_RAND_BOUND_TYPE`), and two equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
   - an expression as a `randint()` bound or as an argument of `lsh`, `rsh`, `lro`, `rro`, `<<` or `>>` (`CLK_MATH_ARG_NOT_PLAIN`)
   - a `SUM` over a bank CLICK can't sum (`CLK_MATH_SUM_BANK_NOT_AVAILABLE`)
-  - a bit in a `math()` formula (`math(C1 + 5, DS1)`, `CLK_MATH_BIT_OPERAND`). A `.sum()` over a bit range is still allowed
+  - a bit in a `math()` formula (`math(C1 + 5, DS1)`, `CLK_MATH_BIT_OPERAND`). A `.sum()` over a bit range is allowed, so write one bit as `c.select(1, 1).sum()`
   - a `math()` result outside `DS`, `DD`, `DF`, `TD`, `CTD` or `DH` (`CLK_MATH_DEST_BANK`). Store into a register and drive the bit from a compare
   - a constant copied or filled into bits (`copy(2, C1)`, `CLK_COPY_CONSTANT_INTO_BIT`). Set bits with `out()`, `latch()` or `reset()`
   - a `search()` over a range outside `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT` (`CLK_SEARCH_RANGE_BANK`), or with its result outside `DS` (`CLK_SEARCH_RESULT_NOT_DS`)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.expression import (
@@ -824,6 +825,8 @@ def _evaluate_math_bit_operands(
     location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
     names = list(dict.fromkeys(tag.name for tag in bits))
     what = "the bit" if len(names) == 1 else "the bits"
+    # CLICK has no SUM over CT, so a one-bit range cannot stand in for a CT bit.
+    counter_bits = all(re.fullmatch(r"CT\d+", name) for name in names)
     return [
         ClickFinding(
             code=CLK_MATH_BIT_OPERAND,
@@ -834,9 +837,18 @@ def _evaluate_math_bit_operands(
             ),
             location=location_text,
             suggestion=(
-                "Set a DS tag from the bit's contacts in a rung above (copy(1, Tag) under "
-                "the bit, copy(0, Tag) under ~bit) and use the tag, or count bits with "
-                ".sum() over a range."
+                ""
+                if counter_bits
+                else "Write the bit as a one-bit range, c.select(1, 1).sum() for C1 "
+                "(SUM ( C1 : C1 )), or "
+            )
+            + "set a DS tag from the bit's contacts in a rung above (copy(1, Tag) under "
+            "the bit, copy(0, Tag) under ~bit) and use the tag."
+            + (
+                ""
+                if counter_bits
+                else " A one-bit range of pyrung's sc block reads 0 in pyrung, "
+                "where a CLICK reads the bit."
             ),
         )
     ]

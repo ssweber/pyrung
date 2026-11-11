@@ -113,25 +113,35 @@ def test_a_constant_into_a_register_and_a_bit_into_a_bit_pass():
 # --- A bit in a Math formula --------------------------------------------------------
 
 
+@pytest.mark.parametrize("bank", [x, y, c, t, ct, sc], ids=lambda bank: bank.name)
 @pytest.mark.parametrize(
     "build",
     [
-        lambda: c[1] + 5,
-        lambda: c[1],
-        lambda: (ds[1] + c[5]) * 2,
-        lambda: ds[1] + c.select(1, 4).sum() + c[9],
+        lambda b: b[1] + 5,
+        lambda b: b[1],
+        lambda b: (ds[1] + b[2]) * 2,
+        lambda b: ds[1] + b.select(1, 2).sum() + b[2],
     ],
     ids=["sum", "bare", "nested", "beside-a-bit-sum"],
 )
-def test_a_bit_in_a_math_formula_is_refused(build):
+def test_a_bit_in_a_math_formula_is_refused(build, bank):
     def body():
         with Rung(x[1]):
-            math(build(), ds[100])
+            math(build(bank), ds[100])
 
     (finding,) = _found(body, CLK_MATH_BIT_OPERAND)
-    assert "reads the bit" in finding.message
+    assert "reads the bit" in finding.message or "reads the bits" in finding.message
+    assert bank.name in finding.message
     assert "except in a SUM over a bit range" in finding.message
-    _export_refuses(body, CLK_MATH_BIT_OPERAND)
+    if bank is ct:
+        assert "select(1, 1)" not in finding.suggestion
+        # SUM over CT is a finding of its own, in the formula that has a bit sum.
+        allowed = ("CLK_MATH_SUM_BANK_NOT_AVAILABLE",)
+    else:
+        assert "select(1, 1).sum()" in finding.suggestion
+        assert "0 in pyrung" in finding.suggestion
+        allowed = ()
+    _export_refuses(body, CLK_MATH_BIT_OPERAND, allowed=allowed)
 
 
 def test_each_bit_is_named_once():
@@ -147,12 +157,20 @@ def test_each_bit_is_named_once():
     "build, dest",
     [
         (lambda: c.select(1, 8).sum(), ds[100]),
+        (lambda: c.select(1, 1).sum() + 5, ds[100]),
         (lambda: c.select(1, 8).sum() + ds[1], ds[100]),
         (lambda: ds[1] * 2 + dd[1], dd[100]),
         (lambda: dd[1] * 40000, dd[100]),
         (lambda: randint(1, 2) + dh[1], dh[100]),
     ],
-    ids=["bit-sum", "bit-sum-in-formula", "registers", "wide-constant", "rand-in-hex"],
+    ids=[
+        "bit-sum",
+        "one-bit-sum",
+        "bit-sum-in-formula",
+        "registers",
+        "wide-constant",
+        "rand-in-hex",
+    ],
 )
 def test_a_formula_without_a_bit_operand_passes(build, dest):
     def body():
@@ -160,6 +178,15 @@ def test_a_formula_without_a_bit_operand_passes(build, dest):
             math(build(), dest)
 
     assert _found(body, CLK_MATH_BIT_OPERAND) == []
+
+
+def test_a_one_bit_sum_exports_as_a_range_of_one_bit():
+    def body():
+        with Rung(x[1]):
+            math(c.select(1, 1).sum() + 5, dd[100])
+
+    rows = pyrung_to_ladder(_program(body), TagMap()).main_rows
+    assert any("SUM ( C1 : C1 ) + 5" in cell for row in rows for cell in row)
 
 
 def test_a_bit_rand_bound_is_the_rand_finding_only():
