@@ -29,12 +29,13 @@ scan.
   later reset scans, and Result3 counts those where Done is on or Acc is not 0.  Step 3 starts
   on the first scan after the reset.  A TON beside the RTON (T305) starts on that scan.  A
   CLICK's TON counts the time of the scan it starts on (the hardware notes in
-  ``tests/core/test_timers.py``).  Step 3 ends on the scan the TON first reads 20 ms or more.  Result4 is 1 if the RTON's Acc
-  equals the TON's with Done off then, and 2 if it is under the TON's.  Result4 = 0 is an RTON
-  ahead of the TON, or Done on.  pyrung reads 1, 0, 0, 1.  A reset that leaves Done on, or counts
-  while it holds, reads Result2 = 1 or above, or Result3 above 0.  An RTON that starts timing a
-  scan after the drop misses that scan's time.  It reads Result4 = 2 when the drop scan adds 1 ms
-  or more.  A shorter drop scan can leave it level with the TON (Result4 = 1).
+  ``tests/core/test_timers.py``).  Step 3 ends on the scan the TON first reads 20 ms or more.
+  Result4 is 1 if the RTON's Acc equals the TON's with Done off then, and 2 if it is under the
+  TON's.  Result4 = 0 is an RTON ahead of the TON, or Done on.  pyrung reads 1, 0, 0, 1.  A reset
+  that leaves Done on, or counts while it holds, reads Result2 = 1 or above, or Result3 above 0.
+  An RTON that starts timing a scan after the drop misses that scan's time.  It reads Result4 = 2
+  when the drop scan adds 1 ms or more.  A shorter drop scan can leave it level with the TON
+  (Result4 = 1).
 - ``rton_reset_after``: once the clock reads 300 ms, 100 ms after the drop, Result1 is 1 if Acc
   is above 0 and under 200 (timing started once the reset dropped).  Result4 is 1 if Acc is
   still 0 then.  Result2 is 1 if Done is on with Acc under 200 on any scan after the drop.

@@ -13,6 +13,9 @@ the TOF in reverse order, so each new step starts on the next scan.
 - Step 4: the step ends on the first scan Done is off again.  Result4 is 1 if the TD is then at the
   preset or past it, 2 if it is under it.
 
+The case times out at the step it is on once its scans sum to 1500 ms (``scans.deadline``, the time
+summed in ErrorCode).  A TD that stops at the preset never ends step 1, for one.
+
 A CLICK read an earlier ladder of 20 ms that counted scans (2026-11-10, twice).  Done came back on
 and the TD counted from 0.  So a TOF that has been enabled judges ``TD < preset`` on every scan its
 rung is false, and a TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never
@@ -38,11 +41,14 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
 from pyrung.core import Rung, copy, off_delay
 from tests.conformance.memory import ClickTimer
+from tests.conformance.scans import deadline
 
 TOF = ClickTimer(291)
 PRESET = 200
 #: The TD that ends step 1: past the preset, so the TOF has timed out.
 TIMED_OUT = 300
+#: The steps take about 500 ms.  Past 1500 ms of scans the case times out.
+DEADLINE_MS = 1500
 
 
 def prove_done_after_td_zeroed(slot: Any) -> None:
@@ -74,6 +80,7 @@ def prove_done_after_td_zeroed(slot: Any) -> None:
         copy(2, slot.Scratch)
     with Rung(*step(0), TOF.Done):
         copy(1, slot.Scratch)
+    deadline(slot, DEADLINE_MS, slot.ErrorCode)
 
 
 group = Group(

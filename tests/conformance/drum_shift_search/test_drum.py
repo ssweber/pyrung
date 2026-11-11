@@ -37,8 +37,10 @@ What each case tells apart:
   event already on when the time is up end the step?).  Each raises ``Fired`` on
   the drum's own state, not on scan 1.  D1 fires once the step's Acc reads 500
   ms, or once the step moves.  If the Acc stops at the 300 ms duration, the case
-  never fires.  D3 fires once the drum completes, or once step 1's Acc reads 500
-  ms.  A drum still on step 1 then reads Result1 = 1 and Result2 = 0.
+  times out at step 0 after 1500 ms (``scans.deadline``, the time summed in
+  Result3).  D3 fires once the drum completes, or once step 1's Acc reads 500
+  ms.  A drum still on step 1 then reads Result1 = 1 and Result2 = 0.  D3 times
+  out after 1500 ms too.
 - ``events_are_edges``: an event drum steps on an event's rising edge, and a
   step entered with its event already on waits for the event to go off and on
   again, whether it was entered by a jog or by an event.  A drum that steps on
@@ -169,9 +171,11 @@ from pyrung.core import (
     time_event_drum,
 )
 from tests.conformance.memory import c, td
-from tests.conformance.scans import WINDOW, count_scans, done, scans_for
+from tests.conformance.scans import WINDOW, count_scans, deadline, done, scans_for
 
 SCANS = scans_for()
+#: D1 and D3 end by 500 ms.  Past 1500 ms of scans they time out.
+DEADLINE_MS = 1500
 
 
 def entered(slot: Any, step: int, into: Any) -> None:
@@ -216,8 +220,9 @@ def prove_te_acc_counts_while_waiting(slot):
     with Rung(slot.Cmd != 0, slot.Result1 == 1, td[401] >= 500):
         copy(1, slot.Result2, oneshot=True)
     # Fired waits until the Acc reads 500 ms or the step moves without its event.
-    with Rung(slot.Cmd != 0, Or(td[401] >= 500, slot.Result1 != 1)):
+    with Rung(slot.Cmd != 0, slot.Fired == 0, Or(td[401] >= 500, slot.Result1 != 1)):
         copy(1, slot.Fired)
+    deadline(slot, DEADLINE_MS, slot.Result3)
 
 
 def prove_te_level_event_already_on(slot):
@@ -239,8 +244,9 @@ def prove_te_level_event_already_on(slot):
     with Rung(slot.Cmd != 0, c[1915]):
         copy(1, slot.Result2)
     # Fired waits until the drum completes or step 1's Acc reads 500 ms.
-    with Rung(slot.Cmd != 0, Or(c[1915], td[411] >= 500)):
+    with Rung(slot.Cmd != 0, slot.Fired == 0, Or(c[1915], td[411] >= 500)):
         copy(1, slot.Fired)
+    deadline(slot, DEADLINE_MS, slot.Result3)
 
 
 def prove_events_are_edges(slot):
