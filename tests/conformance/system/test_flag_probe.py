@@ -53,9 +53,11 @@ or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
   SC43 is off after the Copy.  Result3, Result4 the same for SC44.  CLICK read
   0, 1, 0, 1: the Copy settles first (the SC43 half raises nothing).
 - ``source_flag_in_a_math`` (probe): the same for SC40 in a Math, ``DD =
-  SC40 + 5`` after a division by zero: the DD reads 6 if the Math sees the flag
+  SUM ( SC40 : SC40 ) + 5`` after a division by zero (a Math takes a bit only in a
+  SUM over a bit range): the DD reads 6 if the Math sees the flag
   it is about to settle (Result1; 5 if it sees the flag off), and SC40 is off
-  after it (Result2 = 1).  CLICK read 5, 1: the Math settles first.
+  after it (Result2 = 1).  CLICK read 5, 1 with the bare ``SC40 + 5``, and the
+  bare form is no longer pasted: the SUM form is unconfirmed until it runs again.
 
 Not probed, pack_text with bad text and a bad destination pointer (which flag): CLICK
 takes a pointer in a Single Copy only (the exporter refuses a Pack text destination
@@ -81,7 +83,9 @@ from collections.abc import Callable
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
+    Block,
     Rung,
+    TagType,
     blockcopy,
     copy,
     count_up,
@@ -271,12 +275,28 @@ def prove_source_flag_is_read_before_the_copy_settles(slot):
     done(slot, WINDOW)
 
 
+class _SC40Window(Block):
+    """The SC bank with SC40 as pyrung's runtime flag, so a range over it reads the flag.
+
+    A raw ``sc[40]`` is a plain tag nothing writes.  A CLICK Math takes a bit only in a
+    SUM over a bit range, and pyrung has no range over system points.
+    """
+
+    def _get_tag(self, addr):
+        return SC40 if addr == 40 else super()._get_tag(addr)
+
+
+def test_the_sc40_window_holds_the_system_point():
+    assert _SC40Window("SC", TagType.BOOL, 1, 1000).select(40, 40).tags() == [SC40]
+
+
 def prove_source_flag_in_a_math(slot):
     count_scans(slot, WINDOW)
     tmp, zero, number = dd[715], dd[716], dd[717]
+    sc = _SC40Window("SC", TagType.BOOL, 1, 1000)
     with Rung(slot.Scratch == FIRST_PROBE):
         math(100 / zero, tmp)
-        math(SC40 + 5, number)
+        math(sc.select(40, 40).sum() + 5, number)
     with Rung(slot.Scratch == FIRST_PROBE, ~SC40):
         copy(1, slot.Result2)
     with Rung(slot.Scratch == FIRST_PROBE):
@@ -335,8 +355,9 @@ group = Group(
             probe="does a Copy read its source flag before or after it settles the flag",
         ),
         case(
-            "A Math clears SC40 as it starts, before it reads its operands: SC40 + 5 after a "
-            "division by zero is 5 (Result1) and SC40 is off after it (Result2 = 1)",
+            "A Math clears SC40 as it starts, before it reads its operands: "
+            "SUM ( SC40 : SC40 ) + 5 after a division by zero is 5 (Result1) and SC40 is off "
+            "after it (Result2 = 1)",
             ladder=prove_source_flag_in_a_math,
             init=_init(dds=(715, 717)),
             expect={"Result1": 5, "Result2": 1},

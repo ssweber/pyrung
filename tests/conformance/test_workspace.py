@@ -64,9 +64,12 @@ def test_workspace_source_exports_byte_identical_ladder(tmp_path: Path, plc_pack
     main, tags = plc_package(source)
 
     # The round trip of ClickNick's project_to_csv.py, except that it passes allow=:
-    # the script validates without it and refuses the suite's RAND probes.
+    # the script validates without it and refuses the suite's RAND probes.  The generated
+    # source reads SC40 in flag_probe through the raw sc block, a second identity for it.
     out = tmp_path / "roundtrip"
-    pyrung_to_ladder(main.logic, tags.mapping, allow=PASTE_PROBE_FINDINGS).write(out)
+    pyrung_to_ladder(
+        main.logic, tags.mapping, allow=(*PASTE_PROBE_FINDINGS, "CLK_ADDRESS_IDENTITY_CONFLICT")
+    ).write(out)
     tags.mapping.to_nickname_file(out / "nicknames.csv", blocks=tags.blocks)
 
     actual = _csv_files(out)

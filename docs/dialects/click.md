@@ -399,6 +399,8 @@ Common findings:
 | Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
 | `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Bit memory only: X, Y, C, T, CT, SC (`CLK_BANK_WRONG_ROLE`); clear a register with `copy()` or `fill()` |
 | Whole-number constant in `math()` | Any. Hex mode cuts it to 16 bits, as a CLICK does | −2147483648..2147483647, and 0..65535 in hex mode (`CLK_MATH_WIDE_CONSTANT`) |
+| A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK and 0 in pyrung, because the `sc` block does not follow the system points |
+| Compare of a `Word` mapped to `DH`, `XD` or `YD` with a `DS`, `DD`, `DF`, `TD`, `CTD` or `SD` tag | Compares the values | Both sides hex, or a hex tag against a constant. Copy the `Word` into a `DS` tag first (`CLK_COMPARE_HEX_MIX`) |
 | Text compare on a `Char` (`Name == "AB"`) | Compares the Chars that follow it in its block | Those Chars mapped to consecutive TXT addresses in order (`CLK_TEXT_WINDOW_NOT_CONTIGUOUS`) |
 | Text `copy()` that runs past the end of its bank | Drops what runs past | Start it low enough to keep every character (`CLK_TEXT_PAST_BANK`) |
 | Text `copy()` that runs past the end of its block | Drops what runs past | A CLICK writes on into the bank. Map the block onto more of the bank (`CLK_TEXT_PAST_BLOCK`) |
