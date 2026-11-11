@@ -459,10 +459,11 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "T": range(201, 205),
         "DD": range(71, 75),
     },
+    # T210 is entry_or_first_timing_scan's clock.
     "drum_preset": {
         "C": (range(331, 337), range(341, 353)),
         "DS": range(3923, 3931),
-        "T": range(205, 210),
+        "T": range(205, 211),
     },
     "real_text": {"DF": range(21, 31), "TXT": range(101, 301)},
     "deb_zero": {"C": range(221, 223), "T": range(111, 115)},
@@ -521,7 +522,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DD": range(141, 148),
         "CT": range(6, 7),
     },
-    "reset_pins": {"C": range(701, 704), "T": range(301, 305), "CT": range(11, 13)},
+    "reset_pins": {"C": range(701, 704), "T": range(301, 306), "CT": range(11, 13)},
     # DS10 is a spare header register no group writes, for a pointer with choices of its own.
     # DS4500 is the last DS, for a Modbus write that runs past it.
     "modbus_raw": {

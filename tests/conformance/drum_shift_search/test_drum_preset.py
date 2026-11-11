@@ -2,9 +2,15 @@
 
 ``drum_limits/preset_from_ds`` read on a CLICK that a DS preset lowered under Acc mid-step does
 not end the step, and that a DS 0 or -5 on step 1 after a reset never ends it.  This group asks
-when a DS preset is read, and what a constant 0 does.  Each field is a drum's step, read on scan
-20, so that a 1 ms step has ended even on short scans; every drum has 3 steps, step 1 and 3 30 s
-long.  The case's init zeroes the DS presets while the drums are reset.
+when a DS preset is read, and what a constant 0 does.  Each field is a drum's step.  Every drum
+has 3 steps, step 1 and 3 30 s long.  The case's init zeroes the DS presets while the drums are
+reset.
+
+Each case reads its steps once 50 ms of timing has passed, and raises ``Fired`` then.  A 1 ms step
+has ended by then at any scan length.  ``literal_zero`` waits on its control drum, 50 ms into
+step 2.  No reading yet says whether a CLICK drum's Acc counts on a step whose preset is a DS.
+So ``entry_or_first_timing_scan`` takes a TON started on scan 5, its last write, as its clock.
+The runs the CLICK read (2026-11-06) took every step on scan 20 instead.
 
 ``literal_zero``: a step preset written as the constant 0, not from a DS.  Result1, presets
 0 / 30 s / 30 s: 1 where 0 never ends the step (as from a DS), 2 where it ends at once.  Result2,
@@ -41,22 +47,30 @@ The cases own what ``memory.OWNED_APART`` lists under this group.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill
+from pyrung.conformance import _runner as runner_module
+from pyrung.core import Rung, copy, fill, on_delay
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put
 from tests.conformance.drum_shift_search.test_drum_pins import time_box
-from tests.conformance.memory import ds, td
-from tests.conformance.scans import count_scans, done, scans_for
+from tests.conformance.memory import ClickTimer, ds, td
+from tests.conformance.scans import count_scans
 
-WINDOW = 22
-READ_SCAN = 20
+#: The ms of timing a case waits before it reads its steps.
+SETTLED = 50
+#: The scan of the last write ``entry_or_first_timing_scan`` makes.
+LAST_WRITE = 5
+SCANS = 24
 #: Each case's C bits, then its drums' step registers, TDs and DS presets.
 LITERAL_BITS, TIMING_BITS = range(331, 337), range(341, 353)
 LITERAL_STEPS, TIMING_STEPS = range(3923, 3925), range(3925, 3928)
 LITERAL_TDS, TIMING_TDS = range(205, 207), range(207, 210)
 PRESETS = range(3928, 3931)
+CLOCK = ClickTimer(210)
 
 
 def _sides(bits: range, steps: range, tds: range) -> list[Side]:
@@ -68,27 +82,27 @@ def _sides(bits: range, steps: range, tds: range) -> list[Side]:
     return sides
 
 
-def _read(slot: Any, sides: list[Side]) -> None:
+def _read(slot: Any, sides: list[Side], *when: Any) -> None:
+    """Each side's step into Result1.., and ``Fired``, on the first scan *when* holds."""
     fields = (slot.Result1, slot.Result2, slot.Result3)
-    with Rung(slot.Scratch == READ_SCAN):
+    with Rung(slot.Cmd != 0, slot.Fired == 0, *when):
         for side, field in zip(sides, fields[: len(sides)], strict=True):
             copy(side.step, field)
+        copy(1, slot.Fired)
 
 
 def prove_literal_zero(slot: Any) -> None:
     zero, one = _sides(LITERAL_BITS, LITERAL_STEPS, LITERAL_TDS)
-    count_scans(slot, WINDOW)
     time_box(slot, zero, [0, LONG, LONG])
     time_box(slot, one, [1, LONG, LONG])
-    _read(slot, [zero, one])
-    done(slot, WINDOW)
+    _read(slot, [zero, one], one.step == 2, one.acc >= SETTLED)
 
 
 def prove_entry_or_first_timing_scan(slot: Any) -> None:
     at_move, first_scan, corrected = _sides(TIMING_BITS, TIMING_STEPS, TIMING_TDS)
     jog, jog_early = Pool(TIMING_BITS[9:])(2)
     p_move, p_first, p_back = (ds[n] for n in PRESETS)
-    count_scans(slot, WINDOW)
+    count_scans(slot, LAST_WRITE)
     put(slot, 1, 1, p_move)
     put(slot, 4, LONG, p_move)
     put(slot, 1, LONG, p_first)
@@ -102,8 +116,9 @@ def prove_entry_or_first_timing_scan(slot: Any) -> None:
     time_box(slot, at_move, [LONG, p_move, LONG], jog=jog)
     time_box(slot, first_scan, [LONG, p_first, LONG], jog=jog)
     time_box(slot, corrected, [p_back, LONG, LONG], jog=jog_early)
-    _read(slot, [at_move, first_scan, corrected])
-    done(slot, WINDOW)
+    with Rung(slot.Cmd != 0, slot.Scratch >= LAST_WRITE):
+        on_delay(CLOCK, LONG)
+    _read(slot, [at_move, first_scan, corrected], CLOCK.Acc >= SETTLED)
 
 
 def init_entry_or_first_timing_scan(slot: Any) -> None:
@@ -122,14 +137,14 @@ group = Group(
             init=init_entry_or_first_timing_scan,
             expect={"Result1": 2, "Result2": 2, "Result3": 1},
             pending="PRESET",
-            scans=scans_for(WINDOW),
+            scans=SCANS,
         ),
         case(
             "A time drum step with the constant preset 0 ends at once, unlike one from a DS "
             "(Result1 = 2); a constant 1 ms step ends (Result2 = 2)",
             ladder=prove_literal_zero,
             expect={"Result1": 2, "Result2": 2},
-            scans=scans_for(WINDOW),
+            scans=SCANS,
         ),
     ],
 )
@@ -139,9 +154,22 @@ def test_drum_preset():
     assert_all_passed(run(group))
 
 
-def test_pyrung_reads_the_preset_on_the_first_timing_scan():
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
+def test_pyrung_reads_the_preset_on_the_first_timing_scan(monkeypatch, dt):
     """What pyrung reads, not the CLICK: the 1 ms held on scan 4 alone ends step 2 (Result2 3,
     the CLICK 2), and the corrected step reads step 1's 1 ms afresh (Result3 2, the CLICK 1)."""
-    read = {r.case.id: r.actual for r in run(group)}
+    monkeypatch.setattr(runner_module, "DT", dt)
+    read = {r.case.id: r.actual for r in run(_at(dt))}
     case_read = read["entry_or_first_timing_scan"]
     assert (case_read["Result1"], case_read["Result2"], case_read["Result3"]) == (2, 3, 2)
+
+
+def _at(dt: float) -> Group:
+    return Group("drum_preset", [replace(k, scans=max(SCANS, int(0.2 / dt))) for k in group.cases])
+
+
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
+def test_drum_preset_at_any_scan(monkeypatch, dt):
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    assert_all_passed(run(_at(dt)))

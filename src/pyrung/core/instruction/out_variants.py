@@ -38,8 +38,8 @@ if TYPE_CHECKING:
 
 _ACC_MAX = 32767
 
-# A flasher's phase (memory ``_flash_phase``).  A ``_NEXT`` phase runs from the next scan, which
-# clears its accumulator first.
+# A flasher's phase (memory ``_flash_phase``).  A ``_NEXT`` phase starts on the next scan.  That
+# scan clears the phase's accumulator before it ticks.
 _FLASH_IDLE, _FLASH_ON, _FLASH_OFF, _FLASH_ON_NEXT, _FLASH_OFF_NEXT = 0, 1, 2, 3, 4
 
 
@@ -223,10 +223,11 @@ class FlasherInstruction(Instruction):
     The new phase clears its accumulator on that scan, before it ticks.  So
     every phase shows for at least one scan, and a 1 ms first on phase lights
     the rung's first scan (``flash_zero/short_first_phase``).  The accumulator
-    of the phase not running holds, on the scan a phase ends too
-    (``out_more/preset_mid_phase`` reads the off TD in the on phase).  A TD
-    the ladder writes past the running phase's preset ends that phase on its
-    next tick (``td_write`` read it for both phases).
+    of the phase not running holds, through the scan that ends the running
+    phase too.  ``out_more/preset_mid_phase`` reads it in the middle of the
+    next on phase only, so no CLICK has read that last scan.  A TD the ladder
+    writes past the running phase's preset ends that phase on its next tick
+    (``td_write`` read it for both phases).
     One written to the phase not running stands until that phase starts
     again and clears it.  The model implies this, but no CLICK has read it.
 

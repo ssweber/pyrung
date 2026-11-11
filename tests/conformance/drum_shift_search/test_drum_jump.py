@@ -35,12 +35,14 @@ a snapshot that reads otherwise on a CLICK is an answer.
   still true) and rewrite only the flag: 2626 (Result3, Result4, ErrorCode).  A drum
   that writes every output off again reads 2424 throughout.
 - ``acc_through_jog_completion`` (answered 2026-11-02): a time drum with
-  Acc 900 staged on scan 2 is jogged on its last step on scan 3: the completion keeps
-  the accumulator, Acc / 100 = 9 (Result2), and it then holds, moving on none of scans
+  Acc 9000 staged on scan 2 is jogged on its last step on scan 3: the completion keeps
+  the accumulator, Acc / 1000 = 9 (Result2), and it then holds, moving on none of scans
   4..8 (Result3 = 0).  A second drum is given step 5 and a
-  jog (the hold scan) on scan 3 with Acc 900 staged above it: the hold scan does not
-  tick the accumulator, so Acc - 900 = 0 (Result4), and the next scan's correction
-  keeps it, 900..999 (ErrorCode, 910 on the CLICK).
+  jog (the hold scan) on scan 3 with Acc 9000 staged above it: the hold scan does not
+  tick the accumulator, so Acc - 9000 = 0 (Result4), and the next scan's correction
+  keeps it, Acc / 1000 = 9 (ErrorCode).  The CLICK read 9, 0, 0 and 910 from 900 staged.
+  ErrorCode now reads thousands, so the time the drum adds after the correction leaves it
+  at 9 (it read the whole Acc, 900..999).
 
 The cases own C1110..C1200 and C1401..C1470, T251..T270, DD661..DD680 and the DS
 the group's rigs name (``memory.OWNED``).
@@ -50,7 +52,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import Rung, copy, latch, math, out, reset
 from tests.conformance.drum_rig import (
     Pair,
@@ -64,6 +69,8 @@ from tests.conformance.drum_rig import (
 from tests.conformance.scans import count_scans, done, scans_for
 
 SCANS = scans_for()
+#: The Acc ``acc_through_jog_completion`` stages, read in thousands.
+STAGED = 9000
 
 RES = Resources(
     bits=pool_of(range(1110, 1201), range(1401, 1471)),
@@ -214,11 +221,11 @@ def prove_acc_through_jog_completion(slot):
         on_scans(slot, p.jog, 1, 3)
 
     a = r.pair(0, jog=True, above=a_above)
-    # Acc 900 staged on scan 2, below the drum; the jog on scan 3 completes it.
-    put(slot, 2, 900, a.time.acc)
+    # Acc 9000 staged on scan 2 below the drum.  The jog on scan 3 completes it.
+    put(slot, 2, STAGED, a.time.acc)
     prev = a.time.state
     with Rung(slot.Scratch == 3):
-        math(a.time.acc / 100, slot.Result2)
+        math(a.time.acc / 1000, slot.Result2)
     with Rung(slot.Scratch >= 4, slot.Scratch <= 8, a.time.acc > prev):
         math(slot.Result3 + 1, slot.Result3)
     with Rung():
@@ -228,13 +235,13 @@ def prove_acc_through_jog_completion(slot):
         on_scans(slot, p.jog, 1, 3)
         put(slot, 3, 5, p.time.step)
         put(slot, 3, 5, p.event.step)
-        put(slot, 3, 900, p.time.acc)
+        put(slot, 3, STAGED, p.time.acc)
 
     b = r.pair(1, jog=True, above=b_above)
     with Rung(slot.Scratch == 3):
-        math(b.time.acc - 900, slot.Result4)
+        math(b.time.acc - STAGED, slot.Result4)
     with Rung(slot.Scratch == 4):
-        copy(b.time.acc, slot.ErrorCode)
+        math(b.time.acc / 1000, slot.ErrorCode)
     done(slot)
 
 
@@ -282,12 +289,12 @@ group = Group(
         ),
         case(
             "A time drum's accumulator holds through a jog completion, and a jog-hold scan "
-            "does not tick it nor its correction clear it: Acc 900 staged, then jogged on "
-            "the last step, reads 9 hundreds (Result2) and moves on no scan after (Result3 "
-            "= 0); a jog on a bad step with Acc 900 staged leaves it 900 (Result4 = 0 over "
-            "900) and the next scan's correction keeps it (ErrorCode in 900..999)",
+            "does not tick it nor its correction clear it: Acc 9000 staged, then jogged on "
+            "the last step, reads 9 thousands (Result2) and moves on no scan after (Result3 "
+            "= 0); a jog on a bad step with Acc 9000 staged leaves it 9000 (Result4 = 0 over "
+            "9000) and the next scan's correction keeps it (ErrorCode = 9 thousands)",
             ladder=prove_acc_through_jog_completion,
-            expect={"Result2": 9, "Result3": 0, "Result4": 0, "ErrorCode": range(900, 1000)},
+            expect={"Result2": 9, "Result3": 0, "Result4": 0, "ErrorCode": 9},
             scans=SCANS,
         ),
     ],
@@ -296,3 +303,12 @@ group = Group(
 
 def test_drum_jump():
     assert_all_passed(run(group))
+
+
+@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
+def test_acc_through_jog_completion_at_any_scan(monkeypatch, dt):
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    cases = [c for c in group.cases if c.id == "acc_through_jog_completion"]
+    assert len(cases) == 1
+    assert_all_passed(run(Group("drum_jump", cases)))

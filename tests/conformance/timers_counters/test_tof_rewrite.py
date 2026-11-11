@@ -16,10 +16,11 @@ the TOF in reverse order, so each new step starts on the next scan.
 A CLICK read an earlier ladder of 20 ms that counted scans (2026-11-10, twice).  Done came back on
 and the TD counted from 0.  So a TOF that has been enabled judges ``TD < preset`` on every scan its
 rung is false, and a TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never
-enabled still rests at Done off, TD 0 (``timers/tof_never_enabled``).  pyrung once kept a
-timed-out TOF at rest once its TD read 0.  It would read Result2 = 0 and Result4 = 2 here.  The
-earlier ladder read Done one scan after the write, and the soft PLC's 20 ms scan reached the 20 ms
-preset.  The preset here is 200 ms, five times the soft PLC's longest scan.
+enabled still rests at Done off, TD 0 (``timers/tof_never_enabled``).  pyrung used to keep a
+timed-out TOF at rest after its TD read 0.  It would read Result2 = 0 and Result4 = 2 here.  The
+earlier ladder read Done one scan after the write.  At the soft PLC's 20 ms scan, that one tick
+already reached the 20 ms preset.  The preset here is 200 ms, five times the soft PLC's longest
+scan.
 
 The case's reset depends on nothing the TOF does: its rung is false through the reset, and its
 Done and TD are kept (a TOF times on, and its Done may come back on, after the case).  The case owns
