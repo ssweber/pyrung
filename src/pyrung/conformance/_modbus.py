@@ -25,8 +25,8 @@ from typing import Any
 from pyclickplc.server import PlcValue
 
 from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
-from pyrung.conformance._case import CaseResult, Group, expectation_met, judge
-from pyrung.conformance._slot import PROGRAM_HASH_REGISTER
+from pyrung.conformance._case import CaseResult, Group, expectation_met, judge, timed_out_step
+from pyrung.conformance._slot import LONGEST_SCAN_REGISTER, PROGRAM_HASH_REGISTER
 
 #: Default Modbus TCP port of a CLICK.
 DEFAULT_PORT = 502
@@ -61,6 +61,27 @@ class ConformanceError(RuntimeError):
 
 class BuildMismatchError(ConformanceError):
     """The main program on the endpoint does not have this build's group layout."""
+
+
+class ScanTimeError(ConformanceError):
+    """A scan took longer than the program's cases assume, so the run is void."""
+
+
+def check_scan_time(build: ConformanceProgram, longest_ms: int) -> None:
+    """Raise :class:`ScanTimeError` when *longest_ms* is past *build*'s scan limit.
+
+    The cases of a part assume every scan is at most its limit, so a longer one
+    voids the run.  No Result is judged.
+    """
+    limit = build.scan_limit_ms
+    if limit is None or longest_ms <= limit:
+        return
+    name = f"part {build.part}" if build.part else "this program"
+    raise ScanTimeError(
+        f"Run void: {name} assumes scans of at most {limit} ms, but the longest scan "
+        f"while its cases ran took {longest_ms} ms. No Result was judged. Find what made "
+        "the scan long, or raise the part's limit in tests/conformance/suite.py."
+    )
 
 
 @dataclass(frozen=True)
@@ -311,8 +332,12 @@ def run_modbus(
     A selected group whose subroutine hash does not match is stale: its cases
     come back with ``stale=True`` without running, and the other groups still run.
 
+    The main program keeps the longest scan in ``DS2``.  The harness writes 0
+    there before it zeroes the slots and reads it after the last read.
+
     Raises:
         BuildMismatchError: ``DS1`` does not hold this build's layout hash.
+        ScanTimeError: A scan took longer than the build's ``scan_limit_ms``.
         ConformanceError: The endpoint is unreachable or the phases time out
             before any case can be judged.
         ValueError: *groups* names a group the program does not have.
@@ -534,6 +559,9 @@ async def _drive(
         if not live:
             return results
 
+        # The ladder keeps the longest scan from here on.
+        await client.ds.write(LONGEST_SCAN_REGISTER, 0)
+
         # 1-3. Zero the live groups' slots, then wait for every case's reset:
         # Ready, with Cmd and Fired still 0.  A case whose reset never
         # completes is judged, not fired.
@@ -577,6 +605,10 @@ async def _drive(
         await asyncio.sleep(max(CONFIRM_GAP_S, settle))
         second = _by_register(live, await _read_spans(client, live))
         second_bits = await _read_system_bits(client, live)
+        (longest,) = await _read_ds(client, LONGEST_SCAN_REGISTER, 1)
+
+    # A scan past the cases' limit voids the run before anything is judged.
+    check_scan_time(build, longest)
 
     # 7. Compare.
     for g in live:
@@ -600,6 +632,10 @@ async def _drive(
             )
             if pending_note:
                 notes.insert(0, pending_note)
+            step = timed_out_step(second[g.register(i, "Fired")])
+            if step is not None:
+                passed, xfail = False, False
+                notes.insert(0, f"timed out at step {step}")
             group_results.append(
                 CaseResult(
                     case=c,

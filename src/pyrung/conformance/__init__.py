@@ -9,7 +9,7 @@ or a real CLICK given its ``host[:port]``, all groups or a chosen subset.
 """
 
 from pyrung.conformance._build import ConformanceProgram, GroupBuild, build_program
-from pyrung.conformance._case import Case, CaseResult, Group, case
+from pyrung.conformance._case import TIMED_OUT, Case, CaseResult, Group, case
 from pyrung.conformance._circuitpy import CircuitPySim
 from pyrung.conformance._confirm import (
     Confirmation,
@@ -22,6 +22,7 @@ from pyrung.conformance._modbus import (
     BuildMismatchError,
     ConformanceError,
     Endpoint,
+    ScanTimeError,
     SimServer,
     parse_endpoint,
     read_program_hash,
@@ -45,7 +46,9 @@ __all__ = [
     "GroupLayout",
     "Manifest",
     "ManifestError",
+    "ScanTimeError",
     "SimServer",
+    "TIMED_OUT",
     "TeeSpec",
     "assert_all_passed",
     "build_program",

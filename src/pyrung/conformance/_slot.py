@@ -28,6 +28,10 @@ SLOT_FIELDS = (
 
 #: DS register that holds the program (layout) hash, written every scan by the main program.
 PROGRAM_HASH_REGISTER = 1
+#: DS register where the main program keeps the longest SD10 (scan time, ms) it has read
+#: since the harness last wrote 0 there.  The harness voids a run whose longest scan is past
+#: the program's limit.
+LONGEST_SCAN_REGISTER = 2
 #: DS1..DS10 are the program header; group blocks start after it.
 HEADER_END = 10
 #: Registers per slot (9 fields plus 1 spare); also the size of a group header.

@@ -13,6 +13,7 @@ from pyrung.conformance._case import (
     format_expect,
     judge,
     system_tag_name,
+    timed_out_step,
 )
 from pyrung.conformance._confirm import Confirmation, is_confirmed
 from pyrung.conformance._ladder import case_label, check_disjoint, emit_case
@@ -34,7 +35,7 @@ RESET_TIMEOUT_S = 10.0
 PASSES = 2
 
 
-def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
+def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> list[CaseResult]:
     """Run *cases* in-process on a fixed-step ``PLC``, counting scans exactly.
 
     Given a :class:`Group`, its cases run inside the group's subroutine, called
@@ -45,9 +46,22 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
     differs, other than a case's ``keep`` tags, is a leak and fails the case
     that owns it.
 
+    Every scan takes :data:`DT`.  A *scan_limit_ms* under it voids the run, as a
+    longer scan voids a run over the wire.
+
     Raises:
+        ScanTimeError: :data:`DT` is past *scan_limit_ms*.
         ValueError: Two cases share memory.
     """
+    if scan_limit_ms is not None:
+        from pyrung.conformance._modbus import ScanTimeError
+
+        scan_ms = round(DT * 1000)
+        if scan_ms > scan_limit_ms:
+            raise ScanTimeError(
+                f"Run void: the cases assume scans of at most {scan_limit_ms} ms, but every "
+                f"scan in-process takes {scan_ms} ms. No Result was judged."
+            )
     if isinstance(cases, Group):
         group: Group | None = cases
         case_list = list(cases.cases)
@@ -86,6 +100,7 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
     kept = {t.name for c in case_list for t in c.keep}
 
     runs: list[dict[int, tuple[dict[str, int], bool]]] = []
+    timeouts: dict[int, int] = {}
     unready: set[int] = set()
     leaks: dict[int, list[str]] = {}
     with PLC(logic, dt=DT) as plc:
@@ -103,6 +118,10 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
                     for j in [i] if i is not None else indexes:
                         leaks.setdefault(j, []).append(text)
             runs.append(_fire(plc, slot, case_list, [i for i in indexes if i not in unready]))
+            for i in indexes:
+                step = timed_out_step(plc.current_state.tags.get(slot[i].Fired.name, 0))
+                if step is not None:
+                    timeouts.setdefault(i, step)
 
     results: list[CaseResult] = []
     for i, c in enumerate(case_list, start=1):
@@ -125,6 +144,9 @@ def run(cases: Sequence[Case] | Group) -> list[CaseResult]:
         )
         if pending_note:
             notes.insert(0, pending_note)
+        if i in timeouts:
+            passed, xfail = False, False
+            notes.insert(0, f"timed out at step {timeouts[i]}")
         results.append(
             CaseResult(
                 case=c,
@@ -265,7 +287,7 @@ def format_report(
     CLICK's expectation as it must, FAIL, SKIP, STALE), whether the case has
     passed on a CLICK as it is now (*confirmations*, see ``_confirm.py``), the
     pending step and the probe question; a FAIL or XFAIL line is followed by
-    what the case read.
+    what the case read, and a FAIL line by its note (such as "timed out at step 1").
     """
     confirmations = confirmations or {}
     lines: list[str] = []
@@ -292,6 +314,8 @@ def format_report(
         lines.append(f"{status:<5} {_label(r)} [{'; '.join(marks)}] {r.case.sentence}")
         if status in ("FAIL", "XFAIL"):
             lines.append(f"      actual {r.actual}")
+        if status == "FAIL" and r.note:
+            lines.append(f"      note {r.note}")
     words = {
         "PASS": "passed",
         "XFAIL": "pending (pyrung differs from CLICK)",

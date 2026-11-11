@@ -13,13 +13,18 @@ expectation is an exact int, the same in-process and on the wire.
 
 Pass ``scans=scans_for(window)`` to ``case()``.  Every helper takes the same
 ``window``; the default is :data:`WINDOW`.
+
+A case that waits for a timer to reach a threshold would wait forever under a model that never
+gets there.  :func:`deadline` ends such a case once its scan times add up to a limit.  The harness
+then reports the step the case was on.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core import Rung, copy, math
+from pyrung.conformance import TIMED_OUT
+from pyrung.core import Rung, copy, math, system
 
 #: Scans a case records by default.
 WINDOW = 8
@@ -76,3 +81,20 @@ def done(slot: Any, window: int = WINDOW) -> None:
     """Raise ``Fired`` once the window is recorded.  The case's last rung."""
     with Rung(slot.Cmd != 0, slot.Scratch > window):
         copy(1, slot.Fired)
+
+
+def deadline(slot: Any, limit_ms: int, elapsed: Any) -> None:
+    """Time the case out once *elapsed* reaches *limit_ms*.
+
+    *elapsed* sums SD10 (the scan time in ms) over the scans the case runs.  So it counts
+    time whatever a scan takes, and no timer under test does the counting.  Past the limit
+    ``Fired`` and ``Scratch`` both take ``TIMED_OUT`` plus the step in ``Scratch``, so no
+    ``Scratch == N`` step runs again.  Set *limit_ms* to about 3 times what the case takes.
+    *elapsed* is a slot field or a register the case owns.  Put these rungs last.
+    """
+    live = (slot.Cmd != 0, slot.Fired == 0)
+    with Rung(*live):
+        math(elapsed + system.sys.scan_time_current_ms, elapsed)
+    with Rung(*live, elapsed >= limit_ms):
+        math(slot.Scratch + TIMED_OUT, slot.Fired)
+        copy(slot.Fired, slot.Scratch)

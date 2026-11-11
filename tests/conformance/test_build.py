@@ -17,6 +17,7 @@ from pyrung.conformance import (
     Group,
     Manifest,
     ManifestError,
+    ScanTimeError,
     assert_all_passed,
     build_program,
     case,
@@ -29,6 +30,7 @@ from pyrung.conformance import (
     run,
 )
 from pyrung.conformance._ladder import case_comment, emit_case
+from pyrung.conformance._modbus import check_scan_time
 from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
 from pyrung.core import PLC, Program, Rung, copy, math
 from pyrung.core.system_points import system
@@ -42,6 +44,7 @@ from tests.conformance.probe_kit import (
     record_readings,
     record_run,
 )
+from tests.conformance.scans import deadline
 
 ds = ClickBlocks().ds
 
@@ -295,6 +298,49 @@ def test_every_scan_writes_the_headers() -> None:
     tags = plc.current_state.tags
     assert tags["Conf_ProgramHash"] == build.program_hash
     assert tags[rungs.hash_tag.name] == rungs.group_hash
+
+
+def test_main_keeps_the_longest_scan() -> None:
+    build = build_program(Group("g", [_seven()]))
+    plc = PLC(build.program, dt=0.010)
+    plc.step()
+    assert plc.current_state.tags["Conf_LongestScan"] == 10
+    # A longer scan already kept stays.  The harness writes 0 to start a new record.
+    plc.patch({"Conf_LongestScan": 30})
+    plc.step()
+    assert plc.current_state.tags["Conf_LongestScan"] == 30
+    plc.patch({"Conf_LongestScan": 0})
+    plc.step()
+    assert plc.current_state.tags["Conf_LongestScan"] == 10
+
+
+def test_a_scan_past_the_parts_limit_voids_the_run() -> None:
+    build = suite.build("coils")
+    assert build.scan_limit_ms == 50
+    check_scan_time(build, 50)
+    with pytest.raises(ScanTimeError) as raised:
+        check_scan_time(build, 61)
+    message = str(raised.value)
+    for words in ("Run void", "part coils", "at most 50 ms", "took 61 ms", "No Result"):
+        assert words in message
+    assert message.isascii()
+    # A program with no limit judges any scan.
+    check_scan_time(build_program(Group("g", [_seven()])), 5000)
+    with pytest.raises(ScanTimeError, match="every scan in-process takes 10 ms"):
+        run(Group("g", [_seven()]), scan_limit_ms=5)
+    assert_all_passed(run(Group("g", [_seven()]), scan_limit_ms=10))
+
+
+def test_each_part_carries_a_scan_limit(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+    parts = (*suite.PARTS, *suite.APART_PARTS)
+    assert set(suite.PART_SCAN_LIMITS_MS) <= set(parts)
+    assert suite.scan_limit_ms("units") == suite.SCAN_LIMIT_MS == 50
+    assert suite.scan_limit_ms("fixed_scan") > suite.APART_PARTS["fixed_scan"].fixed_scan_ms
+    assert suite.scan_limit_ms("follow2_for") == 2000
+    for part in parts:
+        assert suite.build(part).scan_limit_ms == suite.scan_limit_ms(part)
+    assert suite.main(["--part", "units", str(tmp_path / "units")]) == 0
+    assert "scans of at most 50 ms" in capsys.readouterr().out
 
 
 def test_in_process_only_cases_are_left_out_of_the_program() -> None:
@@ -737,6 +783,34 @@ def test_a_reset_that_never_completes_fails_only_its_case() -> None:
     assert [r.passed for r in results] == [False, True]
     assert not results[0].fired
     assert "reset did not complete" in results[0].note
+
+
+def _prove_waits_past_its_deadline(slot):
+    # Step 1 waits for a Result2 that never comes.
+    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+        copy(1, slot.Fired)
+    with Rung(slot.Cmd != 0, slot.Scratch == 1, slot.Result2 == 1):
+        copy(2, slot.Scratch)
+    with Rung(slot.Cmd != 0, slot.Scratch == 0):
+        copy(7, slot.Result1)
+        copy(1, slot.Scratch)
+    deadline(slot, 100, slot.Result3)
+
+
+def _prove_ends_before_its_deadline(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Result3 >= 50):
+        copy(7, slot.Result1)
+        copy(1, slot.Fired)
+    deadline(slot, 100, slot.Result3)
+
+
+def test_a_wait_past_its_deadline_times_out_at_its_step() -> None:
+    late = case("Waits", ladder=_prove_waits_past_its_deadline, expect={"Result1": 7}, scans=30)
+    on_time = case("Ends", ladder=_prove_ends_before_its_deadline, expect={"Result1": 7}, scans=30)
+    results = run(Group("g", [late, on_time]))
+    assert [r.passed for r in results] == [False, True]
+    assert results[0].note.startswith("timed out at step 1")
+    assert "timed out at step 1" in format_report(results)
 
 
 def test_cases_that_share_memory_are_rejected() -> None:

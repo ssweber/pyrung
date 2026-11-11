@@ -1,8 +1,9 @@
 """The canonical conformance program: one CLICK subroutine per group on fixed DS blocks.
 
-The main program writes the layout hash to ``DS1`` every scan and calls every
-group's subroutine unconditionally.  Each subroutine writes its own hash (of
-its exported case rungs) to its group header every scan, then runs its cases.
+The main program writes the layout hash to ``DS1`` every scan and keeps the
+longest scan time in ``DS2``.  It calls every group's subroutine unconditionally.
+Each subroutine writes its own hash (of its exported case rungs) to its group
+header every scan, then runs its cases.
 Each case starts with its commented reset rung (see ``_ladder.py``), then its
 ladder, gated by its slot's ``Cmd``/``Fired``.
 """
@@ -24,6 +25,7 @@ from pyrung.conformance._case import Case, Group
 from pyrung.conformance._ladder import check_disjoint, emit_case
 from pyrung.conformance._manifest import GroupLayout, Manifest
 from pyrung.conformance._slot import (
+    LONGEST_SCAN_REGISTER,
     PROGRAM_HASH_REGISTER,
     SLOT_FIELDS,
     SLOT_STRIDE,
@@ -31,7 +33,7 @@ from pyrung.conformance._slot import (
     slot_register,
 )
 from pyrung.conformance._tee import draw_tees
-from pyrung.core import Int, Program, Rung, call, copy, subroutine
+from pyrung.core import Int, Program, Rung, call, copy, subroutine, system
 
 if TYPE_CHECKING:
     from pyrung.click import TagMap
@@ -40,7 +42,8 @@ if TYPE_CHECKING:
 
 #: Bump when the header protocol changes, so an old program bails as a mismatch.
 #: 3: slots gained ``Ready``, raised by each case's reset rung.
-LAYOUT_VERSION = 3
+#: 4: main keeps the longest scan in ``DS2`` (``LONGEST_SCAN_REGISTER``).
+LAYOUT_VERSION = 4
 
 #: Findings the export lets through: the suite pastes RAND with DF and equal
 #: bounds, and Math constants past 16 bits, and measures what CLICK does with them.
@@ -118,6 +121,11 @@ class ConformanceProgram:
     tag_map: TagMap
     #: What the main program writes to ``DS1`` every scan (1..32767).
     program_hash: int
+    #: The part this program is, for messages (``None``: no part).
+    part: str | None = None
+    #: The longest scan, in ms, the cases assume.  A run whose longest scan is past it is void
+    #: (``None``: no limit).
+    scan_limit_ms: int | None = None
 
     def group(self, name: str) -> GroupBuild:
         for g in self.groups:
@@ -197,12 +205,18 @@ class ConformanceProgram:
 
 
 def build_program(
-    groups: Group | Sequence[Group], manifest: Manifest | None = None
+    groups: Group | Sequence[Group],
+    manifest: Manifest | None = None,
+    *,
+    part: str | None = None,
+    scan_limit_ms: int | None = None,
 ) -> ConformanceProgram:
     """Build the canonical program for *groups* on *manifest*'s fixed DS blocks.
 
     Without a manifest the groups are packed in order (:meth:`Manifest.packed`),
     which is fine for a local sim but moves registers whenever a case is added.
+    *part* names the program in messages.  A run whose longest scan is past
+    *scan_limit_ms* is void (``ScanTimeError``).
 
     Raises:
         ManifestError: A wire case or group has no manifest entry; the message
@@ -228,7 +242,11 @@ def build_program(
 
     ds = ClickBlocks().ds
     program_hash_tag = Int("Conf_ProgramHash")
-    mappings = [program_hash_tag.map_to(ds[PROGRAM_HASH_REGISTER])]
+    longest_scan_tag = Int("Conf_LongestScan")
+    mappings = [
+        program_hash_tag.map_to(ds[PROGRAM_HASH_REGISTER]),
+        longest_scan_tag.map_to(ds[LONGEST_SCAN_REGISTER]),
+    ]
     staged: list[
         tuple[Group, GroupLayout, tuple[tuple[int, Case], ...], _NamedArrayRuntime, Tag]
     ] = []
@@ -286,6 +304,10 @@ def build_program(
     with Program(strict=False) as program:
         with Rung():
             copy(program_hash, program_hash_tag)
+        # The harness writes 0 here before a run and reads it after.
+        scan_ms = system.sys.scan_time_current_ms
+        with Rung(scan_ms > longest_scan_tag):
+            copy(scan_ms, longest_scan_tag)
         for gb in built:
             if gb.group.in_main:
                 continue
@@ -313,6 +335,8 @@ def build_program(
         program=program,
         tag_map=tag_map,
         program_hash=program_hash,
+        part=part,
+        scan_limit_ms=scan_limit_ms,
     )
 
 

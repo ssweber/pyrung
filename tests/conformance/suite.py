@@ -391,6 +391,18 @@ APART_PARTS: dict[str, ApartPart] = {
     "modbus_raw": ApartPart(("modbus_raw",)),
 }
 
+#: The longest scan (ms) a part's cases assume, unless ``PART_SCAN_LIMITS_MS`` names the part.
+#: Main keeps the longest SD10 in DS2, and a run whose longest scan is past the limit is void.
+SCAN_LIMIT_MS = 50
+PART_SCAN_LIMITS_MS: dict[str, int] = {
+    # ``for_wide`` runs two For loops of 65536 and 65537 runs on one scan, about 2.2 s.
+    "boot": 3000,
+    # CLICK's fixed scan of 100 ms, and a margin.
+    "fixed_scan": 150,
+    # ``for_signed``'s run on a CLICK read 1287 ms in SD12, its longest scan (2026-11-10).
+    "follow2_for": 2000,
+}
+
 #: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
 #: less a margin for the estimate's error and the instructions it has not
 #: measured.
@@ -413,15 +425,29 @@ def groups(part: str | None = None) -> list[Group]:
     return [g for g in ALL_GROUPS if g.name in PARTS[part]]
 
 
+def scan_limit_ms(part: str | None = None) -> int:
+    """The longest scan, in ms, *part*'s cases assume.
+
+    The whole suite (``None``) runs only on a local target, and takes the largest of
+    its parts' limits.
+    """
+    if part is None:
+        return max(scan_limit_ms(p) for p in PARTS)
+    return PART_SCAN_LIMITS_MS.get(part, SCAN_LIMIT_MS)
+
+
 def build(part: str | None = None) -> ConformanceProgram:
     """The program for *part* (``None``: the whole suite) on its manifest."""
     manifest = APART_MANIFEST_PATH if part in APART_PARTS else MANIFEST_PATH
-    return build_program(groups(part), load_manifest(manifest))
+    return build_program(
+        groups(part), load_manifest(manifest), part=part, scan_limit_ms=scan_limit_ms(part)
+    )
 
 
 def build_apart() -> ConformanceProgram:
     """Every group on memory of its own, as one program, for a local target."""
-    return build_program(APART_GROUPS, load_manifest(APART_MANIFEST_PATH))
+    limit = max(scan_limit_ms(p) for p in APART_PARTS)
+    return build_program(APART_GROUPS, load_manifest(APART_MANIFEST_PATH), scan_limit_ms=limit)
 
 
 def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> ConformanceProgram:
@@ -500,10 +526,11 @@ def main(argv: list[str]) -> int:
     program = build(args.part)
     label = f"part {args.part}, layout" if args.part else "layout"
     note = fixed_scan_note(args.part)
+    limit = f"scans of at most {program.scan_limit_ms} ms"
 
     if args.workspace is None:
         out = program.export(args.out_dir)
-        print(f"Wrote {out} ({label} {program.program_hash} in DS1)")
+        print(f"Wrote {out} ({label} {program.program_hash} in DS1, {limit})")
         _print_layout(program)
         if note is not None:
             print(note)
@@ -511,7 +538,7 @@ def main(argv: list[str]) -> int:
 
     workspace = Path(args.workspace)
     source = program.export_workspace(workspace)
-    print(f"Wrote {source} ({label} {program.program_hash} in DS1)")
+    print(f"Wrote {source} ({label} {program.program_hash} in DS1, {limit})")
     _print_layout(program)
     if not (workspace / "csv").is_dir():
         print(
