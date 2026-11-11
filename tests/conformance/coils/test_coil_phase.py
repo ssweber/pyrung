@@ -88,8 +88,8 @@ deb_fall = Group(
             "scan more on the next (Result2); the rise cleared it (Result3 = 1)",
             ladder=prove_off_td_at_fall,
             ready=lambda slot: ~DEB,
-            # The off TD counts from power-up while the rung is off, and the on TD is kept after the
-            # rung falls; the rise clears the off TD and starts the on TD from 0.
+            # The off TD counts while the rung is off after the coil was on, so it reads 100 or more
+            # after the reset.  The on TD is kept after the rung falls.
             keep=(DEB_ON.Acc, DEB_OFF.Acc),
             expect={
                 "Result1": range(1, 51),

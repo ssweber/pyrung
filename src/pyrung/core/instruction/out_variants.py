@@ -118,7 +118,10 @@ class DebounceInstruction(Instruction):
     Two accumulators, one a side (hardware readings of 2026-11-06).  The on
     side's counts while the rung is true: from 0 at a rise, held at a fall.
     The off side's is 0 on every true scan and counts while the rung is
-    false, from power-up too.  The target turns on on a true scan whose on
+    false.  A CLICK has read that count only after the target was on.  After
+    a pulse shorter than the on preset, a CLICK's off TD did not reach 100
+    (2026-11-11).  pyrung's counts there.  Whether a CLICK's counts from
+    power-up is unread.  The target turns on on a true scan whose on
     accumulator, ticked, reaches its preset, and off on a false scan whose
     off accumulator reached its preset before this scan's tick; between the
     two it holds.  So the off side lags a scan: on the scan of the fall it

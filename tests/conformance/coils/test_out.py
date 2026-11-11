@@ -7,8 +7,9 @@ number).  The cases own what ``memory.OWNED`` lists under this group.
 Every coil's rung is gated on ``Cmd``, so the reset drops each coil's input.
 A debounce coil then turns off only when its off side times out, so those
 cases are ``ready`` once the coil is off, and ``keep`` the off side's timer.
-Its TD keeps counting while the input stays off, from power-up on, so it never
-matches a fresh PLC's.  A CLICK keeps a coil's other TDs after the rung falls
+Each such case ends with its coil on.  A CLICK's off TD counts while the input
+is off after the coil was on, so after the reset it reads its preset or more.
+A fresh PLC's reads 0.  A CLICK keeps a coil's other TDs after the rung falls
 (``out_more``).  So each case's ``init`` writes 0 to every TD that ends one of
 its steps.  No step then depends on the coil clearing that TD on its rise scan.
 
@@ -27,11 +28,16 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   that stopped at its preset would never end the case, so T299 times the case
   out at step 0 after 1000 ms (``scans.deadline``).
 - ``debounce_bounce_restarts_on_side`` (O3, on side 300 ms): the input is on
-  until the on TD reads 200, then off until the off TD reads 100, then on.
-  T302 times from that last rise.  Result2 is 1 if the coil is on at 200 ms
-  on T302, and Result1 if it is on at 400 ms.  An on side that restarts at
-  the rise comes on at 300 ms and reads Result2 = 0, Result1 = 1.  One that
-  runs on from 200 comes on near 100 ms and reads Result2 = 1, Result1 = 1.
+  until the on TD reads 200.  The input is then off while T302 times 100 ms,
+  and one scan more, which resets T302.  Then the input is on again, and T302
+  times from that rise.  Result2 is 1 if the coil is on at 200 ms on T302, and
+  Result1 if it is on at 400 ms.  An on side that restarts at the rise comes
+  on at 300 ms and reads Result2 = 0, Result1 = 1.  One that runs on from 200
+  comes on near 100 ms and reads Result2 = 1, Result1 = 1.  On 2026-11-11 a
+  CLICK ran an earlier ladder, which ended the off time once the off TD read
+  100.  That case never fired, so the off TD never reached 100.  The coil
+  was off all that time.  Every other reading of an off TD had the coil on.
+  So no step ends on the off TD now.
 - ``flasher_restarts_with_on_phase`` (O4, 300 ms phases): the rung drops once
   the off TD reads 150.  It stays false while T305 times 100 ms, then one scan
   more, which resets T305.  On the scan T305 reaches 100 the case reads the
@@ -106,23 +112,25 @@ def prove_debounce_td_keeps_counting(slot):
 
 
 def prove_debounce_bounce_restarts_on_side(slot):
-    # O3: the input is on until the on TD reads 200, off until the off TD reads 100, then on.
-    # T302 times from the second rise.
-    with Rung(slot.Cmd != 0, slot.Scratch != 1):
+    # O3: the input is on until the on TD reads 200, off for 100 ms on T302, then on.
+    # T302 times again from the second rise.
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3)):
         debounce(c[1821], on=(ClickTimer(303), 300), off=(ClickTimer(304), 1000))
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2):
+    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch >= 3)):
         on_delay(ClickTimer(302), 2000)
-    with Rung(*_step(slot, 4)):
+    with Rung(*_step(slot, 5)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 3), td[302] >= 400, c[1821]):
+    with Rung(*_step(slot, 4), td[302] >= 400, c[1821]):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 3), td[302] >= 400):
-        copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2), td[302] >= 200, c[1821]):
+    with Rung(*_step(slot, 4), td[302] >= 400):
+        copy(5, slot.Scratch)
+    with Rung(*_step(slot, 3), td[302] >= 200, c[1821]):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 2), td[302] >= 200):
+    with Rung(*_step(slot, 3), td[302] >= 200):
+        copy(4, slot.Scratch)
+    with Rung(*_step(slot, 2)):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), td[304] >= 100):
+    with Rung(*_step(slot, 1), td[302] >= 100):
         copy(2, slot.Scratch)
     with Rung(*_step(slot, 0), td[303] >= 200):
         copy(1, slot.Scratch)
