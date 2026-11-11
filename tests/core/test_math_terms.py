@@ -81,7 +81,7 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "floordiv_plus": (lambda: SEVEN // ZERO + 5, Dint, 5, {40}),
     "div_by_formula": (lambda: SEVEN / (ZERO * 2) + 5, Dint, 5, {40}),
     "floordiv_by_formula": (lambda: SEVEN // (ZERO + ZERO) + 5, Dint, 5, {40}),
-    "constant_cut_to_zero": (lambda: SEVEN / 65536 + 5, Dint, 5, {40}),
+    "constant_cut_to_zero": (lambda: SEVEN / 4294967296 + 5, Dint, 5, {40}),
     "root_plus": (lambda: sqrt(MINUS) + 5, Int, 5, {46}),
     "root_into_real": (lambda: sqrt(MINUS) + 5, Real, 5.0, {46}),
     "root_over_zero": (lambda: sqrt(MINUS) / ZERO + 3, Int, 3, {40, 46}),

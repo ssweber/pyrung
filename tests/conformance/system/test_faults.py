@@ -61,9 +61,12 @@ tells apart:
   RAND ( 7 , 9 ) into Result3 and RAND of DF 3.0 and DF 5.0 into ErrorCode, SC46
   after them as bits 1 and 2 of Result2.  CLICK's editor takes the first two
   typed in and refuses the DFs, which only a paste gets through.  Hardware
-  (2026-11-01) reads 0, 0, 7, 2233, 0: no flag, the DFs write 0 as
-  ``paste_risk/rand_real_bounds`` read, and 2233 is half of 4466, so the wide
-  bounds are cut to 16 bits (70000 is 4464).
+  (2026-11-01) reads 0, 0, 7, 2233, 0.  The DFs write 0 as
+  ``paste_risk/rand_real_bounds`` read.  2233 is half of 4466, with the bounds
+  cut to 16 bits by an export that wrote every constant in 16 bits.  With the
+  bounds pasted as CLICK's editor writes them, ``store_probe/rand_int_cuts``
+  reads them kept whole (2026-11-11).  So pyrung expects 35000..35001, wrapped
+  to -30536..-30535 (Result4) with SC43 (Result1 = 2).
 - ``rand_real_bounds``: moved to the ``paste_risk`` group (part ``control``), since
   a CLICK may refuse a DF bound at paste; DF461..DF462 stay unused here and
   ``pointer_past_bank_lands`` has its C bits.
@@ -642,18 +645,18 @@ group = Group(
             probe="SIN and SQRT of an infinity",
         ),
         case(
-            "RAND with bounds that differ draws between them, its bounds cut to 16 bits, "
-            "but not from DFs: RAND ( 70000 , 70002 ) / 2 into an Int is 4464..4466 / 2 "
-            "(Result4) with no flag (Result1 = 0); RAND ( 7 , 9 ) draws 7..9 (Result3), and "
-            "RAND of DF 3.0 and DF 5.0 writes 0 (ErrorCode), neither raising SC46 (Result2 "
-            "= 0)",
+            "RAND with bounds that differ draws between them, but not from DFs. RAND ( "
+            "70000 , 70002 ) / 2 into an Int is 35000..35001, which wraps to "
+            "-30536..-30535 (Result4) and raises SC43 (Result1 = 2). RAND ( 7 , 9 ) draws "
+            "7..9 (Result3). RAND of DF 3.0 and DF 5.0 writes 0 (ErrorCode). Neither "
+            "raises SC46 (Result2 = 0).",
             ladder=prove_rand_unequal_bounds,
             init=_init(12, dfs=[(479, 480)]),
             expect={
-                "Result1": 0,
+                "Result1": 2,
                 "Result2": 0,
                 "Result3": range(7, 10),
-                "Result4": range(2232, 2234),
+                "Result4": range(-30536, -30534),
                 "ErrorCode": 0,
             },
             scans=SCANS,

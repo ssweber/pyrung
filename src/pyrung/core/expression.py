@@ -932,15 +932,16 @@ class RandIntExpr(Expression):
     def with_cut_bounds(
         self, lo: Expression, hi: Expression, *, unsigned: bool = False
     ) -> RandIntExpr:
-        """The draw a Math into an Int (or a Word) reads, over *lo* and *hi* cut to 16 bits.
+        """The draw a Math that cuts the bounds reads, over *lo* and *hi* as cut.
 
-        A second site with its own tag, ``expr.cut_tag``: each destination width
-        has one draw, and a CLICK's pasted RANDs each draw their own.  This
-        expression is not touched, so a Math that keeps the constants, in this
-        Program or another, still draws over them, and the export writes them.
-        The cut site is found by name, so every Math that cuts reads the same one.
-        A hex Math (*unsigned*) whose cut differs from the signed one draws from a
-        site of its own, ``_rand.<n>.ucut``.
+        The cut draw is a second site with its own tag (``expr.cut_tag``).  Each
+        cut has one draw, as a CLICK's pasted RANDs each draw their own.  This
+        expression is not touched, so a Math that keeps the constants still draws
+        over them and the export writes them.  Every Math that cuts finds the cut
+        site by name and reads the same one.  A decimal Math cuts only a bound past
+        a Dint's range, to 32 bits.  A hex Math (*unsigned*) cuts to 16 bits.  It
+        draws from its own site (``_rand.<n>.ucut``) when its cut differs from the
+        decimal one.
         """
         site = ~self.site
         cut = "ucut" if unsigned else "cut"
@@ -949,19 +950,18 @@ class RandIntExpr(Expression):
 
     @property
     def cut_tag(self) -> Any:
-        """The tag of the draw a Math into an Int reads; ``tag`` if no constant cuts."""
+        """The tag of the draw a decimal Math reads, ``tag`` if no constant cuts."""
         from pyrung.core.instruction.calc import cut_int_constants
 
         return cut_int_constants(self).tag
 
     @property
     def ucut_tag(self) -> Any:
-        """The tag of the draw a hex Math into a Word reads: ``cut_tag`` where the
-        unsigned cut is the signed one, ``tag`` if no constant cuts."""
+        """The tag of the draw a hex Math reads.  It is ``cut_tag`` where the
+        unsigned cut is the signed one, and ``tag`` if no constant cuts."""
         from pyrung.core.instruction.calc import calc_form
-        from pyrung.core.tag import TagType
 
-        return calc_form(self, "hex", TagType.WORD).tag
+        return calc_form(self, "hex").tag
 
     def draw(self, ctx: ScanContext, numbers: Mapping[int, int]) -> int:
         """This scan's draw, from the bounds as the scan starts.
@@ -1024,8 +1024,10 @@ def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntEx
     (``expr.tag``) to choose a draw in a test.  A bare ``Real`` tag as a bound reads
     0 with no flag.  Equal bounds, constants or tag values, are a math error: the
     ``randint`` reads 0, the rest of the formula runs, and a ``calc`` sets SC46.
-    Into an ``Int`` a constant bound past 16 bits is cut, and that draw is its own
-    (``expr.cut_tag``); into a ``Dint`` or ``Real`` it is not.
+    A decimal Math draws over the whole bounds and stores the draw as any result,
+    so into an ``Int`` a draw outside -32768..32767 wraps and sets SC43.  A hex
+    Math cuts each constant bound to 16 bits, and that draw is its own
+    (``expr.ucut_tag``).
     """
     return RandIntExpr(_wrap(lo), _wrap(hi))
 

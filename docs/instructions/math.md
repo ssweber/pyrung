@@ -22,9 +22,11 @@ The expression comes first and the destination second, as in every pyrung instru
 | `DD1 + 1` (DD1=2147483647) | DINT (32-bit signed) | −2,147,483,648 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
-## Constants past 16 bits
+## Wide constants
 
-A CLICK Math keeps every whole-number constant in its formula in 16 bits, whatever the destination, and pyrung does the same. A constant outside −32768..32767 is read as its low 16 bits, signed (40000 is −25536), or unsigned in hex mode. `math(DD[1] / 65536, DD[2])` divides by 0 (65536 is cut to 0), so it writes 0 and sets `system.fault.division_error`. The same 65536 read from a tag (`math(DD[1] / DD[3], DD[2])`) divides as written. Stage a wide constant in a DINT tag in a rung above and use the tag. CLICK validation reports such a constant (`CLK_MATH_WIDE_CONSTANT`).
+CLICK's editor refuses a whole-number constant outside −2147483648..2147483647 in any Math. CLICK validation reports one (`CLK_MATH_WIDE_CONSTANT`).
+
+A hex-mode Math (only `Word` tags) reads each whole-number constant as its low 16 bits, unsigned, so 70000 is 4464 and −1 is 65535. Write the constant as its 16-bit value, 0..65535. CLICK validation reports one outside that range too.
 
 ## REAL range and precision
 
@@ -143,7 +145,8 @@ math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 
 - Equal bounds are a math error. Examples are `randint(7, 7)` and two `Int`/`Dint` tags that hold the same value. The `randint()` reads 0 and the rest of the formula runs (`randint(7, 7) + 5` stores 5). The `math()` sets `system.fault.math_operation_error` (SC46).
 - An expression or a float literal as a bound is read as an integer (`randint(0, N / 2)`, `sqrt(N)`), so `randint(2.5, 2.9)` has equal bounds (2 and 2) and is a math error.
-- Into an `Int`, and in hex mode into a `Word`, each constant bound is cut to 16 bits like any constant in the formula ([Constants past 16 bits](#constants-past-16-bits)). `randint(70000, 70002)` draws 4464..4466. Into a `Dint` or `Real` the bounds stay whole.
+- Into an `Int`, a draw outside −32768..32767 wraps and sets `system.fault.out_of_range`, as any `math()` result does. `randint(70000, 70002)` stores 4464..4466.
+- In hex mode, each constant bound is cut to 16 bits like any constant in the formula ([Wide constants](#wide-constants)). `randint(70000, 70002)` into a `Word` draws 4464..4466 with no flag.
 
 CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses:
 
@@ -164,7 +167,7 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A draw cut into an `Int` is chosen through `expr.cut_tag` instead.
+A hex-mode draw with its bounds cut to 16 bits is chosen through `expr.ucut_tag` instead.
 
 The verifier explores every value a draw can take: `lo..hi` for literal bounds, or the range a bound tag declares (`min`/`max` or `choices`). A bound tag with no declared range, or equal constants, makes the result `Intractable`, with a hint naming the draw. `how()` treats a draw like any other input, so a plan may say to wait for a lucky draw or to patch the draw's tag.
 

@@ -39,14 +39,13 @@ right after its op.
 - ``functions``: radians or degrees, and which log.  SIN(1), COS(1), TAN(1), ATAN(1) and LN(10),
   each * 1000: 841, 540, 1557, 785, 2302 in radians.  In degrees 17, 999, 17, 785 and the rest
   tells.  ``log`` is LN (2302) and not LOG (1000).
-- ``wide_constant_into_dint`` (last of the group: the editor may refuse 3000000000, past a DD's
-  range, at paste, and a refusal costs only this case): recorded for an Int destination (``numeric/int_math_wide_
-  constant``).  Into a DD: DD 131072 / 65536 is 2, or 0 with SC40 where the constant is cut to
-  16 bits (Result1 = 1 for 2, 2 for 0; ErrorCode bit 1 is SC40); DD 2 * 40000 is 80000 (1) or
-  -51072 (2) (Result2); the same into a DF (Result3); 3000000000 / DD 1000 is 3000000 (1) or
-  -1294967 (2) (Result4).  Answered on a CLICK (2026-11-05): cut, whatever the destination
-  (2, 2, 2, ErrorCode 1); 3000000000 / 1000 is neither (Result4 = 0), its value not read yet
-  (the cut predicts 24064 / 1000, 24).
+- ``wide_constant_into_dint``: asks of a DD and a DF what ``numeric/int_math_wide_constant``
+  asks of an Int.  DD 131072 / 65536 is 2, or 0 with SC40 where the constant
+  is cut to 16 bits (Result1 = 1 for 2, 2 for 0, and ErrorCode bit 1 is SC40).  DD 2 * 40000
+  is 80000 (1) or -51072 (2) (Result2), and the same into a DF (Result3).  A CLICK keeps the
+  constants whole (1, 1, 1, ErrorCode 0, 2026-11-11).  An earlier round read the cut, from an
+  export that wrote every constant in 16 bits.  CLICK's editor refuses a constant past a DD's
+  range, such as 3000000000, so no case asks about one.
 
 ``hex_math`` (WORD only: ``numeric`` reads hex Math's store, not these):
 
@@ -100,22 +99,19 @@ def prove_wide_constant_into_dint(slot):
     with Rung(*once(slot)):
         copy(131072, dd[5])
         copy(2, dd[6])
-        copy(1000, dd[7])
         math(dd[5] / 65536, dd[8])
     flag_bit(slot, SC40, slot.ErrorCode, 1)
     with Rung(*once(slot)):
         math(dd[6] * 40000, dd[9])
         math(dd[6] * 40000, df[152])
-        math(3000000000 / dd[7], dd[10])
     class_of(slot, dd[8], [2, 0], slot.Result1)
     class_of(slot, dd[9], [80000, -51072], slot.Result2)
     class_of(slot, df[152], [80000.0, -51072.0], slot.Result3)
-    class_of(slot, dd[10], [3000000, -1294967], slot.Result4)
     finish(slot)
 
 
 def init_wide_constant_into_dint(slot):
-    fill(0, dd.select(5, 10))
+    fill(0, dd.select(5, 9))
     copy(0.0, df[152])
 
 
@@ -416,12 +412,12 @@ group = Group(
             probe="radians or degrees; a Math's log forms",
         ),
         case(
-            "A constant past 16 bits is cut to 16 bits into a DD or DF too: 131072 / 65536 is 0 "
-            "(Result1 = 2) with SC40 (ErrorCode = 1), 2 * 40000 is -51072 into a DD and a DF "
-            "(Result2, Result3 = 2), 3000000000 / 1000 is neither 3000000 nor -1294967 (Result4 = 0)",
+            "A Math into a DD or a DF keeps a constant past 16 bits whole. 131072 / 65536 "
+            "is 2 (Result1 = 1) with no SC40 (ErrorCode = 0). 2 * 40000 is 80000 into a DD "
+            "(Result2 = 1) and into a DF (Result3 = 1).",
             ladder=prove_wide_constant_into_dint,
             init=init_wide_constant_into_dint,
-            expect={"Result1": 2, "Result2": 2, "Result3": 2, "Result4": 0, "ErrorCode": 1},
+            expect={"Result1": 1, "Result2": 1, "Result3": 1, "ErrorCode": 0},
             probe="does a wide constant reach a Dint or Real Math whole",
         ),
     ],

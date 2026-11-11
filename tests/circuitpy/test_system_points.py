@@ -112,9 +112,9 @@ ByTag = Int("ByTag", retentive=False)
 DivFlagAfterConstant = Bool("DivFlagAfterConstant", retentive=False)
 
 
-def test_calc_into_int_cuts_constants_to_16_bits(monkeypatch):
-    # As core (and a CLICK): 65536 into an Int's Math is 0, a division by zero
-    # (SC40); the same 65536 read from a Dint divides.
+def test_calc_into_int_keeps_its_constants_whole(monkeypatch):
+    # As core (and a CLICK): 65536 in an Int's Math divides as written, as the
+    # same 65536 read from a Dint does.
     with Program(strict=False) as prog:
         with Rung():
             math(Num / 65536, ByConstant)
@@ -125,8 +125,8 @@ def test_calc_into_int_cuts_constants_to_16_bits(monkeypatch):
 
     _code, read = _run(prog, monkeypatch, scans=1)
 
-    assert read(ByConstant) == 0
-    assert read(DivFlagAfterConstant) is True
+    assert read(ByConstant) == -32768
+    assert read(DivFlagAfterConstant) is False
     assert read(ByTag) == -32768
 
 

@@ -124,9 +124,9 @@ def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
             check_float_literals(item, seen)
 
 
-def _int16(value: int) -> int:
-    """*value* cut to its low 16 bits, read as a signed Int."""
-    return ((value + 0x8000) & 0xFFFF) - 0x8000
+def _int32(value: int) -> int:
+    """*value* cut to its low 32 bits, read as a signed Dint."""
+    return ((value + 0x8000_0000) & 0xFFFF_FFFF) - 0x8000_0000
 
 
 @dataclass(frozen=True)
@@ -134,13 +134,12 @@ class _CalcForm:
     """How :func:`calc_form` rewrites a formula: see there."""
 
     unsigned: bool = False
-    rand: bool = True
     abs_ops: bool = False
     mask_shifts: bool = False
     calc_ops: bool = True
 
     def cut(self, value: int) -> int:
-        return value & 0xFFFF if self.unsigned else _int16(value)
+        return value & 0xFFFF if self.unsigned else _int32(value)
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -203,8 +202,6 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             return BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, RandIntExpr):
-        if not form.rand:
-            return value
         # A bound keeps its ops: only its constants are cut (CLICK's editor takes
         # no formula as a bound, CLK_MATH_ARG_NOT_PLAIN).
         form = replace(form, calc_ops=False)
@@ -212,7 +209,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         hi = _rebuild(value.hi, form)
         if lo is value.lo and hi is value.hi:
             return value
-        # A Word's cut is its own draw only where it differs from an Int's.
+        # A hex Math's cut is its own draw only where it differs from a decimal one's.
         signed = _CalcForm(calc_ops=False)
         unsigned = form.unsigned and not (
             _same(_rebuild(value.lo, signed), lo) and _same(_rebuild(value.hi, signed), hi)
@@ -222,24 +219,25 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
 
 
 def cut_int_constants(value: Any) -> Any:
-    """*value* (a calc expression) with each integer constant cut to 16 bits, signed.
+    """*value* (a calc expression) with each integer constant cut to 32 bits, signed.
 
-    What a decimal Math into an Int runs (:func:`calc_form`), the bounds of a
-    ``randint()`` included: ``randint(70000, 70002)`` draws 4464..4466.
+    What a decimal Math runs (:func:`calc_form`), the bounds of a ``randint()``
+    included.  Only a constant past a Dint's range changes.
     """
     return _rebuild(value, _CalcForm(calc_ops=False))
 
 
-def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any:
-    """*expression* as a CLICK Math into *dest_type* runs it (measured, 2026-11-05).
+def calc_form(expression: Any, mode: CalcMode) -> Any:
+    """*expression* as a CLICK Math in *mode* runs it (measured, 2026-11-11).
 
-    - Each integer constant is cut to 16 bits whatever the destination: signed in
-      decimal mode (40000 is -25536, so ``DD1 * 40000`` is ``DD1 * -25536``, and
-      ``DD1 / 65536`` divides by 0), unsigned in hex mode (the export's ``1170h``
-      for 70000).  Operands read from memory keep their width.
-    - The constant bounds of a ``randint()`` are cut into an Int and a Word, and
-      kept whole into a Dint or a Real (``randint(70000, 70002)`` into a Dint draws
-      70000..70002).
+    - A decimal Math keeps each integer constant whole, whatever the destination
+      (``DD1 / 65536`` divides by 65536).  CLICK's editor refuses a constant past
+      a Dint's range.  pyrung cuts one to its low 32 bits, as a CLICK ran a pasted one.
+    - A hex Math cuts each integer constant to 16 bits, unsigned (the export's
+      ``1170h`` for 70000).
+    - The constant bounds of a ``randint()`` are cut as the other constants are, so
+      ``randint(70000, 70002)`` draws 70000..70002 in decimal mode and 4464..4466 in
+      hex mode.
     - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
     - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
@@ -259,7 +257,7 @@ def calc_form(expression: Any, mode: CalcMode, dest_type: TagType | None) -> Any
     if mode == "hex":
         form = _CalcForm(unsigned=True, mask_shifts=True)
     else:
-        form = _CalcForm(rand=dest_type == TagType.INT, abs_ops=True)
+        form = _CalcForm(abs_ops=True)
     return _rebuild(expression, form)
 
 
@@ -281,13 +279,6 @@ def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
         has_hex_family=has_hex_family,
         has_decimal_family=has_decimal_family,
     )
-
-
-def _dest_type(dest: Any) -> TagType | None:
-    if isinstance(dest, Tag):
-        return dest.type
-    block = getattr(dest, "block", None)
-    return getattr(block, "type", None)
 
 
 class CalcInstruction(OneShotMixin, Instruction):
@@ -333,13 +324,11 @@ class CalcInstruction(OneShotMixin, Instruction):
     the formula stores 0 and sets the out-of-range flag.  MOD truncates: the
     result has the dividend's sign.
 
-    **Constants:** each integer constant in `expression` is cut to 16 bits, as
-    a CLICK Math stores it, whatever the destination: ``math(DD1 / 65536, DD2)``
-    divides by 0 (writes 0 and sets the division-error flag), and
-    ``math(DD1 * 40000, DD2)`` multiplies by -25536.  Tags keep their width
-    (``math(DD1 / DD2, DS1)`` with ``DD2 = 65536`` divides by 65536).  See
-    :func:`calc_form`.  ``expression`` holds the formula as it runs;
-    ``source_expression`` the one written, which the CLICK export writes.
+    **Constants:** a decimal Math keeps each integer constant whole, as a CLICK
+    Math does, so ``math(DD1 / 65536, DS1)`` divides by 65536.  A hex Math cuts
+    each one to 16 bits, unsigned.  See :func:`calc_form`.  ``expression`` holds
+    the formula as it runs, and ``source_expression`` the one written, which the
+    CLICK export writes.
 
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.
@@ -386,7 +375,7 @@ class CalcInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.mode_inference = infer_calc_mode(expression, dest)
         self.mode = self.mode_inference.mode
-        self.expression = calc_form(expression, self.mode, _dest_type(dest))
+        self.expression = calc_form(expression, self.mode)
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

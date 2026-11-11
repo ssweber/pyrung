@@ -33,25 +33,24 @@ could plausibly differ, these cases tell the models apart:
   (Word); Math that skips an overflowing write reads 0/-1 (Int).  Math that
   wraps without the out-of-range flag reads Result3 = 0 (Int).  The Dint
   results are read back by compares, not by a quotient (see below).
-- ``dint_quotient_into_int``: round 1 read 0 for -2147483648 / 65536
-  into an Int, where pyrung read -32768.  Preset to 99, the same quotient
+- ``dint_quotient_into_int``: preset to 99, -2147483648 / 65536 into an Int
   with the constant 65536 (Result1), with 65536 staged in a DD (Result2), and
-  -2147418112 / 65536 (Result3, -32767).  Exact quotients: -32768, -32768,
-  -32767 (pyrung before round 2).  A constant cut to 16 bits (65536 -> 0, a
-  division by zero that writes 0): 0, -32768, 0, which a CLICK reads (hardware
-  round 2, 2026-10-30), and pyrung since: a calc into an Int cuts its integer
-  constants to 16 bits.  A quotient of -32768 refused by the Int: 99
-  (or a clamp, -32767), the same for Result2, and -32767.  (SC40 is not read:
-  other cases divide by zero on the same scan.)
+  -2147418112 / 65536 (Result3).  Exact quotients read -32768, -32768 and
+  -32767, which a CLICK reads with the constant pasted as CLICK's editor writes
+  it (2026-11-11).  A constant cut to 16 bits (65536 -> 0, a division by zero
+  that writes 0) reads 0, -32768, 0.  An earlier round read that, from an
+  export that wrote every constant in 16 bits.  A quotient of -32768 refused
+  by the Int reads 99 (or a clamp, -32767), the same for Result2, and -32767.
+  (SC40 is not read, because other cases divide by zero on the same scan.)
 - ``int_math_wide_constant`` (probe): what else an Int Math does with its
   constants.  Preset to 99, 65536 staged in DD171 is divided by the constant
   40000 (Result1) and by -40000 (Result3), and 10 in DD172 is multiplied by
-  the constant 1.5 (Result2).  A constant past 16 bits cut to its low 16 bits,
-  signed (pyrung, adopted): 40000 is -25536 and -40000 is 25536, so -2, 15, 2.
-  Kept whole (unsigned 16 bits or wider): 1, 15, -1.  Clamped to the Int
-  range: 2 (/ 32767), 15, -2 (/ -32768).  Refused by the Math (the write
-  skipped): 99 for Result1 and Result3.  A float constant cut to an integer
-  reads Result2 = 10 (1) or 20 (2); kept, 15.  Paste refused: never fires.
+  the constant 1.5 (Result2).  Kept whole: 1, 15, -1, which a CLICK reads
+  (2026-11-11).  Cut to its low 16 bits, signed: 40000 is -25536 and -40000
+  is 25536, so -2, 15, 2.  Clamped to the Int range: 2 (/ 32767), 15, -2
+  (/ -32768).  Refused by the Math (the write skipped): 99 for Result1 and
+  Result3.  A float constant cut to an integer reads Result2 = 10 (1) or 20
+  (2), and kept reads 15.  Paste refused: never fires.
 - ``int_math_rand_wide_bounds`` (a case of its own so a refused paste loses
   only it): RAND ( 70000 , 70000 ) / 2 into an Int, preset 99.  The
   candidates were: bounds kept whole (pyrung): 35000, which wraps to -30536
@@ -62,11 +61,11 @@ could plausibly differ, these cases tell the models apart:
   any, comes with it is
   ``faults/rand_wide_bounds_flags``, which finds equal bounds the likely cause.
   CLICK's editor refuses them typed in; a paste gets them through.
-- ``int_math_real_operand_constant`` (probe): the 16-bit cut when the other
+- ``int_math_real_operand_constant`` (probe): a wide constant when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
-  an Int, preset 99 (Result1).  The constant cut to its low 16 bits, signed
-  (pyrung, adopted): 100000 is -31072, so -7768.  Cut to unsigned 16 bits:
-  100000 is 34464, so 8616.  Kept whole: 25000.  Clamped
+  an Int, preset 99 (Result1).  Kept whole: 25000, which a CLICK reads
+  (2026-11-11).  Cut to its low 16 bits, signed: 100000 is -31072, so -7768.
+  Cut to unsigned 16 bits: 100000 is 34464, so 8616.  Clamped
   to the Int range, 32767: 8191.  Refused by the Math (write skipped): 99.
   A REAL operand turning the Math into floating point and the constant kept
   whole is the 25000 reading.  Paste refused: never fires.  (A whole-number
@@ -537,20 +536,20 @@ group = Group(
             scans=scans_for(REAL_DIV_WINDOW),
         ),
         case(
-            "A Math constant into an Int is cut to 16 bits: -2147483648 / 65536 is 0 with "
-            "the constant (Result1; 65536 is cut to 0, a division by zero) and -32768 with "
-            "65536 in a DD (Result2); -2147418112 / 65536 is 0 too (Result3)",
+            "A Math into an Int keeps the constant 65536 whole. -2147483648 / 65536 is "
+            "-32768 with the constant (Result1) and with 65536 in a DD (Result2). "
+            "-2147418112 / 65536 is -32767 (Result3).",
             ladder=prove_dint_quotient_into_int,
             init=init_dint_quotient_into_int,
-            expect={"Result1": 0, "Result2": -32768, "Result3": 0},
+            expect={"Result1": -32768, "Result2": -32768, "Result3": -32767},
         ),
         case(
-            "A Math constant into an Int is cut to its low 16 bits, signed: 65536 / 40000 "
-            "is -2 (Result1; 40000 reads -25536) and 65536 / -40000 is 2 (Result3; -40000 "
-            "reads 25536); a float constant is kept: 10 * 1.5 is 15 (Result2)",
+            "A Math into an Int keeps each constant whole. 65536 / 40000 is 1 (Result1) "
+            "and 65536 / -40000 is -1 (Result3). The float constant in 10 * 1.5 is kept "
+            "too, so it is 15 (Result2).",
             ladder=prove_int_math_wide_constant,
             init=init_int_math_wide_constant,
-            expect={"Result1": -2, "Result2": 15, "Result3": 2},
+            expect={"Result1": 1, "Result2": 15, "Result3": -1},
             probe="Int Math constant 32768..65535 and float constant: cut, kept, clamped",
         ),
         case(
@@ -560,11 +559,11 @@ group = Group(
             expect={"Result1": 0},
         ),
         case(
-            "A Math constant cut to 16 bits beside a REAL operand: DF * 100000 into an Int, "
-            "with DF = 0.25, is -7768 when 100000 is cut to -31072 (Result1)",
+            "A Math into an Int keeps the constant 100000 whole beside a REAL operand. "
+            "DF * 100000 with DF = 0.25 is 25000 (Result1).",
             ladder=prove_int_math_real_operand_constant,
             init=init_int_math_real_operand_constant,
-            expect={"Result1": -7768},
+            expect={"Result1": 25000},
             probe="Int Math constant past 16 bits beside a REAL operand",
         ),
     ],

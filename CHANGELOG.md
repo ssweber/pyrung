@@ -24,8 +24,10 @@
   - `abs()` of an `Int` holding -32768 or a `Dint` holding -2147483648 is 0 with `fault.out_of_range`
   - a hex shift that pushes a bit out of the Word sets no flag
   - a math error zeroes only the operation that failed and sets its flag. The rest of the formula still runs, so `X / 0 + 5` now stores 5 with `fault.division_error` (the whole formula was 0)
-  - each whole-number constant is cut to 16 bits, whatever the destination. So `math(DD1 / 65536, DD2)` divides by 0 (0 with `fault.division_error`), and `math(2 * 40000, DD2)` writes -51072. Values read from tags keep their width
-  - dividing by a constant that cuts to 0 is an error-level `MATH_DIV_ZERO` finding, and CLICK validation reports any constant past 16 bits as `CLK_MATH_WIDE_CONSTANT`. Copy the constant into a `DD` tag on a rung above and use the tag
+  - in hex mode (only `Word` tags), each whole-number constant keeps its low 16 bits, so 70000 is 4464 and -1 is 65535
+  - a whole-number constant outside -2147483648..2147483647 keeps its low 32 bits, so 3000000000 is -1294967296
+  - CLICK validation reports a hex constant outside 0..65535, or any constant outside the `Dint` range, as `CLK_MATH_WIDE_CONSTANT`. Write a hex constant as its 16-bit value
+  - dividing by a constant that becomes 0 this way is an error-level `MATH_DIV_ZERO` finding
 - `run_for()` and `run_until()` take `jit=` in place of `fold=`, and `fold=` raises `TypeError`. `jit=False` runs every scan interpreted.
 - `how()` no longer reports skipped scans, because its waits now run every scan:
   - plans no longer carry a "Jump ahead" line, and `PlanStep` loses `accelerators`. The step's "Wait ~Ns (N scans)" line stays
@@ -284,12 +286,12 @@
 
   They run in `PLC`, `CompiledPLC`, generated CircuitPython and the debugger, and export to CLICK and import back. CLICK validation checks loop depth across `call()` (`CLK_FORLOOP_NESTING_DEPTH`), one-shots in an inner loop (`CLK_FORLOOP_INNER_ONESHOT`) and `return_early()` inside a loop (`CLK_FORLOOP_RETURN_INSIDE`). The verifier answers `Intractable` for a program with a rung inside a loop.
 - `randint(lo, hi)` (from `pyrung.core`) is CLICK's `RAND`, a new random value from `lo` to `hi` inclusive each scan:
-  - a scan draws the same value every time it runs, so replay, seek and `fork()` see the same values. A test can set it by patching or forcing its tag (`expr.tag`, or `expr.cut_tag` for a value cut into an `Int`)
+  - a scan draws the same value every time it runs, so replay, seek and `fork()` see the same values. A test can set it by patching or forcing its tag (`expr.tag`, or `expr.ucut_tag` for a hex Math that cuts the bounds)
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython (as `random.randint`), and exports to CLICK as `RAND ( lo , hi )` and imports back
   - a long `run_for()` or `run_until()` of a program that uses it runs its scans compiled, without the faster path for repeated scans, and the verifier explores every value in range
   - it is refused inside a `forloop()`
   - two equal bounds are a math error (0 with SC46), whether constants or tags holding one value
-  - into an `Int`, each constant bound is cut to 16 bits (`randint(70000, 70002)` draws 4464..4466)
+  - into an `Int`, a draw outside -32768..32767 wraps and sets `fault.out_of_range`, as any `math()` result does
   - a bare `Real` tag as a bound reads as 0 with no flag
 - A `time_drum` preset may be a register (CLICK v4), and exports to CLICK. `CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED` is removed.
 - `pyrung.click.estimate_steps()` estimates an exported ladder's CLICK program steps, within about 1% on a 6,000-step project. Validation reports `CLK_STEP_LIMIT` as a program nears or passes CLICK's 8000, and `pyrung_to_ladder` warns with it but still exports. The new CLICK Internals page lists the costs.

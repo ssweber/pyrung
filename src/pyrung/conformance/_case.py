@@ -343,12 +343,19 @@ def format_expect(expect: Mapping[str, Expectation]) -> str:
 def describe_expect(expect: Mapping[str, Expectation]) -> str:
     """Render an expectation as a sentence fragment: ``Result1 = 5, Result2 in 1..6``."""
     return ", ".join(
-        f"{field_name} {'in' if isinstance(wanted, range) else '='} {_value_text(wanted)}"
+        f"{field_name} {'in' if _is_span(wanted) else '='} {_value_text(wanted)}"
         for field_name, wanted in expect.items()
     )
 
 
+def _is_span(wanted: Expectation) -> bool:
+    return isinstance(wanted, range) and wanted.step == 1
+
+
 def _value_text(wanted: Expectation) -> str:
     if isinstance(wanted, range):
-        return f"{wanted.start}..{wanted.stop - 1}" if wanted.step == 1 else repr(wanted)
+        if wanted.step == 1:
+            return f"{wanted.start}..{wanted.stop - 1}"
+        # A stepped range lists its values: ``range(5, 8, 2)`` is "5 or 7".
+        return " or ".join(str(value) for value in wanted)
     return str(wanted)

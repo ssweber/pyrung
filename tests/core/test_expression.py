@@ -750,12 +750,12 @@ class TestExpressionEdgeCases:
         ctx = ScanContext(SystemState().with_tags({"DS1": -7, "DS2": 2, "DS3": 0}))
         mod, by_zero, power = DS[1] % DS[2], DS[1] % DS[3], DS[3] ** DS[3]
         assert (mod.evaluate(ctx), power.evaluate(ctx)) == (1, 1)
-        assert calc_form(mod, "decimal", TagType.INT).evaluate(ctx) == -1
+        assert calc_form(mod, "decimal").evaluate(ctx) == -1
         faults: list[str] = []
         token = CALC_FAULTS.set(faults)
         try:
             for expr in (by_zero, power):
-                assert calc_form(expr + 5, "decimal", TagType.INT).evaluate(ctx) == 5
+                assert calc_form(expr + 5, "decimal").evaluate(ctx) == 5
         finally:
             CALC_FAULTS.reset(token)
         assert faults == []

@@ -5,16 +5,12 @@ What the 2026-11-05 round left unread in ``math_more``, for the fix step ``math-
 pass answers nothing and a run on a CLICK records what it read; an answered one expects what
 the CLICK read.
 
-- ``wide_values``: the two values ``math_more`` read as "neither listed".  ABS(-2147483648) into a
+- ``wide_values``: the value ``math_more`` read as "neither listed".  ABS(-2147483648) into a
   DD preset 99 (``abs_and_precision`` ErrorCode): Result1 1 for itself, 2 for 2147483647, 3 for 0
   (as ABS(-32768) into an Int reads), 4 for 99 (no store), 0 for any other, and Result2 the DD /
-  100000, which shows any other reading's size.  3000000000 / DD 1000 into a DD preset 99
-  (``wide_constant_into_dint`` Result4): Result3 1 for 3000000, 2 for -1294967 (the constant's
-  low 32 bits), 3 for 24 (its low 16 bits, 24064, as the rule for a wide Math constant predicts),
-  4 for 99, 5 for 2147483 (the constant clamped to 2147483647), and ErrorCode the DD copied into
-  an Int (24, or 32767 for 3000000).  Result4 has SC43
-  after the ABS (bit 1) and after the division (bit 2).  pyrung reads 3, 0, 3, 1, 24, as a CLICK
-  did (2026-11-06): the ABS is 0 with SC43, and the constant is its low 16 bits.
+  100000, which shows any other reading's size.  Result4 has SC43 after the ABS (bit 1).  A CLICK
+  read 3, 0 and 1 (2026-11-06).  The case once also divided 3000000000 by a DD.  CLICK's editor
+  refuses that constant typed in, so no case pastes it.
 - ``error_terms``: is a math error's 0 put on its term or on the whole formula, outside RAND
   (``store_probe/rand_tag_bounds`` read RAND ( 7 , 7 ) + 5 as 5)?  Answered on a CLICK
   (2026-11-06): the term, 5, 5, 5, 0, 7, and 0 ^ 0 raises no flag.  DD 7 / DD 0 + 5 (Result1): 5
@@ -59,28 +55,21 @@ SC46 = system.fault.math_operation_error
 
 
 def prove_wide_values(slot: Any) -> None:
-    low, thousand, scale, absolute, quotient = dd[51], dd[52], dd[53], dd[54], dd[55]
+    low, scale, absolute = dd[51], dd[53], dd[54]
     with Rung(*once(slot)):
         copy(-2147483648, low)
-        copy(1000, thousand)
         copy(100000, scale)
         copy(99, absolute)
-        copy(99, quotient)
         math(abs(low), absolute)
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
-        math(3000000000 / thousand, quotient)
-    flag_bit(slot, SC43, slot.Result4, 2)
     class_of(slot, absolute, [-2147483648, 2147483647, 0, 99], slot.Result1)
-    class_of(slot, quotient, [3000000, -1294967, 24, 99, 2147483], slot.Result3)
     with Rung(*once(slot)):
         math(absolute / scale, slot.Result2)
-        copy(quotient, slot.ErrorCode)
     finish(slot)
 
 
 def init_wide_values(slot: Any) -> None:
-    fill(0, dd.select(51, 55))
+    fill(0, dd.select(51, 54))
 
 
 WINDOW = 8
@@ -176,18 +165,16 @@ group = Group(
     "math_terms",
     [
         case(
-            "ABS(-2147483648) into a DD (Result1, Result2 = DD / 100000) and 3000000000 / DD 1000 "
-            "into a DD (Result3, ErrorCode = the DD into an Int), with SC43 after each (Result4)",
+            "ABS(-2147483648) into a DD (Result1, Result2 = DD / 100000), with SC43 after it "
+            "(Result4)",
             ladder=prove_wide_values,
             init=init_wide_values,
             expect={
                 "Result1": 3,
                 "Result2": 0,
-                "Result3": 3,
                 "Result4": 1,
-                "ErrorCode": 24,
             },
-            probe="ABS of the least DD; a constant past 32 bits over a DD (2)",
+            probe="ABS of the least DD",
         ),
         case(
             "A math error's 0 is its term's: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 (Result2) "
