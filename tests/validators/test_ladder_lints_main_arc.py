@@ -10,6 +10,7 @@ from pyrung import (
     Or,
     Real,
     Rung,
+    Word,
     branch,
     call,
     copy,
@@ -264,12 +265,20 @@ def test_divisor_proved_zero_under_rung_guard() -> None:
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
 
 
-def test_divisor_cut_to_zero_in_an_int_math_shows_the_constant_as_written() -> None:
+def test_a_decimal_math_divides_by_65536_as_written() -> None:
     wide = Dint("Wide", external=True)
-    result = Int("Out16")
     with Program() as program:
         with Rung():
-            math(wide / 65536, result)
+            math(wide / 65536, Int("Out16"))
+
+    assert not _codes(program, MATH_DIV_ZERO)
+
+
+def test_divisor_a_hex_math_cuts_to_zero_shows_the_constant_as_written() -> None:
+    wide = Word("Wide", external=True)
+    with Program() as program:
+        with Rung():
+            math(wide / 65536, Word("Out16"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
     (message,) = _messages(program, MATH_DIV_ZERO)

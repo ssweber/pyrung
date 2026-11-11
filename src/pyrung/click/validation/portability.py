@@ -1452,9 +1452,9 @@ def _evaluate_rand_bounds(
 
 
 def _collect_wide_constants(
-    expr: Any, out: list[int], seen: set[int], *, low: int, high: int, rand_cut: bool
+    expr: Any, out: list[int], seen: set[int], *, low: int, high: int
 ) -> None:
-    """Each integer constant in *expr* outside *low*..*high*; a RAND's bounds only if *rand_cut*."""
+    """Each integer constant in *expr* outside *low*..*high*, a RAND's bounds included."""
     if isinstance(expr, bool):
         return
     if isinstance(expr, int):
@@ -1465,64 +1465,54 @@ def _collect_wide_constants(
         return
     seen.add(id(expr))
     if isinstance(expr, LiteralExpr):
-        _collect_wide_constants(expr.value, out, seen, low=low, high=high, rand_cut=rand_cut)
+        _collect_wide_constants(expr.value, out, seen, low=low, high=high)
         return
-    if isinstance(expr, RandIntExpr) and not rand_cut:
-        bounds = (expr.lo, expr.hi)
-        children = [child for child in vars(expr).values() if all(child is not b for b in bounds)]
-    else:
-        children = list(vars(expr).values())
-    for child in children:
+    for child in vars(expr).values():
         # Only subexpressions: a constant is a LiteralExpr (an int attribute, such
         # as a RAND's site number, is not one).
         if isinstance(child, Expression):
-            _collect_wide_constants(child, out, seen, low=low, high=high, rand_cut=rand_cut)
+            _collect_wide_constants(child, out, seen, low=low, high=high)
 
 
 def _evaluate_wide_constants(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
-    """A Math constant past 16 bits: CLICK cuts it to 16 bits whatever the destination
-    (hardware, 2026-11-05), so ``DD1 * 40000`` multiplies by -25536.  A RAND's constant
-    bounds are cut only into an Int or a Word."""
+    """A Math constant CLICK does not keep as written.
+
+    A decimal Math keeps a constant whole, and CLICK's editor refuses one past a
+    DD's range (2026-11-11).  A hex Math reads each constant as its low 16 bits.
+    """
     if type(instruction).__name__ != "CalcInstruction":
         return []
     hex_mode = instruction.mode == "hex"
     # A hex Math reads a constant as its low 16 bits, unsigned (& 0xFFFF): -1 is 65535.
-    low, high = (0, 65535) if hex_mode else (-32768, 32767)
-    dest = instruction.dest
-    dest_type = (
-        dest.type if isinstance(dest, Tag) else getattr(getattr(dest, "block", None), "type", None)
-    )
-    rand_cut = hex_mode or dest_type == TagType.INT
+    low, high = (0, 65535) if hex_mode else (-2147483648, 2147483647)
     wide: list[int] = []
-    _collect_wide_constants(
-        instruction.source_expression, wide, set(), low=low, high=high, rand_cut=rand_cut
-    )
+    _collect_wide_constants(instruction.source_expression, wide, set(), low=low, high=high)
     if not wide:
         return []
     location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
     listed = ", ".join(str(value) for value in dict.fromkeys(wide))
+    if hex_mode:
+        message = (
+            f"math() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
+            "hex Math reads each constant as its low 16 bits, unsigned, so 70000 "
+            "reads 4464 and -1 reads 65535."
+        )
+        suggestion = "Write the constant as its 16-bit value, 0..65535 (0h..FFFFh)."
+    else:
+        message = (
+            f"math() at {location_text} has a constant past a DD's range ({listed}). "
+            "CLICK's editor refuses it."
+        )
+        suggestion = "Use a constant in -2147483648..2147483647."
     return [
         ClickFinding(
             code=CLK_MATH_WIDE_CONSTANT,
             severity=_route_severity(CLK_MATH_WIDE_CONSTANT, mode),
-            message=(
-                f"math() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
-                + (
-                    "hex Math reads each constant as its low 16 bits, unsigned, so 70000 "
-                    "reads 4464 and -1 reads 65535."
-                    if hex_mode
-                    else "Math cuts each constant to 16 bits, whatever the destination, so "
-                    "40000 reads -25536."
-                )
-            ),
+            message=message,
             location=location_text,
-            suggestion=(
-                "Write the constant as its 16-bit value, 0..65535 (0h..FFFFh)."
-                if hex_mode
-                else "Copy the constant into a DD tag in a rung above and use the tag."
-            ),
+            suggestion=suggestion,
         )
     ]
 

@@ -632,7 +632,7 @@ class TestConditionAndExpressionCompiler:
             sqrt(a), ctx, strict=True
         )
         assert "_permissive_op('/', " in compile_expression(a / b, ctx)
-        divided = compile_expression(calc_form(a / b, "decimal", TagType.INT), ctx, strict=True)
+        divided = compile_expression(calc_form(a / b, "decimal"), ctx, strict=True)
         assert divided == "((_t_A / _t_B) if _t_B else _term_fail(_calc_flags, 40))"
         assert "0xFFFF" in compile_expression(lro(a, 1), ctx)
 
@@ -2010,8 +2010,8 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (copied, *self._FAULTS), scans=1)
         assert results == {name: (0, False, False, False) for name in results}
 
-    def test_randint_constants_cut_into_an_int_on_every_backend(self, monkeypatch):
-        """Into an Int the bounds are 4464..4466, cut to 16 bits, with no flag."""
+    def test_randint_constants_stay_whole_into_an_int_on_every_backend(self, monkeypatch):
+        """Into an Int the draw is 70000..70002, which wraps to 4464..4466 with SC43."""
         from pyrung.core import randint
 
         dest = Int("Dest", default=7)
@@ -2022,10 +2022,11 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
         for value, *faults in results.values():
             assert 4464 <= value <= 4466
-            assert faults == [False, False, False]
+            assert faults == [False, True, False]
 
     @pytest.mark.parametrize("narrow_first", [True, False], ids=["narrow_first", "wide_first"])
-    def test_one_randint_has_one_draw_per_width_on_every_backend(self, monkeypatch, narrow_first):
+    def test_one_randint_into_both_widths_on_every_backend(self, monkeypatch, narrow_first):
+        """The Int wraps the draw with SC43, which the Dint Math clears when it runs last."""
         from pyrung.core import randint
 
         roll = randint(70000, 70002)
@@ -2039,7 +2040,7 @@ class TestBoardPeripheralsAndRunStop:
         for low, high, *faults in results.values():
             assert 4464 <= low <= 4466
             assert 70000 <= high <= 70002
-            assert faults == [False, False, False]
+            assert faults == [False, not narrow_first, False]
 
     @pytest.mark.parametrize(
         "make, low, high",
@@ -2465,7 +2466,8 @@ class TestBoardPeripheralsAndRunStop:
 
     #: (label, formula of (n, d, z, w, r), destination type, stored, flags as
     #: (SC40, SC43, SC46)) with n = -7, d = 2147483647, z = 0, w = 0x8001, r = -7.5.
-    #: As a CLICK's Math reads them (hardware, 2026-11-05).
+    #: As a CLICK's Math reads them (hardware, 2026-11-05, the wide constants 2026-11-11).
+    #: A constant past a Dint is cut to 32 bits, as a pasted one ran.
     _CLICK_MATH = [
         ("double_steps", lambda n, d, z, w, r: d * d - (d * d - 1), Dint, 0, (0, 0, 0)),
         ("mod_int", lambda n, d, z, w, r: n % 2, Int, -1, (0, 0, 0)),
@@ -2483,10 +2485,17 @@ class TestBoardPeripheralsAndRunStop:
             "wide_constant_into_dint",
             lambda n, d, z, w, r: (d - d + 131072) / 65536,
             Dint,
-            0,
-            (1, 0, 0),
+            2,
+            (0, 0, 0),
         ),
-        ("wide_constant_times", lambda n, d, z, w, r: (n - n + 2) * 40000, Dint, -51072, (0, 0, 0)),
+        ("wide_constant_times", lambda n, d, z, w, r: (n - n + 2) * 40000, Dint, 80000, (0, 0, 0)),
+        (
+            "constant_past_a_dint",
+            lambda n, d, z, w, r: (d - d + 3000000000) / 1000,
+            Dint,
+            -1294967,
+            (0, 0, 0),
+        ),
         ("hex_lsh_drops_the_bit", lambda n, d, z, w, r: lsh(w, 1), Word, 2, (0, 0, 0)),
     ]
 

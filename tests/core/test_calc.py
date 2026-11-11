@@ -54,17 +54,17 @@ class TestCalcInstruction:
         assert runner.current_state.tags["Result"] == 0
         assert runner.current_state.tags["fault.division_error"] is True
 
-    def test_int_destination_cuts_constants_to_16_bits(self, runner_factory):
-        """A Math keeps each constant in 16 bits whatever the destination, as a
-        CLICK does: -2147483648 / 65536 divides by 0 into an Int and a Dint; the
-        same 65536 read from a Dint does not."""
+    def test_a_decimal_math_keeps_its_constants_whole(self, runner_factory):
+        """A decimal Math keeps each constant whole whatever the destination, as a
+        CLICK does (2026-11-11).  -2147483648 / 65536 is -32768 by the constant and
+        by a Dint holding 65536, and a constant past a Dint is cut to 32 bits."""
         Enable = Bool("Enable")
         Num = Dint("Num")
         Den = Dint("Den")
         ByConstant = Int("ByConstant")
         ByTag = Int("ByTag")
         IntoDint = Dint("IntoDint")
-        Low = Int("Low")
+        Low = Dint("Low")
         Flagged = Bool("Flagged")
 
         with Program() as logic:
@@ -75,17 +75,16 @@ class TestCalcInstruction:
             with Rung(Enable):
                 math(Num / Den, ByTag)
                 math(Num / 65536, IntoDint)
-                math(Den * 0 + 65543, Low)
+                math(Den * 0 + 4294967303, Low)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "Num": -2147483648, "Den": 65536, "ByConstant": 99})
         runner.step()
         tags = runner.current_state.tags
-        assert tags["ByConstant"] == 0
-        assert tags["Flagged"] is True
-        assert tags["fault.division_error"] is False
+        assert tags["ByConstant"] == -32768
+        assert tags["Flagged"] is False
         assert tags["ByTag"] == -32768
-        assert tags["IntoDint"] == 0
+        assert tags["IntoDint"] == -32768
         assert tags["Low"] == 7
 
     def test_real_result(self, runner_factory):
@@ -153,20 +152,21 @@ class TestCalcInstruction:
 
 
 class TestCutIntConstants:
-    def test_cuts_each_integer_constant_to_its_low_16_bits_signed(self):
+    def test_cuts_each_integer_constant_past_a_dint_to_32_bits_signed(self):
         from pyrung.core.expression import LiteralExpr, sqrt
         from pyrung.core.instruction.calc import cut_int_constants
 
         A = Int("A")
-        assert cut_int_constants(65536) == 0
-        assert cut_int_constants(-65536) == 0
-        assert cut_int_constants(65543) == 7
-        assert cut_int_constants(40000) == -25536
-        assert cut_int_constants(32767) == 32767
-        assert cut_int_constants(-32768) == -32768
+        assert cut_int_constants(65536) == 65536
+        assert cut_int_constants(40000) == 40000
+        assert cut_int_constants(2147483647) == 2147483647
+        assert cut_int_constants(-2147483648) == -2147483648
+        assert cut_int_constants(2147483648) == -2147483648
+        assert cut_int_constants(3000000000) == -1294967296
+        assert cut_int_constants(4294967303) == 7
         assert cut_int_constants(1.5) == 1.5
         assert cut_int_constants(True) is True
-        cut = cut_int_constants(sqrt(A + 65536) * 2)
+        cut = cut_int_constants(sqrt(A + 4294967296) * 2)
         assert repr(cut) == "(sqrt((TagExpr(A) + LiteralExpr(0))) * LiteralExpr(2))"
         assert isinstance(cut.right, LiteralExpr)
 
@@ -175,7 +175,7 @@ class TestCutIntConstants:
         from pyrung.core.instruction.calc import CalcInstruction, cut_int_constants
 
         A = Int("A")
-        expr = (A + 32767) * -32768
+        expr = (A + 65536) * -40000
         assert cut_int_constants(expr) is expr
         instr = CalcInstruction(expr, Int("Dest"))
         assert instr.source_expression is expr
@@ -185,7 +185,7 @@ class TestCutIntConstants:
         assert isinstance(instr.expression.left, CalcBinaryExpr)
         assert type(expr) is BinaryExpr and type(expr.left) is BinaryExpr
 
-    def test_every_destination_cuts(self):
+    def test_no_decimal_destination_cuts_a_constant_inside_a_dint(self):
         from pyrung.core.instruction.calc import CalcInstruction
 
         A = Dint("A")
@@ -193,15 +193,14 @@ class TestCutIntConstants:
         for dest in (Int("I"), Dint("D"), Real("R")):
             instr = CalcInstruction(expr, dest)
             assert instr.source_expression is expr
-            assert repr(instr.expression) == "(TagExpr(A) / LiteralExpr(0))"
+            assert repr(instr.expression) == "(TagExpr(A) / LiteralExpr(65536))"
 
-    def test_only_an_int_destination_cuts_randint_bounds(self):
+    def test_no_decimal_destination_cuts_randint_bounds_inside_a_dint(self):
         from pyrung.core.expression import randint
         from pyrung.core.instruction.calc import CalcInstruction
 
         roll = randint(70000, 70002)
-        assert CalcInstruction(roll, Int("I")).expression is not roll
-        for dest in (Dint("D"), Real("R")):
+        for dest in (Int("I"), Dint("D"), Real("R")):
             assert CalcInstruction(roll, dest).expression is roll
 
     def test_a_hex_word_draw_reads_its_own_site_where_the_cuts_differ(self):
@@ -211,18 +210,18 @@ class TestCutIntConstants:
 
         whole = randint(1, 6)
         assert whole.ucut_tag.name == whole.tag.name == whole.cut_tag.name
-        same = randint(70000, 70002)  # 4464..4466 either way
+        same = randint(2**32 + 5, 2**32 + 7)  # 5..7 either way
         assert same.ucut_tag.name == same.cut_tag.name != same.tag.name
-        unsigned_whole = randint(40000, 40002)  # 16 bits unsigned, -25536.. signed
-        assert unsigned_whole.ucut_tag.name == unsigned_whole.tag.name
-        assert unsigned_whole.cut_tag.name != unsigned_whole.tag.name
-        differs = randint(100000, 100002)  # -31072.. signed, 34464.. unsigned
-        assert differs.ucut_tag.name.endswith(".ucut")
-        assert differs.cut_tag.name.endswith(".cut")
-        assert (differs.ucut_tag.min, differs.ucut_tag.max) == (34464, 34466)
-        hex_calc = CalcInstruction(differs | Word("Mask"), Word("W"))
+        unsigned_whole = randint(40000, 40002)  # whole in both modes
+        assert unsigned_whole.ucut_tag is unsigned_whole.tag
+        assert unsigned_whole.cut_tag is unsigned_whole.tag
+        decimal_whole = randint(70000, 70002)  # whole in decimal, 4464.. in hex
+        assert decimal_whole.cut_tag.name == decimal_whole.tag.name
+        assert decimal_whole.ucut_tag.name.endswith(".ucut")
+        assert (decimal_whole.ucut_tag.min, decimal_whole.ucut_tag.max) == (4464, 4466)
+        hex_calc = CalcInstruction(decimal_whole | Word("Mask"), Word("W"))
         assert hex_calc.mode == "hex"
-        assert hex_calc.expression.left.tag.name == differs.ucut_tag.name
+        assert hex_calc.expression.left.tag.name == decimal_whole.ucut_tag.name
 
 
 class TestCalcRangeAggregates:

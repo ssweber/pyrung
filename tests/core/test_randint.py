@@ -47,7 +47,8 @@ def _die_program() -> tuple[Program, RandIntExpr, Tag]:
 
 
 def _int_and_word() -> tuple[Program, RandIntExpr, list[str]]:
-    roll = randint(100000, 110000)
+    # Past a Dint, so the decimal Math cuts the bounds to 32 bits and the hex one to 16.
+    roll = randint(2**32 + 100000, 2**32 + 110000)
     with Program(strict=False) as logic:
         with Rung():
             math(roll, Int("I"))
@@ -64,7 +65,7 @@ def _tag_read_by_a_rung(
     with Program(strict=False) as logic:
         if with_calc:
             with Rung():
-                math(roll, Int("Die"))
+                math(roll, Word("Die"))
         if as_condition:
             with Rung(roll.tag > 80000):
                 copy(1, Int("High"))
@@ -74,21 +75,21 @@ def _tag_read_by_a_rung(
             with Rung():
                 copy(roll.tag, Dint("Shown"))
     name = roll.tag.name
-    return logic, roll, [name, f"{name}.cut", "Die", "Shown", "High"]
+    return logic, roll, [name, f"{name}.ucut", "Die", "Shown", "High"]
 
 
 def _tag_read_in_a_subroutine() -> tuple[Program, RandIntExpr, list[str]]:
     roll = randint(70000, 90000)
     with Program(strict=False) as logic:
         with Rung():
-            math(roll, Int("Die"))
+            math(roll, Word("Die"))
         with Rung():
             call("show")
         with subroutine("show"):
             with Rung():
                 copy(roll.tag, Dint("Shown"))
     name = roll.tag.name
-    return logic, roll, [name, f"{name}.cut", "Die", "Shown"]
+    return logic, roll, [name, f"{name}.ucut", "Die", "Shown"]
 
 
 #: Programs whose draws stepping once took otherwise than the kernel (review of the uncut draw).
@@ -295,28 +296,56 @@ class TestBoundsAsCLICKReadsThem:
             ((70002, 70000), 4464, 4466),
         ],
     )
-    def test_constants_cut_into_an_int(self, bounds, lowest, highest):
+    def test_an_int_keeps_the_low_16_bits_of_a_whole_draw(self, bounds, lowest, highest):
+        """The bounds stay whole, so the draw is 70000..70002 and wraps with SC43."""
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
                 math(randint(*bounds), die)
-        values = _draws(PLC(logic, dt=0.01), "Die", 2000)
+        plc = PLC(logic, dt=0.01)
+        values = []
+        for _ in range(2000):
+            state = plc.step()
+            values.append(state.tags["Die"])
+            assert state.tags["fault.out_of_range"] is True
+            assert state.tags["fault.math_operation_error"] is False
         assert (min(values), max(values)) == (lowest, highest)
 
-    def test_bounds_each_cut_on_their_own(self):
-        """A pair that crosses 65536 is cut bound by bound, not as a range."""
+    def test_an_int_wraps_a_draw_across_65536(self):
+        """The draw is over 65000..66000, and the Int keeps its low 16 bits (CLICK, 2026-11-11)."""
         roll = randint(65000, 66000)
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
                 math(roll, die)
-        assert (roll.cut_tag.min, roll.cut_tag.max) == (-536, 464)
+        assert roll.cut_tag is roll.tag
+        assert (roll.tag.min, roll.tag.max) == (65000, 66000)
         values = _draws(PLC(logic, dt=0.01), "Die", 2000)
         assert -536 <= min(values) < -500
         assert 400 < max(values) <= 464
 
-    def test_bounds_that_cut_to_one_value_are_a_math_error(self):
-        die = Int("Die", default=7)
+    def test_reversed_wide_bounds_are_no_error(self):
+        """RAND ( 70000 , 4464 ) draws between them (CLICK, 2026-11-11)."""
+        with Program(strict=False) as logic:
+            with Rung():
+                math(randint(70000, 4464), Dint("Wide"))
+        values = _draws(PLC(logic, dt=0.01), "Wide", 200)
+        assert 4464 <= min(values) and max(values) <= 70000
+        assert max(values) - min(values) > 30000
+
+    def test_hex_bounds_each_cut_on_their_own(self):
+        """A pair that crosses 65536 is cut bound by bound, not as a range."""
+        roll = randint(65000, 66000)
+        with Program(strict=False) as logic:
+            with Rung():
+                math(roll, Word("Die"))
+        assert (roll.ucut_tag.min, roll.ucut_tag.max) == (464, 65000)
+        values = _draws(PLC(logic, dt=0.01), "Die", 2000)
+        assert 464 <= min(values) < 1000
+        assert 64000 < max(values) <= 65000
+
+    def test_hex_bounds_that_cut_to_one_value_are_a_math_error(self):
+        die = Word("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
                 math(randint(70000, 4464), die)
@@ -337,21 +366,21 @@ class TestBoundsAsCLICKReadsThem:
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_cut_site_still_answers_to_its_tag(self, factory):
         roll = randint(70000, 70002)
-        die = Int("Die")
+        die = Word("Die")
         with Program(strict=False) as logic:
             with Rung():
                 math(roll, die)
         plc = factory(logic, dt=0.01)
-        plc.patch({roll.cut_tag: 4465})
+        plc.patch({roll.ucut_tag: 4465})
         assert plc.step().tags["Die"] == 4465
 
     def test_a_cut_site_draws_inside_its_declared_range(self):
         roll = randint(70000, 70002)
-        die = Int("Die")
+        die = Word("Die")
         with Program(strict=False) as logic:
             with Rung():
                 math(roll, die)
-        assert (roll.cut_tag.min, roll.cut_tag.max) == (4464, 4466)
+        assert (roll.ucut_tag.min, roll.ucut_tag.max) == (4464, 4466)
         assert (roll.tag.min, roll.tag.max) == (70000, 70002)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -361,16 +390,16 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 70002)
         with Program(strict=False) as logic:
             with Rung():
-                math(roll / 2, Int("Die"))
+                math(roll / 2, Word("Die"))
         instr = logic.rungs[0]._instructions[0]
         assert format_expr(instr.source_expression.left) == "randint(70000, 70002)"
         assert format_expr(instr.expression.left) == "randint(4464, 4466)"
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     @pytest.mark.parametrize("narrow_first", [True, False], ids=["narrow_first", "wide_first"])
-    def test_one_expression_has_one_draw_per_width(self, factory, narrow_first):
+    def test_one_expression_has_one_draw_per_cut(self, factory, narrow_first):
         roll = randint(70000, 70002)
-        narrow, wide = Int("Narrow"), Dint("Wide")
+        narrow, wide = Word("Narrow"), Dint("Wide")
         with Program(strict=False) as logic:
             with Rung():
                 for dest in (narrow, wide) if narrow_first else (wide, narrow):
@@ -385,7 +414,7 @@ class TestBoundsAsCLICKReadsThem:
 
     def test_two_calcs_that_cut_read_the_one_cut_draw(self):
         roll = randint(70000, 70002)
-        first, second = Int("First"), Int("Second")
+        first, second = Word("First"), Word("Second")
         with Program(strict=False) as logic:
             with Rung():
                 math(roll, first)
@@ -406,7 +435,7 @@ class TestBoundsAsCLICKReadsThem:
 
         with Program(strict=False) as second:
             with Rung():
-                math(roll, Int("Narrow"))
+                math(roll, Word("Narrow"))
 
         assert (roll.tag.min, roll.tag.max) == (70000, 70002)
         assert _draws(running, "Wide", 20) == before
@@ -417,7 +446,7 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 70002)
         with Program(strict=False) as first:
             with Rung():
-                math(roll, Int("Narrow"))
+                math(roll, Word("Narrow"))
         before = _draws(PLC(first, dt=0.01), "Narrow", 20)
 
         with Program(strict=False) as second:
@@ -434,7 +463,7 @@ class TestBoundsAsCLICKReadsThem:
         roll = randint(70000, 70002)
         with Program(strict=False) as logic:
             with Rung():
-                math(roll, Int("Narrow"))
+                math(roll, Word("Narrow"))
                 math(roll, Dint("Wide"))
         narrow, wide = logic.rungs[0]._instructions
         assert format_expr(narrow.source_expression) == "randint(70000, 70002)"
@@ -443,17 +472,19 @@ class TestBoundsAsCLICKReadsThem:
 
     def test_a_site_with_nothing_to_cut_has_the_one_tag(self):
         roll = randint(70000, 70002)
-        assert roll.cut_tag.name != roll.tag.name
+        assert roll.cut_tag is roll.tag
+        assert roll.ucut_tag.name != roll.tag.name
         small = randint(1, 6)
         assert small.cut_tag is small.tag
+        assert small.ucut_tag is small.tag
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     @pytest.mark.parametrize(
         "dests, drawn",
         [
-            pytest.param((Int,), ("cut",), id="int"),
+            pytest.param((Word,), ("cut",), id="word"),
             pytest.param((Dint,), ("uncut",), id="dint"),
-            pytest.param((Int, Dint), ("cut", "uncut"), id="both"),
+            pytest.param((Word, Dint), ("cut", "uncut"), id="both"),
         ],
     )
     def test_only_the_draws_a_math_runs_are_drawn(self, factory, dests, drawn):
@@ -466,7 +497,7 @@ class TestBoundsAsCLICKReadsThem:
         # The program's one randint draws as number 1, and its cut as ~1.
         sites = {
             "uncut": (roll.tag.name, 1, 70000, 90000),
-            "cut": (f"{roll.tag.name}.cut", ~1, 4464, 24464),
+            "cut": (f"{roll.tag.name}.ucut", ~1, 4464, 24464),
         }
         plc = factory(logic, dt=0.01)
         for _ in range(20):
@@ -481,11 +512,11 @@ class TestBoundsAsCLICKReadsThem:
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_signed_and_an_unsigned_cut_of_one_draw_both_draw(self, factory):
-        """An Int's cut and a hex Word's share a number, and each draws over its own cut."""
-        roll = randint(100000, 110000)
+        """A decimal cut and a hex Word's share a number, and each draws over its own cut."""
+        roll = randint(2**32 + 100000, 2**32 + 110000)
         with Program(strict=False) as logic:
             with Rung():
-                math(roll, Int("I"))
+                math(roll, Dint("I"))
             with Rung():
                 math(roll, Word("W"))
         assert {roll.cut_tag.name, roll.ucut_tag.name} == {
@@ -496,7 +527,7 @@ class TestBoundsAsCLICKReadsThem:
         for _ in range(20):
             state = plc.step()
             scan = state.scan_id - 1
-            assert state.tags["I"] == randint_draw(~1, scan, -31072, -21072)
+            assert state.tags["I"] == randint_draw(~1, scan, 100000, 110000)
             assert state.tags["W"] == randint_draw(~1, scan, 34464, 44464)
 
     @pytest.mark.parametrize("program", sorted(_KERNEL_SITE_PROGRAMS))
@@ -529,11 +560,11 @@ class TestBoundsAsCLICKReadsThem:
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_patch_or_force_of_a_draw_no_math_runs_moves_nothing(self, factory):
-        """The uncut tag of an Int's cut draw holds what is put there, as a tag nothing writes."""
+        """The uncut tag of a hex cut draw holds what is put there, as a tag nothing writes."""
         roll = randint(70000, 90000)
         with Program(strict=False) as logic:
             with Rung():
-                math(roll, Int("Die"))
+                math(roll, Word("Die"))
         natural = _draws(factory(logic, dt=0.01), "Die", 9)
         plc = factory(logic, dt=0.01)
         dice = []

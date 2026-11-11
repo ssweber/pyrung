@@ -137,7 +137,8 @@ def _definitely_zero(
 def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any, index: int) -> FindingDisplay:
     dest = operand_name(instr.dest)
     code, _ = render_instruction(instr, dest)
-    # The formula runs with its constants cut to 16 bits; show the divisor as written.
+    # The formula runs its constants as a CLICK Math cuts them (calc_form).
+    # Show the divisor as written.
     written = list(_division_nodes(instr.source_expression))
     token = render_expr(denominator)
     label = "divisor is always 0"

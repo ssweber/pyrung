@@ -94,10 +94,10 @@ def _randint_sites_run(rungs: Iterable[Any]) -> tuple[tuple[RandIntExpr, ...], d
 
     Found by name, from the tags the kernel's own walk reaches (``walk_rung_operands``):
     a draw's tag inside a formula, or ``expr.tag`` read straight off a rung.  That walk
-    takes a calc's formula as it runs, not its ``source_expression``: a calc into an Int
-    runs a cut draw in its place (``RandIntExpr.with_cut_bounds``), so the uncut site it
-    names runs only where some other rung runs it, as a Dint Math that keeps the
-    constants does.
+    takes a calc's formula as it runs, not its ``source_expression``: a hex calc runs a
+    cut draw in its place (``RandIntExpr.with_cut_bounds``), so the uncut site it names
+    runs only where some other rung runs it, as a decimal Math that keeps the constants
+    does.
     """
     from pyrung.core.expression import is_randint_tag, randint_numbers, randint_sites
     from pyrung.core.validation.walker import walk_rung_operands

@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from pyrung.core import PLC, Int, Program, Rung, math, randint
+from pyrung.core import PLC, Program, Rung, Word, math, randint
 from tests.conformance import loop_corpus, suite
 from tests.conformance.loop_corpus import FIRST_PARTS, Tally
 
@@ -38,10 +38,10 @@ def test_every_drill_on_each_case(part: str) -> None:
 
 
 def test_a_long_run_of_a_wide_rand_equals_stepping() -> None:
-    # A run as a user gets it: nothing lowered, 3000 scans.  A wide RAND into an Int has two
-    # sites, _rand.N and _rand.N.cut; only the cut one runs, and stepping draws only it too.  The
+    # A run as a user gets it: nothing lowered, 3000 scans.  A wide RAND in a hex Math has two
+    # sites, _rand.N and _rand.N.ucut.  Only the cut one runs, and stepping draws only it too.  The
     # bounds leave a draw 20001 values, so a tag standing still would not land on a draw by chance.
-    r = Int("R")
+    r = Word("R")
     with Program(strict=False) as program:
         with Rung():
             math(randint(70000, 90000), r)
@@ -49,9 +49,15 @@ def test_a_long_run_of_a_wide_rand_equals_stepping() -> None:
     loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(30.0))
 
 
-@pytest.mark.parametrize("label", ["faults/rand_unequal_bounds", "store_probe/rand_int_cuts"])
+@pytest.mark.parametrize(
+    "label",
+    ["faults/rand_unequal_bounds", "store_probe/rand_int_cuts", "store_probe/rand_other_stores"],
+)
 def test_a_wide_rand_case_equals_stepping_at_every_landing(label: str) -> None:
-    """The suite's RANDs that cut, over 30 landings: one draw over 3 values can land by chance."""
+    """The suite's RANDs past 16 bits, over 30 landings: one over 3 values can land by chance.
+
+    Only the hex Math in ``rand_other_stores`` cuts its bounds and draws from a second site.
+    """
     group_name, _, case_id = label.partition("/")
     group = next(g for g in [*suite.ALL_GROUPS, *suite.APART_GROUPS] if g.name == group_name)
     case = next(c for c in group.cases if c.id == case_id)

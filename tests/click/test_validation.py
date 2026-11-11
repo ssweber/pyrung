@@ -1883,9 +1883,8 @@ class TestCalcPlainArguments:
 
 
 class TestCalcWideConstant:
-    """A CLICK Math cuts each constant to 16 bits whatever the destination: ``DD1 * 40000``
-    multiplies by -25536 (hardware, 2026-11-05).  A RAND's constant bounds are cut only
-    into an Int or a Word."""
+    """A decimal CLICK Math keeps each constant whole, and CLICK's editor refuses one
+    past a DD's range (2026-11-11).  A hex Math reads each constant as its low 16 bits."""
 
     @staticmethod
     def _found(build, dest_type=TagType.DINT):
@@ -1911,18 +1910,30 @@ class TestCalcWideConstant:
     @pytest.mark.parametrize(
         "build, dest_type",
         [
-            (lambda n, w: n * 40000, TagType.DINT),
-            (lambda n, w: n / 65536, TagType.REAL),
-            (lambda n, w: n - 32768, TagType.INT),
-            (lambda n, w: 70000, TagType.DINT),
-            (lambda n, w: randint(70000, 70002), TagType.INT),
+            (lambda n, w: n * 3000000000, TagType.DINT),
+            (lambda n, w: n / 2147483648, TagType.REAL),
+            (lambda n, w: n - -2147483649, TagType.INT),
+            (lambda n, w: randint(1, 3000000000), TagType.INT),
+        ],
+        ids=["dd", "df", "ds", "rand"],
+    )
+    def test_a_decimal_constant_past_a_dint_is_reported(self, build, dest_type):
+        found = self._found(build, dest_type)
+        assert len(found) == 1
+        assert found[0].message.isascii()
+        assert "past a DD's range" in found[0].message
+        assert "editor refuses" in found[0].message
+
+    @pytest.mark.parametrize(
+        "build, dest_type",
+        [
             (lambda n, w: w + 70000, TagType.WORD),
             (lambda n, w: randint(1, 70000), TagType.WORD),
             (lambda n, w: w + -1, TagType.WORD),
         ],
-        ids=["dd", "df", "ds", "bare", "rand-into-int", "hex", "rand-into-word", "hex-negative"],
+        ids=["hex", "rand-into-word", "hex-negative"],
     )
-    def test_a_constant_past_16_bits_is_reported(self, build, dest_type):
+    def test_a_hex_constant_past_16_bits_is_reported(self, build, dest_type):
         found = self._found(build, dest_type)
         assert len(found) == 1
         assert found[0].message.isascii()
@@ -1931,21 +1942,38 @@ class TestCalcWideConstant:
     @pytest.mark.parametrize(
         "build, dest_type",
         [
-            (lambda n, w: n * 32767 + -32768, TagType.DINT),
-            (lambda n, w: n * 1.0e6, TagType.REAL),
+            (lambda n, w: n * 40000, TagType.DINT),
+            (lambda n, w: n / 65536, TagType.REAL),
+            (lambda n, w: n - 32769, TagType.INT),
+            (lambda n, w: 70000, TagType.DINT),
+            (lambda n, w: n * 2147483647 + -2147483648, TagType.DINT),
+            (lambda n, w: n * 1.0e10, TagType.REAL),
             (lambda n, w: w + 0xFFFF, TagType.WORD),
+            (lambda n, w: randint(70000, 70002), TagType.INT),
             (lambda n, w: randint(70000, 70002), TagType.DINT),
             (lambda n, w: randint(70000, 70002) * 2, TagType.REAL),
         ],
-        ids=["edges", "float", "hex-edge", "rand-into-dint", "rand-into-real"],
+        ids=[
+            "dd",
+            "df",
+            "ds",
+            "bare",
+            "dint-edges",
+            "float",
+            "hex-edge",
+            "rand-into-int",
+            "rand-into-dint",
+            "rand-into-real",
+        ],
     )
-    def test_a_constant_in_16_bits_passes(self, build, dest_type):
+    def test_a_constant_math_keeps_passes(self, build, dest_type):
         assert self._found(build, dest_type) == []
 
     def test_one_finding_names_each_constant(self):
-        found = self._found(lambda n, w: n * 40000 + 40000 - 70000)
+        found = self._found(lambda n, w: n * 3000000000 + 3000000000 - 4000000000)
         assert len(found) == 1
-        assert "(40000, 70000)" in found[0].message
+        assert "(3000000000, 4000000000)" in found[0].message
+        assert "-2147483648..2147483647" in found[0].suggestion
 
     def test_a_hex_math_reads_a_constant_unsigned(self):
         (found,) = self._found(lambda n, w: w + -1 + 70000, TagType.WORD)

@@ -10,12 +10,17 @@ value.  Expectations are what pyrung reads today, so a CLICK that reads
 otherwise is an answer; ``non_finite_into_word`` and ``real_into_text_and_fill``
 are what a CLICK read on 2026-11-05.
 
-- ``rand_int_cuts`` (probe): each constant bound into an Int is cut to 16 bits.
-  RAND ( 65000 , 66000 ) is -536..464 (Result1; 65000 is -536, 66000 is 464)
-  with no flag; RAND ( 70000 , 4464 ) and RAND ( 70000 , 135536 ) are equal
-  after the cut (4464), a math error: 0 (Result2, Result3) with SC46 (bits 2
-  and 4 of Result4; bit 1 is the first op, off) and no SC43 (ErrorCode = 0).
-  A draw that clamps instead reads 32767 or 0 with other flags.
+- ``rand_int_cuts`` (probe): what a RAND into an Int does with constant bounds
+  past 16 bits.  A CLICK draws over the whole bounds, and the Int keeps the low
+  16 bits of the draw, signed, with SC43 (2026-11-11).  RAND ( 65000 , 66000 )
+  is -536..464 (Result1).  RAND ( 70000 , 4464 ) and RAND ( 70000 , 135536 )
+  can be any Int (Result2, Result3), and reversed bounds are no error.  None
+  raises SC46 (Result4 = 0).  Each draw past 32767 raises SC43 (ErrorCode bits
+  1, 2 and 4).  The first and third always are, and the second is unless it
+  draws 4464..32767, so ErrorCode is 7 or 5.  The CLICK drew 65284, 53040 and
+  97521, which read -252, -12496 and 31985 with ErrorCode 7.  Bounds cut to 16
+  bits, signed, read 0 for the second and third, equal after the cut, with
+  SC46 (Result4 = 6) and no SC43.  A draw that clamps reads 32767 or -32768.
 - ``rand_other_stores`` (probe): RAND ( 70000 , 70002 ) into a Dint is not cut,
   70000..70002 (Result1 = 0..2 over 70000), into a Word the exported hex
   bounds are 1170h..1172h, 4464..4466 (Result2), and into a Real 70000..70002
@@ -344,21 +349,22 @@ group = Group(
     "store_probe",
     [
         case(
-            "RAND cuts each constant bound to 16 bits into an Int: RAND ( 65000 , 66000 ) "
-            "draws -536..464 (Result1) with no flag, and RAND ( 70000 , 4464 ) and RAND "
-            "( 70000 , 135536 ), equal after the cut, are a math error that writes 0 "
-            "(Result2, Result3) with SC46 and no SC43 (Result4 = 6, ErrorCode = 0)",
+            "RAND into an Int draws over the whole bounds, and the Int keeps the low 16 "
+            "bits of the draw. RAND ( 65000 , 66000 ) is -536..464 (Result1). RAND ( 70000 "
+            ", 4464 ) and RAND ( 70000 , 135536 ) can be any Int (Result2, Result3). None "
+            "raises SC46 (Result4 = 0). A draw past 32767 raises SC43, so ErrorCode is 5 "
+            "or 7.",
             ladder=prove_rand_int_cuts,
             init=_init(0),
             expect={
                 "Result1": range(-536, 465),
-                "Result2": 0,
-                "Result3": 0,
-                "Result4": 6,
-                "ErrorCode": 0,
+                "Result2": range(-32768, 32768),
+                "Result3": range(-32768, 32768),
+                "Result4": 0,
+                "ErrorCode": range(5, 8, 2),
             },
             scans=SCANS,
-            probe="RAND into an Int: bounds cut to 16 bits, then sorted, equal after the cut",
+            probe="RAND into an Int: bounds kept whole, the draw wrapped",
         ),
         case(
             "RAND ( 70000 , 70002 ) is not cut for a Dint, a Word or a Real: a Dint draws "
