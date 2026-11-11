@@ -5,25 +5,29 @@ Three questions the fix step ``timed-coils`` (5 in the ``conform-fix`` arc) buil
 reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
 
 - ``off_td_held``: does a debounce's off TD keep its value while the rung is true?  A debounce of
-  0 / 500 ms, its rung on to 50 ms on the case's clock, off to 150 ms, on again.  The reset leaves
-  the off TD timed out (500 ms or more), and the case starts with it so.  Result1 = 1 when the coil
-  stayed on through the 100 ms off (read from 100 to 150 ms), Result3 the off TD on the last scan
-  before 150 ms, and at 200 ms Result2 is 1 where the TD still holds that value, 2 where it went
-  back to 0.  The readings:
+  0 / 500 ms, in steps that ``Scratch`` holds.  The reset leaves the off TD timed out (500 ms or
+  more), and the case starts with it so.  A clock (a TON on the debounce's rung) times each spell
+  the rung is on, from 0.  Each step's rungs come below the debounce in reverse order, so each new
+  step starts on the next scan.
 
-  - 1, 2, about 100: the rung's rise clears the off TD, and the fall times from 0.
-  - 1, 1, about 100: the off TD is held while the rung is true (as for the on side), and a fall
-    starts it from 0 (pyrung from timed-coils to 2026-11-06).
-  - 0, 1, 500 or more: it is held while the rung is true and a fall resumes it, so it is past its
-    preset at once and the coil drops at 50 ms.
+  - Step 0: the rung is on until the clock reads 50.
+  - Step 1: the scan the rung falls.  Result3 is 1 if the off TD is under 100, 0 if not.
+  - Step 2: the rung stays off until the off TD reads 100 or more.  Result1 is 1 if the coil is
+    still on then, 0 if it is off.
+  - Step 3: the rung is on again.  Once the clock reads 50, Result2 is 1 if the off TD is still
+    100 or more, 2 if it is 0.  ``Fired`` goes up on that scan.
 
-  A CLICK read 1, 2, 101: the first.  Result3 also says where the off side's scan of lag is (see
-  ``deb_off_against_tof``).  An off TD that ticks from the scan of the fall reads the clock's last
-  value before 150 ms less its last before 50: up to a scan over 100.  One that starts ticking a
-  scan after the fall reads less than 100.  101 is the first, so pyrung ticks the off TD on the
-  scan of the fall and lags the compare instead (``DebounceInstruction``).  101 against 100 is one
-  millisecond: the reading that would settle it is the off TD on the scan of the fall, a scan's
-  time for a lagged compare, 0 for a lagged count.  Result3 is a range for any scan up to 50 ms.
+  The readings (Result1, Result2, Result3):
+
+  - 1, 2, 1: the rung's rise clears the off TD, and the fall times from 0.
+  - 1, 1, 1: the off TD is held while the rung is true (as for the on side), and a fall starts it
+    from 0 (pyrung from timed-coils to 2026-11-06).
+  - 0, 1, 0: it is held while the rung is true and a fall resumes it.  It is past its preset at
+    once, and the coil drops on the scan after the fall.
+
+  A CLICK read an earlier ladder that timed it all on one clock from ``Cmd``.  It read 1, 2, and
+  an off TD of 101 at 100 ms after the fall.  That is the first reading.  So the off TD is under
+  100 on the scan of the fall, as ``deb_fall/off_td_at_fall`` read (1..2).
 - ``flasher_on_zero``: a flasher of 0 on / 1 ms off, its rung on throughout: scans its coil is on
   of 14 (Result1), 0 where an on phase of 0 stays dark after each off phase.  The control
   (Result2) is a flasher of 1 ms / 1 ms, on for some of them.  A CLICK read 0, 7: dark (pyrung read
@@ -47,12 +51,15 @@ what ``memory.OWNED_APART`` lists under this group.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, copy, debounce, flasher, math, off_delay, out
+from pyrung.conformance import _runner as runner_module
+from pyrung.core import Or, Rung, copy, debounce, flasher, math, off_delay, on_delay, out
 from tests.conformance.memory import ClickTimer, c, t, td
-from tests.conformance.probe_kit import end_at, in_window, ms_clock, once
 from tests.conformance.scans import count_scans, done, scans_for
 
 FLASH_WINDOW = 14
@@ -60,22 +67,36 @@ OFF_WINDOW = 40
 
 
 def prove_off_td_held(slot: Any) -> None:
-    rung, deb = c[241], c[242]
+    deb = c[242]
     off_td = td[116]
-    clock = ms_clock(slot, 117)
-    with Rung(slot.Cmd != 0, Or(clock < 50, clock >= 150)):
-        out(rung)
-    with Rung(rung):
+    rung = (slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3))
+
+    def step(n: int) -> tuple[Any, Any]:
+        return (slot.Cmd != 0, slot.Scratch == n)
+
+    with Rung(*rung):
         debounce(deb, on=(ClickTimer(115), 0), off=(ClickTimer(116), 500))
-    with Rung(*in_window(slot, clock, 100, 150)):
-        copy(off_td, slot.Result3)
-    with Rung(*in_window(slot, clock, 100, 150), deb):
-        copy(1, slot.Result1)
-    with Rung(*once(slot), clock >= 200, off_td == slot.Result3):
+    # The clock times the rung's time on, from 0 at each rise.
+    with Rung(*rung):
+        on_delay(ClickTimer(117), 5000)
+    clock = td[117]
+    with Rung(*step(3), clock >= 50, off_td >= 100):
         copy(1, slot.Result2)
-    with Rung(*once(slot), clock >= 200, off_td == 0):
+    with Rung(*step(3), clock >= 50, off_td == 0):
         copy(2, slot.Result2)
-    end_at(slot, clock, 200)
+    with Rung(*step(3), clock >= 50):
+        copy(4, slot.Scratch)
+        copy(1, slot.Fired)
+    with Rung(*step(2), off_td >= 100, deb):
+        copy(1, slot.Result1)
+    with Rung(*step(2), off_td >= 100):
+        copy(3, slot.Scratch)
+    with Rung(*step(1), off_td < 100):
+        copy(1, slot.Result3)
+    with Rung(*step(1)):
+        copy(2, slot.Scratch)
+    with Rung(*step(0), clock >= 50):
+        copy(1, slot.Scratch)
 
 
 def prove_flasher_on_zero(slot: Any) -> None:
@@ -119,15 +140,16 @@ group = Group(
     [
         case(
             "A debounce's off TD goes to 0 while its rung is true (Result2 = 2, 1 if it keeps "
-            "its value) and times from 0 at a fall, about 100 ms by 150 ms (Result3), so the "
-            "coil stays on through 100 ms of a 500 ms off (Result1 = 1, 0 if it resumes)",
+            "its value) and times from 0 at a fall, under 100 on the scan of the fall (Result3 "
+            "= 1, 0 if it resumes), so the coil stays on through 100 ms of a 500 ms off (Result1 "
+            "= 1, 0 if it drops)",
             ladder=prove_off_td_held,
             ready=lambda slot: ~c[242],
             # The off TD is timed out in the reset: what the case starts from, on every repeat.
             # The on TD is kept after the rung falls, as for any debounce; the next rise starts it from 0.
             keep=(td[115], td[116]),
-            expect={"Result1": 1, "Result2": 2, "Result3": range(50, 151)},
-            scans=25,
+            expect={"Result1": 1, "Result2": 2, "Result3": 1},
+            scans=40,
             fires_within=1.0,
         ),
         case(
@@ -165,7 +187,15 @@ def test_pyrung_reads_the_debounce_lag():
     """What pyrung reads at the in-process 10 ms scan."""
     read = {r.case.id: r.actual for r in run(group)}
     assert read == {
-        "off_td_held": {"Result1": 1, "Result2": 2, "Result3": 100},
+        "off_td_held": {"Result1": 1, "Result2": 2, "Result3": 1},
         "flasher_on_zero": {"Result1": 0, "Result2": 7},
         "deb_off_against_tof": {"Result1": 5, "Result2": 4, "ErrorCode": 1},
     }
+
+
+@pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
+def test_off_td_held_at_any_scan(monkeypatch, dt):
+    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    held = next(c for c in group.cases if c.id == "off_td_held")
+    assert_all_passed(run(Group("coil_timing", [replace(held, scans=int(0.5 / dt))])))
