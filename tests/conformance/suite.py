@@ -392,7 +392,7 @@ APART_PARTS: dict[str, ApartPart] = {
 }
 
 #: The longest scan (ms) a part's cases assume, unless ``PART_SCAN_LIMITS_MS`` names the part.
-#: Main keeps the longest SD10 in DS2, and a run whose longest scan is past the limit is void.
+#: Main keeps the longest SD10 in DS2.  On a real PLC a longest scan past the limit voids the run.
 SCAN_LIMIT_MS = 50
 PART_SCAN_LIMITS_MS: dict[str, int] = {
     # ``for_wide`` runs two For loops of 65536 and 65537 runs on one scan, about 2.2 s.

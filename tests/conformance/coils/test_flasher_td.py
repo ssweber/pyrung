@@ -22,9 +22,6 @@ clearing them.
 - Step 5: at 600 ms on T45 Result4 is 1 if the coil is on (the off phase ran the 400 ms it had
   left) and 0 if it is off (a whole 800 ms from 0).
 
-The case times out at the step it is on once its scans sum to 5000 ms (``scans.deadline``, the time
-summed in ErrorCode).  A flasher whose on TD stops at its preset never ends step 0, for one.
-
 Running on from the frozen TD reads 1, 1, 1, 1.  A fresh off phase reads 1, 1, 2, 0.  A CLICK read
 2, 1, 2, 0 (hardware round of 2026-11-05, twice) on an earlier ladder that took the same steps at
 fixed times.  The restart clears the off TD, so the off phase runs a whole 800 ms from 0.
@@ -43,10 +40,6 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
 from pyrung.core import Rung, copy, fill, flasher, on_delay
 from tests.conformance.memory import ClickTimer, c, ds, td
-from tests.conformance.scans import deadline
-
-#: The steps take about 1600 ms.  Past 5000 ms of scans the case times out.
-DEADLINE_MS = 5000
 
 
 def prove_frozen_off_td_at_lowered_preset(slot: Any) -> None:
@@ -102,7 +95,6 @@ def prove_frozen_off_td_at_lowered_preset(slot: Any) -> None:
     with Rung(*step(0), off_td >= 400):
         copy(off_td, frozen)
         copy(1, slot.Scratch)
-    deadline(slot, DEADLINE_MS, slot.ErrorCode)
 
 
 def init_frozen_off_td_at_lowered_preset(slot: Any) -> None:
@@ -120,6 +112,7 @@ group = Group(
             "from 0 (Result3 = 2), a whole off time (Result4 = 0)",
             ladder=prove_frozen_off_td_at_lowered_preset,
             init=init_frozen_off_td_at_lowered_preset,
+            keep=(td[42],),
             scans=250,
             expect={"Result1": 2, "Result2": 1, "Result3": 2, "Result4": 0},
         ),

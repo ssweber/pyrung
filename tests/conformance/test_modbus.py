@@ -10,6 +10,7 @@ real PLC may run one part of the suite (``suite.PARTS``); its ``DS1`` says which
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -26,6 +27,7 @@ from pyrung.conformance import (
     Endpoint,
     Group,
     Manifest,
+    ScanTimeError,
     SimServer,
     assert_all_passed,
     build_program,
@@ -309,6 +311,34 @@ def test_a_stall_advances_the_sim_by_at_most_max_scan_dt(cap: float | None) -> N
         assert dt >= 0.3
     else:
         assert dt == pytest.approx(cap)
+
+
+def test_the_longest_scan_voids_a_plc_run_and_is_noted_on_a_local_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The sim scans every 10 ms or so, past a 5 ms limit."""
+    right = case("Reads 7", ladder=_prove_constant, expect={"Result1": 7}, id="right")
+    wrong = case("Reads 8", ladder=_prove_constant, expect={"Result1": 8}, id="wrong")
+    build = build_program(Group("scan", [right, wrong]), scan_limit_ms=5)
+    with SimServer(build) as sim:
+        assert sim.endpoint is not None
+        # A stale record the harness must clear before the run.
+        with sim._lock:
+            sim.plc.patch({"Conf_LongestScan": 30000})
+        _scans_past(sim, sim.plc.current_state.scan_id + 1)
+        capsys.readouterr()
+        results = run_modbus(build, sim.endpoint, local=True)
+        out = capsys.readouterr().out
+        # The same endpoint, taken for a real PLC.
+        with pytest.raises(ScanTimeError, match="Run void: this program assumes scans of at"):
+            run_modbus(build, sim.endpoint)
+    line = r"longest scan (\d+) ms passed this program's limit of 5 ms"
+    found = re.search(line, out)
+    assert found is not None
+    assert 5 < int(found.group(1)) <= MAX_SCAN_DT_S * 1000
+    assert [r.passed for r in results] == [True, False]
+    assert results[0].note == ""
+    assert results[1].note.endswith(found.group(0))
 
 
 def test_circuitpy_target_runs_the_generated_code() -> None:

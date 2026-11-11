@@ -26,6 +26,8 @@ to 50 ms, as in ``out``.
   - A TOF of 100 ms, its rung on for step 0.  Once it has timed out and its TD reads 200, its DS
     goes up to 1000.  Result3 is 1 if Done is back on once the TD reads 300, 0 where a timed-out
     TOF stays out.  ``Fired`` goes up then, in step 3.
+  - The case's clock times the case out at the step it is on once it reads 1500 ms
+    (``scans.time_out``).  A TOF that stays out never ends step 3, for one.
   - A TD written -100 on the first scan, below its TON on from ``Cmd``.  On the scan after the
     write, Result4 is 1 if it is below 0, 2 if it is 0 or above.
 
@@ -64,7 +66,10 @@ from pyrung.core import (
 )
 from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, ds, t, td
 from tests.conformance.probe_kit import ms_clock, once
-from tests.conformance.scans import count_scans, done, scans_for
+from tests.conformance.scans import count_scans, done, scans_for, time_out
+
+#: ``timers_at_limits`` takes about 500 ms.  Its clock times it out at 1500 ms.
+DEADLINE_MS = 1500
 
 
 def prove_oneshot_and_edges(slot):
@@ -160,6 +165,7 @@ def prove_timers_at_limits(slot):
         copy(2, slot.Scratch)
     with Rung(*step(0), body_td >= 100):
         copy(1, slot.Scratch)
+    time_out(slot, clock >= DEADLINE_MS)
 
 
 def prove_clock_edges_in_a_body(slot):

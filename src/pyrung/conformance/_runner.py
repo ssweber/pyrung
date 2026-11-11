@@ -46,22 +46,13 @@ def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> l
     differs, other than a case's ``keep`` tags, is a leak and fails the case
     that owns it.
 
-    Every scan takes :data:`DT`.  A *scan_limit_ms* under it voids the run, as a
-    longer scan voids a run over the wire.
+    Every scan takes :data:`DT`.  This is one of pyrung's own targets, so a :data:`DT`
+    past *scan_limit_ms* does not void the run.  The run prints a line and adds that
+    line to every failed case instead.
 
     Raises:
-        ScanTimeError: :data:`DT` is past *scan_limit_ms*.
         ValueError: Two cases share memory.
     """
-    if scan_limit_ms is not None:
-        from pyrung.conformance._modbus import ScanTimeError
-
-        scan_ms = round(DT * 1000)
-        if scan_ms > scan_limit_ms:
-            raise ScanTimeError(
-                f"Run void: the cases assume scans of at most {scan_limit_ms} ms, but every "
-                f"scan in-process takes {scan_ms} ms. No Result was judged."
-            )
     if isinstance(cases, Group):
         group: Group | None = cases
         case_list = list(cases.cases)
@@ -159,6 +150,12 @@ def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> l
                 xfail=xfail,
             )
         )
+    from pyrung.conformance._modbus import note_failures, scan_limit_note
+
+    note = scan_limit_note(None, scan_limit_ms, round(DT * 1000))
+    if note is not None:
+        print(note)
+        results = note_failures(results, note)
     return results
 
 

@@ -57,7 +57,9 @@ Every case passed on a CLICK as written (hardware round 1, 2026-10-29).  Which c
   so it reaches the clamp in under a second rather than 33 s.  An accumulator
   that wraps reads negative; one that stops at the preset never fires; a TON
   that keeps its own count and ignores the write never fires and reads
-  Result3 = 0.
+  Result3 = 0.  The case times out after 3000 ms on T97 if it has not fired
+  (``scans.deadline``).  Its Scratch counts scans, so "timed out at step N"
+  says how many scans its Acc read 32767.
 
 The 0 ms presets (``ton_done_on_enabling_scan``, ``rton_reset_gap``,
 ``tof_enable_atomic``) keep those cases about scans, not milliseconds: they
@@ -69,9 +71,11 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import Or, Rung, copy, math, off_delay, on_delay, out
 from tests.conformance.memory import ClickTimer, c
-from tests.conformance.scans import WINDOW, count_scans, done, scans_for, trace
+from tests.conformance.scans import WINDOW, count_scans, deadline, done, scans_for, trace
 
 SCANS = scans_for()
+#: ``acc_clamps_at_32767`` takes about 800 ms.  T97 times it out at 3000 ms.
+ACC_CLAMP_DEADLINE_MS = 3000
 
 
 def prove_ton_auto_reset(slot):
@@ -271,6 +275,7 @@ def prove_acc_clamps_at_32767(slot):
         copy(1, slot.Result2)
     with Rung(slot.Cmd != 0, slot.Scratch >= 10):
         copy(1, slot.Fired, oneshot=True)
+    deadline(slot, ClickTimer(97), ACC_CLAMP_DEADLINE_MS, steps=False)
 
 
 group = Group(

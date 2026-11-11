@@ -13,8 +13,8 @@ the TOF in reverse order, so each new step starts on the next scan.
 - Step 4: the step ends on the first scan Done is off again.  Result4 is 1 if the TD is then at the
   preset or past it, 2 if it is under it.
 
-The case times out at the step it is on once its scans sum to 1500 ms (``scans.deadline``, the time
-summed in ErrorCode).  A TD that stops at the preset never ends step 1, for one.
+T292, a TON on from ``Cmd``, times the case out at the step it is on after 1500 ms
+(``scans.deadline``).  A TD that stops at the preset never ends step 1, for one.
 
 A CLICK read an earlier ladder of 20 ms that counted scans (2026-11-10, twice).  Done came back on
 and the TD counted from 0.  So a TOF that has been enabled judges ``TD < preset`` on every scan its
@@ -46,8 +46,8 @@ from tests.conformance.scans import deadline
 TOF = ClickTimer(291)
 PRESET = 200
 #: The TD that ends step 1: past the preset, so the TOF has timed out.
-TIMED_OUT = 300
-#: The steps take about 500 ms.  Past 1500 ms of scans the case times out.
+PAST_PRESET = 300
+#: The steps take about 500 ms.  T292 times the case out at 1500 ms.
 DEADLINE_MS = 1500
 
 
@@ -74,13 +74,13 @@ def prove_done_after_td_zeroed(slot: Any) -> None:
     with Rung(*step(2)):
         copy(0, TOF.Acc)
         copy(3, slot.Scratch)
-    with Rung(*step(1), TOF.Acc >= TIMED_OUT, TOF.Done):
+    with Rung(*step(1), TOF.Acc >= PAST_PRESET, TOF.Done):
         copy(1, slot.Result1)
-    with Rung(*step(1), TOF.Acc >= TIMED_OUT):
+    with Rung(*step(1), TOF.Acc >= PAST_PRESET):
         copy(2, slot.Scratch)
     with Rung(*step(0), TOF.Done):
         copy(1, slot.Scratch)
-    deadline(slot, DEADLINE_MS, slot.ErrorCode)
+    deadline(slot, ClickTimer(292), DEADLINE_MS)
 
 
 group = Group(

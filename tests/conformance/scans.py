@@ -15,7 +15,7 @@ Pass ``scans=scans_for(window)`` to ``case()``.  Every helper takes the same
 ``window``; the default is :data:`WINDOW`.
 
 A case that waits for a timer to reach a threshold would wait forever under a model that never
-gets there.  :func:`deadline` ends such a case once its scan times add up to a limit.  The harness
+gets there.  :func:`deadline` ends such a case once a TON of its own reaches a limit.  The harness
 then reports the step the case was on.
 """
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import TIMED_OUT
-from pyrung.core import Rung, copy, math, system
+from pyrung.core import Rung, copy, math, on_delay
 
 #: Scans a case records by default.
 WINDOW = 8
@@ -83,18 +83,26 @@ def done(slot: Any, window: int = WINDOW) -> None:
         copy(1, slot.Fired)
 
 
-def deadline(slot: Any, limit_ms: int, elapsed: Any) -> None:
-    """Time the case out once *elapsed* reaches *limit_ms*.
+def deadline(slot: Any, timer: Any, limit_ms: int, *, steps: bool = True) -> None:
+    """Time the case out once *timer*, a TON on from ``Cmd``, reaches *limit_ms*.
 
-    *elapsed* sums SD10 (the scan time in ms) over the scans the case runs.  So it counts
-    time whatever a scan takes, and no timer under test does the counting.  Past the limit
-    ``Fired`` and ``Scratch`` both take ``TIMED_OUT`` plus the step in ``Scratch``, so no
-    ``Scratch == N`` step runs again.  Set *limit_ms* to about 3 times what the case takes.
-    *elapsed* is a slot field or a register the case owns.  Put these rungs last.
+    *timer* is a ``ClickTimer`` the case owns.  Set *limit_ms* to about 3 times what the
+    case takes.  Put these rungs last.  See :func:`time_out` for what *steps* does.
     """
-    live = (slot.Cmd != 0, slot.Fired == 0)
-    with Rung(*live):
-        math(elapsed + system.sys.scan_time_current_ms, elapsed)
-    with Rung(*live, elapsed >= limit_ms):
+    with Rung(slot.Cmd != 0):
+        on_delay(timer, limit_ms)
+    time_out(slot, timer.Done, steps=steps)
+
+
+def time_out(slot: Any, *when: Any, steps: bool = True) -> None:
+    """Write the timed-out code once *when* holds, unless the case has fired.
+
+    ``Fired`` takes ``TIMED_OUT`` plus ``Scratch``, the step the case is on.  With *steps*
+    on, ``Scratch`` takes that value too, so no ``Scratch == N`` step runs again.  Turn
+    *steps* off for a case whose ``Scratch`` counts scans, since a count past a threshold
+    would run its last rungs.
+    """
+    with Rung(slot.Cmd != 0, slot.Fired == 0, *when):
         math(slot.Scratch + TIMED_OUT, slot.Fired)
-        copy(slot.Fired, slot.Scratch)
+        if steps:
+            copy(slot.Fired, slot.Scratch)

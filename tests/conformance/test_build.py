@@ -32,7 +32,7 @@ from pyrung.conformance import (
 from pyrung.conformance._ladder import case_comment, emit_case
 from pyrung.conformance._modbus import check_scan_time
 from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
-from pyrung.core import PLC, Program, Rung, copy, math
+from pyrung.core import PLC, Program, Rung, copy, math, on_delay
 from pyrung.core.system_points import system
 from pyrung.core.validation._common import _collect_write_sites
 from tests.conformance import memory, suite
@@ -314,21 +314,32 @@ def test_main_keeps_the_longest_scan() -> None:
     assert plc.current_state.tags["Conf_LongestScan"] == 10
 
 
-def test_a_scan_past_the_parts_limit_voids_the_run() -> None:
+def test_a_scan_past_the_parts_limit_voids_a_run_on_a_real_plc() -> None:
     build = suite.build("coils")
     assert build.scan_limit_ms == 50
     check_scan_time(build, 50)
     with pytest.raises(ScanTimeError) as raised:
         check_scan_time(build, 61)
     message = str(raised.value)
-    for words in ("Run void", "part coils", "at most 50 ms", "took 61 ms", "No Result"):
+    for words in ("Run void", "part coils", "at most 50 ms", "took 61 ms", "No Result", "For"):
         assert words in message
     assert message.isascii()
     # A program with no limit judges any scan.
     check_scan_time(build_program(Group("g", [_seven()])), 5000)
-    with pytest.raises(ScanTimeError, match="every scan in-process takes 10 ms"):
-        run(Group("g", [_seven()]), scan_limit_ms=5)
+
+
+def test_a_scan_past_the_limit_in_process_is_noted_on_each_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    line = "longest scan 10 ms passed this program's limit of 5 ms"
+    wrong = case("Wrong", ladder=_prove_constant, expect={"Result1": 8}, id="wrong")
+    results = run(Group("g", [_seven(), wrong]), scan_limit_ms=5)
+    assert [r.passed for r in results] == [True, False]
+    assert results[0].note == ""
+    assert results[1].note.endswith(line)
+    assert line in capsys.readouterr().out
     assert_all_passed(run(Group("g", [_seven()]), scan_limit_ms=10))
+    assert line not in capsys.readouterr().out
 
 
 def test_each_part_carries_a_scan_limit(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -336,7 +347,8 @@ def test_each_part_carries_a_scan_limit(tmp_path, capsys: pytest.CaptureFixture[
     assert set(suite.PART_SCAN_LIMITS_MS) <= set(parts)
     assert suite.scan_limit_ms("units") == suite.SCAN_LIMIT_MS == 50
     assert suite.scan_limit_ms("fixed_scan") > suite.APART_PARTS["fixed_scan"].fixed_scan_ms
-    assert suite.scan_limit_ms("follow2_for") == 2000
+    # for_signed's longest scan on a CLICK read 1287 ms (SD12).
+    assert suite.scan_limit_ms("follow2_for") > 1287
     for part in parts:
         assert suite.build(part).scan_limit_ms == suite.scan_limit_ms(part)
     assert suite.main(["--part", "units", str(tmp_path / "units")]) == 0
@@ -794,14 +806,17 @@ def _prove_waits_past_its_deadline(slot):
     with Rung(slot.Cmd != 0, slot.Scratch == 0):
         copy(7, slot.Result1)
         copy(1, slot.Scratch)
-    deadline(slot, 100, slot.Result3)
+    deadline(slot, memory.ClickTimer(1), 100)
 
 
 def _prove_ends_before_its_deadline(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Result3 >= 50):
+    clock = memory.ClickTimer(2)
+    with Rung(slot.Cmd != 0):
+        on_delay(clock, 1000)
+    with Rung(slot.Cmd != 0, slot.Fired == 0, clock.Acc >= 50):
         copy(7, slot.Result1)
         copy(1, slot.Fired)
-    deadline(slot, 100, slot.Result3)
+    deadline(slot, memory.ClickTimer(3), 100)
 
 
 def test_a_wait_past_its_deadline_times_out_at_its_step() -> None:

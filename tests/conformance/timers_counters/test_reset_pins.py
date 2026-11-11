@@ -91,7 +91,7 @@ def prove_down_reset_negative(slot: Any) -> None:
 
 
 #: The RTON's Acc that ends step 0: its 200 ms preset, so it has timed out.
-TIMED_OUT = 200
+PRESET_REACHED = 200
 #: The clock's reading when the reset drops.
 DROP = 200
 #: rton_reset_held compares the RTON with a TON once the TON reads this, in ms.
@@ -140,9 +140,9 @@ def prove_rton_reset_held(slot: Any) -> None:
         math(slot.Result2 + 10, slot.Result2)
     with Rung(*_step(slot, 1)):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), rton.Acc >= TIMED_OUT, rton.Done):
+    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED, rton.Done):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 0), rton.Acc >= TIMED_OUT):
+    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
         copy(1, slot.Scratch)
 
 
@@ -171,7 +171,7 @@ def prove_rton_reset_after(slot: Any) -> None:
         copy(3, slot.Scratch)
     with Rung(*_step(slot, 1), clock.Acc >= DROP):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), rton.Acc >= TIMED_OUT):
+    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
         copy(1, slot.Scratch)
 
 
