@@ -22,18 +22,20 @@ with a preset of 0 or below is dark and its TDs stand where they are (``FlasherI
 - ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK read 0, 0, 0, 0, 0.
   The flasher was dark with both TDs held at 0.  An off TD running would be the empty on phase
   passing to the off phase.
-- ``lowered_to_zero`` (L3): two flashers on DS presets.  A, 1000 / 1000 ms, has its on preset
-  lowered to 0 on scan 6, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on scan 10,
-  in its off phase.  Each reading is ``on TD * 180 + off TD``.  Result1 is A's on scan 5, and
-  Result2 A's on scan 14 less Result1.  Result3 is B's on scan 9, and Result4 B's on scan 14 less
-  Result3.  ErrorCode is A's lit scans from 6 on * 100 + B's from 10 on.  A CLICK read the earlier
-  ladder, in which Result2 and Result4 held the scan-14 values themselves.  It read 1260 and 1260
-  for A and 907..908 twice for B.  ErrorCode read 0.  Both flashers went dark, and their TDs froze
-  where the 0 found them.  So Result2 and Result4 are 0 on this ladder.  pyrung zeroed both TDs
-  before (Result2 -9000 and Result4 -1880 here).  Result1 and Result3 follow the target's scan, so
-  they are ranges.  Result1 is an on TD of at least 1 ms with the off TD 0.  Result3 is an on TD at
-  its 5 ms preset or past it with the off TD running.  Each TD stays under 180 for any scan under
-  about 35 ms, which keeps each reading in an Int.
+- ``lowered_to_zero`` (L3): two flashers on DS presets, their rungs on from ``Cmd``.  The reset
+  writes 0 to their four TDs.  A, 1000 / 1000 ms, has its on preset lowered to 0 on the scan its on
+  TD first reads 100 or more, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on the
+  scan its off TD first reads 300 or more, in its off phase.  Result1 is A's on TD on that scan, and
+  Result3 B's off TD.  Each is a range of one scan of up to 50 ms past its threshold.  Result2 is 1
+  from A's lowering, and 2 once a later scan finds A's on TD off Result1 or its off TD off 0.
+  Result4 is 1 from B's lowering, and 2 once B's off TD is off Result3 or its on TD is under its 5
+  ms preset.  ErrorCode is 1 if A is lit after its lowering, and 2 if B is.  ``Fired`` goes up once
+  B's preset is 0.  The three verdicts go on watching after that, through the harness's two reads.
+  A CLICK read an earlier ladder that lowered A's preset on scan 6 and B's on scan 10, with
+  ``on TD * 180 + off TD`` read before and on scan 14.  A read 1260 both times and B 907..908 both
+  times.  Both flashers went dark, and their TDs froze where the 0 found them.  So Result2 and
+  Result4 are 1 and ErrorCode is 0 here.  That CLICK held the TDs for 8 scans, and this ladder
+  holds them for longer.  pyrung zeroed both TDs before (Result2 and Result4 2 here).
 - ``short_first_phase`` (L4): 1 ms on, 1000 ms off.  Result4 the on TD on scan 1.  A CLICK read 1,
   1, 1, 1..2.  The coil is on on the rung's first true scan, though the on TD reached its preset
   on that scan.  The coil shows the phase that ran on a scan, and the next phase shows from the
@@ -45,10 +47,14 @@ The cases own what ``memory.OWNED_APART`` lists under these groups.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, copy, debounce, flasher, math, out
+from pyrung.conformance import _runner as runner_module
+from pyrung.core import Or, Rung, copy, debounce, flasher, out
 from tests.conformance.memory import ClickTimer, c, ds, td
 from tests.conformance.scans import count_scans, done, scans_for, trace
 
@@ -145,39 +151,45 @@ def init_on_zero_tds(slot: Any) -> None:
 
 #: lowered_to_zero: C673/C674 the coils; T277..280; DS4033..4036 the presets (A on, A off, B on, B off).
 LOWER_PRESETS = {4033: 1000, 4034: 1000, 4035: 5, 4036: 1000}
-A_LOWER, B_LOWER = 6, 10
+#: The TDs that lower the presets: A's on TD in its on phase, B's off TD in its off phase.
+A_LOWER_AT, B_LOWER_AT = 100, 300
 
 
 def prove_lowered_to_zero(slot: Any) -> None:
     a, b = c[673], c[674]
     a_on, a_off, b_on, b_off = (ds[n] for n in LOWER_PRESETS)
-    count_scans(slot, FLASH_WINDOW)
-    with Rung(slot.Cmd != 0, slot.Scratch == A_LOWER):
-        copy(0, a_on)
-    with Rung(slot.Cmd != 0, slot.Scratch == B_LOWER):
-        copy(0, b_off)
+    a_on_td, a_off_td, b_on_td, b_off_td = td[277], td[278], td[279], td[280]
     with Rung(slot.Cmd != 0):
         flasher(a, on=(ClickTimer(277), a_on), off=(ClickTimer(278), a_off))
     with Rung(slot.Cmd != 0):
         flasher(b, on=(ClickTimer(279), b_on), off=(ClickTimer(280), b_off))
-    for (on_td, off_td), before, after, scan in (
-        ((td[277], td[278]), slot.Result1, slot.Result2, A_LOWER - 1),
-        ((td[279], td[280]), slot.Result3, slot.Result4, B_LOWER - 1),
-    ):
-        with Rung(slot.Cmd != 0, slot.Scratch == scan):
-            math(on_td * 180 + off_td, before)
-        # 0 where the TDs stand where they were before the preset went to 0.
-        with Rung(slot.Cmd != 0, slot.Scratch == FLASH_WINDOW):
-            math(on_td * 180 + off_td - before, after)
-    for coil, after, add in ((a, A_LOWER, 100), (b, B_LOWER, 1)):
-        with Rung(slot.Cmd != 0, slot.Scratch >= after, slot.Scratch <= FLASH_WINDOW, coil):
-            math(slot.ErrorCode + add, slot.ErrorCode)
-    done(slot, FLASH_WINDOW)
+    # These rungs sit above the rungs that lower the presets, so they start on the scan after.
+    with Rung(slot.Cmd != 0, a_on == 0, a):
+        copy(1, slot.ErrorCode)
+    with Rung(slot.Cmd != 0, b_off == 0, b):
+        copy(2, slot.ErrorCode)
+    with Rung(slot.Cmd != 0, a_on == 0, Or(a_on_td != slot.Result1, a_off_td != 0)):
+        copy(2, slot.Result2)
+    with Rung(slot.Cmd != 0, b_off == 0, Or(b_off_td != slot.Result3, b_on_td < b_on)):
+        copy(2, slot.Result4)
+    with Rung(slot.Cmd != 0, a_on != 0, a_on_td >= A_LOWER_AT):
+        copy(a_on_td, slot.Result1)
+        copy(1, slot.Result2)
+        copy(0, a_on)
+    with Rung(slot.Cmd != 0, b_off != 0, b_off_td >= B_LOWER_AT):
+        copy(b_off_td, slot.Result3)
+        copy(1, slot.Result4)
+        copy(0, b_off)
+    with Rung(slot.Cmd != 0, b_off == 0):
+        copy(1, slot.Fired)
 
 
 def init_lowered_to_zero(slot: Any) -> None:
     for n, value in LOWER_PRESETS.items():
         copy(value, ds[n])
+    # The last run froze the TDs past both thresholds, so each run starts them from 0.
+    for n in range(277, 281):
+        copy(0, td[n])
 
 
 #: short_first_phase: C677, T281/T282.
@@ -190,13 +202,13 @@ def prove_short_first_phase(slot: Any) -> None:
 
 def _flash_case(sentence: str, ladder: Any, coils: tuple[int, ...], **kwargs: Any) -> Any:
     timers = kwargs.pop("timers")
+    kwargs.setdefault("scans", scans_for(FLASH_WINDOW))
     return case(
         sentence,
         ladder=ladder,
         ready=lambda slot: tuple(~c[n] for n in coils),
         # A flasher's TDs freeze with its rung false, and the restart clears both.
         keep=tuple(td[n] for n in timers),
-        scans=scans_for(FLASH_WINDOW),
         **kwargs,
     )
 
@@ -228,22 +240,23 @@ flash_zero = Group(
             expect={**_DARK, "Result4": 0, "ErrorCode": 0},
         ),
         _flash_case(
-            "A flasher's DS preset lowered to 0 while its TDs run freezes them, as on TD * 180 + "
-            "off TD: before (Result1) and the change after (Result2 = 0) for the on preset in "
-            "the on phase, before (Result3) and the change after (Result4 = 0) for the off "
-            "preset in the off phase; dark after (ErrorCode = 0 lit scans)",
+            "A flasher's DS preset lowered to 0 while its TDs run freezes them: the on preset "
+            "at an on TD of 100 (Result1) in the on phase (Result2 = 1, 2 once a TD moves), the "
+            "off preset at an off TD of 300 (Result3) in the off phase (Result4 = 1, 2 once a "
+            "TD moves); dark after (ErrorCode = 0)",
             prove_lowered_to_zero,
             (673, 674),
             timers=(277, 278, 279, 280),
             init=init_lowered_to_zero,
             expect={
-                # An on TD of 1 ms or more, times 180, with the off TD 0.
-                "Result1": range(180, 32761, 180),
-                "Result2": 0,
-                "Result3": range(901, 32768),
-                "Result4": 0,
+                # The first TD past each threshold, a scan of at most 50 ms later.
+                "Result1": range(A_LOWER_AT, A_LOWER_AT + 50),
+                "Result2": 1,
+                "Result3": range(B_LOWER_AT, B_LOWER_AT + 50),
+                "Result4": 1,
                 "ErrorCode": 0,
             },
+            scans=60,
         ),
         _flash_case(
             "A flasher of 1 ms on and 1000 ms off is on on its rung's first true scan only "
@@ -264,3 +277,11 @@ def test_deb_fall():
 
 def test_flash_zero():
     assert_all_passed(run(flash_zero))
+
+
+@pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
+def test_lowered_to_zero_at_any_scan(monkeypatch, dt):
+    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    lowered = next(c for c in flash_zero.cases if c.id == "lowered_to_zero")
+    assert_all_passed(run(Group("flash_zero", [replace(lowered, scans=int(0.6 / dt))])))
