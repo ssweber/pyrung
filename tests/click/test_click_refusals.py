@@ -14,6 +14,7 @@ from pyrung import debounce, flasher, timed
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
+    CLK_COMPARE_HEX_MIX,
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_MATH_BIT_OPERAND,
     CLK_MATH_DEST_BANK,
@@ -23,11 +24,13 @@ from pyrung.click.validation import (
     CLK_TIMER_PRESET_TOO_LOW,
     validate_click_program,
 )
-from pyrung.core import Bool, Int, Timer, forloop, randint
+from pyrung.core import Bool, Counter, Int, Or, Timer, Word, forloop, randint
 from pyrung.core.program import (
+    Branch,
     Program,
     Rung,
     copy,
+    count_up,
     fill,
     math,
     search,
@@ -371,6 +374,94 @@ def test_a_negative_constant_drum_step_is_refused_and_zero_passes():
     assert [f.location.rsplit(".", 1)[-1] for f in found] == ["presets[1]", "presets[0]"]
     assert "time_drum() preset -1" in found[0].message
     assert "time_event_drum() preset -2" in found[1].message
+
+
+# --- Compare: hex with decimal ---------------------------------------------------------
+# Inst_Compare's OnOK pairs a hex operand (XD, YD, DH, an h constant) only with a hex one
+# (CLICK v4 Help 202).  A paste skips the dialog, so such a rung is one the editor cannot make.
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda w, n: w == n,
+        lambda w, n: n < w,
+        lambda w, n: w > ds[7],
+        lambda w, n: dh[2] == dd[1],
+        lambda w, n: xd[1] != ds[1],
+    ],
+    ids=["word-int", "int-word", "word-ds", "dh-dd", "xd-ds"],
+)
+def test_a_hex_operand_against_a_decimal_one_is_refused(build):
+    word, number = Word("W"), Int("N")
+    tag_map = TagMap([word.map_to(dh[1]), number.map_to(ds[1])], include_system=False)
+
+    def body():
+        with Rung(build(word, number)):
+            copy(1, ds[9])
+
+    found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
+    assert len(found) == 1
+    _export_refuses(body, CLK_COMPARE_HEX_MIX, tag_map)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda n: dh[ds[1]] == n, lambda n: ds[ds[1]] <= dh[2]],
+    ids=["pointer-dh", "pointer-ds"],
+)
+def test_a_hex_operand_through_a_pointer_against_a_decimal_one_is_flagged(build):
+    number = Int("N")
+    tag_map = TagMap([number.map_to(ds[2])], include_system=False)
+
+    def body():
+        with Rung(build(number)):
+            copy(1, ds[9])
+
+    assert len(_found(body, CLK_COMPARE_HEX_MIX, tag_map)) == 1
+
+
+def test_compares_the_dialog_takes_are_not_flagged():
+    word, other, number = Word("W"), Word("V"), Int("N")
+    tag_map = TagMap(
+        [word.map_to(dh[1]), other.map_to(dh[2]), number.map_to(ds[1])], include_system=False
+    )
+
+    def body():
+        with Rung(word == other, word > 255, number < 70000, ds[2] == number, dh[ds[1]] == dh[3]):
+            copy(1, ds[9])
+
+    assert _found(body, CLK_COMPARE_HEX_MIX, tag_map) == []
+
+
+def test_a_hex_compare_inside_an_or_and_a_branch_is_refused():
+    word, number = Word("W"), Int("N")
+    tag_map = TagMap([word.map_to(dh[1]), number.map_to(ds[1])], include_system=False)
+
+    def body():
+        with Rung(x[1]):
+            copy(1, ds[9])
+            with Branch(Or(x[2], word == number)):
+                copy(2, ds[9])
+
+    found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
+    assert len(found) == 1
+
+
+def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
+    word, number, cnt = Word("W"), Int("N"), Counter.clone("Cnt")
+    tag_map = TagMap([word.map_to(dh[1]), number.map_to(ds[1])], include_system=False)
+
+    def body():
+        with Rung(x[1]):
+            with forloop(3):
+                with Rung(word == number):
+                    copy(1, ds[9])
+        with Rung(x[2]):
+            count_up(cnt, 10).reset(word > number)
+
+    found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
+    assert len(found) == 2
 
 
 # --- For count ------------------------------------------------------------------------

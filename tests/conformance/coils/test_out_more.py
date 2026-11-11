@@ -32,14 +32,14 @@ case on an earlier ladder, which read the same things in windows of the clock.
   - The other's rung is held past a 200 ms time.  Result3 is the coil at 500 ms (0 if it pulses as
     the plain one does).  The rung goes at 500 ms, and Result4 is the coil at 700 ms (1 if it stays
     on).
-- ``zero_and_below``: a preset of 0, scan-paced, the rung true on scans 3..5.  A debounce of 0/0:
-  first on (Result1), first off past it (Result2); 3 and 6 are the rung's own scans, later ones
-  mean a scan's lag.  A flasher of 0/0: scans on of 8 (Result3): a scan each way is 2, on throughout 3,
-  once 1.  A timed coil of 0: scans on (Result4), 1 a one-scan pulse, 0 none.  A timed coil from a DS
-  holding -5: scans on (ErrorCode), 1 as a preset of 0, 3 (the rung's) where -5 reads as unsigned,
-  65531 ms.  A CLICK reads 3, 7, 0, 0, 0: no pulse from a preset of 0 or below, and -5 is signed.
-  Its debounce turns off a scan after the rung falls, as pyrung's has since 2026-11-06
-  (``deb_zero/off_side_lag``: the off side always takes a scan more).
+- ``zero_and_below``: a preset of 0 or below, scan-paced, the rung true on scans 3..5.  A debounce of
+  0/0: first on (Result1), first off past it (Result2); 3 and 6 are the rung's own scans, later ones
+  mean a scan's lag.  A timed coil from a DS holding -5: scans on (ErrorCode), 1 as a preset of 0,
+  3 (the rung's) where -5 reads as unsigned, 65531 ms.  A CLICK reads 3, 7, 0: no pulse from a
+  preset of 0 or below, and -5 is signed.  Its debounce turns off a scan after the rung falls, as
+  pyrung's has since 2026-11-06 (``deb_zero/off_side_lag``: the off side always takes a scan more).
+  CLICK's dialog takes a debounce preset of 0 but refuses 0 for a flasher or a timed coil, so this
+  case asks neither of those.
 - ``preset_mid_phase``: a preset in a DS moved mid-phase, read live or at the phase's start.  The
   clock is TD238.
 
@@ -182,7 +182,7 @@ def prove_timed_maintained(slot):
 
 
 def prove_zero_and_below(slot):
-    rung, deb, fla, pulse, neg = c[1709], c[1710], c[1712], c[1713], c[1714]
+    rung, deb, neg = c[1709], c[1710], c[1714]
     window = (slot.Cmd != 0, slot.Scratch >= 1, slot.Scratch <= 8)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
@@ -192,19 +192,11 @@ def prove_zero_and_below(slot):
     with Rung(rung):
         debounce(deb, on=(ClickTimer(232), 0), off=(ClickTimer(233), 0))
     with Rung(rung):
-        flasher(fla, on=(ClickTimer(234), 0), off=(ClickTimer(235), 0))
-    with Rung(rung):
-        timed(pulse, ClickTimer(236), 0)
-    with Rung(rung):
         timed(neg, ClickTimer(237), ds[3926])
     with Rung(*window, deb, slot.Result1 == 0):
         copy(slot.Scratch, slot.Result1)
     with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 8, ~deb, slot.Result2 == 0):
         copy(slot.Scratch, slot.Result2)
-    with Rung(*window, fla):
-        math(slot.Result3 + 1, slot.Result3)
-    with Rung(*window, pulse):
-        math(slot.Result4 + 1, slot.Result4)
     with Rung(*window, neg):
         math(slot.ErrorCode + 1, slot.ErrorCode)
     done(slot)
@@ -292,18 +284,15 @@ group = Group(
             probe="a maintained timed coil, read by nothing yet",
         ),
         case(
-            "Out coils with a preset of 0 and below: a debounce follows its rung (first on, Result1 "
-            "= 3; first off past it, Result2 = 7); a flasher (Result3 = 0), a "
-            "timed coil (Result4 = 0) and one from a DS of -5 (ErrorCode = 0) give no pulse",
+            "A debounce with a preset of 0 follows its rung (first on, Result1 = 3; first off past "
+            "it, Result2 = 7), and a timed coil from a DS of -5 gives no pulse (ErrorCode = 0)",
             ladder=prove_zero_and_below,
             init=init_zero_and_below,
             scans=scans_for(),
-            keep=[td[232], t[233], td[233], t[234], td[234], t[235], td[235], td[236], td[237]],
+            keep=[td[232], t[233], td[233], td[237]],
             expect={
                 "Result1": 3,
                 "Result2": 7,
-                "Result3": 0,
-                "Result4": 0,
                 "ErrorCode": 0,
             },
         ),

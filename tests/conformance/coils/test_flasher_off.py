@@ -1,6 +1,6 @@
 """A flasher whose off preset is 0 or below: the ``flasher_off`` group (part ``follow_extra``).
 
-``zero_and_below`` and ``coil_timing/flasher_on_zero`` ask about an on phase of 0.  These two ask
+``zero_and_below`` asks about a timed coil from a DS of -5.  These two ask
 about an off phase of 0 or below, from a DS.
 
 Each case: a flasher of 5 ms on and its off preset from a DS, its rung on from ``Cmd``, read from

@@ -6,7 +6,7 @@
 case = "out_more/zero_and_below"
 hash = "098fbd29c048"
 on = "2026-11-05"
-read = { Result1 = 3, Result2 = 7, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+read = { Result1 = 3, Result2 = 7, ErrorCode = 0 }
 
 [[reading]]
 case = "boot_read/what_survives"
@@ -365,12 +365,6 @@ case = "coil_timing/off_td_held"
 hash = "5964c0847ba9"
 on = "2026-11-06"
 read = { Result1 = 1, Result2 = 2, Result3 = 101 }
-
-[[reading]]
-case = "coil_timing/flasher_on_zero"
-hash = "b712b36db477"
-on = "2026-11-06"
-read = { Result1 = 0, Result2 = 7 }
 
 [[reading]]
 case = "coil_timing/deb_off_against_tof"

@@ -15,6 +15,7 @@ from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
+    CLK_COMPARE_HEX_MIX,
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
@@ -103,6 +104,7 @@ from .pointer_range import (
     _PointerBounds,
 )
 from .portability import (
+    _evaluate_compare_hex_mix,
     _evaluate_fact,
     _evaluate_forloop_count,
     _evaluate_forloop_structure,
@@ -252,6 +254,7 @@ def validate_click_program(
     findings.extend(_evaluate_immediate_contacts(program, tag_map, mode, resolver))
     findings.extend(_evaluate_status_bit_usage(program, mode))
     findings.extend(_evaluate_text_order_compares(program, mode))
+    findings.extend(_evaluate_compare_hex_mix(program, mode, resolver))
     findings.extend(_evaluate_text_windows(program, mode, resolver))
     findings.extend(_evaluate_forloop_structure(program, mode))
     findings.extend(_evaluate_nested_calls(program, mode))
@@ -362,6 +365,7 @@ __all__ = [
     "CLK_NICKNAME_TOO_LONG",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
+    "CLK_COMPARE_HEX_MIX",
     "CLK_BANK_WRONG_ROLE",
     "CLK_COPY_BANK_INCOMPATIBLE",
     "CLK_COPY_CONVERTER_INCOMPATIBLE",
