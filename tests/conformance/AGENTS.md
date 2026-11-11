@@ -150,7 +150,7 @@ Reset with the instructions' own semantics, not by poking registers an instructi
 
 **`keep=`** names tags the reset leaves alone on purpose. Two kinds:
 
-- An accumulator that keeps running while the case is idle, so it never matches a fresh PLC. A debounce coil's off-side TD counts from power-up while the input stays off: `keep=[t[311], td[311]]`.
+- An accumulator that keeps running while the case is idle, so it never matches a fresh PLC. A debounce coil's off-side TD, in a case that ends with the coil on, counts while the input is off and reads its preset or more after the reset: `keep=[t[311], td[311]]`.
 - A retentive value the experiment carries across the reset. The case must still pass on every repeat. Cases that need a power cycle or STOP->RUN in between ("retentive survives STOP->RUN") also need a harness that can switch modes; that does not exist yet.
 
 Two checks keep resets honest:
