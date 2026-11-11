@@ -12,13 +12,22 @@ to 50 ms, as in ``out``.
   scan 3, the For's rung false on 2..4: a body's rise() fires on the scan the body comes back
   (Result3 = 5), 0 where its memory tracks in a skipped body.  A toggle in a For of 2, rung held:
   on (Result4 = 1) if it flips once, off (2) if each pass is an edge.
-- ``timers_at_limits``: a TON in a body skipped from 100 to 400 ms: at 450-550 ms its Acc is under
-  300 (Result1 = 1), 2 where the first scan back takes in the gap.  ``loop`` reads only that it holds
-  while skipped.  A TON from a DS of -5: done at 100-200 ms (Result2 = 1), 0 where -5 reads unsigned.
-  A TOF of 100 ms timed out, its DS raised to 1000 at 300 ms: Done back on at 400-600 ms
-  (Result3 = 1), 0 where a timed-out TOF stays out.  A TD written -100, its TON true from 50 ms:
-  below 0 at 60-130 ms (Result4 = 1), 2 where it starts at or above 0.  A counter from a DS of
-  -5, no count: done at 100-200 ms (ErrorCode = 1), 0 where -5 reads unsigned.
+- ``timers_at_limits``: steps that ``Scratch`` holds, and timers that judge themselves.  Each
+  step's rungs come last, in reverse order, so each new step starts on the next scan.
+
+  - Step 0 runs a TON in a For body until its Acc reads 100.  Step 1 skips the body until the
+    case's clock (a TON from ``Cmd``) reads 400 ms.  On the first scan of step 2, Result1 is 1 if
+    the TON's Acc is under 300, 2 if the first scan back took in the gap.  ``loop`` reads only
+    that it holds while skipped.
+  - A TON from a DS of -5, on from ``Cmd``: Result2 is 1 if it is done on the first scan of step
+    2, 0 where -5 reads unsigned.
+  - A counter from a DS of -5, with no count: ErrorCode is 1 if it is done on the first scan of
+    step 2, 0 where -5 reads unsigned.
+  - A TOF of 100 ms, its rung on for step 0.  Once it has timed out and its TD reads 200, its DS
+    goes up to 1000.  Result3 is 1 if Done is back on once the TD reads 300, 0 where a timed-out
+    TOF stays out.  ``Fired`` goes up then, in step 3.
+  - A TD written -100 on the first scan, below its TON on from ``Cmd``.  On the scan after the
+    write, Result4 is 1 if it is below 0, 2 if it is 0 or above.
 
 - ``clock_edges_in_a_body``: ``system/clock_bits_toggle_at_their_rate`` reads a clock's rise in a
   subroutine; in a For body nothing has.  rise(SC5) above a For of 2 against the same in its body,
@@ -30,7 +39,12 @@ The cases own what ``memory.OWNED`` lists under this group.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     Or,
     Rung,
@@ -49,7 +63,7 @@ from pyrung.core import (
     toggle,
 )
 from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, ds, t, td
-from tests.conformance.probe_kit import end_at, in_window, ms_clock, once
+from tests.conformance.probe_kit import ms_clock, once
 from tests.conformance.scans import count_scans, done, scans_for
 
 
@@ -92,45 +106,60 @@ def init_oneshot_and_edges(slot):
 
 
 def prove_timers_at_limits(slot):
+    def step(n):
+        return (slot.Cmd != 0, slot.Scratch == n)
+
     clock = ms_clock(slot, 244)
-    with Rung(slot.Cmd != 0, clock < 50):
+    body_td, tof = td[245], ClickTimer(247)
+    counter = ClickCounter(149)
+    # The reset writes 0 to the presets, so this rung stages them on the first scan only.
+    with Rung(slot.Cmd != 0, ds[3930] == 0):
         copy(-5, ds[3929])
         copy(100, ds[3930])
+    with Rung(*step(0)):
         out(c[1726])
-    with Rung(slot.Cmd != 0, clock >= 300):
-        copy(1000, ds[3930])
     # The For's rung is true with Cmd at 0, so the reset reaches the TON.
-    with Rung(Or(slot.Cmd == 0, clock < 100, clock >= 400)):
+    with Rung(Or(slot.Cmd == 0, slot.Scratch != 1)):
         with forloop(1):
             with Rung(slot.Cmd != 0):
                 on_delay(ClickTimer(245), 30000)
-    with Rung(*in_window(slot, clock, 450, 550), td[245] < 300):
-        copy(1, slot.Result1)
-    with Rung(*in_window(slot, clock, 450, 550), td[245] >= 300):
-        copy(2, slot.Result1)
-    with Rung(slot.Cmd != 0, clock >= 50):
+    with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(246), ds[3929])
-    with Rung(*in_window(slot, clock, 100, 200), t[246]):
-        copy(1, slot.Result2)
     with Rung(c[1726]):
-        off_delay(ClickTimer(247), ds[3930])
-    with Rung(*in_window(slot, clock, 400, 600), t[247]):
+        off_delay(tof, ds[3930])
+    with Rung(slot.Cmd != 0, tof.Acc >= 200, ~tof.Done):
+        copy(1000, ds[3930])
+    with Rung(*once(slot), tof.Acc >= 300, ds[3930] == 1000, tof.Done):
         copy(1, slot.Result3)
     # Below its TON, once the rung is true: a false rung clears the TD.
-    with Rung(slot.Cmd != 0, clock >= 50):
+    with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(248), 30000)
-    with Rung(slot.Cmd != 0, clock >= 50, ~c[1728]):
+    # Above the write, so these rungs first see C1728 on the scan after it.
+    with Rung(*once(slot), c[1728], slot.Result4 == 0, td[248] < 0):
+        copy(1, slot.Result4)
+    with Rung(*once(slot), c[1728], slot.Result4 == 0, td[248] >= 0):
+        copy(2, slot.Result4)
+    with Rung(slot.Cmd != 0, ~c[1728]):
         copy(-100, td[248])
         latch(c[1728])
-    with Rung(*in_window(slot, clock, 60, 130), td[248] < 0):
-        copy(1, slot.Result4)
-    with Rung(*in_window(slot, clock, 60, 130), td[248] >= 0):
-        copy(2, slot.Result4)
     with Rung(c[1727]):
-        count_up(ClickCounter(149), ds[3929]).reset(slot.Cmd == 0)
-    with Rung(*in_window(slot, clock, 100, 200), ClickCounter(149).Done):
+        count_up(counter, ds[3929]).reset(slot.Cmd == 0)
+    with Rung(*step(3), tof.Acc >= 300):
+        copy(1, slot.Fired)
+    with Rung(*step(2), body_td < 300):
+        copy(1, slot.Result1)
+    with Rung(*step(2), body_td >= 300):
+        copy(2, slot.Result1)
+    with Rung(*step(2), t[246]):
+        copy(1, slot.Result2)
+    with Rung(*step(2), counter.Done):
         copy(1, slot.ErrorCode)
-    end_at(slot, clock, 650)
+    with Rung(*step(2)):
+        copy(3, slot.Scratch)
+    with Rung(*step(1), clock >= 400):
+        copy(2, slot.Scratch)
+    with Rung(*step(0), body_td >= 100):
+        copy(1, slot.Scratch)
 
 
 def prove_clock_edges_in_a_body(slot):
@@ -187,13 +216,13 @@ group = Group(
             probe="a one-shot For; edge memory in a skipped body; a toggle's edge in a For",
         ),
         case(
-            "Timer limits: a TON in a body skipped 300 ms does not take in the gap (Result1 = 1); "
-            "a DS preset of -5 is done (Result2 = 1); a TOF's raised preset brings Done back "
-            "(Result3 = 1); a TD written -100 stays below 0 (Result4 = 1); a counter's DS "
-            "preset of -5 is done with no count (ErrorCode = 1)",
+            "Timer limits: a TON in a body skipped from an Acc of 100 to 400 ms does not take "
+            "in the gap (Result1 = 1); a DS preset of -5 is done (Result2 = 1); a TOF's raised "
+            "preset brings Done back (Result3 = 1); a TD written -100 is below 0 on the next scan "
+            "(Result4 = 1); a counter's DS preset of -5 is done with no count (ErrorCode = 1)",
             ladder=prove_timers_at_limits,
             init=init_timers_at_limits,
-            scans=200,
+            scans=80,
             keep=[t[247], td[247]],
             expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1, "ErrorCode": 1},
             probe="a timer across a skipped body; presets and an Acc below 0",
@@ -213,3 +242,11 @@ group = Group(
 
 def test_for_more():
     assert_all_passed(run(group))
+
+
+@pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
+def test_timers_at_limits_at_any_scan(monkeypatch, dt):
+    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    monkeypatch.setattr(runner_module, "DT", dt)
+    limits = next(c for c in group.cases if c.id == "timers_at_limits")
+    assert_all_passed(run(Group("for_more", [replace(limits, scans=int(0.8 / dt))])))
