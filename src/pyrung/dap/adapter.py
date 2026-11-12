@@ -159,6 +159,7 @@ class DAPAdapter:
         self._click_provider: Any = None
         self._modbus_fallback: Any = None
         self._has_tag_map = False
+        self._tag_map: Any = None
         self._modbus: Any = None
         self._actual_speed: float | None = None
         self._state_frame_lock = threading.Lock()

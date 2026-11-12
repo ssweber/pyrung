@@ -26,19 +26,120 @@ from pyrung.core.site_memory import (
     seed_new_edge_memory,
 )
 from pyrung.core.state import SystemState
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.dap.console import ConsoleResult, register
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
+def _addresses(adapter: Any) -> dict[str, str] | None:
+    """Each mapped tag's CLICK address, or ``None`` when the program has no tag map."""
+    tag_map = adapter._tag_map
+    if tag_map is None:
+        return None
+    return {slot.logical_name: slot.hardware_address for slot in tag_map.mapped_slots()}
+
+
+def _carry_report(
+    *,
+    old_forces: dict[str, Any],
+    force_drops: dict[str, str],
+    bench_drops: list[tuple[str, Any, str]],
+    kept_bench: dict[str, Any],
+    old_addr: dict[str, str] | None,
+    new_addr: dict[str, str] | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """List each force and bench change a reload moved to another address or dropped.
+
+    Forces and bench changes follow the tag name.  Returns one entry per change
+    for clients, and a sentence for each force drop and each move.  A bench
+    change that was dropped already has its own note from the harness fit.
+    """
+    entries: list[dict[str, Any]] = []
+    lines: list[str] = []
+
+    def addr(table: dict[str, str] | None, name: str) -> str | None:
+        return None if table is None else table.get(name)
+
+    def bench_entry(fb: str, entry: Any, tag: str, **fields: Any) -> dict[str, Any]:
+        kind = "cut" if entry.coupling is None else "link"
+        return {
+            "tag": tag,
+            "kind": kind,
+            "feedback": fb,
+            "old": addr(old_addr, tag),
+            "new": addr(new_addr, tag),
+            "dropped": False,
+            "enabled": entry.enabled,
+            **fields,
+        }
+
+    for tag, value in old_forces.items():
+        old, new = addr(old_addr, tag), addr(new_addr, tag)
+        why = force_drops.get(tag)
+        if why is None and old == new:
+            continue
+        entry: dict[str, Any] = {
+            "tag": tag,
+            "kind": "force",
+            "old": old,
+            "new": None if why else new,
+            "dropped": why is not None,
+            "value": value,
+        }
+        if why is not None:
+            entry["reason"] = why
+            lines.append(f"Dropped the force on {tag} because {_DROP_WHY[why].format(tag=tag)}.")
+        elif old is None:
+            lines.append(f"The force on {tag} is now at {new}.")
+        elif new is None:
+            lines.append(f"The force on {tag} moved from {old} to no address.")
+        else:
+            lines.append(f"The force on {tag} moved from {old} to {new}.")
+        entries.append(entry)
+
+    for fb, entry, why in bench_drops:
+        entries.append(bench_entry(fb, entry, fb, new=None, dropped=True, reason=why))
+
+    for fb, entry in kept_bench.items():
+        label = "bench cut" if entry.coupling is None else "bench link"
+        tags = [fb] if entry.coupling is None else [fb, entry.coupling.en_name]
+        for tag in tags:
+            item = bench_entry(fb, entry, tag)
+            if item["old"] == item["new"]:
+                continue
+            entries.append(item)
+            old, new = item["old"], item["new"]
+            if old is None:
+                moved = f"is now at {new}"
+            elif new is None:
+                moved = f"moved from {old} to no address"
+            else:
+                moved = f"moved from {old} to {new}"
+            if tag == fb:
+                lines.append(f"The {label} on {fb} {moved}.")
+            else:
+                lines.append(f"The {label} on {fb} reads {tag}, which {moved}.")
+    return entries, lines
+
+
+#: Why a force was dropped, as the rest of "Dropped the force on A because ...".
+_DROP_WHY = {
+    "gone": "{tag} is not in the new program",
+    "type changed": "{tag} changed type",
+    "not forceable": "the new program cannot force {tag}",
+}
+
+
 def _reload_locked(
     adapter: Any,
-) -> tuple[str, list[tuple[str, dict[str, Any] | None]]]:
+) -> tuple[str, list[tuple[str, dict[str, Any] | None]], list[dict[str, Any]]]:
     """Re-execute the program file and swap the runner, preserving state.
 
     Must be called with ``adapter._state_lock`` held.  Returns
-    ``(summary_text, events)`` for the caller to wrap in a
-    ``ConsoleResult`` or emit via ``_enqueue_internal_event``.
+    ``(summary_text, events, carried)``.  The caller wraps the first two in a
+    ``ConsoleResult`` or emits them via ``_enqueue_internal_event``, and
+    ``carried`` lists the forces and bench changes that moved or were dropped.
     """
     if adapter._thread_running_locked():
         raise adapter.DAPAdapterError("Cannot reload while continue is running")
@@ -52,6 +153,7 @@ def _reload_locked(
     old_dt = old_runner._dt
     old_known_tags = dict(old_runner._known_tags_by_name)
     old_rtc = old_runner._system_runtime._rtc_now(old_state)
+    old_addr = _addresses(adapter)
 
     program_path = adapter._program_path
     if not program_path:
@@ -157,15 +259,28 @@ def _reload_locked(
             else adapter._keep_forces_on_run
         ),
     )
+    if old_runner.mode == "stop":
+        reloaded.stop()
     reloaded._set_time_mode(old_time_mode, dt=old_dt)
     reloaded._set_rtc_internal(old_rtc, reloaded.current_state.timestamp)
 
+    # A force follows its tag name.  One whose name left the program is dropped, since
+    # PLC.force would accept it and keep it active.
+    force_drops: dict[str, str] = {}
     for tag_name, value in old_forces.items():
-        if tag_name not in tags_to_drop:
+        if tag_name in tags_to_drop:
+            force_drops[tag_name] = "type changed"
+        elif (
+            tag_name not in new_known_tags
+            and reloaded._tag_known_or_reached(tag_name) is None
+            and tag_name not in SYSTEM_TAGS_BY_NAME
+        ):
+            force_drops[tag_name] = "gone"
+        else:
             try:
                 reloaded.force(tag_name, value)
             except Exception:
-                warnings.append(f"  Could not re-apply force {tag_name}={value!r}")
+                force_drops[tag_name] = "not forceable"
 
     adapter._clear_debug_registrations_locked()
     adapter._runner = reloaded
@@ -198,13 +313,24 @@ def _reload_locked(
     adapter._harness = None
     from pyrung.dap.harness_console import try_auto_install
 
-    banner = try_auto_install(adapter, carry=carry)
+    bench_drops: list[tuple[str, Any, str]] = []
+    banner = try_auto_install(adapter, carry=carry, drops=bench_drops)
     stale = _drop_coil_memory_no_coupling_owns(reloaded)
     if stale:
         warnings.append(
             f"  {len(stale)} harness coil memory value(s) had no matching coupling, "
             "reset: " + ", ".join(stale)
         )
+
+    carried, carry_lines = _carry_report(
+        old_forces=old_forces,
+        force_drops=force_drops,
+        bench_drops=bench_drops,
+        kept_bench=dict(adapter._bench_links),
+        old_addr=old_addr,
+        new_addr=_addresses(adapter),
+    )
+    warnings.extend(f"  {line}" for line in carry_lines)
 
     scan_id = reloaded.current_state.scan_id
     n_tags = len(reloaded._known_tags_by_name)
@@ -216,7 +342,7 @@ def _reload_locked(
         parts.append(banner)
 
     events: list[tuple[str, dict[str, Any] | None]] = [("stopped", adapter._stopped_body("entry"))]
-    return "\n".join(parts), events
+    return "\n".join(parts), events, carried
 
 
 def _drop_coil_memory_no_coupling_owns(runner: PLC) -> list[str]:
@@ -246,8 +372,8 @@ def _drop_coil_memory_no_coupling_owns(runner: PLC) -> list[str]:
 
 @register("reload", usage="reload", group="execution")
 def _cmd_reload(adapter: Any, _expression: str) -> ConsoleResult:
-    summary, events = _reload_locked(adapter)
-    return ConsoleResult(summary, events=events)
+    summary, events, carried = _reload_locked(adapter)
+    return ConsoleResult(summary, events=events, body={"carried": carried})
 
 
 def _collect_py_mtimes(directory: Path) -> dict[str, float]:
@@ -284,7 +410,7 @@ def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Even
                 )
                 continue
             try:
-                summary, events = _reload_locked(adapter)
+                summary, events, carried = _reload_locked(adapter)
             except Exception as exc:
                 adapter._enqueue_internal_event(
                     "output",
@@ -297,7 +423,11 @@ def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Even
 
         adapter._enqueue_internal_event(
             "output",
-            {"category": "console", "output": f"[autoreload] {summary}\n"},
+            {
+                "category": "console",
+                "output": f"[autoreload] {summary}\n",
+                "data": {"carried": carried},
+            },
         )
         for event_name, event_body in events:
             adapter._enqueue_internal_event(event_name, event_body)

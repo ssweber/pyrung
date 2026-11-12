@@ -125,6 +125,7 @@ def bind_click_project_locked(adapter: Any, namespace: dict[str, Any], project_d
 
     mapping, blocks = discover_click_project(namespace, project_dir)
     adapter._has_tag_map = mapping is not None
+    adapter._tag_map = mapping
     if adapter._modbus_fallback is None:
         # Unmapped Modbus values survive reloads.
         adapter._modbus_fallback = MemoryDataProvider()

@@ -28,7 +28,11 @@ def install_harness(adapter: Any) -> Harness:
     return harness
 
 
-def try_auto_install(adapter: Any, carry: Collection[CoilWiring] = ()) -> str | None:
+def try_auto_install(
+    adapter: Any,
+    carry: Collection[CoilWiring] = (),
+    drops: list[tuple[str, Any, str]] | None = None,
+) -> str | None:
     """Install the harness for the program's couplings plus the bench links.
 
     Returns a banner string for the debug console, or ``None`` if there are
@@ -40,7 +44,7 @@ def try_auto_install(adapter: Any, carry: Collection[CoilWiring] = ()) -> str | 
         return None
 
     harness = install_harness(adapter)
-    notes = fit_to_harness_locked(adapter, harness)
+    notes = fit_to_harness_locked(adapter, harness, drops)
     # The one settle, over the couplings that run with the bench links in.
     harness._settle(carry)
 

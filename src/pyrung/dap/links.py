@@ -190,17 +190,22 @@ def sync_harness_locked(adapter: Any) -> None:
     _changed(adapter)
 
 
-def fit_to_harness_locked(adapter: Any, harness: Any) -> list[str]:
+def fit_to_harness_locked(
+    adapter: Any, harness: Any, drops: list[tuple[str, BenchLink, str]] | None = None
+) -> list[str]:
     """Fit the bench links to a freshly installed harness (launch, reload, replay).
 
     Drops a bench link the program now declares the same way (it reached the
     project), a cut whose declared link is gone, and a link that no longer
-    validates against the reloaded program.  Returns a note per dropped entry.
+    validates against the reloaded program.  Returns a note per dropped entry.  Each
+    drop is also appended to *drops* as ``(feedback, entry, reason)``, the reason one of
+    "in program", "gone" or "invalid".
     """
     runner = adapter._require_runner_locked()
     declared = {c.fb_name: c for c in harness.declared()}
     notes: list[str] = []
     kept: dict[str, BenchLink] = {}
+    dropped = drops if drops is not None else []
     for fb, entry in adapter._bench_links.items():
         coupling = entry.coupling
         if coupling is None:
@@ -208,14 +213,17 @@ def fit_to_harness_locked(adapter: Any, harness: Any) -> list[str]:
                 kept[fb] = entry
             else:
                 notes.append(f"Dropped the bench cut on {fb}: the program no longer links it.")
+                dropped.append((fb, entry, "gone"))
             continue
         project = declared.get(fb)
         if project is not None and same_wiring(coupling, project):
             notes.append(f"Bench link on {fb} is now in the program.")
+            dropped.append((fb, entry, "in program"))
             continue
         problem = link_problem(runner, coupling)
         if problem is not None:
             notes.append(f"Dropped the bench link on {fb}: {problem}.")
+            dropped.append((fb, entry, "gone" if problem.startswith("unknown tag") else "invalid"))
             continue
         kept[fb] = entry
     adapter._bench_links = kept

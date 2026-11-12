@@ -173,7 +173,7 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     evaluate_context = context if isinstance(context, str) else "repl"
 
     if evaluate_context != "watch":
-        # The last command wins: step/run pause a running continue first.
+        # The last command wins: step, run and reload pause a running continue first.
         from pyrung.dap.handlers.simulation import pause_before_console_command
 
         pause_before_console_command(adapter, expression)
@@ -187,7 +187,9 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             from pyrung.dap.console import dispatch
 
             console_result = dispatch(adapter, expression)
-            return {"result": console_result.text, "variablesReference": 0}, console_result.events
+            body = {"result": console_result.text, "variablesReference": 0}
+            body.update(console_result.body)
+            return body, console_result.events
 
 
 def evaluate_watch_expression_locked(adapter: Any, expression: str) -> Any:
