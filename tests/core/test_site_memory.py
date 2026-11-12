@@ -600,51 +600,28 @@ def _every_memory_kind(*, preset: int = 10, jump_step: int = 1) -> Program:
 class TestReloadInputMemory:
     """Memory of an instruction's inputs as it last saw them follows an edit of what
     it reads (a preset, a source, a jump step); a leg's memory only while that leg is
-    unchanged; a drum's latched preset only while the latched step's preset is."""
+    unchanged."""
 
     def test_every_slot_is_classified(self):
         from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
-        from pyrung.core.instruction.drums import PRESET_MEMORY, PRESET_STEP_MEMORY
-        from pyrung.core.site_memory import _INPUT_MEMORY, _PRESET_LATCH
+        from pyrung.core.site_memory import _INPUT_MEMORY
 
         table = site_table_of(_every_memory_kind())
         prefixes = {
             name.rsplit(":", 1)[0] for site in table.instruction_sites for name, _ in site.memory
         }
         assert {COUNT_UP_MEMORY, COUNT_DOWN_MEMORY} <= _INPUT_MEMORY
-        assert _PRESET_LATCH == {PRESET_MEMORY, PRESET_STEP_MEMORY}
-        assert prefixes - _INPUT_MEMORY == _PRESET_LATCH
-        assert _INPUT_MEMORY <= prefixes
+        assert prefixes == _INPUT_MEMORY
 
-    @staticmethod
-    def _all_memory(table, *, latched_step: int) -> dict[str, object]:
-        memory: dict[str, object] = {
-            name: True for site in table.instruction_sites for name, _ in site.memory
-        }
-        memory["_drum_preset_step:i9"] = latched_step
-        memory["_drum_preset:i9"] = 100
-        return memory
-
-    def test_an_edited_read_operand_carries_input_memory_and_the_latch(self):
+    def test_an_edited_read_operand_carries_input_memory(self):
         old = site_table_of(_every_memory_kind())
         new = site_table_of(_every_memory_kind(preset=40, jump_step=2))
-        # Step 1 latched TdPre, which the edit did not touch.
-        memory = self._all_memory(old, latched_step=1)
-        report = remap_site_memory_report(memory, old, new)
-        assert report.dropped == report.reread == ()
-        assert report.memory == memory
-
-    def test_an_edited_preset_of_the_latched_step_is_read_afresh(self):
-        old = site_table_of(_every_memory_kind())
-        new = site_table_of(_every_memory_kind(preset=40))
-        # Step 2's preset is the literal the edit changed.
-        memory = self._all_memory(old, latched_step=2)
+        memory: dict[str, object] = {
+            name: True for site in old.instruction_sites for name, _ in site.memory
+        }
         report = remap_site_memory_report(memory, old, new)
         assert report.dropped == ()
-        assert sorted(report.reread) == ["_drum_preset:i9", "_drum_preset_step:i9"]
-        assert report.memory == {k: v for k, v in memory.items() if k not in report.reread}
-        # The two-value form counts it as dropped.
-        assert remap_site_memory(memory, old, new)[1] == report.reread
+        assert report.memory == memory
 
     _COUNTER = (
         "with Program(strict=False) as logic:\n"

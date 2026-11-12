@@ -39,8 +39,8 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   The missing source may be intentional, so this is an **advisory**.
 
 * ``CMP_PRESET_STAYS_ZERO`` — the same high-confidence check for a tag-valued
-  timer/counter preset, and a drum step's (a step whose preset stays 0 never
-  ends).  Literal zero remains an intentional, supported elapsed-accumulator
+  timer/counter preset, and a drum step's (a step whose preset stays 0 ends at
+  once).  Literal zero remains an intentional, supported elapsed-accumulator
   idiom and is exempt.  **warning**.
 
 * ``CMP_STEPPER_VALUE_NOT_SET`` — a discrete stepping tag is tested for
@@ -718,7 +718,7 @@ def _preset_display(site: Any, preset: Tag) -> FindingDisplay:
         # The drum's line does not show its presets, so the hint names the tag.
         label = "preset stays 0"
         hint = (
-            f"step preset {name} stays 0, so the step never ends: set it to the "
+            f"step preset {name} stays 0, so the step ends at once. Set it to the "
             "step's intended time, or mark it external"
         )
     else:

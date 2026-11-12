@@ -187,7 +187,7 @@ class TestPresetStaysZero:
 
 
 class TestDrumPresetStaysZero:
-    """A drum step whose tag preset stays 0 never ends: its step hangs."""
+    """A drum step whose tag preset stays 0 ends on its first timing scan."""
 
     @staticmethod
     def _drums(first: Tag, second: Tag) -> Program:
@@ -224,7 +224,7 @@ class TestDrumPresetStaysZero:
         findings = _codes(self._drums(Int("StepTime"), Int("OtherTime")), CMP_PRESET_STAYS_ZERO)
         assert sorted(finding.target_name for finding in findings) == ["OtherTime", "StepTime"]
         assert all(finding.severity == "warning" for finding in findings)
-        assert all("the step never ends" in finding.message for finding in findings)
+        assert all("the step ends at once" in finding.message for finding in findings)
         assert all(finding.message.isascii() for finding in findings)
 
     def test_written_and_external_step_presets_are_clean(self) -> None:

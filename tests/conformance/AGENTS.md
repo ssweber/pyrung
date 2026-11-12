@@ -73,7 +73,6 @@ def test_rungs():
 - `SC43`: which stores raise SC43 (a clamping Copy, a Math that wraps, a Copy of +/-Inf into an integer, but not a Copy of NaN).
 - `F32`: REAL stores and compares at float32 (`real_bits/underflow`, `real_bits/float32_equality`), and writes a Real's float32 digits into a TXT (`real_text/six_digits_first`, `real_text/six_digits_past`).
 - `PASTBANK`: a Copy through a pointer past a bank writes to memory (pyrung has none and drops the write). `past_clean` reads SC43 and SC44 off after the write, as pyrung does (the flag side is `SYS`).
-- `PRESET`: when a drum reads a DS preset (pyrung reads it on the first scan its step times). A CLICK does not.
 
 No case carries `DRUM`, `MATH`, `SC43` or `SYS` now, and the `faults` `TEXT` case is met.
 
@@ -563,7 +562,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
   - a completed drum's own time and event do nothing, its Acc holds, a correction keeps Acc (answered on hardware 2026-11-02; `drum_settle/after_jump_jog_alone`, `acc_in_completed_drum`, `event_drum_after_completion`, `correction_with_acc_staged`)
   - whether the return scan times, whether the flag itself stops a drum, what a return writes after a jog back or a jump, a return scan's jog, jump and last step, Acc by kind of time & event step (`drum_close/return_scan_ticks`, `flag_cleared_from_outside`, `flag_set_from_outside`, `return_after_jog_back`, `return_after_jump`, `return_scan_moves`, `te_acc_by_step_kind`)
   - a drum not reached keeps its rung memory, in an uncalled subroutine and in a skipped For body (`drum_idle/uncalled_subroutine`, `drum_idle/drum_in_skipped_loop`); STOP to RUN clearing it is not probed: the harness cannot switch the PLC's mode
-- [x] a pin and a step's own end on one scan: the pin's move takes the scan (answered on hardware 2026-11-05, part `drum2`; `drum_pins`); a drum's DS preset lowered under Acc mid-step does not end its step and one of 0 or below on step 1 after a reset never ends it (when a DS preset is read is open: `drum_preset/entry_or_first_timing_scan`, pending PRESET), a drum in seconds and minutes, a 1-step drum (answered, part `drum1`; `drum_limits/preset_from_ds`, `drum_limits/units`, `drum_limits/single_step`)
+- [x] a pin and a step's own end on one scan: the pin's move takes the scan (answered on hardware 2026-11-05, part `drum2`; `drum_pins`); a drum in seconds and minutes, a 1-step drum (answered, part `drum1`; `drum_limits/units`, `drum_limits/single_step`)
+- [x] a drum reads a DS preset on every scan its step times. A DS preset lowered under Acc mid-step ends the step. A DS of 0 or below ends the step at once (answered on hardware 2026-11-12 by `drum_limits/preset_from_ds`, `drum_preset/entry_or_first_timing_scan`, `drum_ds/ds_preset_ends`)
 - [x] search hit / miss / continuous (`search/hit_returns_address`, `search/miss_writes_minus_one`, `search/continuous_walks`)
 - [x] search returns the register number of the match, -1 on miss (`search/hit_returns_address`, `search/miss_writes_minus_one`)
 - [x] search continuous resumes after an old result inside the range; result=0 restarts; anything else misses (`search/continuous_walks`, `search/continuous_zero_restarts`, `search/continuous_cursor_is_address`, answered: `search/continuous_cursor_outside_range`)

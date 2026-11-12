@@ -1,25 +1,27 @@
 """A drum step's DS preset, and a bad jump on the rung's return: ``drum_ds`` and ``jump_return``.
 
-Part ``follow2_drums``.  A CLICK answered both on 2026-11-10, once.
+Part ``follow2_drums``.  A CLICK answered ``jump_return`` on 2026-11-10 and ``drum_ds`` on
+2026-11-12.
 
-``drum_ds/ds_preset_ends``: four time drums of three steps.  Each field is a drum's step: 1 for
-step 1 still timing, 2 when step 1 has ended.  The case reads them, and raises ``Fired``, once the
-control drum has timed 50 ms on its step 2.  A 1 ms step has ended by then at any scan length, and
-so has the 5 ms step of Result3.  The run the CLICK read took them on scan 20 instead.  Every step
-but the one asked about is a constant 30 s.  Each DS holds the value the case means from the
-reset on, as the init writes it.
+``drum_ds/ds_preset_ends``: four time drums of three steps.  Each field is a drum's step.  It
+reads 1 while step 1 still times, 2 once step 1 has ended, and 3 once step 2 has.  The case reads
+them, and raises ``Fired``, once the control drum has timed 50 ms on its step 2.  A 1 ms step has
+ended by then at any scan length, and so has the 5 ms step of Result3.  The run the CLICK read
+took them on scan 20 instead.  Every step but the one asked about is a constant 30 s.  Each DS
+holds the value the case means from the reset on, as the init writes it.
 
-- Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again.
+- Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again.  Step 1
+  ends, 2.
 - Result2 (D2): step 1's preset a DS holding 1 ms through the reset and 30 s from scan 1 (written
-  on a rung above the drum).
-- Result3 (D3): step 1 a constant 5 ms, step 2 a DS holding 0, step 3 30 s.
-- Result4, the control: step 1 a constant 1 ms.
+  on a rung above the drum).  By the first scan step 1 times, the DS holds 30 s, 1.  A drum that
+  read its preset while held in reset would read 2.
+- Result3 (D3): step 1 a constant 5 ms, step 2 a DS holding 0, step 3 30 s.  Step 2 ends at once,
+  3.
+- Result4, the control: step 1 a constant 1 ms, 2.
 
-A CLICK read 1, 1, 2, 2.  No DS preset ended a step, not even one that held 1 ms from the reset
-on, while a constant 1 ms did.  So the drum does not read its preset while it is held in reset
-(that reads 2 in Result2), and a DS of 0 entered by a move does not end at once (that reads 3 in
-Result3).  No reading yet shows a DS preset ending a drum step.  pyrung reads 2, 1, 2, 2.  It reads
-a DS preset when the step starts timing, so D1 ends.  The case is pending ``PRESET``.
+The CLICK read 2, 1, 3, 2 (2026-11-12), and pyrung reads the same.  The drum reads a DS preset on
+every scan its step times.  The reading before 2026-11-12 (1, 1, 2, 2) measured a drum that
+laddercodec had pasted with a wrong encoding.
 
 ``jump_return/bad_jump_on_return``: does a jump to a bad step on the scan the drum's rung comes
 back keep the drum from writing its row?  ``bad_jump`` read on a CLICK that a jump to a bad step
@@ -101,15 +103,13 @@ drum_ds = Group(
     "drum_ds",
     [
         case(
-            "A time drum's DS preset of 1 ms held from the reset does not end its step "
-            "(Result1 = 1), nor one of 1 ms through the reset and 30 s from scan 1 "
-            "(Result2 = 1); a DS of 0 entered by a move never ends (Result3 = 2); a constant "
-            "1 ms ends (Result4 = 2)",
+            "A time drum's DS preset of 1 ms held from the reset ends its step (Result1 = 2).  "
+            "One of 1 ms through the reset and 30 s from scan 1 does not (Result2 = 1).  A DS of "
+            "0 entered by a move ends at once (Result3 = 3).  A constant 1 ms ends (Result4 = 2)",
             ladder=prove_ds_preset_ends,
             init=init_ds_preset_ends,
-            expect={"Result1": 1, "Result2": 1, "Result3": 2, "Result4": 2},
+            expect={"Result1": 2, "Result2": 1, "Result3": 3, "Result4": 2},
             scans=24,
-            pending="PRESET",
         ),
     ],
 )
@@ -201,11 +201,7 @@ def test_jump_return():
 
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
 def test_drum_ds_at_any_scan(monkeypatch, dt):
-    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms.  pyrung reads 2, 1, 2, 2 at
-    each, so the case stays pending."""
+    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     (only,) = drum_ds.cases
-    results = run(Group("drum_ds", [replace(only, scans=max(only.scans, int(0.2 / dt)))]))
-    assert_all_passed(results)
-    read = results[0].actual
-    assert (read["Result1"], read["Result2"], read["Result3"], read["Result4"]) == (2, 1, 2, 2)
+    assert_all_passed(run(Group("drum_ds", [replace(only, scans=max(only.scans, int(0.2 / dt)))])))

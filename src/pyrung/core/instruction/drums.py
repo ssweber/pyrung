@@ -421,9 +421,9 @@ class _DrumBaseInstruction(Instruction):
         A box reads its pins before its own writes, as the compiled kernel's
         helper legs do: each drum reads them, and the jump step's value, before
         it corrects an invalid step or moves.  A step's event is read from the
-        box's condition view when the drum uses it.  The accumulator is read
-        from the live scan where the drum uses it, and a tag preset on the first
-        scan its step times, as the compiled kernel reads them.
+        box's condition view when the drum uses it.  The accumulator and a tag
+        preset are read from the live scan where the drum uses them, as the
+        compiled kernel reads them.
         """
         jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
         jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
@@ -447,57 +447,18 @@ class _DrumBaseInstruction(Instruction):
         return jog_curr, jog_curr and not jog_prev
 
 
-PRESET_STEP_MEMORY = "_drum_preset_step"
-"""The step a drum's tag preset was read for (0: none since the last step change)."""
-PRESET_MEMORY = "_drum_preset"
-"""The preset a drum read for that step."""
-
-
-def time_is_up(spec: Tag | int, preset: int, acc: int) -> bool:
-    """A timed step's end: *preset* is the value the step holds, *spec* where it came from.
-
-    A tag preset of 0 or less never ends its step: on a CLICK a DS 0 or -5 on
-    step 1 after a reset never ended it (``drum_limits/preset_from_ds``); other
-    steps are unread and follow it.  A constant 0 ends its step at once
-    (``drum_preset/literal_zero``); a negative constant does too, pyrung's
-    choice, unread.  The compiled kernel's ``_time_up_expr`` is the same test.
-    """
-    if not isinstance(spec, Tag) and spec <= 0:
-        return acc >= preset
-    return 0 < preset <= acc
-
-
-def latches_presets(instr: Any) -> bool:
-    """Whether *instr* is a drum with a tag preset, which it reads once a step."""
-    presets = getattr(instr, "presets", ())
-    return isinstance(instr, _TimedDrumInstruction) and any(isinstance(p, Tag) for p in presets)
-
-
 class _TimedDrumInstruction(_DrumBaseInstruction):
     """A drum with an accumulator: its time ticks and clears here, for the routine.
 
-    A step's preset is read on the first scan the step times, and held until
-    the step changes (``PRESET_STEP_MEMORY``).  On a CLICK a DS preset lowered
-    under Acc mid-step did not end the step; when a CLICK reads it is open
-    (``drum_preset/entry_or_first_timing_scan``, pending).  A drum with literal
-    presets keeps no such memory.  A tag preset of 0 or less never ends its
-    step; a constant 0 ends it on its first timing scan (:func:`time_is_up`).
+    A step ends on the scan its Acc reaches its preset.  A tag preset is read on
+    every scan the step times, as a CLICK reads a DS (``drum_limits/preset_from_ds``,
+    ``drum_ds/ds_preset_ends``).  A preset lowered under Acc ends the step.  A preset
+    of 0 or less ends it on its first timing scan, as a constant 0 does.
     """
 
     accumulator: Tag
     unit: TimeUnit
     presets: tuple[Any, ...]  # each kind narrows it: a time & event step may have none
-
-    def _step_preset(self, ctx: ScanContext, step: int, preset: Tag | int) -> int:
-        """*step*'s preset as the step read it when it started timing."""
-        if not latches_presets(self):
-            return _resolve_preset_value(preset, ctx)
-        if int(ctx.get_memory(self.memory_key(PRESET_STEP_MEMORY), 0)) == step:
-            return int(ctx.get_memory(self.memory_key(PRESET_MEMORY), 0))
-        value = _resolve_preset_value(preset, ctx)
-        ctx.set_memory(self.memory_key(PRESET_STEP_MEMORY), step)
-        ctx.set_memory(self.memory_key(PRESET_MEMORY), value)
-        return value
 
     def _acc_max(self) -> int:
         return _INT_MAX if self.accumulator.type == TagType.INT else _DINT_MAX
@@ -520,33 +481,6 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     def _clear_time(self, ctx: ScanContext) -> None:
         ctx.set_tag(self.accumulator.name, 0)
         ctx.set_memory(f"_frac:{self.accumulator.name}", 0)
-        if latches_presets(self):
-            # A step change: the step the drum lands on reads its preset afresh.
-            ctx.set_memory(self.memory_key(PRESET_STEP_MEMORY), 0)
-            ctx.set_memory(self.memory_key(PRESET_MEMORY), 0)
-
-    def _never_ends(self, step: int, snapshot: Snapshot) -> bool:
-        """Whether *step* has a tag preset of 0 or less, so it never ends on its own.
-
-        Its Acc still counts; only a jog, a jump or a reset moves the drum off
-        it.  The preset is read from *snapshot*, the value the step reads when
-        it starts timing.  A CLICK read this on step 1 after a reset only
-        (:func:`time_is_up`).  A constant preset of 0 or less ends its step at
-        once.
-        """
-        spec = self.presets[step - 1]
-        if not isinstance(spec, Tag):
-            return False
-        try:
-            return int(resolve_snapshot_value(spec, snapshot)) <= 0
-        except (TypeError, ValueError):
-            return False
-
-    def _jogged(self, until: Eq | Cmp) -> AdvanceStep | None:
-        """A jog edge moves the drum one step, or ends the last one; none, no plan."""
-        if self.jog_condition is None:
-            return None
-        return AdvanceStep(until=until, pulse=ConditionDemand(self.jog_condition))
 
 
 class EventDrumInstruction(_DrumBaseInstruction):
@@ -724,9 +658,8 @@ class TimeDrumInstruction(_TimedDrumInstruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """The step's time is up, against the preset read when the step started timing."""
-        spec = self.presets[step - 1]
-        return time_is_up(spec, self._step_preset(ctx, step, spec), acc)
+        """The step's time is up, against its preset as this scan reads it."""
+        return acc >= _resolve_preset_value(self.presets[step - 1], ctx)
 
     def advance_profile(self) -> AdvanceProfile:
         def _auto(until: Eq | Cmp) -> AdvanceStep:
@@ -738,12 +671,6 @@ class TimeDrumInstruction(_TimedDrumInstruction):
 
         def _reset(until: Eq | Cmp) -> AdvanceStep:
             return _condition_step(until, self.reset_condition)
-
-        def _ends(until: Eq | Cmp, current: int, snapshot: Snapshot) -> AdvanceStep | None:
-            """End *current*: its time does, unless its preset never ends it."""
-            if self._never_ends(current, snapshot):
-                return self._jogged(until)
-            return _auto(until)
 
         def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
             if not isinstance(constraint, (Eq, Cmp)):
@@ -770,7 +697,7 @@ class TimeDrumInstruction(_TimedDrumInstruction):
                 return (
                     _reset(boundary)
                     if _is_step_one_restart(boundary, self.current_step)
-                    else _ends(boundary, current, snapshot)
+                    else _auto(boundary)
                 )
 
             if constraint.tag == self.completion_flag.name:
@@ -780,8 +707,8 @@ class TimeDrumInstruction(_TimedDrumInstruction):
                 if not desired:
                     return _reset(eq(self.completion_flag, False))
                 if current < self.step_count:
-                    return _ends(Cmp(self.current_step.name, ">=", current + 1), current, snapshot)
-                return _ends(eq(self.completion_flag, True), current, snapshot)
+                    return _auto(Cmp(self.current_step.name, ">=", current + 1))
+                return _auto(eq(self.completion_flag, True))
 
             if constraint.tag != self.accumulator.name:
                 return None
@@ -795,13 +722,10 @@ class TimeDrumInstruction(_TimedDrumInstruction):
             except (TypeError, ValueError):
                 return None
 
-            if self._never_ends(current, snapshot) and target >= acc:
-                # The step never ends, and its Acc keeps counting.
-                return _auto(constraint)
             # A non-final step clears Acc as it crosses its preset. Treat that
             # step transition as the observable boundary, then ask again.
             if current < self.step_count and (target >= preset or target < acc):
-                return _ends(Cmp(self.current_step.name, ">=", current + 1), current, snapshot)
+                return _auto(Cmp(self.current_step.name, ">=", current + 1))
             if current == self.step_count and target < acc:
                 return _reset(eq(self.current_step, 1))
             return _auto(constraint)
@@ -900,7 +824,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
     ) -> bool:
         """The step's time is up, if it has one, and its event is on, if it has one."""
         preset = self.presets[step - 1]
-        if preset is not None and not time_is_up(preset, self._step_preset(ctx, step, preset), acc):
+        if preset is not None and acc < _resolve_preset_value(preset, ctx):
             return False
         event = self.events[step - 1]
         return event is None or bool(event.evaluate(condition_view))
@@ -930,14 +854,8 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
         def _reset(until: Eq | Cmp) -> AdvanceStep:
             return _condition_step(until, self.reset_condition)
 
-        def _ends(until: Eq | Cmp, current: int, snapshot: Snapshot) -> AdvanceStep | None:
-            """End *current*: its time and event do, unless its preset never ends it."""
-            if self._never_ends(current, snapshot):
-                return self._jogged(until)
-            return self._advance(until, current)
-
-        def _next(current: int, snapshot: Snapshot) -> AdvanceStep | None:
-            return _ends(Cmp(self.current_step.name, ">=", current + 1), current, snapshot)
+        def _next(current: int) -> AdvanceStep:
+            return self._advance(Cmp(self.current_step.name, ">=", current + 1), current)
 
         def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
             if not isinstance(constraint, (Eq, Cmp)):
@@ -964,7 +882,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
                 return (
                     _reset(boundary)
                     if _is_step_one_restart(boundary, self.current_step)
-                    else _ends(boundary, current, snapshot)
+                    else self._advance(boundary, current)
                 )
 
             if constraint.tag == self.completion_flag.name:
@@ -974,8 +892,8 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
                 if not desired:
                     return _reset(eq(self.completion_flag, False))
                 if current < self.step_count:
-                    return _next(current, snapshot)
-                return _ends(eq(self.completion_flag, True), current, snapshot)
+                    return _next(current)
+                return self._advance(eq(self.completion_flag, True), current)
 
             if constraint.tag != self.accumulator.name:
                 return None
@@ -986,7 +904,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
             if target < acc:
                 if current == self.step_count:
                     return _reset(eq(self.current_step, 1))
-                return _next(current, snapshot)
+                return _next(current)
             preset_spec = self.presets[current - 1]
             if preset_spec is None:
                 # An event-only step: its event may end it before Acc gets there.
@@ -995,13 +913,12 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
                 preset = int(resolve_snapshot_value(preset_spec, snapshot))
             except (TypeError, ValueError):
                 return None
-            if target < preset or self._never_ends(current, snapshot):
-                # Acc counts whatever the event does, and on for good in a step
-                # its tag preset never ends.
+            if target < preset:
+                # Acc counts whatever the event does.
                 return _condition_step(constraint, self.auto_condition, reports_progress=True)
             if current < self.step_count and self.events[current - 1] is None:
                 # A time-only step clears Acc as it crosses its preset.
-                return _next(current, snapshot)
+                return _next(current)
             # Past the preset the event ends the step: no plan holds it off.
             return None
 

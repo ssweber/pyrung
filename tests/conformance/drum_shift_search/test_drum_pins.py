@@ -129,11 +129,13 @@ Reading at the return   2626          2626           2424
 
 ``drum_limits``, last in the part since a paste may refuse one:
 
-- ``preset_from_ds``: a preset in a DS lowered below Acc on a step: read live, the step ends
-  that scan, 2222, read at entry it does not, 1111 (Result2, a time drum over a time & event
-  drum).  Preset DS 0 (Result3) and -5 (Result4): the time drum's step ends on the next
-  scan (2), or never (1).  The CLICK read 1111, 1 and 1: read at entry, and 0 or below never
-  ends the step.  An Out coil's DS preset reads live (``out_more/preset_mid_phase``).
+- ``preset_from_ds``: a preset in a DS lowered below Acc on a step (Result2, a time drum over a
+  time & event drum).  Read live, the step ends that scan, 2222.  Read at entry, it does not,
+  1111.  With a preset DS of 0 (Result3) or -5 (Result4), the time drum's step ends on its first
+  timing scan (2), or never (1).  The CLICK read 2222, 2 and 2 (2026-11-12).  The drum reads a DS
+  preset live, as an Out coil does (``out_more/preset_mid_phase``), and a DS of 0 or below ends
+  the step at once.  The readings before 2026-11-12 (1111, 1, 1) measured a drum that laddercodec
+  had pasted with a wrong encoding.
 - ``units``: a time drum in seconds beside a free TON: Result2 is Acc after 2100 ms, 2 in
   seconds, 2100 if the unit does not reach the drum.  Result3 is the same in minutes, 0, or
   2100 likewise.  Result4 is the seconds drum on scan 3, 0 unless it starts at 1.  The
@@ -1064,13 +1066,13 @@ limits_group = Group(
     "drum_limits",
     [
         case(
-            "A preset in a DS is read at step entry: lowered below Acc mid-step it does not "
-            "end the step, 1111 (Result2); preset DS 0 (Result3) and -5 (Result4) never end "
-            "step 1, 1 on scan 4",
+            "A preset in a DS is read every scan.  Lowered below Acc mid-step, it ends the "
+            "step, 2222 (Result2).  Preset DS 0 (Result3) and -5 (Result4) end step 1 at once, "
+            "2 on scan 4",
             ladder=prove_preset_from_ds,
             init=restoring(_EXTRA[11], _EXTRA[12], _EXTRA[13]),
             scans=SCANS,
-            expect={"Result2": 1111, "Result3": 1, "Result4": 1},
+            expect={"Result2": 2222, "Result3": 2, "Result4": 2},
         ),
         case(
             "A time drum in seconds beside a free TON: Acc after 2100 ms is 2 in seconds "

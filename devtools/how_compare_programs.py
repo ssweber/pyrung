@@ -1098,8 +1098,8 @@ _add("drums", "drums/mid-step start held step 2", _drum_mid("step"))
 
 
 def _drum_zero_step(tagged, target):
-    """A 3-step time drum, 2 s / 0 / 2 s, with a jog.  The constant 0 ends step 2 at once
-    (``drum_preset/literal_zero``); a tag holding 0 never ends it, so only the jog does."""
+    """A 3-step time drum, 2 s / 0 / 2 s, with a jog.  A 0 preset ends step 2 at once, constant
+    or tag (``drum_preset/literal_zero``, ``drum_limits/preset_from_ds``)."""
 
     def build():
         done, start = Bool("LzDone"), Bool("LzStart", external=True)
