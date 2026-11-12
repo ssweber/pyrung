@@ -93,21 +93,24 @@ class _Carry:
         self.reason, self.about, self.detail = reason, about, detail
 
 
-def _place(carries: list[_Carry], targets: dict[_Carry, tuple[str, Any]], what: str) -> None:
-    """Give each carry in *targets* its new name, a planned carry before one that follows its own.
+def _place(targets: dict[_Carry, tuple[str, Any]], what: str) -> None:
+    """Give each carry in *targets* its new name.
 
-    Two carries on one name would fight over it, so the later one is dropped.
+    Two carries on one name would fight over it, and neither is the right one to keep.
+    So each carry whose name another carry also takes is dropped, planned or not.
     """
-    claimed: dict[str, str] = {}
-    for carry in sorted(carries, key=lambda c: not c.planned):
-        if carry not in targets:
+    by_name: dict[str, list[_Carry]] = {}
+    for carry, (name, _new_entry) in targets.items():
+        by_name.setdefault(name, []).append(carry)
+    for carry, (name, new_entry) in targets.items():
+        others = [other.tag for other in by_name[name] if other is not carry]
+        if others:
+            if len(others) == 1:
+                on = f"the {what} on {others[0]} also goes"
+            else:
+                on = f"the {what}s on {' and '.join(others)} also go"
+            carry.drop("conflict", name, f"{on} to {name}")
             continue
-        name, new_entry = targets[carry]
-        other = claimed.get(name)
-        if other is not None:
-            carry.drop("taken", name, f"the {what} on {other} moves to {name}")
-            continue
-        claimed[name] = carry.tag
         carry.to, carry.new_entry = name, new_entry
 
 
@@ -124,7 +127,7 @@ def _plan_forces(old_forces: Mapping[str, Any], plan: Mapping[str, Any]) -> list
             targets[carry] = (raw.strip(), None)
         else:
             carry.drop("bad plan", tag, "its plan is not a tag name or null")
-    _place(carries, targets, "force")
+    _place(targets, "force")
     for tag in plan:
         if tag not in old_forces:
             carry = _Carry(tag, "force", planned=True)
@@ -186,7 +189,7 @@ def _plan_links(old_bench: Mapping[str, BenchLink], plan: Mapping[str, Any]) -> 
             carry.drop("bad plan", fb, planned)
         else:
             targets[carry] = planned
-    _place(carries, targets, "bench change")
+    _place(targets, "bench change")
     for fb in plan:
         if fb not in old_bench:
             carry = _Carry(fb, "link", planned=True)

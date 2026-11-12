@@ -1479,6 +1479,18 @@ class TestReloadReportsWhatMoved:
         entry = resp["body"]["carried"][0]
         assert (entry["kind"], entry["dropped"], entry["reason"]) == ("cut", True, "unlinked")
 
+    def test_a_cut_whose_feedback_left_is_reported_gone(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        _rewrite(script, a="B")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=12)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["tag"], entry["reason"]) == ("cut", "A", "gone")
+
     def test_nothing_is_reported_when_nothing_moved(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)
         _repl(adapter, out, "force A true", seq=10)
@@ -1803,17 +1815,54 @@ class TestPlannedReload:
         assert _carried(resp, "Lamp", "link")["reason"] == "no bench change"
         assert adapter._bench_links == {}
 
-    def test_two_changes_planned_onto_one_tag_keep_the_planned_one(self, tmp_path: Path):
+    def test_two_forces_onto_one_tag_are_both_dropped(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)
         _repl(adapter, out, "force A true", seq=10)
         _repl(adapter, out, "force Lamp false", seq=11)
 
         resp = _plan_reload(adapter, out, forces={"A": "Lamp"})
 
-        lamp = _carried(resp, "Lamp", "force")
-        assert (lamp["dropped"], lamp["reason"]) == (True, "taken")
-        assert lamp["detail"] == "the force on A moves to Lamp"
-        assert adapter._runner.forces == {"Lamp": True}
+        a, lamp = _carried(resp, "A", "force"), _carried(resp, "Lamp", "force")
+        assert (a["reason"], a["detail"]) == ("conflict", "the force on Lamp also goes to Lamp")
+        assert (lamp["reason"], lamp["detail"]) == ("conflict", "the force on A also goes to Lamp")
+        assert adapter._runner.forces == {}
+
+    def test_two_links_planned_onto_one_feedback_are_both_dropped(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        _repl(adapter, out, "link Cmd Lamp on_delay=0ms", seq=11)
+
+        resp = _plan_reload(
+            adapter,
+            out,
+            links={"A": {"en": "Lamp", "fb": "A"}, "Cmd": {"en": "Lamp", "fb": "A"}},
+        )
+
+        a, cmd = _carried(resp, "A", "link"), _carried(resp, "Cmd", "link")
+        assert (a["dropped"], a["reason"], a["to"]) == (True, "conflict", None)
+        assert a["detail"] == "the bench change on Cmd also goes to A"
+        assert (cmd["dropped"], cmd["reason"], cmd["detail"]) == (
+            True,
+            "conflict",
+            "the bench change on A also goes to A",
+        )
+        assert (
+            "Dropped the bench link on Cmd because the bench change on A also goes to A."
+            in (resp["body"]["result"])
+        )
+        assert adapter._bench_links == {}
+
+    def test_a_link_planned_onto_a_feedback_another_link_keeps_drops_both(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        _repl(adapter, out, "link Cmd Lamp on_delay=0ms", seq=11)
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Lamp", "fb": "Cmd"}})
+
+        assert _carried(resp, "A", "link")["reason"] == "conflict"
+        cmd = _carried(resp, "Cmd", "link")
+        assert (cmd["planned"], cmd["reason"]) == (False, "conflict")
+        assert adapter._bench_links == {}
 
     def test_a_bad_plan_shape_refuses_the_reload(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)

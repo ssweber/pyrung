@@ -295,7 +295,7 @@ Each `reason` means:
 | `in program` | The new program declares the bench link the same way, so the program's link runs. |
 | `invalid` | The bench link does not fit the new program, such as a feedback that is now an `Int`. |
 | `bad plan` | Only from `pyrungReload`. The plan entry is malformed (`detail` says how). |
-| `taken` | Only from `pyrungReload`. Another force or bench change went to the same new tag first. A planned one goes before one that follows its name. |
+| `conflict` | Only from `pyrungReload`. Two or more forces, or two or more bench changes, would end on the same new tag. None of them is applied. |
 | `not forced` | Only from `pyrungReload`. The plan names a force that does not exist. |
 | `no bench change` | Only from `pyrungReload`. The plan names a bench change that does not exist. |
 
@@ -319,6 +319,7 @@ Each `reason` means:
 - A bench cut is planned as `{"cut": true, "fb": ...}`. The cut is dropped when the new program does not link `fb`.
 - A plan entry without `en` and without `"cut": true` is a `bad plan`. It is never taken as a cut.
 - A force or bench change the plan leaves out follows its tag name, as the console `reload` does.
+- When two forces or two bench changes would end on the same new tag, planned or following their names, neither is applied. Each is reported as a `conflict`.
 
 A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. The plan is applied when the new program replaces the old one. A reload that fails keeps the old program, mode, forces and bench changes. A plan whose `forces` or `links` is not an object fails the request. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.
 

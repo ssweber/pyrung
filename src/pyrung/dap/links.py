@@ -221,7 +221,8 @@ def fit_to_harness_locked(
                 kept[fb] = entry
             else:
                 notes.append(f"Dropped the bench cut on {fb}: the program no longer links it.")
-                dropped.append((fb, entry, "unlinked", fb))
+                gone = fb not in runner._known_tags_by_name
+                dropped.append((fb, entry, "gone" if gone else "unlinked", fb))
             continue
         project = declared.get(fb)
         if project is not None and same_wiring(coupling, project):
