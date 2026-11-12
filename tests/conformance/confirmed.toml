@@ -106,6 +106,7 @@
 "drum_jump/jump_after_completion" = { hash = "daff63cca1df", on = "2026-11-11" }
 "drum_jump/jump_with_jog_and_to_own_step" = { hash = "445e632fd67f", on = "2026-11-11" }
 "drum_jump/paused_jog_cases" = { hash = "09978c37e094", on = "2026-11-11" }
+"drum_limits/preset_from_ds" = { hash = "a5ddb74e2a87", on = "2026-11-12" }
 "drum_limits/single_step" = { hash = "528a537eaa8b", on = "2026-11-12" }
 "drum_limits/units" = { hash = "b582e7a1965e", on = "2026-11-12" }
 "drum_pins/acc_jog_completing" = { hash = "81271cc49c71", on = "2026-11-11" }
