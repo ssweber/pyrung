@@ -175,7 +175,8 @@
 "flag_steps/sc43_steps" = { hash = "c8daf34b6cd9", on = "2026-11-12" }
 "flag_steps/sc44_steps" = { hash = "c60f016ae203", on = "2026-11-12" }
 "flash_zero/lowered_to_zero" = { hash = "3b32b8bd3df9", on = "2026-11-12" }
-"flash_zero/off_zero_first_phase" = { hash = "83b4ba409591", on = "2026-11-12" }
+"flash_zero/off_zero_first_phase" = { hash = "234f0df63422", on = "2026-11-12" }
+"flash_zero/on_zero_tds" = { hash = "e72d19abd2c7", on = "2026-11-12" }
 "flash_zero/short_first_phase" = { hash = "48fdf3dfe10b", on = "2026-11-12" }
 "flasher_off/ds_minus_five" = { hash = "778a24963497", on = "2026-11-12" }
 "flasher_off/ds_zero" = { hash = "0d6248d4c346", on = "2026-11-12" }
