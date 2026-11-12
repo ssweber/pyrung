@@ -162,6 +162,10 @@
 "flag_probe/oneshot_that_does_not_fire" = { hash = "9ea449db0889", on = "2026-11-12" }
 "flag_probe/source_flag_in_a_math" = { hash = "3e69c8c18f3d", on = "2026-11-12" }
 "flag_probe/source_flag_is_read_before_the_copy_settles" = { hash = "c2c9101394fa", on = "2026-11-12" }
+"flag_reads/math_after_sqrt" = { hash = "6c41d517cd52", on = "2026-11-12" }
+"flag_reads/oneshot_held" = { hash = "ab276cdaed31", on = "2026-11-12" }
+"flag_reads/pointer_minus_one" = { hash = "9c81335814c7", on = "2026-11-12" }
+"flag_reads/unpowered_division" = { hash = "05b2a9ec6205", on = "2026-11-12" }
 "flag_scan/math_flags_over_a_scan" = { hash = "3ebb134b9fe5", on = "2026-11-07" }
 "flag_steps/sc40_steps" = { hash = "94d546977151", on = "2026-11-12" }
 "flag_steps/sc43_steps" = { hash = "c8daf34b6cd9", on = "2026-11-12" }
@@ -245,6 +249,7 @@
 "out_more/timed_maintained" = { hash = "76329e69fd31", on = "2026-11-12" }
 "out_more/toggle_and_timed" = { hash = "2b58c1f65716", on = "2026-11-12" }
 "out_more/zero_and_below" = { hash = "d099ee7574d2", on = "2026-11-12" }
+"pack_point/point_into_dd" = { hash = "d10fcf3581b4", on = "2026-11-12" }
 "past_clean/clear_then_write" = { hash = "17167528ee1c", on = "2026-11-12" }
 "past_write/past_bank_write" = { hash = "b9ed6acee44c", on = "2026-11-11" }
 "paste_risk/jump_to_own_step_register" = { hash = "51104ba64de9", on = "2026-11-11" }
@@ -338,6 +343,9 @@
 "td_write/debounce_on_td_write" = { hash = "e530a7f21327", on = "2026-11-12" }
 "td_write/flasher_off_td_write" = { hash = "9996b8bdf87e", on = "2026-11-12" }
 "td_write/flasher_on_td_write" = { hash = "07a4284c41de", on = "2026-11-12" }
+"term_zero/abs_int_min" = { hash = "ffb44d94aa8a", on = "2026-11-12" }
+"term_zero/quiet_terms" = { hash = "755cf0c6e047", on = "2026-11-12" }
+"term_zero/real_quiet_terms" = { hash = "b90becfdde80", on = "2026-11-12" }
 "text/fill_blank_ascii" = { hash = "4d04729ac25d", on = "2026-11-11" }
 "text/literal_fanout" = { hash = "593fa315f53f", on = "2026-11-11" }
 "text/null_ascii" = { hash = "c2db7e360725", on = "2026-11-11" }
