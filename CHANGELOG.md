@@ -376,6 +376,7 @@
 - The debugger's `reload` keeps the PLC mode, and a `reload` sent while `continue` runs pauses first.
   - a `reload` in STOP stays in STOP (it came back in RUN)
   - a `reload` sent after `pause` waits for the pause to land (it failed with "Cannot reload while continue is running")
+  - a `reload` lists each force and bench link whose tag moved to another CLICK address or is gone from the new program. The console prints a sentence for each, and the response carries them in `carried`. Forces and links still follow the tag name
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
 - Rungs after a `with Program()` block nested in another one join the outer program (they joined no program).
 - Two threads can build programs at the same time (a rung could join the other thread's program).

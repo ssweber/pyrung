@@ -30,6 +30,8 @@ class ConsoleResult:
 
     text: str
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
+    #: Extra fields for the evaluate response body, for clients that read data.
+    body: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

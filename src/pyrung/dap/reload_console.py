@@ -31,9 +31,79 @@ from pyrung.dap.console import ConsoleResult, register
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
+def _addresses(adapter: Any) -> dict[str, str] | None:
+    """Each mapped tag's CLICK address, or ``None`` when the program has no tag map."""
+    tag_map = adapter._tag_map
+    if tag_map is None:
+        return None
+    return {slot.logical_name: slot.hardware_address for slot in tag_map.mapped_slots()}
+
+
+def _carry_report(
+    *,
+    forces: dict[str, Any],
+    links: dict[str, Any],
+    new_tags: set[str],
+    kept_forces: Any,
+    kept_links: Any,
+    old_addr: dict[str, str] | None,
+    new_addr: dict[str, str] | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Report each force or bench link a reload moved to another address or dropped.
+
+    Forces and links follow the tag name.  Returns one entry per change for
+    clients and one sentence per entry for the console.
+    """
+    entries: list[dict[str, Any]] = []
+    lines: list[str] = []
+
+    def addr(table: dict[str, str] | None, name: str) -> str | None:
+        return None if table is None else table.get(name)
+
+    def check(kind: str, label: str, tag: str, value: Any, dropped_why: str | None) -> None:
+        old, new = addr(old_addr, tag), addr(new_addr, tag)
+        if dropped_why is None and old == new:
+            return
+        entry: dict[str, Any] = {
+            "tag": tag,
+            "kind": kind,
+            "old": old,
+            "new": None if dropped_why else new,
+            "dropped": dropped_why is not None,
+        }
+        if kind == "force":
+            entry["value"] = value
+        entries.append(entry)
+        if dropped_why is not None:
+            lines.append(f"{label} on {tag} dropped: {dropped_why}.")
+        elif old is None:
+            lines.append(f"{label} on {tag} is now at {new}.")
+        elif new is None:
+            lines.append(f"{label} on {tag} moved from {old} to no address.")
+        else:
+            lines.append(f"{label} on {tag} moved from {old} to {new}.")
+
+    for tag, value in forces.items():
+        why = None
+        if tag not in new_tags:
+            why = f"{tag} is not in the new program"
+        elif tag not in kept_forces:
+            why = f"{tag} could not be forced in the new program"
+        check("force", "Force", tag, value, why)
+    for fb, coupling in links.items():
+        if coupling is None:
+            continue
+        for tag in (fb, coupling.en_name):
+            why = f"{tag} is not in the new program" if tag not in new_tags else None
+            if why is None and fb not in kept_links:
+                continue
+            check("link", "Bench link", tag, None, why)
+    return entries, lines
+
+
 def _reload_locked(
     adapter: Any,
-) -> tuple[str, list[tuple[str, dict[str, Any] | None]]]:
+) -> tuple[str, list[tuple[str, dict[str, Any] | None]], list[dict[str, Any]]]:
     """Re-execute the program file and swap the runner, preserving state.
 
     Must be called with ``adapter._state_lock`` held.  Returns
@@ -52,6 +122,8 @@ def _reload_locked(
     old_dt = old_runner._dt
     old_known_tags = dict(old_runner._known_tags_by_name)
     old_rtc = old_runner._system_runtime._rtc_now(old_state)
+    old_addr = _addresses(adapter)
+    old_links = {fb: entry.coupling for fb, entry in adapter._bench_links.items() if entry.enabled}
 
     program_path = adapter._program_path
     if not program_path:
@@ -208,6 +280,17 @@ def _reload_locked(
             "reset: " + ", ".join(stale)
         )
 
+    carried, carry_lines = _carry_report(
+        forces=old_forces,
+        links=old_links,
+        new_tags=set(new_known_tags),
+        kept_forces=reloaded.forces,
+        kept_links=adapter._bench_links,
+        old_addr=old_addr,
+        new_addr=_addresses(adapter),
+    )
+    warnings.extend(f"  {line}" for line in carry_lines)
+
     scan_id = reloaded.current_state.scan_id
     n_tags = len(reloaded._known_tags_by_name)
     parts = [f"Reloaded at scan {scan_id} ({n_tags} tag(s))"]
@@ -218,7 +301,7 @@ def _reload_locked(
         parts.append(banner)
 
     events: list[tuple[str, dict[str, Any] | None]] = [("stopped", adapter._stopped_body("entry"))]
-    return "\n".join(parts), events
+    return "\n".join(parts), events, carried
 
 
 def _drop_coil_memory_no_coupling_owns(runner: PLC) -> list[str]:
@@ -248,8 +331,8 @@ def _drop_coil_memory_no_coupling_owns(runner: PLC) -> list[str]:
 
 @register("reload", usage="reload", group="execution")
 def _cmd_reload(adapter: Any, _expression: str) -> ConsoleResult:
-    summary, events = _reload_locked(adapter)
-    return ConsoleResult(summary, events=events)
+    summary, events, carried = _reload_locked(adapter)
+    return ConsoleResult(summary, events=events, body={"carried": carried})
 
 
 def _collect_py_mtimes(directory: Path) -> dict[str, float]:
@@ -286,7 +369,7 @@ def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Even
                 )
                 continue
             try:
-                summary, events = _reload_locked(adapter)
+                summary, events, _carried = _reload_locked(adapter)
             except Exception as exc:
                 adapter._enqueue_internal_event(
                     "output",

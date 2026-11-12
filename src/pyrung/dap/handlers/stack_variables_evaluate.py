@@ -187,7 +187,9 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             from pyrung.dap.console import dispatch
 
             console_result = dispatch(adapter, expression)
-            return {"result": console_result.text, "variablesReference": 0}, console_result.events
+            body = {"result": console_result.text, "variablesReference": 0}
+            body.update(console_result.body)
+            return body, console_result.events
 
 
 def evaluate_watch_expression_locked(adapter: Any, expression: str) -> Any:

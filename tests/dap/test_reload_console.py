@@ -1236,3 +1236,104 @@ class TestReloadWhileContinueRuns:
 
         assert resp["success"] is True
         assert not adapter._thread_running_locked()
+
+
+CARRY_SCRIPT = (
+    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "from pyrung.click import ClickBlocks, TagMap\n"
+    "x, y, c, *_ = ClickBlocks()\n"
+    "\n"
+    "a = Bool('{a}')\n"
+    "cmd = Bool('Cmd')\n"
+    "lamp = Bool('Lamp')\n"
+    "\n"
+    "with Program(strict=False) as prog:\n"
+    "    with Rung(cmd):\n"
+    "        out(lamp)\n"
+    "    with Rung(a):\n"
+    "        out(Bool('Sink'))\n"
+    "\n"
+    "mapping = TagMap({{a: {a_addr}, cmd: x[1], lamp: y[1]}})\n"
+    "runner = PLC(prog, dt=0.010)\n"
+)
+
+
+def _carry(tmp_path: Path, *, a: str = "A", a_addr: str = "c[1]") -> tuple[Any, Any, Path]:
+    return _setup(tmp_path, CARRY_SCRIPT.format(a=a, a_addr=a_addr))
+
+
+def _rewrite(script_path: Path, **kwargs: str) -> None:
+    script_path.write_text(CARRY_SCRIPT.format(**{"a": "A", "a_addr": "c[1]", **kwargs}))
+
+
+class TestReloadReportsWhatMoved:
+    def test_a_force_whose_tag_moved_is_reported_with_both_addresses(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _rewrite(script, a_addr="c[5]")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert "Force on A moved from C1 to C5." in resp["body"]["result"]
+        assert resp["body"]["carried"] == [
+            {"tag": "A", "kind": "force", "old": "C1", "new": "C5", "dropped": False, "value": True}
+        ]
+        assert adapter._runner.forces == {"A": True}
+
+    def test_a_force_dropped_by_a_rename_is_reported(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _rewrite(script, a="B")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert "Force on A dropped: A is not in the new program." in resp["body"]["result"]
+        assert resp["body"]["carried"] == [
+            {"tag": "A", "kind": "force", "old": "C1", "new": None, "dropped": True, "value": True}
+        ]
+
+    def test_a_dropped_force_is_reported_with_no_tag_map(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path)
+        _repl(adapter, out, "force Button true", seq=10)
+        script.write_text(BASIC_SCRIPT.replace("Button", "Press"))
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert (
+            "Force on Button dropped: Button is not in the new program." in (resp["body"]["result"])
+        )
+        assert resp["body"]["carried"] == [
+            {
+                "tag": "Button",
+                "kind": "force",
+                "old": None,
+                "new": None,
+                "dropped": True,
+                "value": True,
+            }
+        ]
+
+    def test_a_bench_link_whose_feedback_moved_is_reported(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        assert "A" in adapter._bench_links
+        _rewrite(script, a_addr="c[5]")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert "Bench link on A moved from C1 to C5." in resp["body"]["result"]
+        assert resp["body"]["carried"] == [
+            {"tag": "A", "kind": "link", "old": "C1", "new": "C5", "dropped": False}
+        ]
+        assert "A" in adapter._bench_links
+
+    def test_nothing_is_reported_when_nothing_moved(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "link Lamp Cmd on_delay=0ms", seq=11)
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=12)
+
+        assert resp["body"]["carried"] == []
+        assert "moved" not in resp["body"]["result"]
+        assert "dropped" not in resp["body"]["result"]
