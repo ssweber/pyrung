@@ -1484,3 +1484,10 @@ case = "pack_point/point_into_dd"
 hash = "7708a81c2c65"
 on = "2026-11-10"
 read = { Result1 = 12, Result2 = 12, Result3 = 12, Result4 = 0, ErrorCode = 0 }
+
+# T275 and T276 held 164 and 1000 from an earlier program, and the case did not clear them.
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-12"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 164, ErrorCode = 1000 }
