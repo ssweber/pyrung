@@ -80,6 +80,7 @@ _READINGS_HEADER = """\
 # What the probes with no answer yet read on a real CLICK, oldest first, written by
 # `make test-conformance PLC=...`.  A case here is not confirmed: its range holds every
 # candidate, so a pass says nothing.  hash: the case's exported rows when it read this.
+# note: why a reading no longer counts (a bad paste).
 """
 
 

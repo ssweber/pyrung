@@ -163,7 +163,7 @@ For conflicting outputs, the lint proves mutual exclusivity for different-consta
 | `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
 | `CMP_EQ_ON_COMPUTED_REAL` | Advisory | `==` or `!=` on a REAL the ladder computes with `math()` (or copies from one), where rounding can step over the exact value. Use a range or a tolerance. |
 | `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. |
-| `CMP_PRESET_STAYS_ZERO` | Warning | A timer, counter or drum step preset is a tag that starts at 0 and no rung writes, so a timer or counter completes at once and a drum step never ends. |
+| `CMP_PRESET_STAYS_ZERO` | Warning | A timer, counter or drum step preset is a tag that starts at 0 and no rung writes, so the timer, counter or step finishes at once. |
 | `CMP_STEPPER_VALUE_NOT_SET` | Warning | A step tag (one the program moves through a set of values) is compared with a value no rung sets it to. |
 | `CMP_REPEATED_STATE_VALUE` | Advisory | Literal equality comparisons against the same discrete values are repeated heavily or spread across the program. |
 | `CMP_TRUE_AT_RESET` | Warning | A timer or counter completion comparison is already true when the accumulator resets. |

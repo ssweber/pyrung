@@ -1196,10 +1196,11 @@ def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
     assert _snapshot(plc) == (2, False, True, True)
 
 
-# -- a step's preset: read when the step starts timing ---------------------------
+# -- a step's preset: read on every scan the step times --------------------------
 #
-# Read on a CLICK (``drum_limits/preset_from_ds``): a DS preset lowered under Acc
-# mid-step does not end the step, and a preset of 0 or -5 never ends it.
+# Read on a CLICK (``drum_limits/preset_from_ds``, ``drum_ds/ds_preset_ends``,
+# 2026-11-12): a DS preset lowered under Acc mid-step ends the step, and one of 0
+# or below ends it at once.
 
 
 def _preset_drum(kind: str, presets: list[Any]) -> Program:
@@ -1224,40 +1225,83 @@ def _preset_drum(kind: str, presets: list[Any]) -> Program:
 
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
-def test_a_tag_preset_is_read_when_its_step_starts_timing(kind: str, backend: type) -> None:
+def test_a_tag_preset_lowered_under_acc_ends_the_step_that_scan(kind: str, backend: type) -> None:
     plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
     plc.patch({"Enable": True, "P": 1000})
     for _ in range(4):
         plc.step()
     assert plc.current_state.tags["Acc"] == 30
-    # Lowered under Acc mid-step: the step keeps the preset it read.
     plc.patch({"P": 20})
-    for _ in range(3):
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    assert plc.current_state.tags["Acc"] == 0
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_a_tag_preset_raised_mid_step_extends_the_step(kind: str, backend: type) -> None:
+    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
+    plc.patch({"Enable": True, "P": 50})
+    for _ in range(4):
+        plc.step()
+    assert plc.current_state.tags["Acc"] == 30
+    plc.patch({"P": 100})
+    for _ in range(6):
         plc.step()
     assert _snapshot(plc) == (1, True, False, False)
-    # A jump to the same step is a step change: it reads 20, and ends on the second tick.
-    plc.patch({"Go": True})
-    plc.step()
-    assert plc.current_state.tags["Acc"] == 0
-    plc.step()
-    assert plc.current_state.tags["Step"] == 1
+    assert plc.current_state.tags["Acc"] == 90
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
-def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend: type) -> None:
-    """A write to the step register is not a move, but the step it lands on reads its preset.
+@pytest.mark.parametrize("preset", [0, -5])
+def test_a_tag_preset_of_zero_or_below_ends_step_one_at_once(
+    kind: str, backend: type, preset: int
+) -> None:
+    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
+    plc.patch({"Enable": True, "P": preset})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    # After a reset, step 1 ends on its first timing scan again.
+    plc.patch({"Reset": True})
+    plc.step()
+    assert _snapshot(plc) == (1, False, False, False)
+    plc.patch({"Reset": False})
+    plc.step()
+    assert _snapshot(plc) == (1, True, False, False)
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
 
-    pyrung's choice, unread on a CLICK (when a CLICK reads a DS preset is open:
-    ``drum_preset/entry_or_first_timing_scan``).
-    """
-    plc = backend(_preset_drum(kind, [Int("P"), Int("P")]), dt=0.01)
-    plc.patch({"Enable": True, "P": 1000})
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+@pytest.mark.parametrize("preset", [0, -5])
+def test_a_tag_preset_of_zero_or_below_ends_a_step_entered_by_a_move(
+    kind: str, backend: type, preset: int
+) -> None:
+    plc = backend(_preset_drum(kind, [10, Int("P")]), dt=0.01)
+    plc.patch({"Enable": True, "P": preset})
+    plc.step()
+    plc.step()
+    assert _snapshot(plc) == (2, False, True, False)
+    # Step 2, the last, ends on its first timing scan: the drum completes.
+    plc.step()
+    assert _snapshot(plc) == (2, False, False, True)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("kind", ["time", "time_event"])
+def test_a_step_written_to_the_register_ends_on_its_own_preset(kind: str, backend: type) -> None:
+    """A write to the step register is not a move: Acc carries over to the step written."""
+    plc = backend(_preset_drum(kind, [Int("P"), Int("Q")]), dt=0.01)
+    plc.patch({"Enable": True, "P": 1000, "Q": 20})
     for _ in range(4):
         plc.step()
-    plc.patch({"P": 20, "Step": 2})
+    plc.patch({"Step": 2})
     plc.step()
     tags = plc.current_state.tags
     assert (tags["Step"], tags["Acc"], tags["Done"]) == (2, 40, True)
@@ -1265,30 +1309,16 @@ def test_a_step_written_to_the_register_reads_its_own_preset(kind: str, backend:
 
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
-@pytest.mark.parametrize("preset", [0, -5])
-def test_a_tag_preset_of_zero_or_below_never_ends_its_step(
-    kind: str, backend: type, preset: int
-) -> None:
-    plc = backend(_preset_drum(kind, [Int("P"), 30_000]), dt=0.01)
-    plc.patch({"Enable": True, "P": preset})
-    for _ in range(20):
-        plc.step()
-    assert _snapshot(plc) == (1, True, False, False)
-    assert plc.current_state.tags["Acc"] == 190
-
-
-@pytest.mark.parametrize("backend", BACKENDS)
-@pytest.mark.parametrize("kind", ["time", "time_event"])
-@pytest.mark.parametrize("latching", [False, True], ids=["literal", "beside_a_tag"])
+@pytest.mark.parametrize("beside_a_tag", [False, True], ids=["literal", "beside_a_tag"])
 @pytest.mark.parametrize("preset", [0, -5])
 def test_a_constant_preset_of_zero_or_below_ends_its_step_at_once(
-    kind: str, backend: type, latching: bool, preset: int
+    kind: str, backend: type, beside_a_tag: bool, preset: int
 ) -> None:
     """``drum_preset/literal_zero``: the first scan the step times ends it.
 
     A CLICK read the constant 0; -5 ending at once too is pyrung's choice, unread.
     """
-    second = Int("P") if latching else 30_000
+    second = Int("P") if beside_a_tag else 30_000
     plc = backend(_preset_drum(kind, [preset, second]), dt=0.01)
     plc.patch({"Enable": True, "P": 30_000})
     plc.step()

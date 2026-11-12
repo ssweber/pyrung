@@ -118,11 +118,6 @@ def _reload_locked(
             f"  {len(remap.dropped)} site memory value(s) had no matching site "
             "in the new program, reset: " + ", ".join(sorted(remap.dropped))
         )
-    if remap.reread:
-        warnings.append(
-            f"  {len(remap.reread)} drum preset value(s) reset, the edited preset is "
-            "read afresh: " + ", ".join(sorted(remap.reread))
-        )
     # An edge contact with no match in the old program (new, or edited) starts
     # from its tag's current value, so a held bit does not rise on the first
     # scan after reload.  A matched contact keeps its memory, written or not.

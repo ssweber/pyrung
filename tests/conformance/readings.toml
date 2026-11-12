@@ -1,6 +1,7 @@
 # What the probes with no answer yet read on a real CLICK, oldest first, written by
 # `make test-conformance PLC=...`.  A case here is not confirmed: its range holds every
 # candidate, so a pass says nothing.  hash: the case's exported rows when it read this.
+# note: why a reading no longer counts (a bad paste).
 
 [[reading]]
 case = "out_more/zero_and_below"
@@ -100,6 +101,7 @@ read = { Result1 = 1, Result2 = 1, Result3 = 11, Result4 = 1, ErrorCode = 1 }
 case = "drum_limits/preset_from_ds"
 hash = "197d29eb89fa"
 on = "2026-11-05"
+note = "laddercodec mis-encoded the drum's DS presets in this paste (before a057062)"
 read = { Result2 = 1111, Result3 = 1, Result4 = 1 }
 
 [[reading]]
@@ -346,6 +348,7 @@ read = { Result1 = 1111, Result2 = 2222, Result3 = 5252, Result4 = 1212, ErrorCo
 case = "drum_preset/entry_or_first_timing_scan"
 hash = "2a12e58df5b2"
 on = "2026-11-06"
+note = "laddercodec mis-encoded the drum's DS presets in this paste (before a057062)"
 read = { Result1 = 2, Result2 = 2, Result3 = 1 }
 
 [[reading]]
@@ -1484,3 +1487,27 @@ case = "pack_point/point_into_dd"
 hash = "7708a81c2c65"
 on = "2026-11-10"
 read = { Result1 = 12, Result2 = 12, Result3 = 12, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "drum_preset/entry_or_first_timing_scan"
+hash = "fa749323281e"
+on = "2026-11-12"
+read = { Result1 = 2, Result2 = 3, Result3 = 2 }
+
+[[reading]]
+case = "drum_preset/entry_or_first_timing_scan"
+hash = "fa749323281e"
+on = "2026-11-12"
+read = { Result1 = 2, Result2 = 3, Result3 = 2 }
+
+[[reading]]
+case = "drum_ds/ds_preset_ends"
+hash = "2cffe3371893"
+on = "2026-11-12"
+read = { Result1 = 2, Result2 = 1, Result3 = 3, Result4 = 2 }
+
+[[reading]]
+case = "drum_limits/preset_from_ds"
+hash = "b5e701d59fb4"
+on = "2026-11-12"
+read = { Result2 = 2222, Result3 = 2, Result4 = 2 }

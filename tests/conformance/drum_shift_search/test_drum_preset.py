@@ -1,46 +1,31 @@
 """When a time drum reads a step's preset: the ``drum_preset`` group (part ``follow_timing``).
 
-``drum_limits/preset_from_ds`` read on a CLICK that a DS preset lowered under Acc mid-step does
-not end the step, and that a DS 0 or -5 on step 1 after a reset never ends it.  This group asks
-when a DS preset is read, and what a constant 0 does.  Each field is a drum's step.  Every drum
-has 3 steps, step 1 and 3 30 s long.  The case's init zeroes the DS presets while the drums are
-reset.
+A time drum reads a DS step preset on every scan the step times, as it reads a constant.  Each
+field is a drum's step.  Every drum has 3 steps, step 1 and 3 30 s long.  The case's init zeroes
+the DS presets while the drums are reset.
 
 Each case reads its steps once 50 ms of timing has passed, and raises ``Fired`` then.  A 1 ms step
 has ended by then at any scan length.  ``literal_zero`` waits on its control drum, 50 ms into
-step 2.  No reading yet says whether a CLICK drum's Acc counts on a step whose preset is a DS.
-So ``entry_or_first_timing_scan`` takes a TON started on scan 5, its last write, as its clock.
-The runs the CLICK read (2026-11-06) took every step on scan 20 instead.
+step 2.  ``entry_or_first_timing_scan`` takes a TON started on scan 5, its last write, as its
+clock.
 
-``literal_zero``: a step preset written as the constant 0, not from a DS.  Result1, presets
-0 / 30 s / 30 s: 1 where 0 never ends the step (as from a DS), 2 where it ends at once.  Result2,
-the control, presets 1 ms / 30 s / 30 s: 2.  The CLICK read 2, 2 (2026-11-06): a constant 0 ends
-its step at once, unlike a DS holding 0.  The rows were pasted; whether the editor's dialog
-takes a typed 0 is unread.
+``literal_zero``: a step preset written as the constant 0, not from a DS.  Result1 has presets
+0 / 30 s / 30 s.  It reads 2 if 0 ends the step at once, and 1 if the step never ends.  Result2,
+the control, has presets 1 ms / 30 s / 30 s and reads 2.  The CLICK read 2, 2 (2026-11-06).  The
+rows were pasted.  Whether the editor's dialog takes a typed 0 is unread.
 
 ``entry_or_first_timing_scan``: drums jogged from step 1 to step 2 on scan 3, step 2's preset from
 a DS.
-- Result1: the DS holds 1 ms up to scan 3 (the jog's scan) and 30 s from scan 4: 3 where the
-  preset is read at the move, 2 where it is read later.  The CLICK read 2.
-- Result2: the DS holds 30 s up to scan 3, 1 ms on scan 4 only, then 30 s: 3 where the preset is
-  read on the first scan step 2 times (scan 4), 2 otherwise.  The CLICK read 2.
-- Result3: a correction.  Step 1's preset from a DS of 30 s, jogged to step 2 on scan 2; on scan
-  4 the step is written 5 and the DS 1 ms from then on.  The bad step goes back to step 1: 2
-  where step 1's preset is read again there (1 ms ends it), 1 where it is not.  The CLICK read 1.
+- Result1: the DS holds 1 ms up to scan 3 (the jog's scan) and 30 s from scan 4.  Step 2 first
+  times on scan 4 and reads 30 s, 2.  A drum that read the preset at the move would read 3.
+- Result2: the DS holds 30 s up to scan 3, 1 ms on scan 4 only, then 30 s.  Step 2 reads the 1 ms
+  on scan 4 and ends, 3.
+- Result3: a correction.  Step 1's preset from a DS of 30 s, jogged to step 2 on scan 2.  On scan
+  4 the step is written 5 and the DS 1 ms from then on.  The bad step goes back to step 1, which
+  reads the 1 ms and ends, 2.
 
-What the readings leave (2/2/1 here, 1111/1/1 in ``preset_from_ds``):
-- (a) the preset read on the first scan its step times: refuted by Result2 (it reads 3).
-- (a') read on the first scan its step's time moves: refuted by Result2 too, since this part's
-  scans run 2.5 to 5 ms and scan 4 adds time.
-- (b) open: the DS read while the drum is reset (the init zeroes it then, so it reads 0), not
-  read again on a move, and a held 0 never ends the step.
-- (c) open: a DS preset as pasted never ends its step.
-Both open models meet all five DS readings, Result3 with no rule for a correction.  The probes
-that split them: P1, a DS preset set to 1 ms (not 0) and held through the reset, no jog (ends:
-a DS preset works; never: (c)); P2, a DS of 1 ms during the reset and 30 s from scan 1 (ends:
-(b); never: read later); P3, a step-2 DS of 0 entered by a move (never ends: a DS 0 never ends
-off step 1 too).  pyrung reads on the first scan the step times, (a), so this case is pending
-(``test_pyrung_reads_the_preset_on_the_first_timing_scan`` pins what it reads).
+The CLICK read 2, 3, 2, twice (2026-11-12).  The readings before 2026-11-12 (2, 2, 1) measured a
+drum that laddercodec had pasted with a wrong encoding.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -130,18 +115,18 @@ group = Group(
     "drum_preset",
     [
         case(
-            "A time drum's step 2 on a DS preset of 1 ms only at the jog stays (Result1 = 2), "
-            "and of 1 ms only on the scan after stays too (Result2 = 2); a bad step corrected "
-            "to step 1, its DS lowered to 1 ms, stays (Result3 = 1)",
+            "A time drum reads a DS step preset every scan.  Step 2 on a DS of 1 ms only at the "
+            "jog stays (Result1 = 2).  Step 2 on a DS of 1 ms only on the scan after ends "
+            "(Result2 = 3).  A bad step corrected to step 1, its DS lowered to 1 ms, ends "
+            "(Result3 = 2)",
             ladder=prove_entry_or_first_timing_scan,
             init=init_entry_or_first_timing_scan,
-            expect={"Result1": 2, "Result2": 2, "Result3": 1},
-            pending="PRESET",
+            expect={"Result1": 2, "Result2": 3, "Result3": 2},
             scans=SCANS,
         ),
         case(
-            "A time drum step with the constant preset 0 ends at once, unlike one from a DS "
-            "(Result1 = 2); a constant 1 ms step ends (Result2 = 2)",
+            "A time drum step with the constant preset 0 ends at once (Result1 = 2).  A constant "
+            "1 ms step ends (Result2 = 2)",
             ladder=prove_literal_zero,
             expect={"Result1": 2, "Result2": 2},
             scans=SCANS,
@@ -152,16 +137,6 @@ group = Group(
 
 def test_drum_preset():
     assert_all_passed(run(group))
-
-
-@pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
-def test_pyrung_reads_the_preset_on_the_first_timing_scan(monkeypatch, dt):
-    """What pyrung reads, not the CLICK: the 1 ms held on scan 4 alone ends step 2 (Result2 3,
-    the CLICK 2), and the corrected step reads step 1's 1 ms afresh (Result3 2, the CLICK 1)."""
-    monkeypatch.setattr(runner_module, "DT", dt)
-    read = {r.case.id: r.actual for r in run(_at(dt))}
-    case_read = read["entry_or_first_timing_scan"]
-    assert (case_read["Result1"], case_read["Result2"], case_read["Result3"]) == (2, 3, 2)
 
 
 def _at(dt: float) -> Group:

@@ -125,7 +125,7 @@ class Site:
     """An instruction's written operands (its ``_writes``) as source text."""
     instruction: Any = field(default=None, compare=False, repr=False)
     """The instruction an instruction site was bound for.  Reload reads its helper
-    legs and presets from it, only for a site it pairs with an edited one."""
+    legs from it, only for a site it pairs with an edited one."""
 
 
 @dataclass(frozen=True)
@@ -178,13 +178,7 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         CountDownInstruction,
         CountUpInstruction,
     )
-    from pyrung.core.instruction.drums import (
-        PRESET_MEMORY,
-        PRESET_STEP_MEMORY,
-        EventDrumInstruction,
-        _DrumBaseInstruction,
-        latches_presets,
-    )
+    from pyrung.core.instruction.drums import EventDrumInstruction, _DrumBaseInstruction
     from pyrung.core.instruction.out_variants import (
         DebounceInstruction,
         FlasherInstruction,
@@ -216,10 +210,6 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
         slots.append(("_drum_jog_prev", False))
         # Its rung as the last scan left it: a false-to-true writes the outputs.
         slots.append(("_drum_rung_prev", False))
-    if latches_presets(instr):
-        # The step a tag preset was read for, and what it read.
-        slots.append((PRESET_STEP_MEMORY, 0))
-        slots.append((PRESET_MEMORY, 0))
     if isinstance(instr, EventDrumInstruction):
         slots.append(("_drum_event_prev", False))
         slots.append(("_drum_last_step", 0))
@@ -1094,13 +1084,8 @@ last saw them.  An edit to what the instruction reads (a preset, a source, a jum
 step) does not change those inputs, so on reload this memory follows the edited
 instruction (:func:`_match_input_memory`)."""
 
-_PRESET_LATCH = frozenset({"_drum_preset", "_drum_preset_step"})
-"""A drum's tag preset as read for its step (``PRESET_MEMORY``,
-``PRESET_STEP_MEMORY``): it follows an edited drum only while that step's preset
-operand is unchanged (:func:`_keeps_preset_latch`)."""
-
 _RUNG = ""
-"""The :func:`_match_input_memory` pairing of rung memory (and of a drum's latch)."""
+"""The :func:`_match_input_memory` pairing of rung memory."""
 
 
 def _input_leg(site: Site, prefix: str) -> str:
@@ -1136,8 +1121,6 @@ def _match_input_memory(
             prefix = name[: -(len(site.key) + 1)]
             if prefix in _INPUT_MEMORY:
                 legs.add(_input_leg(site, prefix))
-            elif prefix in _PRESET_LATCH:
-                legs.add(_RUNG)
         return legs
 
     def _key(site: Site, leg: str) -> Any:
@@ -1166,23 +1149,6 @@ def _match_input_memory(
     return out
 
 
-def _keeps_preset_latch(old: Site, new: Site, memory: Mapping[str, Any]) -> bool:
-    """Whether a drum paired with its edited self keeps the preset it latched: the
-    latched step's preset operand is the same in both (or nothing is latched)."""
-    from pyrung.core.instruction.drums import PRESET_STEP_MEMORY
-
-    step = int(memory.get(f"{PRESET_STEP_MEMORY}:{old.key}", 0))
-    if step <= 0:
-        return True
-    if old.instruction is None or new.instruction is None:
-        return False
-    old_presets = getattr(old.instruction, "presets", ())
-    new_presets = getattr(new.instruction, "presets", ())
-    if step > len(old_presets) or step > len(new_presets):
-        return False
-    return _operand_text(old_presets[step - 1]) == _operand_text(new_presets[step - 1])
-
-
 _OVERLAY_NAMESPACES = frozenset({PLANT_NAMESPACE, PILOT_NAMESPACE})
 
 
@@ -1208,10 +1174,6 @@ class SiteMemoryRemap:
     dropped: tuple[str, ...]
     """Keys reset because no site of the new program matches theirs unambiguously
     (an overlay's memory included)."""
-    reread: tuple[str, ...]
-    """A drum's latched preset (``_drum_preset``, ``_drum_preset_step``), reset
-    because the reload edited the preset of the step it latched: the drum reads it
-    afresh."""
 
 
 def remap_site_memory(
@@ -1221,11 +1183,10 @@ def remap_site_memory(
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Carry site memory to the matching sites of a new program.
 
-    Returns ``(memory, dropped keys)``; see :func:`remap_site_memory_report`, whose
-    ``dropped`` and ``reread`` keys both count as dropped here.
+    Returns ``(memory, dropped keys)``.  See :func:`remap_site_memory_report`.
     """
     report = remap_site_memory_report(memory, old, new)
-    return report.memory, report.dropped + report.reread
+    return report.memory, report.dropped
 
 
 def remap_site_memory_report(
@@ -1241,8 +1202,7 @@ def remap_site_memory_report(
     for the new program.  A harness coil's memory (``plant:fb.{name}``) is kept.
     Edge memory (``_edge:e{N}``) is site memory like any other.  A site left
     unmatched still carries its input memory to an edited
-    counterpart (:func:`_match_input_memory`), and a drum its latched preset
-    unless the latched step's preset was edited.  Other memory (timer carries,
+    counterpart (:func:`_match_input_memory`).  Other memory (timer carries,
     system memory) is kept as is, except that a carry is cut to below one unit of
     its timer in *new*: it is less than a unit by what it means, and an edit to the
     timer's unit must not finish the timer.
@@ -1263,7 +1223,6 @@ def remap_site_memory_report(
     )
     out: dict[str, Any] = {}
     dropped: list[str] = []
-    reread: list[str] = []
     for name, value in memory.items():
         owner = owned.get(name)
         if owner is None:
@@ -1274,17 +1233,9 @@ def remap_site_memory_report(
             continue
         site_key, prefix = owner
         target = matched.get(site_key)
-        if target is None and old is not None and new is not None:
-            if prefix in _INPUT_MEMORY:
-                leg = _input_leg(old.site(site_key), prefix)
-                target = input_matched.get(leg, {}).get(site_key)
-            elif prefix in _PRESET_LATCH:
-                target = input_matched.get(_RUNG, {}).get(site_key)
-                if target is not None and not _keeps_preset_latch(
-                    old.site(site_key), new.site(target), memory
-                ):
-                    reread.append(name)
-                    continue
+        if target is None and old is not None and new is not None and prefix in _INPUT_MEMORY:
+            leg = _input_leg(old.site(site_key), prefix)
+            target = input_matched.get(leg, {}).get(site_key)
         new_name = f"{prefix}:{target}" if target is not None else None
         if new_name is None or new_name not in new_names:
             dropped.append(name)
@@ -1295,7 +1246,7 @@ def remap_site_memory_report(
             for name, unit_ns in site.carries:
                 if name in out:
                     out[name] %= unit_ns
-    return SiteMemoryRemap(out, tuple(dropped), tuple(reread))
+    return SiteMemoryRemap(out, tuple(dropped))
 
 
 def seed_new_edge_memory(

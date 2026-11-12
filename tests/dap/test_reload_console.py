@@ -969,27 +969,24 @@ class TestReloadInputMemory:
         script_path.write_text(DRUM_SCRIPT.format(first="long", second=100), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=13)
         assert resp["success"] is True
-        result = resp["body"]["result"]
-        # The latched preset is read afresh; the rung and the held jump are not new edges.
-        assert "no matching site" not in result
-        assert (
-            "2 drum preset value(s) reset, the edited preset is read afresh: "
-            "_drum_preset:i1, _drum_preset_step:i1"
-        ) in result
+        # The rung and the held jump are not new edges.
+        assert "Warnings" not in resp["body"]["result"]
 
         _repl(adapter, out, "step 1", seq=14)
         tags = adapter._runner.current_state.tags
         assert tags["Step"] == 1
         assert tags["DrumAcc"] == acc + 10
-        _repl(adapter, out, "step 20", seq=15)
+        # It ends at the 300 the new register holds.
+        scans = (300 - (acc + 10)) // 10
+        _repl(adapter, out, f"step {scans - 1}", seq=15)
         tags = adapter._runner.current_state.tags
         assert tags["Step"] == 1
         assert tags["Fill"] is True
+        _repl(adapter, out, "step 1", seq=16)
+        assert adapter._runner.current_state.tags["Step"] == 2
 
-    def test_an_edit_to_another_steps_preset_keeps_the_latched_one(self, tmp_path: Path):
+    def test_an_edit_to_another_steps_preset_runs_this_step_on(self, tmp_path: Path):
         adapter, out, script_path, acc = self._drum_mid_step_one(tmp_path)
-        # Lowered mid-step: the step keeps the preset it read when it started.
-        adapter._runner.patch({"Short": acc // 2})
         script_path.write_text(DRUM_SCRIPT.format(first="short", second=150), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=13)
         assert resp["success"] is True
@@ -999,7 +996,7 @@ class TestReloadInputMemory:
         tags = adapter._runner.current_state.tags
         assert tags["Step"] == 1
         assert tags["DrumAcc"] == acc + 10
-        # It ends at the 100 it latched.
+        # It ends at the 100 its register holds.
         scans = (100 - (acc + 10)) // 10
         _repl(adapter, out, f"step {scans - 1}", seq=15)
         assert adapter._runner.current_state.tags["Step"] == 1

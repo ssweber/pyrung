@@ -89,7 +89,6 @@
   - after a jump or jog, the new step starts on the next scan
   - when the drum corrects a bad step, it keeps the accumulator
   - while the completion flag is on, whether the drum set it or something else did, the drum ignores its time and events and its accumulator holds
-- A `time_drum` or `time_event_drum` step reads a tag preset on its first timed scan, and keeps that value until the step changes. A change mid-step takes effect from the next step. A tag preset of 0 or less now never ends its step (it ended it at once). A constant 0 still ends it at once.
 - `reboot()` with `battery_present` True keeps only the retentive tags and resets the rest, as STOP->RUN does (it kept every tag). With `battery_present` False it still resets every tag.
 - Copy, Block copy and Fill store these values as a CLICK does, in `PLC`, `CompiledPLC` and generated CircuitPython:
   - a `Dint` or `Real` into a `Word` stores 65535 above 65535 (it wrapped), and 32768 below -32768, with no flag. From -1 to -32768 it still wraps, as any constant or `Int` does

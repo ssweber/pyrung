@@ -53,10 +53,6 @@ PENDING_STEPS: Mapping[str, str] = {
         "a Copy through a pointer past a bank writes to memory (pyrung has none and"
         " drops the write), and raises no flag"
     ),
-    "PRESET": (
-        "when a drum reads a DS preset (pyrung reads it on the first scan its step times;"
-        " a CLICK does not)"
-    ),
 }
 
 
