@@ -181,6 +181,7 @@
 "for_wide/count_forms" = { hash = "13f61c73db35", on = "2026-11-07" }
 "hex_math/rotates_and_bits" = { hash = "e99dab058aaa", on = "2026-11-12" }
 "hex_math/shifts" = { hash = "ea8b767425f0", on = "2026-11-12" }
+"jump_return/bad_jump_on_return" = { hash = "fa4860307fc1", on = "2026-11-12" }
 "loop/body_oneshot_holds_while_for_false" = { hash = "c320f1d7a513", on = "2026-11-11" }
 "loop/body_rung_contact_per_iteration" = { hash = "6cab715db8c3", on = "2026-11-11" }
 "loop/break_leaves_innermost_loop" = { hash = "3689bec29bc5", on = "2026-11-11" }
