@@ -157,6 +157,8 @@ def _reload_locked(
             else adapter._keep_forces_on_run
         ),
     )
+    if old_runner.mode == "stop":
+        reloaded.stop()
     reloaded._set_time_mode(old_time_mode, dt=old_dt)
     reloaded._set_rtc_internal(old_rtc, reloaded.current_state.timestamp)
 

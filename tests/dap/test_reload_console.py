@@ -88,12 +88,18 @@ BASIC_SCRIPT = (
 )
 
 
-def _setup(tmp_path: Path, script: str = BASIC_SCRIPT) -> tuple[DAPAdapter, io.BytesIO, Path]:
+def _setup(
+    tmp_path: Path, script: str = BASIC_SCRIPT, **launch_args: Any
+) -> tuple[DAPAdapter, io.BytesIO, Path]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script_path = _write_script(tmp_path, "logic.py", script)
     _send_request(
-        adapter, out_stream, seq=1, command="launch", arguments={"program": str(script_path)}
+        adapter,
+        out_stream,
+        seq=1,
+        command="launch",
+        arguments={"program": str(script_path), **launch_args},
     )
     _send_request(adapter, out_stream, seq=2, command="configurationDone")
     _drain_messages(out_stream)
@@ -1126,3 +1132,107 @@ class TestMemoryPaneLabels:
         assert [item["name"] for item in edges] == [f"_edge:e{n}" for n in range(1, 13)]
         assert edges[0]["value"] == "True (rise(Button) line 8)"
         assert edges[11]["value"] == "True (rise(Button) line 30)"
+
+
+RETENTIVE_SCRIPT = (
+    "from pyrung.core import Bool, Int, PLC, Program, Rung, Timer, Counter, on_delay, count_down\n"
+    "\n"
+    "button = Bool('Button')\n"
+    "rst = Bool('Rst')\n"
+    "td = Timer.clone('TD1')\n"
+    "ctd = Counter.clone('CTD1')\n"
+    "\n"
+    "with Program(strict=False) as prog:\n"
+    "    with Rung(button):\n"
+    "        on_delay(td, preset=1000)\n"
+    "    with Rung(button):\n"
+    "        count_down(ctd, preset=100).reset(rst)\n"
+    "\n"
+    "runner = PLC(prog, dt=0.010)\n"
+)
+
+
+class TestReloadKeepsTheMode:
+    def test_a_reload_in_stop_stays_in_stop(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path)
+        _repl(adapter, out, "mode stop", seq=10)
+        assert adapter._runner.mode == "stop"
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert resp["success"] is True
+        assert adapter._runner.mode == "stop"
+
+    def test_a_reload_in_run_stays_in_run(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path)
+        _repl(adapter, out, "step 3", seq=10)
+        assert adapter._runner.mode == "run"
+
+        _repl(adapter, out, "reload", seq=11)
+
+        assert adapter._runner.mode == "run"
+
+    def test_autoreload_shares_the_reload_path(self, tmp_path: Path):
+        from pyrung.dap import reload_console
+
+        adapter, out, _script_path = _setup(tmp_path)
+        _repl(adapter, out, "mode stop", seq=10)
+
+        reload_console._reload_locked(adapter)
+
+        assert adapter._runner.mode == "stop"
+
+    def test_stop_reload_run_resets_the_timer_and_keeps_the_rest(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path, RETENTIVE_SCRIPT, keepForcesOnRun=True)
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 5", seq=11)
+        _repl(adapter, out, "mode stop", seq=12)
+        assert adapter._runner.current_state.tags["TD1_Acc"] > 0
+        ctd_acc = adapter._runner.current_state.tags["CTD1_Acc"]
+        assert ctd_acc != 0
+
+        _repl(adapter, out, "reload", seq=13)
+        assert adapter._runner.mode == "stop"
+        assert adapter._runner.forces == {"Button": True}
+        _repl(adapter, out, "mode run", seq=14)
+
+        assert adapter._runner.mode == "run"
+        assert adapter._runner.current_state.tags["TD1_Acc"] == 0
+        assert adapter._runner.current_state.tags["CTD1_Acc"] == ctd_acc
+        assert adapter._runner.forces == {"Button": True}
+
+    def test_a_reload_in_run_keeps_the_timer_and_forces(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path, RETENTIVE_SCRIPT, keepForcesOnRun=True)
+        _repl(adapter, out, "force Button true", seq=10)
+        _repl(adapter, out, "step 5", seq=11)
+        acc = adapter._runner.current_state.tags["TD1_Acc"]
+        ctd_acc = adapter._runner.current_state.tags["CTD1_Acc"]
+        assert acc > 0
+
+        assert adapter._runner.forces == {"Button": True}
+        _repl(adapter, out, "reload", seq=12)
+
+        assert adapter._runner.current_state.tags["TD1_Acc"] == acc
+        assert adapter._runner.current_state.tags["CTD1_Acc"] == ctd_acc
+        assert adapter._runner.forces == {"Button": True}
+
+
+class TestReloadWhileContinueRuns:
+    def test_a_reload_right_after_pause_waits_for_the_pause(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path)
+        _send_request(adapter, out, seq=10, command="continue")
+        _send_request(adapter, out, seq=11, command="pause")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=12)
+
+        assert resp["success"] is True
+        assert "Reloaded" in resp["body"]["result"]
+
+    def test_a_reload_while_running_pauses_first(self, tmp_path: Path):
+        adapter, out, _script_path = _setup(tmp_path)
+        _send_request(adapter, out, seq=10, command="continue")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert resp["success"] is True
+        assert not adapter._thread_running_locked()

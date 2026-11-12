@@ -120,14 +120,14 @@ def _apply(adapter: Any, verb: str, action: Any, target: str) -> None:
         raise adapter.DAPAdapterError(f"cannot {verb} {target}: {exc}") from exc
 
 
-#: Console verbs that run scans themselves; they pause a running worker first.
-PAUSE_FIRST_VERBS = frozenset({"step", "run"})
+#: Console verbs that run scans or swap the runner.  They pause a running worker first.
+PAUSE_FIRST_VERBS = frozenset({"step", "run", "reload"})
 
 
 def pause_before_console_command(adapter: Any, expression: str) -> None:
     """Pause a running continue worker if *expression* will run scans (no lock held).
 
-    Anyone can drive and the last command wins: a ``step`` or ``run`` sent
+    Anyone can drive and the last command wins: a ``step``, ``run`` or ``reload`` sent
     while continue runs pauses it and then executes.
     """
     parts = expression.strip().split(None, 1)
