@@ -187,6 +187,8 @@ class _ConditionRow:
     # The cell left of the cursor is an Or merge's bare ``T``; a contact placed next
     # shares that cell as ``T:contact``.
     merge_open: bool = False
+    # The column where that Or's rows start.
+    merge_start: int = 0
 
     def clone(self) -> _ConditionRow:
         return _ConditionRow(
@@ -194,6 +196,7 @@ class _ConditionRow:
             cursor=self.cursor,
             accepts_terms=self.accepts_terms,
             merge_open=self.merge_open,
+            merge_start=self.merge_start,
         )
 
 

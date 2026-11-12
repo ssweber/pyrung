@@ -124,6 +124,8 @@ class _LayoutMixin:
             source=source,
         )
         split_col = condition_rows[0].cursor
+        if not any(isinstance(item, Rung) for item in execution_items):
+            split_col = _bus_column(condition_rows[0], split_col)
         if split_col == 0 and len(condition_rows) == 1 and len(execution_items) > 1:
             # No trunk contact: a wire in column A stands in for it so the split
             # lands in column B (column A is the rail and takes no vertical token).
@@ -233,6 +235,9 @@ class _LayoutMixin:
             row = rows[band.start_row]
             if row.cells[split_col] == "":
                 row.cells[split_col] = "-"
+            elif row.cells[split_col] == "|":
+                # An Or's merge vertical passes this output row, so the row also takes the wire.
+                row.cells[split_col] = "T"
             for col in range(split_col + 1, _CONDITION_COLS):
                 if row.cells[col] == "":
                     row.cells[col] = "-"
@@ -302,6 +307,7 @@ class _LayoutMixin:
                     cells=cells,
                     cursor=base_col + row.cursor,
                     accepts_terms=row.accepts_terms,
+                    merge_open=row.merge_open,
                 )
             )
         return shifted
@@ -389,20 +395,8 @@ class _LayoutMixin:
             condition_rows[0].cells[0] = "-"
             condition_rows[0].cursor = 1
             split_col = 1
-        if (
-            len(condition_rows) > 2
-            and condition_rows[0].merge_open
-            and split_col >= 1
-            and condition_rows[0].cells[split_col - 1] == "T"
-        ):
-            # A CLICK draws the bus of an Or of 3 rows or more in the Or's merge column.
-            # An Or of 2 rows keeps it one column on.
-            split_col -= 1
-        # Under an Or the CLICK keeps the first output on the top row and puts the
-        # rest on the last Or row and below it, so a middle Or row only carries
-        # the bus down.
-        slot_rows = _slot_rows(len(slots), len(condition_rows))
-        row_count = max(len(condition_rows), slot_rows[-1] + 1)
+        split_col = _bus_column(condition_rows[0], split_col)
+        row_count = max(len(condition_rows), len(slots))
         rows: list[list[str]] = []
         for row_index in range(row_count):
             cells = (
@@ -413,37 +407,25 @@ class _LayoutMixin:
             rows.append([first_marker if row_index == 0 else "", *cells, ""])
 
         if len(slots) > 1:
-            for row_index in range(slot_rows[-1] + 1):
-                if row_index == 0:
-                    marker = "T"
-                elif row_index == slot_rows[-1]:
-                    marker = "-"
-                elif row_index in slot_rows:
-                    marker = "T"
-                else:
-                    marker = "|"
+            for row_index in range(len(slots)):
                 # Split node markers on the parent branch column (T / -).
                 cell_index = split_col + 1
                 existing = rows[row_index][cell_index]
-                if existing in {"", "-", "T", "|"}:
-                    if marker == "T" or existing == "T":
-                        rows[row_index][cell_index] = "T"
-                    elif existing == "|":
-                        rows[row_index][cell_index] = "|"
-                    else:
-                        rows[row_index][cell_index] = marker
-                else:
+                if existing not in {"", "-", "T", "|"}:
                     self._raise_issue(
                         path=path,
                         message=(
                             f"Conflicting branch split content at column {split_col}: "
-                            f"{existing!r} vs {marker!r}."
+                            f"{existing!r} vs an output bus marker."
                         ),
                         source=None,
                     )
+                rows[row_index][cell_index] = _bus_marker(
+                    existing, last=row_index == len(slots) - 1
+                )
 
         for slot_index, slot in enumerate(slots):
-            row = rows[slot_rows[slot_index]]
+            row = rows[slot_index]
             row[-1] = slot.output_token
 
             local_tokens = self._local_condition_tokens(
@@ -623,27 +605,51 @@ class _LayoutMixin:
                 source=condition,
             )
 
+        # An Or inside an Or is drawn as one flat Or, as the CLICK's syntax check redraws it.
+        terms = _or_terms(condition)
         active_rows: list[_ConditionRow] = []
         frozen_rows: list[_ConditionRow] = []
 
-        for row in rows:
+        for row_index, row in enumerate(rows):
             if not row.accepts_terms:
                 frozen_rows.append(row.clone())
                 continue
 
-            # A contact that opens its own Or keeps the previous merge's bare T;
-            # a one-way Or is just a contact.
-            if len(condition.conditions) > 1:
+            # An Or straight after an Or starts in the first Or's merge column, as the CLICK's
+            # syntax check redraws it.  Only terms drawn on one row can share that column.  After
+            # an Or on the left rail the new Or keeps the bare T between them, as the native
+            # captures in tests/fixtures/click_or_topology.csv draw it.  A one-way Or is just a
+            # contact.
+            share = (
+                row.merge_open
+                and row.merge_start > 0
+                and len(terms) > 1
+                and sum(r.accepts_terms for r in rows) == 1
+                and all(_is_series(term) for term in terms)
+            )
+            if len(terms) > 1 and not share:
                 row.merge_open = False
-            start_cursor = row.cursor
+            start_cursor = row.cursor - 1 if share else row.cursor
             branch_rows: list[_ConditionRow] = []
-            for branch_condition in condition.conditions:
+            for branch_condition in terms:
                 seeded = [row.clone()]
                 branch_rows.extend(self._apply_condition_term(seeded, branch_condition, path=path))
 
             if len(branch_rows) == 1:
                 active_rows.extend(branch_rows)
                 continue
+
+            if share:
+                # The shared column's vertical runs to the last row of either Or.  The contact on
+                # the last row drops its T: when no vertical goes on below it.
+                reach = 1
+                for later in rows[row_index + 1 :]:
+                    if later.cells[start_cursor] not in {"T", "|"}:
+                        break
+                    reach += 1
+                last = branch_rows[-1]
+                if len(branch_rows) - 1 >= reach and last.cells[start_cursor].startswith("T:"):
+                    last.cells[start_cursor] = last.cells[start_cursor][2:]
 
             merge_col = max(branch.cursor for branch in branch_rows)
             if merge_col >= _CONDITION_COLS:
@@ -689,6 +695,7 @@ class _LayoutMixin:
                 branch_row.cursor = merge_col + 1
                 branch_row.accepts_terms = index == 0
                 branch_row.merge_open = index == 0
+                branch_row.merge_start = start_cursor
 
             active_rows.extend(branch_rows)
 
@@ -785,9 +792,44 @@ def assert_no_column_a_vertical(rows: list[tuple[str, ...]] | tuple[tuple[str, .
 
 
 # ---- Marker helpers ----
-def _slot_rows(slot_count: int, or_rows: int) -> list[int]:
-    """Row of each output slot: the first on the top row, the rest from the last Or row down."""
-    return [0, *[max(index, or_rows + index - 2) for index in range(1, slot_count)]][:slot_count]
+def _or_terms(condition: AnyCondition) -> list[Condition]:
+    """The terms of an Or, with each Or nested straight inside it opened up."""
+    terms: list[Condition] = []
+    for term in condition.conditions:
+        if isinstance(term, AnyCondition):
+            terms.extend(_or_terms(term))
+        else:
+            terms.append(term)
+    return terms
+
+
+def _is_series(condition: Condition) -> bool:
+    """True for a term drawn on one row, a contact or an And of contacts."""
+    if isinstance(condition, AnyCondition):
+        return False
+    if isinstance(condition, AllCondition):
+        return bool(condition.conditions) and all(_is_series(c) for c in condition.conditions)
+    return True
+
+
+def _bus_column(first_row: _ConditionRow, split_col: int) -> int:
+    """Column of the output bus, which is the Or's own merge column when an Or ends the condition.
+
+    The CLICK's syntax check moves the bus there and puts the outputs on the Or's rows from the top.
+    """
+    if first_row.merge_open and split_col >= 1 and first_row.cells[split_col - 1] == "T":
+        return split_col - 1
+    return split_col
+
+
+def _bus_marker(existing: str, *, last: bool) -> str:
+    """Marker of an output row on the bus.  It is a T while the vertical goes on below it.
+
+    An Or's merge vertical (``T`` or ``|``) can run below the last output, down to the Or's last row.
+    """
+    if not last or existing in {"T", "|"}:
+        return "T"
+    return "-"
 
 
 def _vertical_marker(*, index: int, total: int) -> str:

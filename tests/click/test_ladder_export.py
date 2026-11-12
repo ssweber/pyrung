@@ -305,6 +305,16 @@ def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
             id="only-the-last-of-series-ors",
         ),
         pytest.param(
+            "X1, Or(X2, X3), Or(X4, X5)",
+            ["R,X001,T:X002,T:X004,T,out(Y001)", ",,X003,X005,"],
+            id="series-ors-after-a-contact-share-the-merge-column",
+        ),
+        pytest.param(
+            "X1, Or(Or(X2, X3), X4)",
+            ["R,X001,T:X002,T,out(Y001)", ",,T:X003,|,", ",,X004,"],
+            id="or-inside-an-or-is-one-or",
+        ),
+        pytest.param(
             "Or(X1, X2), X3, Or(X4, X5)",
             ["R,X001,T:X003,T:X004,T,out(Y001)", ",X002,,X005,"],
             id="contact-between-ors",

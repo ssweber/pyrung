@@ -1,10 +1,10 @@
 """Output-bus drawings: one rung per topology, exported and pinned to a golden CSV.
 
-The golden is pyrung's export for now.  Only the Or of 3 rows with 2 outputs has CLICK evidence
-(``system/address_flag_clears_each_scan``, saved by the CLICK as the golden draws it).  Every other
-rung waits on the pasted project.  To check it, paste the export into CLICK, write it
-to the PLC, save, and compare the CSV ClickNick writes for the saved project (``ckp_check``).
-A DIFF means the CLICK redraws that topology.  Then copy the saved project's ``main.csv`` over
+The golden is the CSV ClickNick wrote for the CLICK's saved project of 2026-11-12, so every rung
+in it is drawn as the CLICK keeps it.  CLICK's syntax check redraws a pasted rung.  To check a
+change, paste the export into CLICK and run the syntax check.  Then write it to the PLC, save,
+and compare the CSV ClickNick writes for the saved project (``ckp_check``).  A DIFF means the
+CLICK redraws that topology.  Then copy the saved project's ``main.csv`` over
 ``ladder_topology_golden/main.csv``, so the test pins what the CLICK keeps.
 
 Export the project for Guided Paste (``main.csv`` and ``nicknames.csv``) with::
@@ -15,6 +15,7 @@ Export the project for Guided Paste (``main.csv`` and ``nicknames.csv``) with::
 from __future__ import annotations
 
 import csv
+import re
 import sys
 from pathlib import Path
 
@@ -117,7 +118,9 @@ def export(out_dir: Path) -> None:
 
 
 def _read(path: Path) -> str:
-    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    # The CLICK numbers its rungs (R1, R2, ...) where pyrung writes R.
+    text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    return re.sub(r"^R\d+,", "R,", text, flags=re.MULTILINE)
 
 
 def test_the_export_equals_the_golden(tmp_path: Path) -> None:
