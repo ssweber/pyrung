@@ -98,6 +98,7 @@
 "drum_close/return_scan_moves" = { hash = "4a4c020c0a98", on = "2026-11-11" }
 "drum_close/return_scan_ticks" = { hash = "049c24792d6a", on = "2026-11-11" }
 "drum_close/te_acc_by_step_kind" = { hash = "c7806494a038", on = "2026-11-11" }
+"drum_ds/ds_preset_ends" = { hash = "20cfa4f5718a", on = "2026-11-12" }
 "drum_idle/drum_in_skipped_loop" = { hash = "ddf90c7c8515", on = "2026-11-11" }
 "drum_idle/uncalled_subroutine" = { hash = "3889de69c4e1", on = "2026-11-11" }
 "drum_jump/acc_through_jog_completion" = { hash = "ca8b292f06d1", on = "2026-11-11" }
