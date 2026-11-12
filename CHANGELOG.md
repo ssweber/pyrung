@@ -274,6 +274,7 @@
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive them
   - they export to CLICK and import back, and CLICK validation checks their timer banks and units
   - their timers' `Done` bits never turn on
+  - a `debounce()`'s off `Acc` counts only while its coil is on and its rung is false, and holds its value while the coil is off
   - the verifier models `toggle` exactly and the timed ones as black-box timers
 - `time_event_drum()` is CLICK v4's Time & Event drum. A step ends when its time is up and its event is on, and either half may be `None`:
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive it

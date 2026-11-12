@@ -1518,3 +1518,9 @@ case = "flash_zero/on_zero_tds"
 hash = "a766ced20531"
 on = "2026-11-12"
 read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 164, ErrorCode = 1000 }
+
+[[reading]]
+case = "deb_off/off_td_with_coil_off"
+hash = "5d41600a3ea8"
+on = "2026-11-12"
+read = { ErrorCode = 50, Result1 = 0, Result2 = 50, Result3 = 50, Result4 = 201 }

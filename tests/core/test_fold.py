@@ -4636,6 +4636,18 @@ class TestOutVariants:
 
         _assert_fold_is_exact(self._shape(verb, reader), run, dt=0.01)
 
+    def test_debounce_off_side_stops_once_the_coil_drops(self) -> None:
+        """The off TD counts to the drop and then holds, so a long run must not count it on."""
+
+        def run(plc: PLC, jit: bool) -> None:
+            plc.patch({"In": True})
+            _run_scans(plc, 300, jit=jit)
+            plc.patch({"In": False})
+            _run_scans(plc, 600, jit=jit)
+
+        plc = _assert_fold_is_exact(self._shape("debounce", "coil"), run, dt=0.01)
+        assert plc.state.tags["OV2_Acc"] == 1210
+
     def test_flasher_folds(self) -> None:
         """A held flasher is not stepped scan by scan."""
         plc = PLC(self._shape("flasher", "coil")(), dt=0.01)

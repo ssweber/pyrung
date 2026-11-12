@@ -8,7 +8,7 @@ Every coil's rung is gated on ``Cmd``, so the reset drops each coil's input.
 A debounce coil then turns off only when its off side times out, so those
 cases are ``ready`` once the coil is off, and ``keep`` the off side's timer.
 Each such case ends with its coil on.  A CLICK's off TD counts while the input
-is off after the coil was on, so after the reset it reads its preset or more.
+is off and the coil is on, so after the reset it reads its preset or more.
 A fresh PLC's reads 0.  A CLICK keeps a coil's other TDs after the rung falls
 (``out_more``).  So each case's ``init`` writes 0 to every TD that ends one of
 its steps.  No step then depends on the coil clearing that TD on its rise scan.
@@ -36,8 +36,9 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   comes on near 100 ms and reads Result2 = 1, Result1 = 1.  On 2026-11-11 a
   CLICK ran an earlier ladder, which ended the off time once the off TD read
   100.  That case never fired, so the off TD never reached 100.  The coil
-  was off all that time.  Every other reading of an off TD had the coil on.
-  So no step ends on the off TD now.
+  was off all that time.  A debounce's off TD does not count with its coil
+  off (``deb_off/off_td_with_coil_off``).  So no step ends on the off TD
+  now.
 - ``flasher_restarts_with_on_phase`` (O4, 300 ms phases): the rung drops once
   the off TD reads 150.  It stays false while T305 times 100 ms, then one scan
   more, which resets T305.  On the scan T305 reaches 100 the case reads the
