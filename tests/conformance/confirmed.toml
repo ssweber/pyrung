@@ -163,6 +163,9 @@
 "flag_probe/source_flag_in_a_math" = { hash = "3e69c8c18f3d", on = "2026-11-12" }
 "flag_probe/source_flag_is_read_before_the_copy_settles" = { hash = "c2c9101394fa", on = "2026-11-12" }
 "flag_scan/math_flags_over_a_scan" = { hash = "3ebb134b9fe5", on = "2026-11-07" }
+"flag_steps/sc40_steps" = { hash = "94d546977151", on = "2026-11-12" }
+"flag_steps/sc43_steps" = { hash = "c8daf34b6cd9", on = "2026-11-12" }
+"flag_steps/sc44_steps" = { hash = "c60f016ae203", on = "2026-11-12" }
 "flasher_off/ds_minus_five" = { hash = "778a24963497", on = "2026-11-12" }
 "flasher_off/ds_zero" = { hash = "0d6248d4c346", on = "2026-11-12" }
 "flasher_td/frozen_off_td_at_lowered_preset" = { hash = "34b2e3cc210d", on = "2026-11-11" }
