@@ -247,6 +247,27 @@ def _plan_declared(
     return carries, targets
 
 
+def _bench_wins(
+    bench: list[_Carry], declared_targets: dict[_Carry, tuple[str, Any]]
+) -> dict[_Carry, tuple[str, Any]]:
+    """The declared entries that no bench change takes the feedback of.
+
+    A bench change replaces the program's link on its feedback, before the reload
+    and after it.  So a declared entry onto that feedback is dropped, and the bench
+    change stays.
+    """
+    benched = {carry.to for carry in bench if carry.to is not None and not carry.dropped}
+    kept: dict[_Carry, tuple[str, Any]] = {}
+    for carry, (name, new_entry) in declared_targets.items():
+        if name in benched:
+            carry.drop(
+                "not declared", name, f"a bench change replaces the program's link on {name}"
+            )
+        else:
+            kept[carry] = (name, new_entry)
+    return kept
+
+
 def _declared_couplings(runner: PLC) -> dict[str, Coupling]:
     """The links *runner*'s program declares, by feedback.
 
@@ -274,8 +295,9 @@ def _coil_moves(
     A planned bench link that the old harness ran and the new program accepts runs
     the same coil under its new names, so the coil keeps its memory and its count.
     So does the coil of a declared link the plan moves to a link the new program
-    declares.  A coil never moves onto a feedback whose own coil stays there, since
-    that coil's state would be lost.  Such an entry is dropped as ``in use``.
+    declares with the same kind and trigger.  A coil never moves onto a feedback
+    whose own coil stays there, since that coil's state would be lost.  Such an
+    entry is dropped as ``in use``.
     """
     moves: dict[str, tuple[_Carry, Coupling]] = {}
     for carry in bench:
@@ -284,43 +306,82 @@ def _coil_moves(
             continue
         if old_active.get(carry.tag) is not None and link_problem(new_runner, coupling) is None:
             moves[carry.tag] = (carry, coupling)
-    if any(carry.to is not None for carry in declared):
+    old_declared = {c.fb_name: c for c in old_harness.declared()} if old_harness else {}
+    # Whether a bench link may move onto a declared feedback depends on the new program too.
+    onto_declared = any(c.fb_name in old_declared for _carry, c in moves.values())
+    new_declared: dict[str, Coupling] = {}
+    if onto_declared or any(carry.to is not None for carry in declared):
         new_declared = _declared_couplings(new_runner)
-        for carry in declared:
-            target = carry.to
-            if target is None:
-                continue
-            coupling = new_declared.get(target)
-            if coupling is not None:
-                carry.coupling = coupling
-                moves[carry.tag] = (carry, coupling)
-            elif target in new_known:
+    for carry in declared:
+        target = carry.to
+        if target is None:
+            continue
+        coupling = new_declared.get(target)
+        if coupling is None:
+            if target in new_known:
                 carry.drop("unlinked", target, f"the new program does not link {target}")
             else:
                 carry.drop("gone", target, f"{target} is not in the new program")
+            continue
+        old = old_declared[carry.tag]
+        # Another kind of coil keeps other timers, and another trigger fires on
+        # other values.  So the old coil's state does not fit, and the new coil settles.
+        new_kind, old_kind = coupling.physical.kind, old.physical.kind
+        if new_kind != old_kind:
+            carry.drop(
+                "changed kind",
+                target,
+                f"{target} is {_article(new_kind)} {new_kind} link in the new program, "
+                f"not {_article(old_kind)} {old_kind} link",
+            )
+        elif old.trigger_value != coupling.trigger_value:
+            carry.drop(
+                "changed kind", target, f"the new program's link on {target} has another trigger"
+            )
+        else:
+            carry.coupling = coupling
+            moves[carry.tag] = (carry, coupling)
 
     running = {c.fb_name for c in old_harness.couplings()} if old_harness else set()
+    by_tag = {carry.tag: carry for carry in bench}
+
+    def stays(fb: str, mover: _Carry, leaving: set[str]) -> bool:
+        """Whether the coil the old harness ran on *fb* still runs there after the reload."""
+        if fb not in running or fb in leaving:
+            return False
+        own = by_tag.get(fb)
+        if fb in old_active:
+            # The old coil on fb was its bench link.
+            return own is not None and not own.dropped and own.to == fb
+        taken = any(carry is not mover and not carry.dropped and carry.to == fb for carry in bench)
+        return fb in old_declared and fb in new_declared and not taken
+
     while True:
         leaving = {fb for fb, (_carry, c) in moves.items() if c.fb_name != fb}
         blocked = [
             fb
-            for fb, (_carry, c) in moves.items()
-            if c.fb_name != fb and c.fb_name in running and c.fb_name not in leaving
+            for fb, (carry, c) in moves.items()
+            if c.fb_name != fb and stays(c.fb_name, carry, leaving)
         ]
         if not blocked:
             break
-        # Each drop can leave a coil in place that a move onto it now overwrites.
+        # A dropped move keeps its coil on its own feedback, so a move onto that
+        # feedback may be blocked now.
         for fb in blocked:
             carry, coupling = moves.pop(fb)
             target = coupling.fb_name
-            carry.drop("in use", target, f"the old program already ran a coil on {target}")
+            carry.drop("in use", target, f"a coil already runs on {target}")
     return {fb: coupling for fb, (_carry, coupling) in moves.items()}
+
+
+def _article(word: str) -> str:
+    return "an" if word[0].upper() in "AEIOU" else "a"
 
 
 def _type_name(tag: Any) -> str:
     """The tag's type with its article, such as ``"an Int"``."""
     name = tag.type.value.capitalize()
-    return f"{'an' if name[0] in 'AEIOU' else 'a'} {name}"
+    return f"{_article(name)} {name}"
 
 
 def _why(carry: _Carry) -> str:
@@ -564,7 +625,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     force_carries = _plan_forces(old_forces, plan.forces)
     bench_carries, bench_targets = _plan_links(adapter._bench_links, plan.links)
     declared_carries, declared_targets = _plan_declared(old_harness, old_active, plan.declared)
-    _place({**bench_targets, **declared_targets})
+    _place(bench_targets)
+    _place(_bench_wins(bench_carries, declared_targets))
 
     program_path = adapter._program_path
     if not program_path:

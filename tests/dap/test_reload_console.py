@@ -1363,6 +1363,10 @@ class TestReloadReportsWhatMoved:
 
         entry = resp["body"]["carried"][0]
         assert (entry["tag"], entry["dropped"], entry["reason"]) == ("A", True, "type changed")
+        assert (
+            "Dropped the force on A because A is an Int in the new program."
+            in (resp["body"]["result"])
+        )
         assert adapter._runner.forces == {}
 
     def test_a_bench_link_whose_feedback_moved_is_reported(self, tmp_path: Path):
@@ -1997,6 +2001,12 @@ def _timed(name: str, enable: str = "Cmd", ms: int = 100) -> str:
     return f"Bool('{name}', physical=Physical('{name}', timed='{ms}ms'), link='{enable}')"
 
 
+def _three(a: str = "Bool('A')") -> str:
+    """The two-feedback program with a third feedback, C."""
+    rung_c = "    with Rung(Bool('C')):\n        out(Bool('Sink3'))\n"
+    return _two(a=a).replace("    with Rung(b):\n", rung_c + "    with Rung(b):\n")
+
+
 def _counts(adapter: DAPAdapter, *fbs: str) -> tuple[int, ...]:
     return tuple(_timed_count(adapter, fb) for fb in fbs)
 
@@ -2072,13 +2082,59 @@ class TestPlannedCoilMoves:
 
         entry = _carried(resp, "A", "link")
         assert (entry["dropped"], entry["reason"], entry["to"]) == (True, "in use", None)
-        assert entry["detail"] == "the old program already ran a coil on B"
+        assert entry["detail"] == "a coil already runs on B"
         assert (
-            "Dropped the bench link on A because the old program already ran a coil on B."
+            "Dropped the bench link on A because a coil already runs on B."
             in (resp["body"]["result"])
         )
         assert adapter._bench_links == {}
         assert _counts(adapter, "B") == (b,)
+
+    @pytest.mark.parametrize(
+        "b_plan",
+        [
+            pytest.param(None, id="removed"),
+            pytest.param({"en": "Go"}, id="bad-plan"),
+            pytest.param({"en": "Go", "fb": "C"}, id="conflict"),
+        ],
+    )
+    def test_a_link_moves_onto_a_feedback_whose_own_link_leaves(self, tmp_path: Path, b_plan: Any):
+        adapter, out, script = _setup(tmp_path, _three())
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "link B Go timed=1000ms", seq=11)
+        _repl(adapter, out, "link C Go timed=1000ms", seq=12)
+        _repl(adapter, out, "force Cmd true", seq=13)
+        _repl(adapter, out, "step 3", seq=14)
+        _repl(adapter, out, "force Go true", seq=15)
+        _repl(adapter, out, "step 1", seq=16)
+        a, b = _counts(adapter, "A", "B")
+        assert a != b
+        script.write_text(_three(a="Bool('A2')"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}, "B": b_plan})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["dropped"], entry["to"]) == (False, "B")
+        assert _counts(adapter, "B") == (a,)
+        assert adapter._bench_links["B"].coupling.en_name == "Cmd"
+
+    def test_a_link_moves_onto_a_feedback_whose_declared_link_left_the_program(
+        self, tmp_path: Path
+    ):
+        adapter, out, script = _setup(tmp_path, _two(b=_timed("B", "Go", ms=1000)))
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        _repl(adapter, out, "force Go true", seq=13)
+        _repl(adapter, out, "step 1", seq=14)
+        a, b = _counts(adapter, "A", "B")
+        assert a != b
+        script.write_text(_two(a="Bool('A2')"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+
+        assert _carried(resp, "A", "link")["to"] == "B"
+        assert _counts(adapter, "B") == (a,)
 
 
 class TestPlannedDeclaredLinks:
@@ -2178,9 +2234,7 @@ class TestPlannedDeclaredLinks:
         assert (entry["dropped"], entry["reason"]) == (True, "in use")
         assert _counts(adapter, "B") == (b,)
 
-    def test_a_declared_link_and_a_bench_link_onto_one_feedback_are_both_dropped(
-        self, tmp_path: Path
-    ):
+    def test_a_bench_change_wins_over_a_declared_link_onto_its_feedback(self, tmp_path: Path):
         adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
         _repl(adapter, out, "link B Go timed=100ms", seq=10)
         script.write_text(_two(b=_timed("B")))
@@ -2189,14 +2243,48 @@ class TestPlannedDeclaredLinks:
 
         declared, bench = _carried(resp, "A", "declared"), _carried(resp, "B", "link")
         assert (declared["reason"], declared["detail"]) == (
-            "conflict",
-            "the bench change on B also goes to B",
+            "not declared",
+            "a bench change replaces the program's link on B",
         )
-        assert (bench["reason"], bench["detail"]) == (
-            "conflict",
-            "the declared link on A also goes to B",
-        )
-        assert adapter._bench_links == {}
+        assert (bench["dropped"], bench["to"]) == (False, "B")
+        assert adapter._bench_links["B"].coupling.en_name == "Go"
+
+    @pytest.mark.parametrize(
+        ("new_b", "detail"),
+        [
+            pytest.param(
+                "Bool('B', physical=Physical('B', on_delay='100ms'), link='Cmd')",
+                "B is a delay link in the new program, not a timed link",
+                id="kind",
+            ),
+            pytest.param(
+                "Bool('B', physical=Physical('B', timed='100ms'), link='~Cmd')",
+                "the new program's link on B has another trigger",
+                id="trigger",
+            ),
+        ],
+    )
+    def test_a_declared_link_onto_another_kind_of_link_is_dropped_and_settles(
+        self, tmp_path: Path, new_b: str, detail: str
+    ):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "force Cmd true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        assert 0 < _timed_count(adapter, "A") < 100
+        script.write_text(_two(a="Bool('A2')", b=new_b))
+
+        resp = _plan_reload(adapter, out, declared={"A": "B"})
+
+        entry = _carried(resp, "A", "declared")
+        assert (entry["reason"], entry["detail"], entry["to"]) == ("changed kind", detail, None)
+        assert f"Dropped the declared link on A because {detail}." in resp["body"]["result"]
+        # B settles as a fresh coil would, so A's count is not carried.
+        tags = adapter._runner.current_state.tags
+        if "on_delay" in new_b:
+            assert "__tmd_on__B" not in tags
+            assert tags["__cpl_on__B"] == 100
+        else:
+            assert tags["__tmd_on__B"] == 0
 
 
 def _bad_trigger(script: Path, monkeypatch: pytest.MonkeyPatch) -> None:
