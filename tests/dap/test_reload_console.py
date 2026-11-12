@@ -2250,6 +2250,36 @@ class TestPlannedDeclaredLinks:
         assert adapter._bench_links["B"].coupling.en_name == "Go"
 
     @pytest.mark.parametrize(
+        "set_links",
+        [
+            pytest.param({"enabled": {"B": False}}, id="disabled"),
+            pytest.param({"bench": False}, id="bench-off"),
+        ],
+    )
+    def test_a_bench_change_that_waits_lets_a_declared_link_move_onto_its_feedback(
+        self, tmp_path: Path, set_links: dict[str, Any]
+    ):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "link B Go timed=1000ms", seq=10)
+        messages = _send_request(
+            adapter, out, seq=11, command="pyrungSetLinks", arguments=set_links
+        )
+        assert _single_response(messages)["success"] is True
+        _repl(adapter, out, "force Cmd true", seq=12)
+        _repl(adapter, out, "step 3", seq=13)
+        (count,) = _counts(adapter, "A")
+        assert 0 < count < 100
+        script.write_text(_two(a="Bool('A2')", b=_timed("B")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "B"})
+
+        entry = _carried(resp, "A", "declared")
+        assert (entry["dropped"], entry["to"]) == (False, "B")
+        assert _counts(adapter, "B") == (count,)
+        assert list(adapter._bench_links) == ["B"]
+        assert adapter._harness.overrides == {}
+
+    @pytest.mark.parametrize(
         ("new_b", "detail"),
         [
             pytest.param(

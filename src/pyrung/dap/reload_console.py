@@ -46,7 +46,7 @@ from pyrung.dap.handlers.lifecycle_launch import (
     stage_click_project,
 )
 from pyrung.dap.harness_console import StagedHarness, commit_harness, stage_harness
-from pyrung.dap.links import BenchDrop, BenchLink, active_overrides
+from pyrung.dap.links import BenchDrop, BenchLink, active_overrides, bench_active
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -247,16 +247,26 @@ def _plan_declared(
     return carries, targets
 
 
+def _taken(carry: _Carry, bench_on: bool) -> str | None:
+    """The feedback a kept bench change replaces the program's link on after the reload.
+
+    ``None`` when it was dropped or released, and when it waits disabled or with bench off.
+    """
+    if carry.dropped or carry.to is None or carry.new_entry is None:
+        return None
+    return carry.to if bench_active(carry.new_entry, bench_on) else None
+
+
 def _bench_wins(
-    bench: list[_Carry], declared_targets: dict[_Carry, tuple[str, Any]]
+    bench: list[_Carry], declared_targets: dict[_Carry, tuple[str, Any]], bench_on: bool
 ) -> dict[_Carry, tuple[str, Any]]:
     """The declared entries that no bench change takes the feedback of.
 
-    A bench change replaces the program's link on its feedback, before the reload
-    and after it.  So a declared entry onto that feedback is dropped, and the bench
-    change stays.
+    A bench change the harness runs replaces the program's link on its feedback, before
+    the reload and after it.  So a declared entry onto that feedback is dropped, and the
+    bench change stays.
     """
-    benched = {carry.to for carry in bench if carry.to is not None and not carry.dropped}
+    benched = {_taken(carry, bench_on) for carry in bench} - {None}
     kept: dict[_Carry, tuple[str, Any]] = {}
     for carry, (name, new_entry) in declared_targets.items():
         if name in benched:
@@ -287,6 +297,7 @@ def _coil_moves(
     declared: list[_Carry],
     old_harness: Harness | None,
     old_active: Mapping[str, Coupling | None],
+    bench_on: bool,
     new_runner: PLC,
     new_known: Mapping[str, Any],
 ) -> dict[str, Coupling]:
@@ -352,8 +363,8 @@ def _coil_moves(
         own = by_tag.get(fb)
         if fb in old_active:
             # The old coil on fb was its bench link.
-            return own is not None and not own.dropped and own.to == fb
-        taken = any(carry is not mover and not carry.dropped and carry.to == fb for carry in bench)
+            return own is not None and _taken(own, bench_on) == fb
+        taken = any(carry is not mover and _taken(carry, bench_on) == fb for carry in bench)
         return fb in old_declared and fb in new_declared and not taken
 
     while True:
@@ -626,7 +637,7 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     bench_carries, bench_targets = _plan_links(adapter._bench_links, plan.links)
     declared_carries, declared_targets = _plan_declared(old_harness, old_active, plan.declared)
     _place(bench_targets)
-    _place(_bench_wins(bench_carries, declared_targets))
+    _place(_bench_wins(bench_carries, declared_targets, adapter._bench_links_on))
 
     program_path = adapter._program_path
     if not program_path:
@@ -685,6 +696,7 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
         declared=declared_carries,
         old_harness=old_harness,
         old_active=old_active,
+        bench_on=adapter._bench_links_on,
         new_runner=new_runner,
         new_known=new_known_tags,
     )

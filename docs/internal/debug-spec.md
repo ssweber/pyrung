@@ -298,7 +298,7 @@ Each `reason` means:
 | `conflict` | Only from `pyrungReload`. Two or more forces would end on the same new tag, or two or more bench changes would end on the same new feedback. Two `declared` entries onto one feedback are a conflict too. None of them is applied. |
 | `in use` | Only from `pyrungReload`. A coil already runs on the new feedback, and it still runs there after the reload. Moving this coil there would overwrite the other coil's state, so the entry is dropped. |
 | `changed kind` | Only from `pyrungReload`. A `declared` entry's new link has another kind (`timed` and `delay`, say) or another trigger than the old one. The new coil starts fresh. |
-| `not declared` | Only from `pyrungReload`. A `declared` entry names a feedback the old program does not link, or one whose link a bench change replaced. A bench change on the new feedback drops the entry too, and the bench change stays. |
+| `not declared` | Only from `pyrungReload`. A `declared` entry names a feedback the old program does not link, or one whose link a bench change replaced. A bench change that runs on the new feedback drops the entry too, and the bench change stays. A disabled bench change, or any with bench wiring off, does not. |
 | `not forced` | Only from `pyrungReload`. The plan names a force that does not exist. |
 | `no bench change` | Only from `pyrungReload`. The plan names a bench change that does not exist. |
 
@@ -325,7 +325,7 @@ Each `reason` means:
 - A force or bench change the plan leaves out follows its tag name, as the console `reload` does.
 - A `declared` entry is for a link the program declares itself. The old program links the old feedback, and the new program links the new one. The coil's state moves to the new feedback, and the entry is reported as kind `declared`. An entry is dropped when either side has no declared link. It is also dropped when the new link has another kind or trigger.
 - When two forces or two bench changes would end on the same new tag, planned or following their names, neither is applied. Each is reported as a `conflict`.
-- A bench change on a feedback drops a `declared` entry onto it as `not declared`. The bench change stays.
+- A bench change that runs on a feedback drops a `declared` entry onto it as `not declared`. The bench change stays. A disabled bench change, or any with bench wiring off, lets the entry move.
 - A coil never moves onto a feedback whose own coil stays there. Such an entry is dropped as `in use`.
 
 A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. A feedback value moves only into a tag of the same type. Otherwise the new feedback starts from its default. The plan is applied when the new program replaces the old one. A reload that fails changes nothing, so the old program, mode, forces, harness, bench changes and breakpoints stay. A plan whose `forces`, `links` or `declared` is not an object fails the request. So does a plan with a key that is not a tag name. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.

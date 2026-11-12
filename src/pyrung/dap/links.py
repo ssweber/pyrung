@@ -168,10 +168,15 @@ def active_overrides(adapter: Any) -> dict[str, Coupling | None]:
     return _active(adapter._bench_links, adapter._bench_links_on)
 
 
+def bench_active(entry: BenchLink, bench_on: bool) -> bool:
+    """Whether the harness runs *entry*.  A disabled entry, or any entry with bench off, waits."""
+    return bench_on and entry.enabled
+
+
 def _active(bench_links: Mapping[str, BenchLink], bench_on: bool) -> dict[str, Coupling | None]:
-    if not bench_on:
-        return {}
-    return {fb: entry.coupling for fb, entry in bench_links.items() if entry.enabled}
+    return {
+        fb: entry.coupling for fb, entry in bench_links.items() if bench_active(entry, bench_on)
+    }
 
 
 def _declared(adapter: Any) -> dict[str, Coupling]:
