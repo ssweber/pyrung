@@ -97,6 +97,7 @@ def _compile_debounce_instruction(
     sp = " " * indent
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
+    sp12 = " " * (indent + 12)
     rung_key = f"_debounce_rung:{ctx.state_key_for(instr)}"
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
@@ -120,15 +121,19 @@ def _compile_debounce_instruction(
         f"{sp4}if _acc >= int({_compile_value(instr.on_preset, ctx)}):",
         f"{sp8}{target_write} = True",
         f"{sp}else:",
-        # The off side compares what it had reached before this scan, and not on the fall.
-        f"{sp4}_timed_out = not _was and int({_compile_value(instr.off_acc, ctx)})"
-        f" >= int({_compile_value(instr.off_preset, ctx)})",
-        *_tick_lines(instr.off_acc, instr.off_preset, instr.unit, ctx, sp4),
-        f'{sp4}_mem["{off_frac}"] = _new_frac',
         _keep_frac_line(instr.on_acc, sp4),
-        f"{sp4}{off_write} = _acc",
-        f"{sp4}if _timed_out:",
-        f"{sp8}{target_write} = False",
+        # With the coil off, the off TD holds its value, including one the ladder wrote.
+        f"{sp4}if not bool({_compile_value(instr.target, ctx)}):",
+        _keep_frac_line(instr.off_acc, sp8),
+        f"{sp4}else:",
+        # The off side compares what it had reached before this scan, and not on the fall.
+        f"{sp8}_timed_out = not _was and int({_compile_value(instr.off_acc, ctx)})"
+        f" >= int({_compile_value(instr.off_preset, ctx)})",
+        *_tick_lines(instr.off_acc, instr.off_preset, instr.unit, ctx, sp8),
+        f'{sp8}_mem["{off_frac}"] = _new_frac',
+        f"{sp8}{off_write} = _acc",
+        f"{sp8}if _timed_out:",
+        f"{sp12}{target_write} = False",
     ]
 
 

@@ -1484,3 +1484,9 @@ case = "pack_point/point_into_dd"
 hash = "7708a81c2c65"
 on = "2026-11-10"
 read = { Result1 = 12, Result2 = 12, Result3 = 12, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "deb_off/off_td_with_coil_off"
+hash = "5d41600a3ea8"
+on = "2026-11-12"
+read = { ErrorCode = 50, Result1 = 0, Result2 = 50, Result3 = 50, Result4 = 201 }

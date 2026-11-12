@@ -131,8 +131,9 @@ def debounce_model(
     from 0 when the input rises and is kept after it falls (hardware,
     2026-11-05); the off TD is 0 while the input is on and counts from the
     fall's scan, but the off side compares the TD as the scan before left it,
-    and not on the fall's scan (hardware, 2026-11-06).  The input counts as off
-    before scan 1."""
+    and not on the fall's scan (hardware, 2026-11-06).  The off TD counts only
+    while the coil is on, and holds with it off (hardware, 2026-11-12).  The
+    input counts as off before scan 1."""
     coil, run_len, prev, out = False, 0, False, []
     on_td = off_td = 0
     for level in levels:
@@ -144,7 +145,7 @@ def debounce_model(
             on_td, off_td = acc, 0
             if acc >= on_preset:
                 coil = True
-        else:
+        elif coil:
             if not fell and off_td >= off_preset:
                 coil = False
             off_td = acc

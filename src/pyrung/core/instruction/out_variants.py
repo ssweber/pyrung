@@ -117,17 +117,16 @@ class DebounceInstruction(Instruction):
 
     Two accumulators, one a side (hardware readings of 2026-11-06).  The on
     side's counts while the rung is true: from 0 at a rise, held at a fall.
-    The off side's is 0 on every true scan and counts while the rung is
-    false.  A CLICK has read that count only after the target was on.  After
-    a pulse shorter than the on preset, a CLICK's off TD did not reach 100
-    (2026-11-11).  pyrung's counts there.  Whether a CLICK's counts from
-    power-up is unread.  The target turns on on a true scan whose on
-    accumulator, ticked, reaches its preset, and off on a false scan whose
-    off accumulator reached its preset before this scan's tick; between the
-    two it holds.  So the off side lags a scan: on the scan of the fall it
-    ticks and compares nothing, and it drops the target a scan after a TOF of
-    its preset would (``coil_timing/deb_off_against_tof``), a 0/0 debounce
-    filtering a one-scan dropout (``deb_zero/off_side_lag``).
+    The off side's is 0 on every true scan.  It counts while the rung is false
+    and the target is on.  With the target off, the off TD holds its value,
+    including one the ladder wrote (``deb_off/off_td_with_coil_off``,
+    2026-11-12).  The target turns on on a true scan whose on accumulator,
+    ticked, reaches its preset.  It turns off on a false scan whose off
+    accumulator reached its preset before this scan's tick.  Between the two
+    it holds.  So the off side lags a scan.  On the scan of the fall it ticks
+    and compares nothing.  It drops the target a scan after a TOF of its
+    preset would (``coil_timing/deb_off_against_tof``), so a 0/0 debounce
+    filters a one-scan dropout (``deb_zero/off_side_lag``).
 
     The lag is taken in the compare, not the count: an off side that only
     started ticking on the scan after the fall would read its TD a scan
@@ -189,13 +188,17 @@ class DebounceInstruction(Instruction):
                 tags[self.target.name] = True
             ctx.set_tags(tags)
             return
+        ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
+        if not ctx.get_tag(self.target.name, False):
+            # With the coil off, the off TD holds its value, including one the ladder wrote.
+            ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0))
+            return
         # The off side compares what it had reached before this scan, and not on the fall.
         timed_out = not was_enabled and ctx.get_tag(self.off_acc.name, 0) >= resolve_preset_ctx(
             self.off_preset, ctx
         )
         acc_value, frac = _tick(ctx, self.off_acc, self.unit)
         ctx.set_memory(off_frac, frac)
-        ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
         tags = {self.off_acc.name: acc_value}
         if timed_out:
             tags[self.target.name] = False

@@ -160,7 +160,7 @@ class TestDebounce:
         assert [r[0] for r in rows] == [True, True, True, True, True, False, True]
 
     def test_off_side_from_power_up(self, runner_factory):
-        """The off side counts from power-up with the rung false; no rise, no fall."""
+        """A coil on at power-up counts its off side with no rise or fall, and holds once off."""
         Valve = Bool("Valve", default=True)
         with Program() as logic:
             with Rung(In):
@@ -168,7 +168,54 @@ class TestDebounce:
 
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(runner, [0, 0, 0, 0], "Valve", "OT2_Acc")
-        assert rows == [(True, 10), (True, 20), (False, 30), (False, 40)]
+        assert rows == [(True, 10), (True, 20), (False, 30), (False, 30)]
+
+    def test_off_td_holds_a_write_while_the_coil_is_off(self, runner_factory):
+        """``deb_off/off_td_with_coil_off``: a CLICK kept the 50 the ladder wrote."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 300), off=(T[2], 1000))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"OT2_Acc": 50})
+        assert _trace(runner, [0, 0, 0], "Valve", "OT2_Acc") == [(False, 50)] * 3
+
+    def test_off_td_stays_0_after_a_pulse_too_short_for_the_on_side(self, runner_factory):
+        """The rise clears the off TD.  The fall does not start it, since the coil never came on."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 30), off=(T[2], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"OT2_Acc": 50})
+        rows = _trace(runner, [1, 1, 0, 0, 0], "Valve", "OT1_Acc", "OT2_Acc")
+        assert rows == [
+            (False, 10, 0),
+            (False, 20, 0),
+            (False, 20, 0),
+            (False, 20, 0),
+            (False, 20, 0),
+        ]
+
+    def test_off_td_counts_once_the_coil_is_on_and_the_rung_falls(self, runner_factory):
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 0), off=(T[2], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [0, 1, 0, 0, 0, 0, 0], "Valve", "OT2_Acc")
+        assert rows == [
+            (False, 0),  # no count with the coil off
+            (True, 0),
+            (True, 10),  # the fall
+            (True, 20),
+            (False, 30),  # 20 reached a scan ago, so off.  This scan still ticks
+            (False, 30),  # the coil is off, so the off TD holds
+            (False, 30),
+        ]
 
     def test_both_sides_a_bounce_resets_the_side_timing(self, runner_factory):
         """O3, pyrung's answer: the side that was timing starts over."""

@@ -36,7 +36,7 @@ with rung(LevelSwitch):
     debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
 ```
 
-`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms. A shorter blip changes nothing. The on `Acc` restarts from 0 when the rung goes true. It keeps counting past the preset while the rung stays true, as `on_delay`'s does, and holds its value while the rung is false. The off `Acc` is 0 while the rung is true and counts while the rung is false. The off side takes one scan longer than an `off_delay` with the same preset. The coil drops on the scan after the off `Acc` reaches the preset. CLICK requires both sides.
+`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms. A shorter blip changes nothing. The on `Acc` restarts from 0 when the rung goes true. It keeps counting past the preset while the rung stays true, as `on_delay`'s does, and holds its value while the rung is false. The off `Acc` is 0 while the rung is true. It counts while the rung is false and the coil is on, and holds its value while the coil is off. The off side takes one scan longer than an `off_delay` with the same preset. The coil drops on the scan after the off `Acc` reaches the preset. CLICK requires both sides.
 
 ### `flasher` — blink while the rung is true
 
