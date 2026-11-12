@@ -142,7 +142,7 @@ class LiveServer:
         adapter = self._adapter
         changed = False
         try:
-            # The last command wins: step/run pause a running continue first.
+            # The last command wins: step, run and reload pause a running continue first.
             from pyrung.dap.handlers.simulation import pause_before_console_command
 
             pause_before_console_command(adapter, command)

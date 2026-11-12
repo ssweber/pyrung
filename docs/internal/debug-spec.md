@@ -266,6 +266,23 @@ Each frame carries `trace` (whose `forces` always holds the full force map), `ch
 
 Frames sent outside Continue carry an empty `changes` list and, when paused, the same trace as the latest `pyrungTrace`.
 
+### Reload report
+
+The `evaluate` response for the console `reload` carries a `carried` list next to `result`. Autoreload puts the same list in the `data` of its console output event. The list is empty when nothing moved or dropped. Each entry is one force, bench link or bench cut that moved to another CLICK address or was dropped:
+
+| Field | Meaning |
+|---|---|
+| `tag` | The tag that moved or was dropped. For a link whose enable moved, this is the enable. |
+| `kind` | `force`, `link` or `cut` |
+| `feedback` | The link's or cut's feedback tag. Absent for a force. |
+| `old`, `new` | CLICK addresses as the TagMap writes them (`X001`, `DS1`). `null` when the tag had none, and `new` is `null` when dropped. |
+| `dropped` | `true` when the force or bench change no longer applies |
+| `reason` | Only when dropped. `gone`, `type changed`, `invalid`, `in program` or `not forceable`. |
+| `value` | A force's value. Absent otherwise. |
+| `enabled` | A link's or cut's enabled flag. Absent for a force. |
+
+A force or link follows the tag name, never the address. A reload without a TagMap reports only drops.
+
 ---
 
 ## Force Semantics

@@ -583,7 +583,7 @@ class TestReload:
 
 
 ONESHOT_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, Int, Physical, PLC, Program, Rung, out\n"
     "\n"
     "button = Bool('Button')\n"
     "pulse = Bool('Pulse')\n"
@@ -1239,11 +1239,11 @@ class TestReloadWhileContinueRuns:
 
 
 CARRY_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, Int, Physical, PLC, Program, Rung, out\n"
     "from pyrung.click import ClickBlocks, TagMap\n"
-    "x, y, c, *_ = ClickBlocks()\n"
+    "x, y, c, t, ct, sc, ds, *_ = ClickBlocks()\n"
     "\n"
-    "a = Bool('{a}')\n"
+    "a = {a_decl}\n"
     "cmd = Bool('Cmd')\n"
     "lamp = Bool('Lamp')\n"
     "\n"
@@ -1253,17 +1253,33 @@ CARRY_SCRIPT = (
     "    with Rung(a):\n"
     "        out(Bool('Sink'))\n"
     "\n"
-    "mapping = TagMap({{a: {a_addr}, cmd: x[1], lamp: y[1]}})\n"
+    "mapping = TagMap({{a: {a_addr}, cmd: {cmd_addr}, lamp: y[1]}})\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
 
 
+def _carry_script(**kwargs: str) -> str:
+    values = {"a": "A", "a_addr": "c[1]", "cmd_addr": "x[1]", "a_type": "Bool", **kwargs}
+    values["a_decl"] = values.pop("a_decl", f"{values['a_type']}('{values['a']}')")
+    return CARRY_SCRIPT.format(**values)
+
+
 def _carry(tmp_path: Path, *, a: str = "A", a_addr: str = "c[1]") -> tuple[Any, Any, Path]:
-    return _setup(tmp_path, CARRY_SCRIPT.format(a=a, a_addr=a_addr))
+    return _setup(tmp_path, _carry_script(a=a, a_addr=a_addr))
 
 
 def _rewrite(script_path: Path, **kwargs: str) -> None:
-    script_path.write_text(CARRY_SCRIPT.format(**{"a": "A", "a_addr": "c[1]", **kwargs}))
+    script_path.write_text(_carry_script(**kwargs))
+
+
+def _int_a_script() -> str:
+    """A is an Int now, so a force or a bench link on it no longer fits."""
+    return _carry_script(a_type="Int", a_addr="ds[1]").replace("Rung(a)", "Rung(a > 0)")
+
+
+def _declared_a_script() -> str:
+    decl = "Bool('A', physical=Physical('A', on_delay='0ms'), link='Cmd')"
+    return _carry_script(a_decl=decl)
 
 
 class TestReloadReportsWhatMoved:
@@ -1274,23 +1290,35 @@ class TestReloadReportsWhatMoved:
 
         resp, _stopped = _repl(adapter, out, "reload", seq=11)
 
-        assert "Force on A moved from C1 to C5." in resp["body"]["result"]
+        assert "The force on A moved from C1 to C5." in resp["body"]["result"]
         assert resp["body"]["carried"] == [
             {"tag": "A", "kind": "force", "old": "C1", "new": "C5", "dropped": False, "value": True}
         ]
         assert adapter._runner.forces == {"A": True}
 
-    def test_a_force_dropped_by_a_rename_is_reported(self, tmp_path: Path):
+    def test_a_force_dropped_by_a_rename_is_unforced_and_reported(self, tmp_path: Path):
         adapter, out, script = _carry(tmp_path)
         _repl(adapter, out, "force A true", seq=10)
         _rewrite(script, a="B")
 
         resp, _stopped = _repl(adapter, out, "reload", seq=11)
 
-        assert "Force on A dropped: A is not in the new program." in resp["body"]["result"]
+        assert (
+            "Dropped the force on A because A is not in the new program."
+            in (resp["body"]["result"])
+        )
         assert resp["body"]["carried"] == [
-            {"tag": "A", "kind": "force", "old": "C1", "new": None, "dropped": True, "value": True}
+            {
+                "tag": "A",
+                "kind": "force",
+                "old": "C1",
+                "new": None,
+                "dropped": True,
+                "value": True,
+                "reason": "gone",
+            }
         ]
+        assert adapter._runner.forces == {}
 
     def test_a_dropped_force_is_reported_with_no_tag_map(self, tmp_path: Path):
         adapter, out, script = _setup(tmp_path)
@@ -1300,7 +1328,8 @@ class TestReloadReportsWhatMoved:
         resp, _stopped = _repl(adapter, out, "reload", seq=11)
 
         assert (
-            "Force on Button dropped: Button is not in the new program." in (resp["body"]["result"])
+            "Dropped the force on Button because Button is not in the new program."
+            in (resp["body"]["result"])
         )
         assert resp["body"]["carried"] == [
             {
@@ -1310,8 +1339,30 @@ class TestReloadReportsWhatMoved:
                 "new": None,
                 "dropped": True,
                 "value": True,
+                "reason": "gone",
             }
         ]
+        assert adapter._runner.forces == {}
+
+    def test_a_force_on_a_system_tag_stays_and_is_not_reported(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force rtc.new_hour true", seq=10)
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert resp["body"]["carried"] == []
+        assert adapter._runner.forces == {"rtc.new_hour": True}
+
+    def test_a_force_on_a_tag_that_changed_type_is_dropped_with_that_reason(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        script.write_text(_int_a_script())
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["tag"], entry["dropped"], entry["reason"]) == ("A", True, "type changed")
+        assert adapter._runner.forces == {}
 
     def test_a_bench_link_whose_feedback_moved_is_reported(self, tmp_path: Path):
         adapter, out, script = _carry(tmp_path)
@@ -1321,19 +1372,157 @@ class TestReloadReportsWhatMoved:
 
         resp, _stopped = _repl(adapter, out, "reload", seq=11)
 
-        assert "Bench link on A moved from C1 to C5." in resp["body"]["result"]
+        assert "The bench link on A moved from C1 to C5." in resp["body"]["result"]
         assert resp["body"]["carried"] == [
-            {"tag": "A", "kind": "link", "old": "C1", "new": "C5", "dropped": False}
+            {
+                "tag": "A",
+                "kind": "link",
+                "feedback": "A",
+                "old": "C1",
+                "new": "C5",
+                "dropped": False,
+                "enabled": True,
+            }
         ]
         assert "A" in adapter._bench_links
+
+    def test_a_moved_enable_is_reported_under_the_links_feedback(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        _rewrite(script, cmd_addr="x[3]")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        assert (
+            "The bench link on A reads Cmd, which moved from X001 to X003."
+            in (resp["body"]["result"])
+        )
+        entry = resp["body"]["carried"][0]
+        assert (entry["tag"], entry["feedback"], entry["kind"]) == ("Cmd", "A", "link")
+
+    def test_a_disabled_link_is_reported_with_its_flag(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        link = adapter._bench_links["A"]
+        adapter._bench_links["A"] = type(link)(link.coupling, enabled=False)
+        _rewrite(script, a_addr="c[5]")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["enabled"], entry["new"]) == ("link", False, "C5")
+
+    def test_a_link_dropped_by_a_rename_is_reported_gone(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        _rewrite(script, a="B")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["feedback"], entry["dropped"], entry["reason"]) == (
+            "link",
+            "A",
+            True,
+            "gone",
+        )
+        assert entry["new"] is None
+        assert "A" not in adapter._bench_links
+
+    def test_a_link_that_no_longer_validates_is_reported_invalid(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        script.write_text(_int_a_script())
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("link", True, "invalid")
+
+    def test_a_link_the_program_now_declares_is_reported_in_program(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        script.write_text(_declared_a_script())
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("link", True, "in program")
+
+    def test_a_cut_is_reported_when_the_program_no_longer_links_it(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        assert adapter._bench_links["A"].coupling is None
+        _rewrite(script)
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=12)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("cut", True, "gone")
 
     def test_nothing_is_reported_when_nothing_moved(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)
         _repl(adapter, out, "force A true", seq=10)
-        _repl(adapter, out, "link Lamp Cmd on_delay=0ms", seq=11)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=11)
 
         resp, _stopped = _repl(adapter, out, "reload", seq=12)
 
         assert resp["body"]["carried"] == []
         assert "moved" not in resp["body"]["result"]
-        assert "dropped" not in resp["body"]["result"]
+        assert "Dropped" not in resp["body"]["result"]
+
+
+class TestReloadWaitsForThePause:
+    def test_a_reload_after_pause_waits_until_the_worker_lands(self, tmp_path: Path, monkeypatch):
+        import threading
+
+        adapter, out, _script_path = _setup(tmp_path)
+        gate = threading.Event()
+        monkeypatch.setattr(adapter, "_continue_worker", lambda: gate.wait(10))
+        _send_request(adapter, out, seq=10, command="continue")
+        _send_request(adapter, out, seq=11, command="pause")
+        assert adapter._thread_running_locked()
+        threading.Timer(0.2, gate.set).start()
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=12)
+
+        assert resp["success"] is True
+        assert gate.is_set()
+        assert not adapter._thread_running_locked()
+
+    def test_a_reload_refuses_when_the_pause_never_lands(self, tmp_path: Path, monkeypatch):
+        import threading
+
+        from pyrung.dap.handlers import simulation
+
+        monkeypatch.setattr(simulation, "_PAUSE_JOIN_TIMEOUT", 0.05)
+        adapter, out, _script_path = _setup(tmp_path)
+        gate = threading.Event()
+        monkeypatch.setattr(adapter, "_continue_worker", lambda: gate.wait(10))
+        _send_request(adapter, out, seq=10, command="continue")
+        old_runner = adapter._runner
+        try:
+            resp, _stopped = _repl(adapter, out, "reload", seq=11)
+        finally:
+            gate.set()
+
+        assert resp["success"] is False
+        assert "Timed out waiting for execution to pause" in resp["message"]
+        assert adapter._runner is old_runner
+
+    def test_a_failed_reload_in_stop_keeps_stop_forces_and_links(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=11)
+        _repl(adapter, out, "mode stop", seq=12)
+        script.write_text("this is not python (\n")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=13)
+
+        assert resp["success"] is False
+        assert "Reload failed" in resp["message"]
+        assert adapter._runner.mode == "stop"
+        assert adapter._runner.forces == {"A": True}
+        assert "A" in adapter._bench_links

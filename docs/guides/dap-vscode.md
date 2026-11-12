@@ -389,6 +389,15 @@ pyrung live reload             # from another terminal
 
 Scan ID and timestamp continue from where they were. Debug registrations (breakpoints, monitors) are cleared since rung indices may have shifted.
 
+A reload keeps the PLC mode, so a reload in STOP stays in STOP. A reload sent while `continue` runs pauses it first.
+
+Forces and bench links follow the tag name. When the program has a TagMap, the reload says which of them now sit at another CLICK address and which were dropped because the new program no longer has the tag:
+
+```text
+The force on A moved from C1 to C5.
+Dropped the force on B because B is not in the new program.
+```
+
 ### Auto-reload on file save
 
 ```text

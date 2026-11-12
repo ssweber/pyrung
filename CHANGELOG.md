@@ -373,10 +373,12 @@
 - The ladder export draws a rung with an Or of 3 or more rows and several outputs the way the CLICK keeps it, so a pasted project shows no redraw (it put the second output on row 2).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
-- The debugger's `reload` keeps the PLC mode, and a `reload` sent while `continue` runs pauses first.
+- The debugger's `reload` keeps the PLC mode, pauses a running `continue` first, and reports the forces and bench links it moved or dropped.
   - a `reload` in STOP stays in STOP (it came back in RUN)
-  - a `reload` sent after `pause` waits for the pause to land (it failed with "Cannot reload while continue is running")
-  - a `reload` lists each force and bench link whose tag moved to another CLICK address or is gone from the new program. The console prints a sentence for each, and the response carries them in `carried`. Forces and links still follow the tag name
+  - a `reload` sent while `continue` runs pauses it first (it failed with "Cannot reload while continue is running")
+  - forces and bench links still follow the tag name. A `reload` now prints a sentence for each one whose tag moved to another CLICK address, and for each one dropped because the new program no longer has the tag
+  - a force on a tag the new program no longer has is now removed (it stayed active)
+  - the evaluate response lists every moved or dropped force, link and cut in a `carried` field, and autoreload sends the same list in its output event
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
 - Rungs after a `with Program()` block nested in another one join the outer program (they joined no program).
 - Two threads can build programs at the same time (a rung could join the other thread's program).

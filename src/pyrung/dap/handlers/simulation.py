@@ -125,7 +125,7 @@ PAUSE_FIRST_VERBS = frozenset({"step", "run", "reload"})
 
 
 def pause_before_console_command(adapter: Any, expression: str) -> None:
-    """Pause a running continue worker if *expression* will run scans (no lock held).
+    """Pause a running continue worker if *expression* runs scans or swaps the runner (no lock held).
 
     Anyone can drive and the last command wins: a ``step``, ``run`` or ``reload`` sent
     while continue runs pauses it and then executes.
