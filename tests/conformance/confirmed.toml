@@ -116,7 +116,8 @@
 "drum_pins/paused_jog_with_flag" = { hash = "8a5c38f21f16", on = "2026-11-11" }
 "drum_pins/paused_jog_with_flag_mid" = { hash = "a73110e694c5", on = "2026-11-11" }
 "drum_pins/time_and_jog" = { hash = "293063f180ab", on = "2026-11-11" }
-"drum_preset/literal_zero" = { hash = "0e521a4f952f", on = "2026-11-12" }
+"drum_preset/entry_or_first_timing_scan" = { hash = "b40f7d9e421e", on = "2026-11-12" }
+"drum_preset/literal_zero" = { hash = "9ac8c1ac7f9a", on = "2026-11-12" }
 "drum_rule/bad_step_and_first_scan_jog" = { hash = "4ac393018e13", on = "2026-11-11" }
 "drum_rule/correction_moves" = { hash = "88f63227e76e", on = "2026-11-11" }
 "drum_rule/last_step_jog" = { hash = "c5a30a0e3b15", on = "2026-11-11" }
