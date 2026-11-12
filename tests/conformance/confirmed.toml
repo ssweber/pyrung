@@ -280,6 +280,10 @@
 "real_text/ten_billion_first" = { hash = "f329a7ec9d8b", on = "2026-11-12" }
 "real_text/ten_billion_past" = { hash = "52484ca4ad33", on = "2026-11-12" }
 "real_text/zero_first" = { hash = "ce6102786be2", on = "2026-11-12" }
+"reset_pins/down_reset_negative" = { hash = "39ab01ae7e5c", on = "2026-11-12" }
+"reset_pins/down_reset_positive" = { hash = "f9275cf68231", on = "2026-11-12" }
+"reset_pins/rton_reset_after" = { hash = "12ad510183ac", on = "2026-11-12" }
+"reset_pins/rton_reset_held" = { hash = "8445ec6c60a3", on = "2026-11-12" }
 "ret_branch/branch_return_stops_subroutine" = { hash = "03745c2216bb", on = "2026-11-11" }
 "row_solve/continued_after_box_rereads_trunk" = { hash = "50a4f2232fa2", on = "2026-11-11" }
 "row_solve/correction_scan_with_free_enable" = { hash = "e78a65f47c08", on = "2026-11-11" }
