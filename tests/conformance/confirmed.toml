@@ -153,6 +153,7 @@
 "faults/real_intermediate_range" = { hash = "571af57a341f", on = "2026-11-12" }
 "flag_boxes/boxes_by_pointer" = { hash = "7a1272f9278c", on = "2026-11-12" }
 "flag_boxes/ton_ctu_by_pointer" = { hash = "cd28e7f79d80", on = "2026-11-12" }
+"flag_carry/math_flags_carry" = { hash = "f578d14515c3", on = "2026-11-12" }
 "flag_halves/bulk_ops_settle_sc43" = { hash = "41090c1f3bdc", on = "2026-11-12" }
 "flag_halves/df_into_dd" = { hash = "457d58f531e8", on = "2026-11-12" }
 "flag_halves/oneshot_settles_sc43" = { hash = "f92171528c8c", on = "2026-11-12" }
