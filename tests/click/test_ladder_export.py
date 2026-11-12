@@ -333,6 +333,41 @@ def test_contact_after_or_merge_shares_the_merge_cell(conditions: str, rows: lis
 
 
 @pytest.mark.parametrize(
+    ("build", "rows"),
+    [
+        pytest.param(
+            lambda: (x[1], Or(txt[1] != "AB", x[5])),
+            ['R,X001,T:TXT1!="AB",T,out(C1)', ",,X005,"],
+            id="in-an-or",
+        ),
+        pytest.param(
+            lambda: (x[1], Or(txt[1] != "AB", x[5])),
+            ['R,X001,T:TXT1!="AB",T,out(C1)', ",,X005,out(C2)"],
+            id="in-an-or-with-two-outputs",
+        ),
+        pytest.param(
+            lambda: (x[1], Or(x[2], x[3]), Or(txt[1] != "AB", x[5])),
+            ['R,X001,T:X002,T:TXT1!="AB",T,out(C1)', ",,X003,X005,"],
+            id="in-ors-in-series",
+        ),
+    ],
+)
+def test_a_text_compare_with_a_longer_literal_stays_one_compare_in_an_or(build, rows):
+    # TXT1 != "AB" is an Or of one compare per character underneath.
+    outputs = sum(row.split(",")[-1].startswith("out(") for row in rows)
+    with Program(strict=False) as logic:
+        with Rung(*build()):
+            for index in range(outputs):
+                out(c[index + 1])
+    bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
+    assert list(bundle.main_rows[1:-1]) == _rows(*rows)
+    namespace: dict[str, object] = {}
+    exec_with_source(ladder_to_pyrung(bundle), namespace)
+    again = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    assert again.main_rows == bundle.main_rows
+
+
+@pytest.mark.parametrize(
     ("conditions", "rows"),
     [
         pytest.param(

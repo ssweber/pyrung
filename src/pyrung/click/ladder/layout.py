@@ -236,7 +236,8 @@ class _LayoutMixin:
             if row.cells[split_col] == "":
                 row.cells[split_col] = "-"
             elif row.cells[split_col] == "|":
-                # An Or's merge vertical passes this output row, so the row also takes the wire.
+                # The cell becomes a T, which carries the Or's vertical on down and the wire to
+                # this output.
                 row.cells[split_col] = "T"
             for col in range(split_col + 1, _CONDITION_COLS):
                 if row.cells[col] == "":
@@ -308,6 +309,7 @@ class _LayoutMixin:
                     cursor=base_col + row.cursor,
                     accepts_terms=row.accepts_terms,
                     merge_open=row.merge_open,
+                    merge_start=base_col + row.merge_start,
                 )
             )
         return shifted
@@ -615,11 +617,9 @@ class _LayoutMixin:
                 frozen_rows.append(row.clone())
                 continue
 
-            # An Or straight after an Or starts in the first Or's merge column, as the CLICK's
-            # syntax check redraws it.  Only terms drawn on one row can share that column.  After
-            # an Or on the left rail the new Or keeps the bare T between them, as the native
-            # captures in tests/fixtures/click_or_topology.csv draw it.  A one-way Or is just a
-            # contact.
+            # CLICK's syntax check starts an Or that follows an Or in the first Or's merge column,
+            # except after an Or on the left rail (tests/fixtures/click_or_topology.csv).  Only
+            # terms drawn on one row can share that column.
             share = (
                 row.merge_open
                 and row.merge_start > 0
@@ -796,6 +796,8 @@ def _or_terms(condition: AnyCondition) -> list[Condition]:
     """The terms of an Or, with each Or nested straight inside it opened up."""
     terms: list[Condition] = []
     for term in condition.conditions:
+        # A TXT compare against a longer literal is an Or underneath but one compare as written.
+        term = text_window_of(term)
         if isinstance(term, AnyCondition):
             terms.extend(_or_terms(term))
         else:
@@ -805,6 +807,7 @@ def _or_terms(condition: AnyCondition) -> list[Condition]:
 
 def _is_series(condition: Condition) -> bool:
     """True for a term drawn on one row, a contact or an And of contacts."""
+    condition = text_window_of(condition)
     if isinstance(condition, AnyCondition):
         return False
     if isinstance(condition, AllCondition):

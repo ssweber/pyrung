@@ -370,10 +370,10 @@
   - validation reports `CLK_PTR_BLOCK_OFFSET`
   - add the offset with `math(idx + 99, Ptr)` and copy through `ds[Ptr]`
 - The `CLK_PTR_EXPR_NOT_ALLOWED` suggestion no longer adds the block offset twice.
-- The ladder export draws rungs with an Or as CLICK's syntax check redraws them, so a pasted rung keeps its drawing:
-  - The outputs go on the Or's own rows from the top, in the column where the Or's rows join. (The second output sat on the last Or row, or the outputs sat one column further right.)
+- The ladder export draws rungs with an Or the way CLICK's syntax check redraws them, so the check leaves a pasted rung as it is:
+  - The outputs after an Or go on the Or's own rows from the top, in the column where the Or's rows join (they sat one column further right). Outputs beside a `branch()` keep their column.
   - An Or inside an Or is drawn as one Or.
-  - An Or straight after an Or that is not on the left rail starts in the column where the first Or's rows join (a column of wire sat between them).
+  - When an Or follows another Or that does not start at the left rail, the second Or starts in the column where the first Or's rows join (a column of wire sat between them).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).

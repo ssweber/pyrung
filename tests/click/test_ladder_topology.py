@@ -127,6 +127,16 @@ def build_program() -> tuple[Program, TagMap]:
             outputs(1)
             with branch(rows(2)):
                 outputs(2)
+        # An Or followed by a branch between two outputs, and two Ors in series on a branch.
+        with Rung(x[1], rows(3)):
+            outputs(1)
+            with branch(x[5]):
+                outputs(1)
+            outputs(1)
+        with Rung(x[1]):
+            outputs(1)
+            with branch(rows(2), rows(2, first=4)):
+                outputs(1)
     mapping = TagMap(
         {
             TallyA.Done: ct[2],
