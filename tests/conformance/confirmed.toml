@@ -181,6 +181,7 @@
 "for_more/clock_edges_in_a_body" = { hash = "c08350dd4748", on = "2026-11-11" }
 "for_more/oneshot_and_edges" = { hash = "a4c1e11033f3", on = "2026-11-11" }
 "for_more/timers_at_limits" = { hash = "7a8f71b80834", on = "2026-11-11" }
+"for_signed/minus_counts" = { hash = "1f0e4d3f312a", on = "2026-11-12" }
 "for_wide/count_forms" = { hash = "13f61c73db35", on = "2026-11-07" }
 "hex_math/rotates_and_bits" = { hash = "e99dab058aaa", on = "2026-11-12" }
 "hex_math/shifts" = { hash = "ea8b767425f0", on = "2026-11-12" }
