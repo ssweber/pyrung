@@ -391,7 +391,7 @@ Scan ID and timestamp continue from where they were. Debug registrations (breakp
 
 A reload keeps the PLC mode, so a reload in STOP stays in STOP. A reload sent while `continue` runs pauses it first.
 
-Forces and bench links follow the tag name. When the program has a TagMap, the reload says which of them now sit at another CLICK address and which were dropped because the new program no longer has the tag:
+Forces and bench links follow the tag name. A reload names each force and bench link whose tag moved to another CLICK address, and each one it dropped:
 
 ```text
 The force on A moved from C1 to C5.

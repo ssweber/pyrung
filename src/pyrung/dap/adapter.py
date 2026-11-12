@@ -33,6 +33,7 @@ from pyrung.dap.handlers import (
     lifecycle_launch,
     link_requests,
     monitor_data_breakpoints,
+    reload_request,
     simulation,
     stack_variables_evaluate,
 )
@@ -544,6 +545,9 @@ class DAPAdapter:
 
     def _on_pyrungListLinks(self, _args: dict[str, Any]) -> HandlerResult:
         return link_requests.on_pyrung_list_links(self, _args)
+
+    def _on_pyrungReload(self, args: dict[str, Any]) -> HandlerResult:
+        return reload_request.on_pyrung_reload(self, args)
 
     def _on_pyrungSetMode(self, args: dict[str, Any]) -> HandlerResult:
         return simulation.on_pyrung_set_mode(self, args)

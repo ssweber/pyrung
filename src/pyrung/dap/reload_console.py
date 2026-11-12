@@ -12,6 +12,8 @@ import os
 import runpy
 import sys
 import threading
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,14 @@ from pyrsistent import pmap
 
 from pyrung.core import PLC
 from pyrung.core._source import clear_source_index
+from pyrung.core.harness import (
+    CoilWiring,
+    Coupling,
+    coil_feedback,
+    link_problem,
+    rename_coil_state,
+    rename_coil_wiring,
+)
 from pyrung.core.site_memory import (
     PLANT_FEEDBACK_SITE,
     instruction_memory,
@@ -28,6 +38,7 @@ from pyrung.core.site_memory import (
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.dap.console import ConsoleResult, register
+from pyrung.dap.links import BenchDrop, BenchLink, active_overrides
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -40,16 +51,179 @@ def _addresses(adapter: Any) -> dict[str, str] | None:
     return {slot.logical_name: slot.hardware_address for slot in tag_map.mapped_slots()}
 
 
+@dataclass(frozen=True)
+class ReloadPlan:
+    """Where a reload puts each force and bench change, keyed by the old tag name.
+
+    ``forces`` maps a forced tag to the tag it moves to, or to ``None`` to release
+    it.  ``links`` maps a bench change's feedback to ``{"en": enable, "fb": feedback}``,
+    to ``{"cut": True, "fb": feedback}`` for a cut, or to ``None`` to remove it.  A
+    force or bench change the plan leaves out follows its tag name.
+    """
+
+    forces: Mapping[str, Any] = field(default_factory=dict)
+    links: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(eq=False)
+class _Carry:
+    """One force or bench change in a reload, with where it goes and what became of it."""
+
+    #: The old name of the forced tag, or of the bench change's feedback.
+    tag: str
+    kind: str
+    planned: bool
+    #: The name it goes to in the new program.  ``None`` when released or dropped.
+    to: str | None = None
+    value: Any = None
+    entry: BenchLink | None = None
+    new_entry: BenchLink | None = None
+    released: bool = False
+    #: Why it was dropped, ``None`` while it is kept.
+    reason: str | None = None
+    #: The tag the reason is about.
+    about: str | None = None
+    detail: str | None = None
+
+    @property
+    def dropped(self) -> bool:
+        return self.reason is not None
+
+    def drop(self, reason: str, about: str | None = None, detail: str | None = None) -> None:
+        self.reason, self.about, self.detail = reason, about, detail
+
+
+def _place(carries: list[_Carry], targets: dict[_Carry, tuple[str, Any]], what: str) -> None:
+    """Give each carry in *targets* its new name, a planned carry before one that follows its own.
+
+    Two carries on one name would fight over it, so the later one is dropped.
+    """
+    claimed: dict[str, str] = {}
+    for carry in sorted(carries, key=lambda c: not c.planned):
+        if carry not in targets:
+            continue
+        name, new_entry = targets[carry]
+        other = claimed.get(name)
+        if other is not None:
+            carry.drop("taken", name, f"the {what} on {other} moves to {name}")
+            continue
+        claimed[name] = carry.tag
+        carry.to, carry.new_entry = name, new_entry
+
+
+def _plan_forces(old_forces: Mapping[str, Any], plan: Mapping[str, Any]) -> list[_Carry]:
+    carries: list[_Carry] = []
+    targets: dict[_Carry, tuple[str, Any]] = {}
+    for tag, value in old_forces.items():
+        carry = _Carry(tag, "force", planned=tag in plan, value=value)
+        carries.append(carry)
+        raw = plan.get(tag, tag)
+        if raw is None:
+            carry.released = True
+        elif isinstance(raw, str) and raw.strip():
+            targets[carry] = (raw.strip(), None)
+        else:
+            carry.drop("bad plan", tag, "its plan is not a tag name or null")
+    _place(carries, targets, "force")
+    for tag in plan:
+        if tag not in old_forces:
+            carry = _Carry(tag, "force", planned=True)
+            carry.drop("not forced", tag, f"{tag} is not forced")
+            carries.append(carry)
+    return carries
+
+
+_PLAN_LINK_KEYS = frozenset({"en", "fb", "cut"})
+
+
+def _planned_bench(fb: str, entry: BenchLink, raw: Any) -> tuple[str, BenchLink] | str:
+    """The new feedback and bench entry *raw* plans for *fb*, or why the plan is wrong."""
+    if not isinstance(raw, Mapping):
+        return "its plan is not an object or null"
+    unknown = sorted(str(key) for key in raw if key not in _PLAN_LINK_KEYS)
+    if unknown:
+        return f"its plan has unknown key(s) {', '.join(unknown)}"
+    target, en, cut = raw.get("fb"), raw.get("en"), raw.get("cut", False)
+    if not isinstance(target, str) or not target.strip():
+        return "its plan names no feedback (fb)"
+    if not isinstance(cut, bool):
+        return "its plan's cut is not true or false"
+    target = target.strip()
+    if cut:
+        if en is not None:
+            return "its plan sets both en and cut"
+        if entry.coupling is not None:
+            return f"its plan is a cut, but {fb} is a bench link"
+        return target, BenchLink(None, enabled=entry.enabled)
+    if not isinstance(en, str) or not en.strip():
+        return "its plan names no enable (en) and is not a cut"
+    coupling = entry.coupling
+    if coupling is None:
+        return f'its plan names an enable, but {fb} is a bench cut (plan it as "cut": true)'
+    physical = coupling.physical
+    # A link made without physical= is named after its feedback, so it keeps that.
+    if physical.name == fb:
+        physical = replace(physical, name=target)
+    moved = Coupling(en.strip(), target, physical, coupling.trigger_value)
+    return target, BenchLink(moved, enabled=entry.enabled)
+
+
+def _plan_links(old_bench: Mapping[str, BenchLink], plan: Mapping[str, Any]) -> list[_Carry]:
+    carries: list[_Carry] = []
+    targets: dict[_Carry, tuple[str, Any]] = {}
+    for fb, entry in old_bench.items():
+        kind = "cut" if entry.coupling is None else "link"
+        carry = _Carry(fb, kind, planned=fb in plan, entry=entry)
+        carries.append(carry)
+        if fb not in plan:
+            targets[carry] = (fb, entry)
+            continue
+        if plan[fb] is None:
+            carry.released = True
+            continue
+        planned = _planned_bench(fb, entry, plan[fb])
+        if isinstance(planned, str):
+            carry.drop("bad plan", fb, planned)
+        else:
+            targets[carry] = planned
+    _place(carries, targets, "bench change")
+    for fb in plan:
+        if fb not in old_bench:
+            carry = _Carry(fb, "link", planned=True)
+            carry.drop("no bench change", fb, f"{fb} has no bench change")
+            carries.append(carry)
+    return carries
+
+
+def _why(carry: _Carry) -> str:
+    """Why *carry* was dropped, as the rest of "Dropped the force on A because ..."."""
+    about = carry.about or carry.tag
+    if carry.reason == "gone":
+        return f"{about} is not in the new program"
+    if carry.reason == "type changed":
+        return f"{about} changed type"
+    if carry.reason == "not forceable":
+        return f"the new program cannot force {about}"
+    if carry.reason == "unlinked":
+        return f"the new program does not link {about}"
+    if carry.reason == "in program":
+        return f"the new program links {about} the same way"
+    return carry.detail or str(carry.reason)
+
+
+def _addr(table: dict[str, str] | None, name: str | None) -> str | None:
+    return None if table is None or name is None else table.get(name)
+
+
 def _carry_report(
     *,
-    old_forces: dict[str, Any],
-    force_drops: dict[str, str],
-    bench_drops: list[tuple[str, Any, str]],
-    kept_bench: dict[str, Any],
+    forces: list[_Carry],
+    bench: list[_Carry],
+    kept_bench: Mapping[str, BenchLink],
     old_addr: dict[str, str] | None,
     new_addr: dict[str, str] | None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """List each force and bench change a reload moved to another address or dropped.
+    """List each force and bench change a plain reload moved to another address or dropped.
 
     Forces and bench changes follow the tag name.  Returns one entry per change
     for clients, and a sentence for each force drop and each move.  A bench
@@ -58,38 +232,35 @@ def _carry_report(
     entries: list[dict[str, Any]] = []
     lines: list[str] = []
 
-    def addr(table: dict[str, str] | None, name: str) -> str | None:
-        return None if table is None else table.get(name)
-
-    def bench_entry(fb: str, entry: Any, tag: str, **fields: Any) -> dict[str, Any]:
+    def bench_entry(fb: str, entry: BenchLink, tag: str, **fields: Any) -> dict[str, Any]:
         kind = "cut" if entry.coupling is None else "link"
         return {
             "tag": tag,
             "kind": kind,
             "feedback": fb,
-            "old": addr(old_addr, tag),
-            "new": addr(new_addr, tag),
+            "old": _addr(old_addr, tag),
+            "new": _addr(new_addr, tag),
             "dropped": False,
             "enabled": entry.enabled,
             **fields,
         }
 
-    for tag, value in old_forces.items():
-        old, new = addr(old_addr, tag), addr(new_addr, tag)
-        why = force_drops.get(tag)
-        if why is None and old == new:
+    for carry in forces:
+        tag = carry.tag
+        old, new = _addr(old_addr, tag), _addr(new_addr, tag)
+        if not carry.dropped and old == new:
             continue
         entry: dict[str, Any] = {
             "tag": tag,
             "kind": "force",
             "old": old,
-            "new": None if why else new,
-            "dropped": why is not None,
-            "value": value,
+            "new": None if carry.dropped else new,
+            "dropped": carry.dropped,
+            "value": carry.value,
         }
-        if why is not None:
-            entry["reason"] = why
-            lines.append(f"Dropped the force on {tag} because {_DROP_WHY[why].format(tag=tag)}.")
+        if carry.dropped:
+            entry["reason"] = carry.reason
+            lines.append(f"Dropped the force on {tag} because {_why(carry)}.")
         elif old is None:
             lines.append(f"The force on {tag} is now at {new}.")
         elif new is None:
@@ -98,14 +269,21 @@ def _carry_report(
             lines.append(f"The force on {tag} moved from {old} to {new}.")
         entries.append(entry)
 
-    for fb, entry, why in bench_drops:
-        entries.append(bench_entry(fb, entry, fb, new=None, dropped=True, reason=why))
+    for carry in bench:
+        if carry.dropped and carry.entry is not None:
+            # The tag is the one the drop is about, the enable when the enable left.
+            tag = carry.about or carry.tag
+            entries.append(
+                bench_entry(
+                    carry.tag, carry.entry, tag, new=None, dropped=True, reason=carry.reason
+                )
+            )
 
-    for fb, entry in kept_bench.items():
-        label = "bench cut" if entry.coupling is None else "bench link"
-        tags = [fb] if entry.coupling is None else [fb, entry.coupling.en_name]
+    for fb, kept in kept_bench.items():
+        label = "bench cut" if kept.coupling is None else "bench link"
+        tags = [fb] if kept.coupling is None else [fb, kept.coupling.en_name]
         for tag in tags:
-            item = bench_entry(fb, entry, tag)
+            item = bench_entry(fb, kept, tag)
             if item["old"] == item["new"]:
                 continue
             entries.append(item)
@@ -123,16 +301,76 @@ def _carry_report(
     return entries, lines
 
 
-#: Why a force was dropped, as the rest of "Dropped the force on A because ...".
-_DROP_WHY = {
-    "gone": "{tag} is not in the new program",
-    "type changed": "{tag} changed type",
-    "not forceable": "the new program cannot force {tag}",
-}
+def _plan_report(
+    *,
+    forces: list[_Carry],
+    bench: list[_Carry],
+    old_addr: dict[str, str] | None,
+    new_addr: dict[str, str] | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """List every force and bench change of a planned reload, and every plan entry.
+
+    Unlike a plain reload's report, this lists an entry that kept its name and
+    address too.  The caller then sees each change its plan left out.
+    """
+    entries: list[dict[str, Any]] = []
+    lines: list[str] = []
+    for carry in [*forces, *bench]:
+        to = None if carry.dropped or carry.released else carry.to
+        entry: dict[str, Any] = {
+            "tag": carry.tag,
+            "kind": carry.kind,
+            "to": to,
+            "old": _addr(old_addr, carry.tag),
+            "new": _addr(new_addr, to),
+            "planned": carry.planned,
+            "released": carry.released,
+            "dropped": carry.dropped,
+        }
+        if carry.kind == "force":
+            entry["value"] = carry.value
+            what = "force"
+        else:
+            kept = carry.new_entry if to is not None else None
+            entry["feedback"] = carry.tag
+            entry["enable"] = (
+                kept.coupling.en_name if kept is not None and kept.coupling is not None else None
+            )
+            entry["enabled"] = carry.entry.enabled if carry.entry is not None else None
+            what = "bench cut" if carry.kind == "cut" else "bench link"
+        if carry.dropped:
+            entry["reason"] = carry.reason
+            entry["detail"] = _why(carry)
+        entries.append(entry)
+
+        tag = carry.tag
+        if carry.reason == "not forced":
+            lines.append(f"The plan names a force on {tag}, but {tag} is not forced.")
+        elif carry.reason == "no bench change":
+            lines.append(f"The plan names a bench change on {tag}, but {tag} has none.")
+        elif carry.dropped:
+            lines.append(f"Dropped the {what} on {tag} because {_why(carry)}.")
+        elif carry.released:
+            verb = "Released" if carry.kind == "force" else "Removed"
+            lines.append(f"{verb} the {what} on {tag}.")
+        elif not carry.planned:
+            lines.append(f"The {what} on {tag} is not in the plan, so it stays on {tag}.")
+        else:
+            if to != tag:
+                lines.append(f"Moved the {what} on {tag} to {to}.")
+            old_link = carry.entry.coupling if carry.entry is not None else None
+            new_link = carry.new_entry.coupling if carry.new_entry is not None else None
+            if old_link is not None and new_link is not None:
+                if old_link.en_name != new_link.en_name:
+                    lines.append(
+                        f"The bench link on {to} reads {new_link.en_name} "
+                        f"(it read {old_link.en_name})."
+                    )
+    return entries, lines
 
 
 def _reload_locked(
-    adapter: Any,
+    adapter: Any, plan: ReloadPlan | None = None
 ) -> tuple[str, list[tuple[str, dict[str, Any] | None]], list[dict[str, Any]]]:
     """Re-execute the program file and swap the runner, preserving state.
 
@@ -140,6 +378,8 @@ def _reload_locked(
     ``(summary_text, events, carried)``.  The caller wraps the first two in a
     ``ConsoleResult`` or emits them via ``_enqueue_internal_event``, and
     ``carried`` lists the forces and bench changes that moved or were dropped.
+    With a *plan*, ``carried`` lists every force and bench change and every plan
+    entry.  The plan is applied at the swap, so a reload that fails changes nothing.
     """
     if adapter._thread_running_locked():
         raise adapter.DAPAdapterError("Cannot reload while continue is running")
@@ -154,6 +394,9 @@ def _reload_locked(
     old_known_tags = dict(old_runner._known_tags_by_name)
     old_rtc = old_runner._system_runtime._rtc_now(old_state)
     old_addr = _addresses(adapter)
+    force_carries = _plan_forces(old_forces, plan.forces if plan is not None else {})
+    bench_carries = _plan_links(adapter._bench_links, plan.links if plan is not None else {})
+    old_active = active_overrides(adapter)
 
     program_path = adapter._program_path
     if not program_path:
@@ -207,6 +450,19 @@ def _reload_locked(
             )
             tags_to_drop.add(name)
 
+    # A planned link that the old harness ran and the new program accepts runs the
+    # same coil under its new names, so the coil keeps its memory and its count.
+    moved_coils: dict[str, Coupling] = {}
+    for carry in bench_carries:
+        new_entry = carry.new_entry
+        if not carry.planned or new_entry is None or new_entry.coupling is None:
+            continue
+        if old_active.get(carry.tag) is None:
+            continue
+        if link_problem(new_runner, new_entry.coupling) is None:
+            moved_coils[carry.tag] = new_entry.coupling
+    renames = {fb: c.fb_name for fb, c in moved_coils.items() if c.fb_name != fb}
+
     patched_tags = {k: v for k, v in old_state.tags.items() if k not in tags_to_drop}
     # Site memory (one-shots, drum and shift edges, edge contacts) is keyed by
     # site, and site keys are ordinal: carry each site's memory to the site of
@@ -219,6 +475,10 @@ def _reload_locked(
         warnings.append(
             f"  {len(remap.dropped)} site memory value(s) had no matching site "
             "in the new program, reset: " + ", ".join(sorted(remap.dropped))
+        )
+    if renames:
+        patched_tags, patched_memory = rename_coil_state(
+            patched_tags, patched_memory, old_runner._plant_tag_defaults(), renames
         )
     # An edge contact with no match in the old program (new, or edited) starts
     # from its tag's current value, so a held bit does not rise on the first
@@ -264,23 +524,28 @@ def _reload_locked(
     reloaded._set_time_mode(old_time_mode, dt=old_dt)
     reloaded._set_rtc_internal(old_rtc, reloaded.current_state.timestamp)
 
-    # A force follows its tag name.  One whose name left the program is dropped, since
-    # PLC.force would accept it and keep it active.
-    force_drops: dict[str, str] = {}
-    for tag_name, value in old_forces.items():
-        if tag_name in tags_to_drop:
-            force_drops[tag_name] = "type changed"
-        elif (
-            tag_name not in new_known_tags
-            and reloaded._tag_known_or_reached(tag_name) is None
-            and tag_name not in SYSTEM_TAGS_BY_NAME
+    # A force goes to the tag its plan names, or follows its tag name.  One whose tag
+    # is not in the new program is dropped, since PLC.force would accept it and keep it.
+    for carry in force_carries:
+        target = carry.to
+        if target is None:
+            continue
+        old_tag, new_tag = old_known_tags.get(carry.tag), new_known_tags.get(target)
+        if target in tags_to_drop or (
+            old_tag is not None and new_tag is not None and old_tag.type != new_tag.type
         ):
-            force_drops[tag_name] = "gone"
+            carry.drop("type changed", target)
+        elif (
+            new_tag is None
+            and reloaded._tag_known_or_reached(target) is None
+            and target not in SYSTEM_TAGS_BY_NAME
+        ):
+            carry.drop("gone", target)
         else:
             try:
-                reloaded.force(tag_name, value)
+                reloaded.force(target, carry.value)
             except Exception:
-                force_drops[tag_name] = "not forceable"
+                carry.drop("not forceable", target)
 
     adapter._clear_debug_registrations_locked()
     adapter._runner = reloaded
@@ -307,14 +572,31 @@ def _reload_locked(
     adapter._miner_suppressed.clear()
 
     # Each coil the old harness ran carries on from the memory the reload kept.  A coil
-    # new to the program, or one of a harness removed before the reload, settles.
+    # new to the program, or one of a harness removed before the reload, settles.  A
+    # coil the plan moved carries on under its new feedback and enable only, so a coil
+    # the new program runs on the old feedback settles.
     old_harness = adapter._harness
-    carry = old_harness._coil_wiring() if old_harness is not None else frozenset()
+    carry_coils: set[CoilWiring] = set()
+    for wiring in old_harness._coil_wiring() if old_harness is not None else ():
+        moved = moved_coils.get(coil_feedback(wiring))
+        if moved is None:
+            carry_coils.add(wiring)
+        else:
+            carry_coils.add(rename_coil_wiring(wiring, moved.fb_name, moved.en_name))
     adapter._harness = None
+    adapter._bench_links = {
+        carry.to: carry.new_entry
+        for carry in bench_carries
+        if carry.to is not None and carry.new_entry is not None
+    }
     from pyrung.dap.harness_console import try_auto_install
 
-    bench_drops: list[tuple[str, Any, str]] = []
-    banner = try_auto_install(adapter, carry=carry, drops=bench_drops)
+    bench_drops: list[BenchDrop] = []
+    banner = try_auto_install(adapter, carry=carry_coils, drops=bench_drops)
+    placed = {carry.to: carry for carry in bench_carries if carry.to is not None}
+    for fb, entry, reason, tag in bench_drops:
+        problem = link_problem(reloaded, entry.coupling) if entry.coupling is not None else None
+        placed[fb].drop(reason, tag, problem)
     stale = _drop_coil_memory_no_coupling_owns(reloaded)
     if stale:
         warnings.append(
@@ -322,14 +604,19 @@ def _reload_locked(
             "reset: " + ", ".join(stale)
         )
 
-    carried, carry_lines = _carry_report(
-        old_forces=old_forces,
-        force_drops=force_drops,
-        bench_drops=bench_drops,
-        kept_bench=dict(adapter._bench_links),
-        old_addr=old_addr,
-        new_addr=_addresses(adapter),
-    )
+    new_addr = _addresses(adapter)
+    if plan is None:
+        carried, carry_lines = _carry_report(
+            forces=force_carries,
+            bench=bench_carries,
+            kept_bench=dict(adapter._bench_links),
+            old_addr=old_addr,
+            new_addr=new_addr,
+        )
+    else:
+        carried, carry_lines = _plan_report(
+            forces=force_carries, bench=bench_carries, old_addr=old_addr, new_addr=new_addr
+        )
     warnings.extend(f"  {line}" for line in carry_lines)
 
     scan_id = reloaded.current_state.scan_id

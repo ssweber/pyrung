@@ -177,6 +177,74 @@ def _wiring(c: _BoolCoupling | _ProfileCoupling) -> CoilWiring:
     return (c.rung_memory_key, c.en_name, c.trigger_value)
 
 
+def coil_feedback(wiring: CoilWiring) -> str:
+    """The feedback a coil drives, read from its memory key."""
+    from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
+
+    return wiring[0].partition(PLANT_FEEDBACK_SITE)[2]
+
+
+def rename_coil_wiring(wiring: CoilWiring, new_fb: str, new_en: str) -> CoilWiring:
+    """The *wiring* of a coil moved to *new_fb* and reading *new_en*, its trigger kept."""
+    from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
+
+    head, site, _old_fb = wiring[0].partition(PLANT_FEEDBACK_SITE)
+    return (f"{head}{site}{new_fb}", new_en, wiring[2])
+
+
+def rename_coil_state(
+    tags: Mapping[str, Any],
+    memory: Mapping[str, Any],
+    plant_tags: Collection[str],
+    renames: Mapping[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Move each harness coil's state from its old feedback to the new one in *renames*.
+
+    A reload that renames a linked feedback runs the same coil under the new name, so a
+    count in progress carries on.  A coil keeps its timers in tags named after its
+    feedback (*plant_tags* lists the harness tags of the old program).  It keeps its
+    memory of the rung under a key that ends in the feedback's name.  The feedback's own
+    value moves too, since a toggle keeps its state there.  The old feedback tag keeps
+    its value, because the new program may still use it.
+    """
+    from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
+
+    tag_moves: dict[str, str] = {}
+    for old_fb, new_fb in renames.items():
+        suffix = f"__{old_fb}"
+        for name in plant_tags:
+            if not name.endswith(suffix):
+                continue
+            stem = name[: -len(suffix)]
+            # A stem such as ``__cpl_on_Ts`` has no ``__`` past its start, so the
+            # timer of a feedback named ``X__A`` is not taken for one of ``A``.
+            if stem.startswith("__") and "__" not in stem[2:]:
+                tag_moves[name] = f"{stem}__{new_fb}"
+    out_tags = {name: value for name, value in tags.items() if name not in tag_moves}
+    for old, new in tag_moves.items():
+        if old in tags:
+            out_tags[new] = tags[old]
+    for old_fb, new_fb in renames.items():
+        if old_fb in tags:
+            out_tags[new_fb] = tags[old_fb]
+
+    names = {**tag_moves, **renames}
+
+    def moved_key(key: str) -> str | None:
+        if key.startswith("_frac:"):
+            new = tag_moves.get(key[len("_frac:") :])
+            return None if new is None else f"_frac:{new}"
+        head, site, name = key.partition(PLANT_FEEDBACK_SITE)
+        new = names.get(name) if site else None
+        return None if new is None else f"{head}{site}{new}"
+
+    moved = {key: new for key in memory if (new := moved_key(key)) is not None}
+    out_memory = {key: value for key, value in memory.items() if key not in moved}
+    for old, new in moved.items():
+        out_memory[new] = memory[old]
+    return out_tags, out_memory
+
+
 def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
     """A plant timer's carry, in ns as the timer keeps it.  A saved float is of its unit."""
     carry = state.memory.get(f"_frac:{acc_name}", 0) or 0

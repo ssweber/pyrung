@@ -244,6 +244,7 @@ These requests drive the [simulator controls](../guides/dap-vscode.md#simulator-
 | `pyrungRestoreLink` | `{feedback}` | `{text}` |
 | `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
 | `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
+| `pyrungReload` | `{forces?: {old: new or null}, links?: {old feedback: {en, fb} or {cut: true, fb} or null}}` | `{result, carried}` (see [Planned reload](#planned-reload)) |
 
 `pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again.
 
@@ -272,16 +273,71 @@ The `evaluate` response for the console `reload` carries a `carried` list next t
 
 | Field | Meaning |
 |---|---|
-| `tag` | The tag that moved or was dropped. For a link whose enable moved, this is the enable. |
+| `tag` | The tag that moved or was dropped. For a link whose enable moved or left the program, this is the enable. |
 | `kind` | `force`, `link` or `cut` |
 | `feedback` | The link's or cut's feedback tag. Absent for a force. |
 | `old`, `new` | CLICK addresses as the TagMap writes them (`X001`, `DS1`). `null` when the tag had none, and `new` is `null` when dropped. |
 | `dropped` | `true` when the force or bench change no longer applies |
-| `reason` | Only when dropped. `gone`, `type changed`, `invalid`, `in program` or `not forceable`. |
+| `reason` | Only when dropped. One of the reasons below. |
 | `value` | A force's value. Absent otherwise. |
 | `enabled` | A link's or cut's enabled flag. Absent for a force. |
 
 A force or link follows the tag name, never the address. A reload without a TagMap reports only drops.
+
+Each `reason` means:
+
+| Reason | Meaning |
+|---|---|
+| `gone` | The new program has no tag of that name (`tag` names it). |
+| `type changed` | The forced tag has another type in the new program. |
+| `not forceable` | The new program refuses the force. |
+| `unlinked` | A cut's feedback is still in the program, but the program no longer links it. |
+| `in program` | The new program declares the bench link the same way, so the program's link runs. |
+| `invalid` | The bench link does not fit the new program, such as a feedback that is now an `Int`. |
+| `bad plan` | Only from `pyrungReload`. The plan entry is malformed (`detail` says how). |
+| `taken` | Only from `pyrungReload`. Another force or bench change went to the same new tag first. A planned one goes before one that follows its name. |
+| `not forced` | Only from `pyrungReload`. The plan names a force that does not exist. |
+| `no bench change` | Only from `pyrungReload`. The plan names a bench change that does not exist. |
+
+### Planned reload
+
+`pyrungReload` reloads the program as the console `reload` does, and moves each force and bench change where the caller's plan says. A client that has the new program's TagMap (ClickNick) knows where each tag went, so it sends the plan. Both arguments are optional, and each is keyed by the old tag name:
+
+```json
+{
+  "forces": {"Start": "StartPB", "Jog": null},
+  "links": {
+    "MotorFb": {"en": "MotorCmd", "fb": "Motor_Fb"},
+    "DoorFb": {"cut": true, "fb": "Door_Fb"},
+    "PumpFb": null
+  }
+}
+```
+
+- A force moves to the tag its plan names with the same value. `null` releases it.
+- A bench link moves to the feedback `fb` and reads the enable `en`, with the same response and trigger. `null` removes it.
+- A bench cut is planned as `{"cut": true, "fb": ...}`. The cut is dropped when the new program does not link `fb`.
+- A plan entry without `en` and without `"cut": true` is a `bad plan`. It is never taken as a cut.
+- A force or bench change the plan leaves out follows its tag name, as the console `reload` does.
+
+A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. The plan is applied when the new program replaces the old one. A reload that fails keeps the old program, mode, forces and bench changes. A plan whose `forces` or `links` is not an object fails the request. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.
+
+The response body is `{result, carried}`, as for the console `reload`. Here `carried` lists every force and bench change of the session, moved or not, and every plan entry that matched nothing. Each entry has these fields:
+
+| Field | Meaning |
+|---|---|
+| `tag` | The old name of the forced tag, or of the bench change's feedback |
+| `kind` | `force`, `link` or `cut` |
+| `to` | The tag it now sits on. `null` when released or dropped. |
+| `old`, `new` | CLICK addresses of `tag` in the old program and of `to` in the new one, or `null` |
+| `planned` | `true` when the plan named it |
+| `released` | `true` when the plan released the force or removed the bench change |
+| `dropped` | `true` when it could not be carried |
+| `reason`, `detail` | Only when dropped. `detail` is a sentence such as `"Motor_Fb is not in the new program"`. |
+| `value` | A force's value |
+| `feedback` | A link's or cut's old feedback (the same as `tag`) |
+| `enable` | The enable a kept link now reads. `null` for a cut or a link that is gone. |
+| `enabled` | A link's or cut's enabled flag |
 
 ---
 

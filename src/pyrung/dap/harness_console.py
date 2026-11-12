@@ -9,11 +9,14 @@ across reloads. Console verbs: ``harness status``, ``harness install``,
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.harness import CoilWiring, Harness
 from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
+
+if TYPE_CHECKING:
+    from pyrung.dap.links import BenchDrop
 
 
 def install_harness(adapter: Any) -> Harness:
@@ -31,7 +34,7 @@ def install_harness(adapter: Any) -> Harness:
 def try_auto_install(
     adapter: Any,
     carry: Collection[CoilWiring] = (),
-    drops: list[tuple[str, Any, str]] | None = None,
+    drops: list[BenchDrop] | None = None,
 ) -> str | None:
     """Install the harness for the program's couplings plus the bench links.
 

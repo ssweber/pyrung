@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from typing import Any
 
@@ -583,7 +584,7 @@ class TestReload:
 
 
 ONESHOT_SCRIPT = (
-    "from pyrung.core import Bool, Int, Physical, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
     "\n"
     "button = Bool('Button')\n"
     "pulse = Bool('Pulse')\n"
@@ -1429,6 +1430,22 @@ class TestReloadReportsWhatMoved:
         assert entry["new"] is None
         assert "A" not in adapter._bench_links
 
+    def test_a_link_whose_enable_left_is_reported_under_the_enable(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        script.write_text(_carry_script().replace("'Cmd'", "'Go'"))
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["tag"], entry["feedback"], entry["old"], entry["reason"]) == (
+            "Cmd",
+            "A",
+            "X001",
+            "gone",
+        )
+        assert "A" not in adapter._bench_links
+
     def test_a_link_that_no_longer_validates_is_reported_invalid(self, tmp_path: Path):
         adapter, out, script = _carry(tmp_path)
         _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
@@ -1460,7 +1477,7 @@ class TestReloadReportsWhatMoved:
         resp, _stopped = _repl(adapter, out, "reload", seq=12)
 
         entry = resp["body"]["carried"][0]
-        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("cut", True, "gone")
+        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("cut", True, "unlinked")
 
     def test_nothing_is_reported_when_nothing_moved(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)
@@ -1526,3 +1543,311 @@ class TestReloadWaitsForThePause:
         assert adapter._runner.mode == "stop"
         assert adapter._runner.forces == {"A": True}
         assert "A" in adapter._bench_links
+
+
+class TestAutoreloadReport:
+    def test_the_output_event_carries_the_report(self, tmp_path: Path, monkeypatch):
+        from pyrung.dap import reload_console
+
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        events: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            adapter, "_enqueue_internal_event", lambda e, b=None: events.append((e, b))
+        )
+        monkeypatch.setattr(adapter, "_request_state_frame", lambda _info: None)
+
+        class OneEdit:
+            """Edits the program on the first wait, then stops the loop."""
+
+            calls = 0
+
+            def wait(self, timeout: float) -> bool:
+                self.calls += 1
+                if self.calls == 1:
+                    _rewrite(script, a_addr="c[5]")
+                    stat = script.stat()
+                    os.utime(script, (stat.st_atime, stat.st_mtime + 5))
+                return self.calls > 2
+
+        reload_console._autoreload_loop(adapter, script.parent, OneEdit())  # type: ignore[arg-type]
+
+        outputs = [body for name, body in events if name == "output"]
+        assert outputs[0]["output"].startswith("[autoreload] Reloaded")
+        assert outputs[0]["data"]["carried"] == [
+            {"tag": "A", "kind": "force", "old": "C1", "new": "C5", "dropped": False, "value": True}
+        ]
+
+
+def _plan_reload(
+    adapter: DAPAdapter,
+    out: io.BytesIO,
+    *,
+    forces: Any = None,
+    links: Any = None,
+    seq: int = 20,
+) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    if forces is not None:
+        arguments["forces"] = forces
+    if links is not None:
+        arguments["links"] = links
+    messages = _send_request(adapter, out, seq=seq, command="pyrungReload", arguments=arguments)
+    return _single_response(messages)
+
+
+def _carried(resp: dict[str, Any], tag: str, kind: str) -> dict[str, Any]:
+    (entry,) = [e for e in resp["body"]["carried"] if e["tag"] == tag and e["kind"] == kind]
+    return entry
+
+
+def _timed_count(adapter: DAPAdapter, fb: str) -> int:
+    return adapter._runner.current_state.tags[f"__tmd_on__{fb}"]
+
+
+class TestPlannedReload:
+    def test_a_planned_force_moves_to_its_new_tag(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _rewrite(script, a="B")
+
+        resp = _plan_reload(adapter, out, forces={"A": "B"})
+
+        assert resp["success"] is True
+        assert "Moved the force on A to B." in resp["body"]["result"]
+        assert resp["body"]["carried"] == [
+            {
+                "tag": "A",
+                "kind": "force",
+                "to": "B",
+                "old": "C1",
+                "new": "C1",
+                "planned": True,
+                "released": False,
+                "dropped": False,
+                "value": True,
+            }
+        ]
+        assert adapter._runner.forces == {"B": True}
+
+    def test_a_force_planned_null_is_released(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+
+        resp = _plan_reload(adapter, out, forces={"A": None})
+
+        entry = _carried(resp, "A", "force")
+        assert (entry["released"], entry["dropped"], entry["to"]) == (True, False, None)
+        assert "Released the force on A." in resp["body"]["result"]
+        assert adapter._runner.forces == {}
+
+    def test_a_renamed_link_keeps_a_timed_coils_count(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        count = _timed_count(adapter, "A")
+        assert 0 < count < 100
+        _rewrite(script, a="B")
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+
+        assert resp["success"] is True
+        assert "Moved the bench link on A to B." in resp["body"]["result"]
+        assert "reset" not in resp["body"]["result"]
+        entry = _carried(resp, "A", "link")
+        assert (entry["to"], entry["enable"], entry["planned"]) == ("B", "Cmd", True)
+        assert list(adapter._bench_links) == ["B"]
+        tags = adapter._runner.current_state.tags
+        assert _timed_count(adapter, "B") == count
+        assert tags["B"] is True
+        assert "__tmd_on__A" not in tags
+        _repl(adapter, out, "step 1", seq=13)
+        assert _timed_count(adapter, "B") == count + 10
+        assert adapter._runner.current_state.tags["B"] is True
+
+    def test_a_link_whose_enable_is_renamed_keeps_its_count(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        count = _timed_count(adapter, "A")
+        script.write_text(_carry_script(a="B").replace("'Cmd'", "'Go'"))
+
+        resp = _plan_reload(
+            adapter, out, forces={"Cmd": "Go"}, links={"A": {"en": "Go", "fb": "B"}}
+        )
+
+        assert "The bench link on B reads Go (it read Cmd)." in resp["body"]["result"]
+        assert adapter._bench_links["B"].coupling.en_name == "Go"
+        assert adapter._runner.forces == {"Go": True}
+        assert _timed_count(adapter, "B") == count
+        _repl(adapter, out, "step 1", seq=13)
+        assert _timed_count(adapter, "B") == count + 10
+
+    def test_a_renamed_toggle_keeps_its_state(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd toggle", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 2", seq=12)
+        assert adapter._runner.current_state.tags["A"] is True
+        _rewrite(script, a="B")
+
+        _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+        _repl(adapter, out, "step 2", seq=13)
+
+        assert adapter._runner.current_state.tags["B"] is True
+
+    def test_a_link_planned_null_is_removed(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+
+        resp = _plan_reload(adapter, out, links={"A": None})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["released"], entry["dropped"], entry["to"]) == (True, False, None)
+        assert "Removed the bench link on A." in resp["body"]["result"]
+        assert adapter._bench_links == {}
+
+    def test_a_cut_moves_to_the_feedback_its_plan_names(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        script.write_text(_declared_a_script().replace("'A'", "'B'"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"cut": True, "fb": "B"}})
+
+        entry = _carried(resp, "A", "cut")
+        assert (entry["to"], entry["dropped"]) == ("B", False)
+        assert adapter._bench_links["B"].coupling is None
+
+    def test_a_cut_on_a_feedback_the_program_does_not_link_is_dropped(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        _rewrite(script, a="B")
+
+        resp = _plan_reload(adapter, out, links={"A": {"cut": True, "fb": "B"}})
+
+        entry = _carried(resp, "A", "cut")
+        assert (entry["dropped"], entry["reason"], entry["to"]) == (True, "unlinked", None)
+        assert entry["detail"] == "the new program does not link B"
+        assert adapter._bench_links == {}
+
+    def test_an_entry_the_plan_leaves_out_follows_its_name(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp true", seq=11)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=12)
+
+        resp = _plan_reload(adapter, out, forces={"A": "A"})
+
+        assert _carried(resp, "A", "force")["planned"] is True
+        lamp = _carried(resp, "Lamp", "force")
+        assert (lamp["planned"], lamp["to"], lamp["old"], lamp["new"]) == (
+            False,
+            "Lamp",
+            "Y001",
+            "Y001",
+        )
+        link = _carried(resp, "A", "link")
+        assert (link["planned"], link["to"], link["enable"]) == (False, "A", "Cmd")
+        text = resp["body"]["result"]
+        assert "The force on Lamp is not in the plan, so it stays on Lamp." in text
+        assert "The bench link on A is not in the plan, so it stays on A." in text
+        assert adapter._runner.forces == {"A": True, "Lamp": True}
+        assert list(adapter._bench_links) == ["A"]
+
+    def test_a_plan_naming_a_missing_tag_drops_that_entry(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp true", seq=11)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=12)
+
+        resp = _plan_reload(
+            adapter,
+            out,
+            forces={"A": "Nope", "Lamp": "Lamp", "Ghost": "Lamp"},
+            links={"A": {"en": "Gone", "fb": "A"}},
+        )
+
+        assert resp["success"] is True
+        force = _carried(resp, "A", "force")
+        assert (force["dropped"], force["reason"], force["to"]) == (True, "gone", None)
+        assert force["detail"] == "Nope is not in the new program"
+        ghost = _carried(resp, "Ghost", "force")
+        assert (ghost["dropped"], ghost["reason"]) == (True, "not forced")
+        link = _carried(resp, "A", "link")
+        assert (link["dropped"], link["reason"], link["detail"]) == (
+            True,
+            "gone",
+            "Gone is not in the new program",
+        )
+        text = resp["body"]["result"]
+        assert "Dropped the force on A because Nope is not in the new program." in text
+        assert "The plan names a force on Ghost, but Ghost is not forced." in text
+        assert adapter._runner.forces == {"Lamp": True}
+        assert adapter._bench_links == {}
+
+    def test_a_link_plan_with_no_enable_is_an_error_not_a_cut(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+
+        resp = _plan_reload(adapter, out, links={"A": {"fb": "A"}, "Lamp": None})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["dropped"], entry["reason"]) == (True, "bad plan")
+        assert entry["detail"] == "its plan names no enable (en) and is not a cut"
+        assert _carried(resp, "Lamp", "link")["reason"] == "no bench change"
+        assert adapter._bench_links == {}
+
+    def test_two_changes_planned_onto_one_tag_keep_the_planned_one(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp false", seq=11)
+
+        resp = _plan_reload(adapter, out, forces={"A": "Lamp"})
+
+        lamp = _carried(resp, "Lamp", "force")
+        assert (lamp["dropped"], lamp["reason"]) == (True, "taken")
+        assert lamp["detail"] == "the force on A moves to Lamp"
+        assert adapter._runner.forces == {"Lamp": True}
+
+    def test_a_bad_plan_shape_refuses_the_reload(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        old_runner = adapter._runner
+
+        resp = _plan_reload(adapter, out, forces=["A"])
+
+        assert resp["success"] is False
+        assert "pyrungReload.forces must be an object" in resp["message"]
+        assert adapter._runner is old_runner
+
+    def test_a_failed_reload_leaves_the_plan_unapplied(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=11)
+        _repl(adapter, out, "mode stop", seq=12)
+        old_runner = adapter._runner
+        script.write_text("this is not python (\n")
+
+        resp = _plan_reload(adapter, out, forces={"A": "B"}, links={"A": None})
+
+        assert resp["success"] is False
+        assert "Reload failed" in resp["message"]
+        assert adapter._runner is old_runner
+        assert adapter._runner.mode == "stop"
+        assert adapter._runner.forces == {"A": True}
+        assert list(adapter._bench_links) == ["A"]
+
+    def test_a_planned_reload_while_running_pauses_first(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _send_request(adapter, out, seq=10, command="continue")
+
+        resp = _plan_reload(adapter, out)
+
+        assert resp["success"] is True
+        assert resp["body"]["carried"] == []
+        assert not adapter._thread_running_locked()

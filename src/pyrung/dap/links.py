@@ -45,6 +45,15 @@ class BenchLink:
     enabled: bool = True
 
 
+BenchDrop = tuple[str, BenchLink, str, str]
+"""The feedback, entry, reason and tag of a bench change dropped at a harness install.
+
+The reason is "gone" (the tag is not in the new program), "unlinked" (a cut whose
+feedback the program no longer links), "in program" or "invalid".  The tag is the one
+the reason is about, the enable when the enable left.
+"""
+
+
 # ---------------------------------------------------------------------------
 # Building and describing links
 # ---------------------------------------------------------------------------
@@ -191,15 +200,14 @@ def sync_harness_locked(adapter: Any) -> None:
 
 
 def fit_to_harness_locked(
-    adapter: Any, harness: Any, drops: list[tuple[str, BenchLink, str]] | None = None
+    adapter: Any, harness: Any, drops: list[BenchDrop] | None = None
 ) -> list[str]:
     """Fit the bench links to a freshly installed harness (launch, reload, replay).
 
     Drops a bench link the program now declares the same way (it reached the
     project), a cut whose declared link is gone, and a link that no longer
     validates against the reloaded program.  Returns a note per dropped entry.  Each
-    drop is also appended to *drops* as ``(feedback, entry, reason)``, the reason one of
-    "in program", "gone" or "invalid".
+    drop is also appended to *drops* (see :data:`BenchDrop`).
     """
     runner = adapter._require_runner_locked()
     declared = {c.fb_name: c for c in harness.declared()}
@@ -213,17 +221,22 @@ def fit_to_harness_locked(
                 kept[fb] = entry
             else:
                 notes.append(f"Dropped the bench cut on {fb}: the program no longer links it.")
-                dropped.append((fb, entry, "gone"))
+                dropped.append((fb, entry, "unlinked", fb))
             continue
         project = declared.get(fb)
         if project is not None and same_wiring(coupling, project):
             notes.append(f"Bench link on {fb} is now in the program.")
-            dropped.append((fb, entry, "in program"))
+            dropped.append((fb, entry, "in program", fb))
             continue
         problem = link_problem(runner, coupling)
         if problem is not None:
             notes.append(f"Dropped the bench link on {fb}: {problem}.")
-            dropped.append((fb, entry, "gone" if problem.startswith("unknown tag") else "invalid"))
+            if coupling.fb_name not in runner._known_tags_by_name:
+                dropped.append((fb, entry, "gone", fb))
+            elif coupling.en_name not in runner._known_tags_by_name:
+                dropped.append((fb, entry, "gone", coupling.en_name))
+            else:
+                dropped.append((fb, entry, "invalid", fb))
             continue
         kept[fb] = entry
     adapter._bench_links = kept

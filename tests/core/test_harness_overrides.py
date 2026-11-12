@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from pyrung.core import PLC, Bool, Coupling, Harness, Program, Real, Rung, out
-from pyrung.core.harness import link_problem
+from pyrung.core.harness import link_problem, rename_coil_state
 from pyrung.core.physical import Physical
 
 AUX = Physical("Aux", on_delay="20ms", off_delay="10ms")
@@ -214,3 +214,33 @@ class TestLinkProblem:
         assert link_problem(plc, Coupling("Spare", "Spare", Physical("Spare", on_delay="1s"))) == (
             "Spare cannot drive itself"
         )
+
+
+class TestRenameCoilState:
+    def test_moves_the_coils_timers_memory_and_feedback(self):
+        tags = {"A": True, "__tmd_on__A": 20, "__tmd_ond__A": False, "Other": 3}
+        memory = {"_timed_rung:plant:fb.A": True, "_frac:__tmd_on__A": 7, "_edge:e1": True}
+        plant_tags = ["A", "Cmd", "__tmd_on__A", "__tmd_ond__A"]
+
+        new_tags, new_memory = rename_coil_state(tags, memory, plant_tags, {"A": "B"})
+
+        assert new_tags == {
+            "A": True,
+            "B": True,
+            "__tmd_on__B": 20,
+            "__tmd_ond__B": False,
+            "Other": 3,
+        }
+        assert new_memory == {
+            "_timed_rung:plant:fb.B": True,
+            "_frac:__tmd_on__B": 7,
+            "_edge:e1": True,
+        }
+
+    def test_leaves_the_timer_of_a_feedback_whose_name_ends_the_same(self):
+        tags = {"__cpl_on__X__A": 5, "__cpl_on__A": 1}
+        plant_tags = list(tags)
+
+        new_tags, _memory = rename_coil_state(tags, {}, plant_tags, {"A": "B"})
+
+        assert new_tags == {"__cpl_on__X__A": 5, "__cpl_on__B": 1}
