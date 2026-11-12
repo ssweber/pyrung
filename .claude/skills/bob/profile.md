@@ -176,6 +176,13 @@ The user runs hardware rounds on a CLICK. Collect questions only hardware can an
 cases, firmware version) and list them in milestone reports; changed conformance subroutines
 must be re-pasted before a round, so batch case-layout changes.
 
+When a reading asks pyrung for an odd rule, suspect the paste before you build the rule. An odd rule
+is one that treats a register differently from a constant, or makes a value nobody would type
+behave strangely. First check that laddercodec writes that instruction the way CLICK's editor does.
+If you can't settle it, tell the user before building the rule. From 2026-11-05 to 2026-11-11,
+pyrung's drums held a DS step preset per step, and a DS preset of 0 never ended its step. Both rules
+came from drums that laddercodec had mis-encoded.
+
 ## Gotcha
 
 Agent `isolation: worktree` fails in this repo (cwd `documents` vs git `Documents` case
