@@ -1511,3 +1511,10 @@ case = "drum_limits/preset_from_ds"
 hash = "b5e701d59fb4"
 on = "2026-11-12"
 read = { Result2 = 2222, Result3 = 2, Result4 = 2 }
+
+# T275 and T276 held 164 and 1000 from an earlier program, and the case did not clear them.
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-12"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 164, ErrorCode = 1000 }

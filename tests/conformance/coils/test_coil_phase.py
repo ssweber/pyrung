@@ -1,6 +1,7 @@
 """A debounce's off TD at its fall, and flashers with a phase of 0: ``deb_fall`` and ``flash_zero``.
 
-Part ``follow2_coils``.  A CLICK answered every case on 2026-11-10, twice.
+Part ``follow2_coils``.  A CLICK answered every case on 2026-11-10, twice.  It read ``on_zero_tds``
+again on 2026-11-12, after other parts had left values in T275 and T276 (see below).
 
 ``deb_fall/off_td_at_fall`` (B1): a debounce of 0 / 100 ms on a rung on scans 2 and 3, off from
 scan 4.  Result1 is the off TD copied on scan 4, the fall, on the rung right after the debounce.
@@ -15,13 +16,16 @@ milliseconds and follow the target's scan, so they are ranges for any scan up to
 its rung is on from ``Cmd``.  Over a window of 14 scans Result1 is the scans its coil is on,
 Result2 the first and Result3 the last (``scans.trace``).  The readings fit one rule.  A flasher
 with a preset of 0 or below is dark and its TDs stand where they are (``FlasherInstruction``).
+A flasher runs on whatever its TDs hold when it starts, so each case's init writes 0 to its TDs.
 
 - ``off_zero_first_phase`` (L1): 1000 ms on, a DS off preset of 0.  Result4 the on TD and
   ErrorCode the off TD on scan 14.  A CLICK read 0, 0, 0, 0, 0.  The flasher was dark from the
-  start, with no first on phase and both TDs at 0.
+  start, with no first on phase and both TDs at 0 from the init.
 - ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK read 0, 0, 0, 0, 0.
-  The flasher was dark with both TDs held at 0.  An off TD running would be the empty on phase
-  passing to the off phase.
+  The flasher was dark and left both TDs at 0 from the init.  An off TD running would be
+  the empty on phase passing to the off phase.  On 2026-11-12 the TDs were not cleared, and a CLICK
+  read 0, 0, 0, 164, 1000.  T275 and T276 held 164 and 1000 from an earlier program, and the dark
+  flasher left them there.  The case now clears them.
 - ``lowered_to_zero`` (L3): two flashers on DS presets, their rungs on from ``Cmd``.  The reset
   writes 0 to their four TDs.  A, 1000 / 1000 ms, has its on preset lowered to 0 on the scan its on
   TD first reads 100 or more, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on the
@@ -136,6 +140,9 @@ def prove_off_zero_first_phase(slot: Any) -> None:
 
 def init_off_zero_first_phase(slot: Any) -> None:
     copy(0, ds[4031])
+    # An earlier program may have left values in the TDs, and a dark flasher keeps them.
+    copy(0, td[273])
+    copy(0, td[274])
 
 
 #: on_zero_tds: C672, T275/T276, the on preset DS4032.
@@ -147,6 +154,8 @@ def prove_on_zero_tds(slot: Any) -> None:
 
 def init_on_zero_tds(slot: Any) -> None:
     copy(0, ds[4032])
+    copy(0, td[275])
+    copy(0, td[276])
 
 
 #: lowered_to_zero: C673/C674 the coils; T277..280; DS4033..4036 the presets (A on, A off, B on, B off).
@@ -195,6 +204,7 @@ def init_lowered_to_zero(slot: Any) -> None:
 #: short_first_phase: C677, T281/T282.
 def prove_short_first_phase(slot: Any) -> None:
     on_td, _off_td = _flash(slot, c[677], (281, 1), (282, 1000))
+    # No init clears T281/T282: stale TDs (164/1000 checked) change nothing, as the rung's rise restarts them.
     with Rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(on_td, slot.Result4)
     done(slot, FLASH_WINDOW)
@@ -207,7 +217,7 @@ def _flash_case(sentence: str, ladder: Any, coils: tuple[int, ...], **kwargs: An
         sentence,
         ladder=ladder,
         ready=lambda slot: tuple(~c[n] for n in coils),
-        # A flasher's TDs freeze with its rung false, and the restart clears both.
+        # The flasher leaves its TDs behind, and keep stops the leak check flagging them.
         keep=tuple(td[n] for n in timers),
         **kwargs,
     )
@@ -230,9 +240,9 @@ flash_zero = Group(
             expect={**_DARK, "Result4": 0, "ErrorCode": 0},
         ),
         _flash_case(
-            "A flasher with a DS on preset of 0 and 1000 ms off holds its on TD (Result4 = 0) "
-            "and off TD (ErrorCode = 0) at 0 on scan 14, dark (Result1 = 0 scans lit, Result2 = "
-            "0 the first, Result3 = 0 the last)",
+            "A flasher with a DS on preset of 0 and 1000 ms off leaves its on TD (Result4 = 0) "
+            "and off TD (ErrorCode = 0) at 0 on scan 14, dark (Result1 = 0 scans lit, "
+            "Result2 = 0 the first, Result3 = 0 the last)",
             prove_on_zero_tds,
             (672,),
             timers=(275, 276),
@@ -285,3 +295,18 @@ def test_lowered_to_zero_at_any_scan(monkeypatch, dt):
     monkeypatch.setattr(runner_module, "DT", dt)
     lowered = next(c for c in flash_zero.cases if c.id == "lowered_to_zero")
     assert_all_passed(run(Group("flash_zero", [replace(lowered, scans=int(0.6 / dt))])))
+
+
+@pytest.mark.parametrize("case_id", ["off_zero_first_phase", "on_zero_tds"])
+def test_dark_flasher_cases_clear_stale_tds(monkeypatch, case_id):
+    """A CLICK held 164 and 1000 in a dark flasher's TDs from another program, and it keeps them."""
+    case_ = next(c for c in flash_zero.cases if c.id == case_id)
+    stale = dict(zip([t.name for t in case_.keep], (164, 1000), strict=True))
+
+    class StalePLC(runner_module.PLC):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.patch(stale)
+
+    monkeypatch.setattr(runner_module, "PLC", StalePLC)
+    assert_all_passed(run(Group("flash_zero", [case_])))
