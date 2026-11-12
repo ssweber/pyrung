@@ -142,7 +142,7 @@ Reset with the instructions' own semantics, not by poking registers an instructi
 - **Counters, RTON, drums, shift registers**: tie the reset input to the reset, `count_up(ct, 100).reset(slot.Cmd == 0)`, `time_event_drum(...).reset(slot.Cmd == 0)`.
 - **Latched or toggled bits, and bits driven from inside a loop**: `reset(c[1801])` in `init`.
 - **Staged registers** (a case's raw DS/DD/DF/DH): `fill(0, ds.select(4401, 4402))` or `copy(0, df[1])` in `init`.
-- **A flasher's TDs** only freeze with its rung false, so `keep` them; the restart clears both, so a reading does not depend on where the last run stopped (`flasher_td/frozen_off_td_at_lowered_preset`).
+- **A flasher's TDs** only freeze with its rung false, so `keep` them. The restart clears both, so a reading does not depend on where the last run stopped (`flasher_td/frozen_off_td_at_lowered_preset`). A case must also zero a dark flasher's TDs in its `init`, since a flasher with a preset of 0 or below leaves them where they stand (`flash_zero`, 2026-11-12).
 - **Edge history and one-shots** need nothing: they rearm on the scans the rung is false. Not inside a loop whose For rung is false: CLICK skips that body, so nothing in it rearms (`loop/body_oneshot_holds_while_for_false`).
 
 **A reset must not depend on an open probe.** If what CLICK does is the question a case asks, the reset cannot rely on pyrung's answer. F2 (a false For rung skips its body, answered on a CLICK) is why the `loop` edge, timer, counter and one-shot cases keep their For rung true and gate a body rung instead, so their resets are scanned.

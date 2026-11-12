@@ -36,8 +36,9 @@ reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
   the three TDs: it wrote 0 to them every reset scan until a CLICK hung in that reset on a repeat
   run (2026-11-06), since a TOF whose Acc is zeroed while its rung is false keeps its Done on
   (``timers/tof_times_only_when_false``), so ``ready`` (the TOF's Done off) never held.  None needs
-  it.  The rung's rise clears the debounce's on TD and the TOF's, and holds the debounce's off TD
-  at 0.  The case lists the three TDs in ``keep`` only because they move after it fires.
+  that write.  The rung's rise clears the debounce's on TD and the TOF's, and holds the
+  debounce's off TD at 0.  The case lists the three TDs in ``keep`` only because they move
+  after it fires.
 
 pyrung's in-process readings are pinned in ``test_pyrung_reads_the_debounce_lag``.  The cases own
 what ``memory.OWNED_APART`` lists under this group.

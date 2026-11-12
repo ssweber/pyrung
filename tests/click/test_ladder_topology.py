@@ -1,10 +1,16 @@
 """Output-bus drawings: one rung per topology, exported and pinned to a golden CSV.
 
-The golden is the CSV ClickNick wrote for the CLICK's saved project of 2026-11-12, so every rung
-in it is drawn as the CLICK keeps it.  CLICK's syntax check redraws a pasted rung.  To check a
-change, paste the export into CLICK and run the syntax check.  Then write it to the PLC, save,
-and compare the CSV ClickNick writes for the saved project (``ckp_check``).  A DIFF means the
-CLICK redraws that topology.  Then copy the saved project's ``main.csv`` over
+CLICK's syntax check redraws a pasted rung, so only a project saved after the check shows what
+the CLICK keeps.  The golden holds two kinds of rung:
+
+- Rungs R1 to R22 (out(C1) to the counters) are copied from the CSV ClickNick wrote for the
+  CLICK's saved project of 2026-11-12.  They are CLICK evidence.
+- The rungs after them (out(C52) on), marked ``R`` without a number, are pyrung's drawing.  They
+  await the next paste and syntax check.
+
+To check a change, paste the export into CLICK and run the syntax check.  Then write it to the
+PLC, save, and compare the CSV ClickNick writes for the saved project (``ckp_check``).  A DIFF
+means the CLICK redraws that topology.  Then copy the saved project's ``main.csv`` over
 ``ladder_topology_golden/main.csv``, so the test pins what the CLICK keeps.
 
 Export the project for Guided Paste (``main.csv`` and ``nicknames.csv``) with::
@@ -95,6 +101,32 @@ def build_program() -> tuple[Program, TagMap]:
         for count, tally in ((2, TallyA), (3, TallyB)):
             with Rung(x[1], rows(count)):
                 count_up(tally, preset=5).reset(x[8])
+        # The rungs above were saved by the CLICK.  The rungs below await the next paste.
+        # An Or nested in an Or, with one output.
+        with Rung(x[1], Or(Or(x[2], x[3]), x[4])):
+            outputs(1)
+        # Ors in series after a contact, with one output: 2 rows then 2, 2 then 3, 3 then 2,
+        # three Ors, and an And row in the second Or.
+        for first, second in ((2, 2), (2, 3), (3, 2)):
+            with Rung(x[1], rows(first), rows(second, first=2 + first)):
+                outputs(1)
+        with Rung(x[1], rows(2), rows(2, first=4), rows(2, first=6)):
+            outputs(1)
+        with Rung(x[1], rows(2), Or(And(x[4], x[5]), x[6])):
+            outputs(1)
+        # Ors in series on the left rail, with one and two outputs.
+        for n in (1, 2):
+            with Rung(rows(2, first=1), rows(2, first=3)):
+                outputs(n)
+        # An Or of 2 rows into 5 and 6 outputs.
+        for n in (5, 6):
+            with Rung(x[1], rows(2)):
+                outputs(n)
+        # An Or of 2 rows on a branch in front of the outputs.
+        with Rung(x[1]):
+            outputs(1)
+            with branch(rows(2)):
+                outputs(2)
     mapping = TagMap(
         {
             TallyA.Done: ct[2],
