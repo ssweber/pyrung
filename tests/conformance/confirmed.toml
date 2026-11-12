@@ -64,6 +64,7 @@
 "counters/survives_rung_false" = { hash = "a51735615a61", on = "2026-11-12" }
 "counters/up_down_same_scan" = { hash = "6c04b9e3dea6", on = "2026-11-12" }
 "deb_fall/off_td_at_fall" = { hash = "cf8b83bdedb6", on = "2026-11-12" }
+"deb_off/off_td_with_coil_off" = { hash = "1c28b8c497a8", on = "2026-11-12" }
 "deb_zero/off_side_lag" = { hash = "87d48cdb1f54", on = "2026-11-12" }
 "drum/completion_turns_outputs_off" = { hash = "b4facffd4fe1", on = "2026-11-11" }
 "drum/correction_without_jog" = { hash = "45385697ba85", on = "2026-11-11" }
