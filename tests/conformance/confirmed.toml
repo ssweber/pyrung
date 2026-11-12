@@ -63,6 +63,7 @@
 "counters/reset_zero_preset" = { hash = "922a21c0deaa", on = "2026-11-12" }
 "counters/survives_rung_false" = { hash = "a51735615a61", on = "2026-11-12" }
 "counters/up_down_same_scan" = { hash = "6c04b9e3dea6", on = "2026-11-12" }
+"deb_fall/off_td_at_fall" = { hash = "cf8b83bdedb6", on = "2026-11-12" }
 "deb_zero/off_side_lag" = { hash = "87d48cdb1f54", on = "2026-11-12" }
 "drum/completion_turns_outputs_off" = { hash = "b4facffd4fe1", on = "2026-11-11" }
 "drum/correction_without_jog" = { hash = "45385697ba85", on = "2026-11-11" }
@@ -170,6 +171,9 @@
 "flag_steps/sc40_steps" = { hash = "94d546977151", on = "2026-11-12" }
 "flag_steps/sc43_steps" = { hash = "c8daf34b6cd9", on = "2026-11-12" }
 "flag_steps/sc44_steps" = { hash = "c60f016ae203", on = "2026-11-12" }
+"flash_zero/lowered_to_zero" = { hash = "3b32b8bd3df9", on = "2026-11-12" }
+"flash_zero/off_zero_first_phase" = { hash = "83b4ba409591", on = "2026-11-12" }
+"flash_zero/short_first_phase" = { hash = "48fdf3dfe10b", on = "2026-11-12" }
 "flasher_off/ds_minus_five" = { hash = "778a24963497", on = "2026-11-12" }
 "flasher_off/ds_zero" = { hash = "0d6248d4c346", on = "2026-11-12" }
 "flasher_td/frozen_off_td_at_lowered_preset" = { hash = "34b2e3cc210d", on = "2026-11-11" }
@@ -378,6 +382,7 @@
 "timers/tof_times_only_when_false" = { hash = "b68b9dbc0cc2", on = "2026-11-12" }
 "timers/ton_auto_reset" = { hash = "7207e7029141", on = "2026-11-12" }
 "timers/ton_done_on_enabling_scan" = { hash = "be32e270b67a", on = "2026-11-12" }
+"tof_rewrite/done_after_td_zeroed" = { hash = "16288613f4e2", on = "2026-11-12" }
 "txt_end/by_pointer" = { hash = "5cb6f7383195", on = "2026-11-12" }
 "unit_minute/one_minute" = { hash = "d8c66af6c036", on = "2026-11-05" }
 "unit_minute/thirty_seconds" = { hash = "2af1085ba437", on = "2026-11-05" }
