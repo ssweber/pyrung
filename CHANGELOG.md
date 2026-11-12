@@ -376,12 +376,15 @@
   - When an Or follows another Or that does not start at the left rail, the second Or starts in the column where the first Or's rows join (a column of wire sat between them).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
-- The debugger's `reload` keeps the PLC mode, pauses a running `continue` first, and reports the forces and bench links it moved or dropped.
+- The debugger's `reload` keeps the PLC mode, pauses a running `continue` first, and reports each force and bench link whose tag moved, and each one it dropped.
   - a `reload` in STOP stays in STOP (it came back in RUN)
   - a `reload` sent while `continue` runs pauses it first (it failed with "Cannot reload while continue is running")
-  - forces and bench links still follow the tag name. A `reload` now prints a sentence for each one whose tag moved to another CLICK address, and for each one dropped because the new program no longer has the tag
+  - forces and bench links still follow the tag name. A `reload` now prints a sentence for each one whose tag moved to another CLICK address, and for each one it dropped
   - a force on a tag the new program no longer has is now removed (it stayed active)
   - the evaluate response lists every moved or dropped force, link and cut in a `carried` field, and autoreload sends the same list in its output event
+  - a client such as ClickNick can send the `pyrungReload` request with a plan that moves each force and bench link to its new tag name. A moved link keeps its timer count
+  - the `pyrungReload` plan can also move a link the program declares to its new feedback. That link keeps its timer count too
+  - a `reload` that fails changes nothing (a new program with a bad `link=` trigger was loaded anyway and ran with no harness)
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
 - Rungs after a `with Program()` block nested in another one join the outer program (they joined no program).
 - Two threads can build programs at the same time (a rung could join the other thread's program).

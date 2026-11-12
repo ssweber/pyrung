@@ -45,6 +45,15 @@ class BenchLink:
     enabled: bool = True
 
 
+BenchDrop = tuple[str, BenchLink, str, str]
+"""The feedback, entry, reason and tag of a bench change dropped at a harness install.
+
+The reason is "gone" (the tag is not in the new program), "unlinked" (a cut whose
+feedback the program no longer links), "in program" or "invalid".  The tag is the one
+the reason is about, the enable when the enable left.
+"""
+
+
 # ---------------------------------------------------------------------------
 # Building and describing links
 # ---------------------------------------------------------------------------
@@ -156,9 +165,18 @@ def link_command(adapter: Any, coupling: Coupling) -> str:
 
 def active_overrides(adapter: Any) -> dict[str, Coupling | None]:
     """The bench entries the harness should run now."""
-    if not adapter._bench_links_on:
-        return {}
-    return {fb: entry.coupling for fb, entry in adapter._bench_links.items() if entry.enabled}
+    return _active(adapter._bench_links, adapter._bench_links_on)
+
+
+def bench_active(entry: BenchLink, bench_on: bool) -> bool:
+    """Whether the harness runs *entry*.  A disabled entry, or any entry with bench off, waits."""
+    return bench_on and entry.enabled
+
+
+def _active(bench_links: Mapping[str, BenchLink], bench_on: bool) -> dict[str, Coupling | None]:
+    return {
+        fb: entry.coupling for fb, entry in bench_links.items() if bench_active(entry, bench_on)
+    }
 
 
 def _declared(adapter: Any) -> dict[str, Coupling]:
@@ -168,7 +186,8 @@ def _declared(adapter: Any) -> dict[str, Coupling]:
     return {c.fb_name: c for c in harness.declared()}
 
 
-def _changed(adapter: Any) -> None:
+def links_changed(adapter: Any) -> None:
+    """Tell clients the wiring changed, and restart a scan stepped part way."""
     adapter._links_revision += 1
     execution_flow.invalidate_mid_scan(adapter)
 
@@ -187,49 +206,56 @@ def sync_harness_locked(adapter: Any) -> None:
         harness._settle(skip=overrides)
     elif harness is not None:
         harness.set_overrides(overrides)
-    _changed(adapter)
+    links_changed(adapter)
 
 
-def fit_to_harness_locked(
-    adapter: Any, harness: Any, drops: list[tuple[str, BenchLink, str]] | None = None
-) -> list[str]:
-    """Fit the bench links to a freshly installed harness (launch, reload, replay).
+def fit_bench_links(
+    runner: Any,
+    harness: Any,
+    bench_links: Mapping[str, BenchLink],
+    bench_on: bool,
+    drops: list[BenchDrop] | None = None,
+) -> tuple[dict[str, BenchLink], list[str]]:
+    """Fit *bench_links* to a harness freshly installed on *runner* (launch, reload, replay).
 
     Drops a bench link the program now declares the same way (it reached the
     project), a cut whose declared link is gone, and a link that no longer
-    validates against the reloaded program.  Returns a note per dropped entry.  Each
-    drop is also appended to *drops* as ``(feedback, entry, reason)``, the reason one of
-    "in program", "gone" or "invalid".
+    validates against the reloaded program.  Returns the bench links kept and a note
+    per dropped entry.  Each drop is also appended to *drops* (see :data:`BenchDrop`).
+    The adapter is not touched, so a reload can stage the fit and still back out.
     """
-    runner = adapter._require_runner_locked()
     declared = {c.fb_name: c for c in harness.declared()}
     notes: list[str] = []
     kept: dict[str, BenchLink] = {}
     dropped = drops if drops is not None else []
-    for fb, entry in adapter._bench_links.items():
+    for fb, entry in bench_links.items():
         coupling = entry.coupling
         if coupling is None:
             if fb in declared:
                 kept[fb] = entry
             else:
                 notes.append(f"Dropped the bench cut on {fb}: the program no longer links it.")
-                dropped.append((fb, entry, "gone"))
+                gone = fb not in runner._known_tags_by_name
+                dropped.append((fb, entry, "gone" if gone else "unlinked", fb))
             continue
         project = declared.get(fb)
         if project is not None and same_wiring(coupling, project):
             notes.append(f"Bench link on {fb} is now in the program.")
-            dropped.append((fb, entry, "in program"))
+            dropped.append((fb, entry, "in program", fb))
             continue
         problem = link_problem(runner, coupling)
         if problem is not None:
             notes.append(f"Dropped the bench link on {fb}: {problem}.")
-            dropped.append((fb, entry, "gone" if problem.startswith("unknown tag") else "invalid"))
+            if coupling.fb_name not in runner._known_tags_by_name:
+                dropped.append((fb, entry, "gone", fb))
+            elif coupling.en_name not in runner._known_tags_by_name:
+                dropped.append((fb, entry, "gone", coupling.en_name))
+            else:
+                dropped.append((fb, entry, "invalid", fb))
             continue
         kept[fb] = entry
-    adapter._bench_links = kept
-    harness.set_overrides(active_overrides(adapter))
-    _changed(adapter)
-    return notes
+    harness.set_overrides(_active(kept, bench_on))
+    return kept, notes
 
 
 def set_link_locked(adapter: Any, coupling: Coupling) -> str:

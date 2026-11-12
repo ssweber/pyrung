@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from typing import Any
 
@@ -583,7 +584,7 @@ class TestReload:
 
 
 ONESHOT_SCRIPT = (
-    "from pyrung.core import Bool, Int, Physical, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
     "\n"
     "button = Bool('Button')\n"
     "pulse = Bool('Pulse')\n"
@@ -1362,6 +1363,10 @@ class TestReloadReportsWhatMoved:
 
         entry = resp["body"]["carried"][0]
         assert (entry["tag"], entry["dropped"], entry["reason"]) == ("A", True, "type changed")
+        assert (
+            "Dropped the force on A because A is an Int in the new program."
+            in (resp["body"]["result"])
+        )
         assert adapter._runner.forces == {}
 
     def test_a_bench_link_whose_feedback_moved_is_reported(self, tmp_path: Path):
@@ -1429,6 +1434,22 @@ class TestReloadReportsWhatMoved:
         assert entry["new"] is None
         assert "A" not in adapter._bench_links
 
+    def test_a_link_whose_enable_left_is_reported_under_the_enable(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        script.write_text(_carry_script().replace("'Cmd'", "'Go'"))
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=11)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["tag"], entry["feedback"], entry["old"], entry["reason"]) == (
+            "Cmd",
+            "A",
+            "X001",
+            "gone",
+        )
+        assert "A" not in adapter._bench_links
+
     def test_a_link_that_no_longer_validates_is_reported_invalid(self, tmp_path: Path):
         adapter, out, script = _carry(tmp_path)
         _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
@@ -1460,7 +1481,19 @@ class TestReloadReportsWhatMoved:
         resp, _stopped = _repl(adapter, out, "reload", seq=12)
 
         entry = resp["body"]["carried"][0]
-        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("cut", True, "gone")
+        assert (entry["kind"], entry["dropped"], entry["reason"]) == ("cut", True, "unlinked")
+
+    def test_a_cut_whose_feedback_left_is_reported_gone(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        _rewrite(script, a="B")
+
+        resp, _stopped = _repl(adapter, out, "reload", seq=12)
+
+        entry = resp["body"]["carried"][0]
+        assert (entry["kind"], entry["tag"], entry["reason"]) == ("cut", "A", "gone")
 
     def test_nothing_is_reported_when_nothing_moved(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)
@@ -1526,3 +1559,856 @@ class TestReloadWaitsForThePause:
         assert adapter._runner.mode == "stop"
         assert adapter._runner.forces == {"A": True}
         assert "A" in adapter._bench_links
+
+
+class TestAutoreloadReport:
+    def test_the_output_event_carries_the_report(self, tmp_path: Path, monkeypatch):
+        from pyrung.dap import reload_console
+
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        events: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            adapter, "_enqueue_internal_event", lambda e, b=None: events.append((e, b))
+        )
+        monkeypatch.setattr(adapter, "_request_state_frame", lambda _info: None)
+
+        class OneEdit:
+            """Edits the program on the first wait, then stops the loop."""
+
+            calls = 0
+
+            def wait(self, timeout: float) -> bool:
+                self.calls += 1
+                if self.calls == 1:
+                    _rewrite(script, a_addr="c[5]")
+                    stat = script.stat()
+                    os.utime(script, (stat.st_atime, stat.st_mtime + 5))
+                return self.calls > 2
+
+        reload_console._autoreload_loop(adapter, script.parent, OneEdit())  # type: ignore[arg-type]
+
+        outputs = [body for name, body in events if name == "output"]
+        assert outputs[0]["output"].startswith("[autoreload] Reloaded")
+        assert outputs[0]["data"]["carried"] == [
+            {"tag": "A", "kind": "force", "old": "C1", "new": "C5", "dropped": False, "value": True}
+        ]
+
+
+def _plan_reload(
+    adapter: DAPAdapter,
+    out: io.BytesIO,
+    *,
+    forces: Any = None,
+    links: Any = None,
+    declared: Any = None,
+    seq: int = 20,
+) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    if forces is not None:
+        arguments["forces"] = forces
+    if links is not None:
+        arguments["links"] = links
+    if declared is not None:
+        arguments["declared"] = declared
+    messages = _send_request(adapter, out, seq=seq, command="pyrungReload", arguments=arguments)
+    return _single_response(messages)
+
+
+def _carried(resp: dict[str, Any], tag: str, kind: str) -> dict[str, Any]:
+    (entry,) = [e for e in resp["body"]["carried"] if e["tag"] == tag and e["kind"] == kind]
+    return entry
+
+
+def _timed_count(adapter: DAPAdapter, fb: str) -> int:
+    return adapter._runner.current_state.tags[f"__tmd_on__{fb}"]
+
+
+class TestPlannedReload:
+    def test_a_planned_force_moves_to_its_new_tag(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _rewrite(script, a="B")
+
+        resp = _plan_reload(adapter, out, forces={"A": "B"})
+
+        assert resp["success"] is True
+        assert "Moved the force on A to B." in resp["body"]["result"]
+        assert resp["body"]["carried"] == [
+            {
+                "tag": "A",
+                "kind": "force",
+                "to": "B",
+                "old": "C1",
+                "new": "C1",
+                "planned": True,
+                "released": False,
+                "dropped": False,
+                "value": True,
+            }
+        ]
+        assert adapter._runner.forces == {"B": True}
+
+    def test_a_force_planned_null_is_released(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+
+        resp = _plan_reload(adapter, out, forces={"A": None})
+
+        entry = _carried(resp, "A", "force")
+        assert (entry["released"], entry["dropped"], entry["to"]) == (True, False, None)
+        assert "Released the force on A." in resp["body"]["result"]
+        assert adapter._runner.forces == {}
+
+    def test_a_renamed_link_keeps_a_timed_coils_count(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        count = _timed_count(adapter, "A")
+        assert 0 < count < 100
+        _rewrite(script, a="B")
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+
+        assert resp["success"] is True
+        assert "Moved the bench link on A to B." in resp["body"]["result"]
+        assert "reset" not in resp["body"]["result"]
+        entry = _carried(resp, "A", "link")
+        assert (entry["to"], entry["enable"], entry["planned"]) == ("B", "Cmd", True)
+        assert list(adapter._bench_links) == ["B"]
+        tags = adapter._runner.current_state.tags
+        assert _timed_count(adapter, "B") == count
+        assert tags["B"] is True
+        assert "__tmd_on__A" not in tags
+        _repl(adapter, out, "step 1", seq=13)
+        assert _timed_count(adapter, "B") == count + 10
+        assert adapter._runner.current_state.tags["B"] is True
+
+    def test_a_link_whose_enable_is_renamed_keeps_its_count(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        count = _timed_count(adapter, "A")
+        script.write_text(_carry_script(a="B").replace("'Cmd'", "'Go'"))
+
+        resp = _plan_reload(
+            adapter, out, forces={"Cmd": "Go"}, links={"A": {"en": "Go", "fb": "B"}}
+        )
+
+        assert "The bench link on B reads Go (it read Cmd)." in resp["body"]["result"]
+        assert adapter._bench_links["B"].coupling.en_name == "Go"
+        assert adapter._runner.forces == {"Go": True}
+        assert _timed_count(adapter, "B") == count
+        _repl(adapter, out, "step 1", seq=13)
+        assert _timed_count(adapter, "B") == count + 10
+
+    def test_a_renamed_toggle_keeps_its_state(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd toggle", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 2", seq=12)
+        assert adapter._runner.current_state.tags["A"] is True
+        _rewrite(script, a="B")
+
+        _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+        _repl(adapter, out, "step 2", seq=13)
+
+        assert adapter._runner.current_state.tags["B"] is True
+
+    def test_a_link_planned_null_is_removed(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+
+        resp = _plan_reload(adapter, out, links={"A": None})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["released"], entry["dropped"], entry["to"]) == (True, False, None)
+        assert "Removed the bench link on A." in resp["body"]["result"]
+        assert adapter._bench_links == {}
+
+    def test_a_cut_moves_to_the_feedback_its_plan_names(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        script.write_text(_declared_a_script().replace("'A'", "'B'"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"cut": True, "fb": "B"}})
+
+        entry = _carried(resp, "A", "cut")
+        assert (entry["to"], entry["dropped"]) == ("B", False)
+        assert adapter._bench_links["B"].coupling is None
+
+    def test_a_cut_on_a_feedback_the_program_does_not_link_is_dropped(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        script.write_text(_declared_a_script())
+        _repl(adapter, out, "reload", seq=10)
+        _repl(adapter, out, "unlink A", seq=11)
+        _rewrite(script, a="B")
+
+        resp = _plan_reload(adapter, out, links={"A": {"cut": True, "fb": "B"}})
+
+        entry = _carried(resp, "A", "cut")
+        assert (entry["dropped"], entry["reason"], entry["to"]) == (True, "unlinked", None)
+        assert entry["detail"] == "the new program does not link B"
+        assert adapter._bench_links == {}
+
+    def test_an_entry_the_plan_leaves_out_follows_its_name(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp true", seq=11)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=12)
+
+        resp = _plan_reload(adapter, out, forces={"A": "A"})
+
+        assert _carried(resp, "A", "force")["planned"] is True
+        lamp = _carried(resp, "Lamp", "force")
+        assert (lamp["planned"], lamp["to"], lamp["old"], lamp["new"]) == (
+            False,
+            "Lamp",
+            "Y001",
+            "Y001",
+        )
+        link = _carried(resp, "A", "link")
+        assert (link["planned"], link["to"], link["enable"]) == (False, "A", "Cmd")
+        text = resp["body"]["result"]
+        assert "The force on Lamp is not in the plan, so it stays on Lamp." in text
+        assert "The bench link on A is not in the plan, so it stays on A." in text
+        assert adapter._runner.forces == {"A": True, "Lamp": True}
+        assert list(adapter._bench_links) == ["A"]
+
+    def test_a_plan_naming_a_missing_tag_drops_that_entry(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp true", seq=11)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=12)
+
+        resp = _plan_reload(
+            adapter,
+            out,
+            forces={"A": "Nope", "Lamp": "Lamp", "Ghost": "Lamp"},
+            links={"A": {"en": "Gone", "fb": "A"}},
+        )
+
+        assert resp["success"] is True
+        force = _carried(resp, "A", "force")
+        assert (force["dropped"], force["reason"], force["to"]) == (True, "gone", None)
+        assert force["detail"] == "Nope is not in the new program"
+        ghost = _carried(resp, "Ghost", "force")
+        assert (ghost["dropped"], ghost["reason"]) == (True, "not forced")
+        link = _carried(resp, "A", "link")
+        assert (link["dropped"], link["reason"], link["detail"]) == (
+            True,
+            "gone",
+            "Gone is not in the new program",
+        )
+        text = resp["body"]["result"]
+        assert "Dropped the force on A because Nope is not in the new program." in text
+        assert "The plan names a force on Ghost, but Ghost is not forced." in text
+        assert adapter._runner.forces == {"Lamp": True}
+        assert adapter._bench_links == {}
+
+    def test_a_link_plan_with_no_enable_is_an_error_not_a_cut(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+
+        resp = _plan_reload(adapter, out, links={"A": {"fb": "A"}, "Lamp": None})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["dropped"], entry["reason"]) == (True, "bad plan")
+        assert entry["detail"] == "its plan names no enable (en) and is not a cut"
+        assert _carried(resp, "Lamp", "link")["reason"] == "no bench change"
+        assert adapter._bench_links == {}
+
+    def test_two_forces_onto_one_tag_are_both_dropped(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp false", seq=11)
+
+        resp = _plan_reload(adapter, out, forces={"A": "Lamp"})
+
+        a, lamp = _carried(resp, "A", "force"), _carried(resp, "Lamp", "force")
+        assert (a["reason"], a["detail"]) == ("conflict", "the force on Lamp also goes to Lamp")
+        assert (lamp["reason"], lamp["detail"]) == ("conflict", "the force on A also goes to Lamp")
+        assert adapter._runner.forces == {}
+
+    def test_two_links_planned_onto_one_feedback_are_both_dropped(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        _repl(adapter, out, "link Cmd Lamp on_delay=0ms", seq=11)
+
+        resp = _plan_reload(
+            adapter,
+            out,
+            links={"A": {"en": "Lamp", "fb": "A"}, "Cmd": {"en": "Lamp", "fb": "A"}},
+        )
+
+        a, cmd = _carried(resp, "A", "link"), _carried(resp, "Cmd", "link")
+        assert (a["dropped"], a["reason"], a["to"]) == (True, "conflict", None)
+        assert a["detail"] == "the bench change on Cmd also goes to A"
+        assert (cmd["dropped"], cmd["reason"], cmd["detail"]) == (
+            True,
+            "conflict",
+            "the bench change on A also goes to A",
+        )
+        assert (
+            "Dropped the bench link on Cmd because the bench change on A also goes to A."
+            in (resp["body"]["result"])
+        )
+        assert adapter._bench_links == {}
+
+    def test_a_link_planned_onto_a_feedback_another_link_keeps_drops_both(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=10)
+        _repl(adapter, out, "link Cmd Lamp on_delay=0ms", seq=11)
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Lamp", "fb": "Cmd"}})
+
+        assert _carried(resp, "A", "link")["reason"] == "conflict"
+        cmd = _carried(resp, "Cmd", "link")
+        assert (cmd["planned"], cmd["reason"]) == (False, "conflict")
+        assert adapter._bench_links == {}
+
+    def test_a_bad_plan_shape_refuses_the_reload(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        old_runner = adapter._runner
+
+        resp = _plan_reload(adapter, out, forces=["A"])
+
+        assert resp["success"] is False
+        assert "pyrungReload.forces must be an object" in resp["message"]
+        assert adapter._runner is old_runner
+
+    def test_a_failed_reload_leaves_the_plan_unapplied(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "link A Cmd on_delay=0ms", seq=11)
+        _repl(adapter, out, "mode stop", seq=12)
+        old_runner = adapter._runner
+        script.write_text("this is not python (\n")
+
+        resp = _plan_reload(adapter, out, forces={"A": "B"}, links={"A": None})
+
+        assert resp["success"] is False
+        assert "Reload failed" in resp["message"]
+        assert adapter._runner is old_runner
+        assert adapter._runner.mode == "stop"
+        assert adapter._runner.forces == {"A": True}
+        assert list(adapter._bench_links) == ["A"]
+
+    def test_a_planned_reload_while_running_pauses_first(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _send_request(adapter, out, seq=10, command="continue")
+
+        resp = _plan_reload(adapter, out)
+
+        assert resp["success"] is True
+        assert resp["body"]["carried"] == []
+        assert not adapter._thread_running_locked()
+
+    def test_a_planned_reload_is_logged_as_a_reload(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+
+        _plan_reload(adapter, out, forces={})
+
+        assert adapter._action_log == [(adapter._runner.current_state.scan_id, "reload", "console")]
+
+    def test_a_force_dropped_for_a_conflict_is_released(self, tmp_path: Path):
+        adapter, out, _script = _carry(tmp_path)
+        _repl(adapter, out, "force A true", seq=10)
+        _repl(adapter, out, "force Lamp false", seq=11)
+
+        resp = _plan_reload(adapter, out, forces={"A": "Lamp"})
+
+        for tag in ("A", "Lamp"):
+            entry = _carried(resp, tag, "force")
+            assert (entry["dropped"], entry["released"], entry["to"]) == (True, True, None)
+
+    def test_a_force_moves_onto_a_tag_whose_old_namesake_had_another_type(self, tmp_path: Path):
+        old = (
+            "from pyrung.core import Bool, Int, PLC, Program, Rung, out\n"
+            "a = Int('A')\n"
+            "b = Bool('B')\n"
+            "with Program(strict=False) as prog:\n"
+            "    with Rung(a > 0):\n"
+            "        out(Bool('Sink'))\n"
+            "    with Rung(b):\n"
+            "        out(Bool('Sink2'))\n"
+            "runner = PLC(prog, dt=0.010)\n"
+        )
+        new = (
+            "from pyrung.core import Bool, Int, PLC, Program, Rung, out\n"
+            "b = Int('B')\n"
+            "with Program(strict=False) as prog:\n"
+            "    with Rung(b > 0):\n"
+            "        out(Bool('Sink'))\n"
+            "runner = PLC(prog, dt=0.010)\n"
+        )
+        adapter, out, script = _setup(tmp_path, old)
+        _repl(adapter, out, "force A 5", seq=10)
+        script.write_text(new)
+
+        resp = _plan_reload(adapter, out, forces={"A": "B"})
+
+        entry = _carried(resp, "A", "force")
+        assert (entry["to"], entry["dropped"]) == ("B", False)
+        assert adapter._runner.forces == {"B": 5}
+
+    def test_a_force_planned_onto_a_tag_of_another_type_is_dropped(self, tmp_path: Path):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "force Lamp true", seq=10)
+        script.write_text(_int_a_script())
+
+        resp = _plan_reload(adapter, out, forces={"Lamp": "A"})
+
+        entry = _carried(resp, "Lamp", "force")
+        assert (entry["dropped"], entry["reason"]) == (True, "type changed")
+        assert entry["detail"] == "A is an Int in the new program"
+        assert (
+            "Dropped the force on Lamp because A is an Int in the new program."
+            in (resp["body"]["result"])
+        )
+        assert adapter._runner.forces == {}
+
+
+TWO_SCRIPT = (
+    "from pyrung.core import Bool, Int, Physical, PLC, Program, Real, Rung, out\n"
+    "a = {a}\n"
+    "b = {b}\n"
+    "cmd = Bool('Cmd')\n"
+    "go = Bool('Go')\n"
+    "with Program(strict=False) as prog:\n"
+    "    with Rung(cmd):\n"
+    "        out(Bool('Lamp'))\n"
+    "    with Rung(go):\n"
+    "        out(Bool('Lamp2'))\n"
+    "    with Rung({a_read}):\n"
+    "        out(Bool('Sink'))\n"
+    "    with Rung(b):\n"
+    "        out(Bool('Sink2'))\n"
+    "runner = PLC(prog, dt=0.010)\n"
+)
+
+
+def _two(a: str = "Bool('A')", b: str = "Bool('B')", a_read: str = "a") -> str:
+    """A program with two feedbacks, ``a`` and ``b``, and two enables, Cmd and Go."""
+    return TWO_SCRIPT.format(a=a, b=b, a_read=a_read)
+
+
+def _timed(name: str, enable: str = "Cmd", ms: int = 100) -> str:
+    return f"Bool('{name}', physical=Physical('{name}', timed='{ms}ms'), link='{enable}')"
+
+
+def _three(a: str = "Bool('A')") -> str:
+    """The two-feedback program with a third feedback, C."""
+    rung_c = "    with Rung(Bool('C')):\n        out(Bool('Sink3'))\n"
+    return _two(a=a).replace("    with Rung(b):\n", rung_c + "    with Rung(b):\n")
+
+
+def _counts(adapter: DAPAdapter, *fbs: str) -> tuple[int, ...]:
+    return tuple(_timed_count(adapter, fb) for fb in fbs)
+
+
+class TestPlannedCoilMoves:
+    def test_a_moved_link_leaves_the_coil_of_a_feedback_named_with_an_underscore(
+        self, tmp_path: Path
+    ):
+        adapter, out, script = _setup(tmp_path, _two(b="Bool('_A')"))
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "link _A Cmd timed=1000ms", seq=11)
+        _repl(adapter, out, "force Cmd true", seq=12)
+        _repl(adapter, out, "step 3", seq=13)
+        (count,) = _counts(adapter, "_A")
+        script.write_text(_two(a="Bool('B')", b="Bool('_A')"))
+
+        _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+        _repl(adapter, out, "step 1", seq=14)
+
+        tags = adapter._runner.current_state.tags
+        assert _counts(adapter, "B", "_A") == (count + 10, count + 10)
+        assert "__tmd_on___B" not in tags
+        assert "__tmd_ond___B" not in tags
+
+    def test_a_ramp_moved_onto_an_int_starts_from_the_new_default(self, tmp_path: Path):
+        old = _two(a="Real('A')", b="Bool('Other')", a_read="a > 5")
+        adapter, out, script = _setup(tmp_path, old)
+        _repl(adapter, out, "link A Cmd ramp_on=37.3", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        assert adapter._runner.current_state.tags["A"] > 0
+        script.write_text(old.replace("Real('A')", "Int('B')"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+
+        assert _carried(resp, "A", "link")["to"] == "B"
+        b = adapter._runner.current_state.tags.get("B", 0)
+        assert b == 0 and type(b) is int
+
+    def test_two_links_swapped_keep_each_others_counts(self, tmp_path: Path):
+        adapter, out, _script = _setup(tmp_path, _two())
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "link B Go timed=1000ms", seq=11)
+        _repl(adapter, out, "force Cmd true", seq=12)
+        _repl(adapter, out, "step 3", seq=13)
+        _repl(adapter, out, "force Go true", seq=14)
+        _repl(adapter, out, "step 1", seq=15)
+        a, b = _counts(adapter, "A", "B")
+        assert a != b
+
+        _plan_reload(
+            adapter,
+            out,
+            links={"A": {"en": "Cmd", "fb": "B"}, "B": {"en": "Go", "fb": "A"}},
+        )
+
+        assert _counts(adapter, "A", "B") == (b, a)
+        assert adapter._bench_links["B"].coupling.en_name == "Cmd"
+
+    def test_a_link_is_not_moved_onto_a_feedback_whose_own_coil_stays(self, tmp_path: Path):
+        program = _two(b=_timed("B", "Go"))
+        adapter, out, script = _setup(tmp_path, program)
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        _repl(adapter, out, "force Go true", seq=13)
+        _repl(adapter, out, "step 1", seq=14)
+        a, b = _counts(adapter, "A", "B")
+        assert a != b
+        script.write_text(program)
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Go", "fb": "B"}})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["dropped"], entry["reason"], entry["to"]) == (True, "in use", None)
+        assert entry["detail"] == "a coil already runs on B"
+        assert (
+            "Dropped the bench link on A because a coil already runs on B."
+            in (resp["body"]["result"])
+        )
+        assert adapter._bench_links == {}
+        assert _counts(adapter, "B") == (b,)
+
+    @pytest.mark.parametrize(
+        "b_plan",
+        [
+            pytest.param(None, id="removed"),
+            pytest.param({"en": "Go"}, id="bad-plan"),
+            pytest.param({"en": "Go", "fb": "C"}, id="conflict"),
+        ],
+    )
+    def test_a_link_moves_onto_a_feedback_whose_own_link_leaves(self, tmp_path: Path, b_plan: Any):
+        adapter, out, script = _setup(tmp_path, _three())
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "link B Go timed=1000ms", seq=11)
+        _repl(adapter, out, "link C Go timed=1000ms", seq=12)
+        _repl(adapter, out, "force Cmd true", seq=13)
+        _repl(adapter, out, "step 3", seq=14)
+        _repl(adapter, out, "force Go true", seq=15)
+        _repl(adapter, out, "step 1", seq=16)
+        a, b = _counts(adapter, "A", "B")
+        assert a != b
+        script.write_text(_three(a="Bool('A2')"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}, "B": b_plan})
+
+        entry = _carried(resp, "A", "link")
+        assert (entry["dropped"], entry["to"]) == (False, "B")
+        assert _counts(adapter, "B") == (a,)
+        assert adapter._bench_links["B"].coupling.en_name == "Cmd"
+
+    def test_a_link_moves_onto_a_feedback_whose_declared_link_left_the_program(
+        self, tmp_path: Path
+    ):
+        adapter, out, script = _setup(tmp_path, _two(b=_timed("B", "Go", ms=1000)))
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        _repl(adapter, out, "force Go true", seq=13)
+        _repl(adapter, out, "step 1", seq=14)
+        a, b = _counts(adapter, "A", "B")
+        assert a != b
+        script.write_text(_two(a="Bool('A2')"))
+
+        resp = _plan_reload(adapter, out, links={"A": {"en": "Cmd", "fb": "B"}})
+
+        assert _carried(resp, "A", "link")["to"] == "B"
+        assert _counts(adapter, "B") == (a,)
+
+
+class TestPlannedDeclaredLinks:
+    def test_a_declared_link_renamed_keeps_its_count(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "force Cmd true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        (count,) = _counts(adapter, "A")
+        assert 0 < count < 100
+        script.write_text(_two(a=_timed("C")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "C"})
+
+        assert resp["success"] is True
+        assert "Moved the declared link on A to C." in resp["body"]["result"]
+        assert _carried(resp, "A", "declared") == {
+            "tag": "A",
+            "kind": "declared",
+            "to": "C",
+            "old": None,
+            "new": None,
+            "planned": True,
+            "released": False,
+            "dropped": False,
+            "feedback": "A",
+            "enable": "Cmd",
+        }
+        assert _counts(adapter, "C") == (count,)
+        _repl(adapter, out, "step 1", seq=12)
+        assert _counts(adapter, "C") == (count + 10,)
+        assert adapter._runner.current_state.tags["C"] is True
+
+    def test_without_the_plan_the_renamed_declared_link_settles(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "force Cmd true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        script.write_text(_two(a=_timed("C")))
+
+        _plan_reload(adapter, out)
+
+        assert _counts(adapter, "C") == (100,)
+        assert adapter._runner.current_state.tags.get("C", False) is False
+
+    def test_a_declared_link_whose_enable_is_renamed_keeps_its_count(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "force Cmd true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        (count,) = _counts(adapter, "A")
+        script.write_text(_two(a=_timed("C", "Go")))
+
+        resp = _plan_reload(adapter, out, forces={"Cmd": "Go"}, declared={"A": "C"})
+
+        assert _carried(resp, "A", "declared")["enable"] == "Go"
+        assert _counts(adapter, "C") == (count,)
+
+    def test_an_entry_without_a_declared_link_on_either_side_is_dropped(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A"), b=_timed("B", "Go")))
+        _repl(adapter, out, "link B Cmd timed=100ms", seq=10)
+        script.write_text(_two(a=_timed("A")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "Lamp", "Lamp": "C", "B": "C", "Go": 5})
+
+        reasons = {
+            entry["tag"]: (entry["reason"], entry["detail"])
+            for entry in resp["body"]["carried"]
+            if entry["kind"] == "declared"
+        }
+        assert reasons == {
+            "A": ("unlinked", "the new program does not link Lamp"),
+            "Lamp": ("not declared", "the old program declares no link on Lamp"),
+            "B": ("not declared", "a bench change replaced the program's link on B"),
+            "Go": ("bad plan", "its plan is not a tag name"),
+        }
+
+    def test_a_declared_link_onto_a_missing_tag_is_dropped_gone(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "Nope"})
+
+        entry = _carried(resp, "A", "declared")
+        assert (entry["reason"], entry["detail"]) == ("gone", "Nope is not in the new program")
+
+    def test_a_declared_link_is_not_moved_onto_a_feedback_whose_own_coil_stays(
+        self, tmp_path: Path
+    ):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A"), b=_timed("B", "Go")))
+        _repl(adapter, out, "force Cmd true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        _repl(adapter, out, "force Go true", seq=12)
+        _repl(adapter, out, "step 1", seq=13)
+        (b,) = _counts(adapter, "B")
+        script.write_text(_two(b=_timed("B", "Go")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "B"})
+
+        entry = _carried(resp, "A", "declared")
+        assert (entry["dropped"], entry["reason"]) == (True, "in use")
+        assert _counts(adapter, "B") == (b,)
+
+    def test_a_bench_change_wins_over_a_declared_link_onto_its_feedback(self, tmp_path: Path):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "link B Go timed=100ms", seq=10)
+        script.write_text(_two(b=_timed("B")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "B"})
+
+        declared, bench = _carried(resp, "A", "declared"), _carried(resp, "B", "link")
+        assert (declared["reason"], declared["detail"]) == (
+            "not declared",
+            "a bench change replaces the program's link on B",
+        )
+        assert (bench["dropped"], bench["to"]) == (False, "B")
+        assert adapter._bench_links["B"].coupling.en_name == "Go"
+
+    @pytest.mark.parametrize(
+        "set_links",
+        [
+            pytest.param({"enabled": {"B": False}}, id="disabled"),
+            pytest.param({"bench": False}, id="bench-off"),
+        ],
+    )
+    def test_a_bench_change_that_waits_lets_a_declared_link_move_onto_its_feedback(
+        self, tmp_path: Path, set_links: dict[str, Any]
+    ):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "link B Go timed=1000ms", seq=10)
+        messages = _send_request(
+            adapter, out, seq=11, command="pyrungSetLinks", arguments=set_links
+        )
+        assert _single_response(messages)["success"] is True
+        _repl(adapter, out, "force Cmd true", seq=12)
+        _repl(adapter, out, "step 3", seq=13)
+        (count,) = _counts(adapter, "A")
+        assert 0 < count < 100
+        script.write_text(_two(a="Bool('A2')", b=_timed("B")))
+
+        resp = _plan_reload(adapter, out, declared={"A": "B"})
+
+        entry = _carried(resp, "A", "declared")
+        assert (entry["dropped"], entry["to"]) == (False, "B")
+        assert _counts(adapter, "B") == (count,)
+        assert list(adapter._bench_links) == ["B"]
+        assert adapter._harness.overrides == {}
+
+    @pytest.mark.parametrize(
+        ("new_b", "detail"),
+        [
+            pytest.param(
+                "Bool('B', physical=Physical('B', on_delay='100ms'), link='Cmd')",
+                "B is a delay link in the new program, not a timed link",
+                id="kind",
+            ),
+            pytest.param(
+                "Bool('B', physical=Physical('B', timed='100ms'), link='~Cmd')",
+                "the new program's link on B has another trigger",
+                id="trigger",
+            ),
+        ],
+    )
+    def test_a_declared_link_onto_another_kind_of_link_is_dropped_and_settles(
+        self, tmp_path: Path, new_b: str, detail: str
+    ):
+        adapter, out, script = _setup(tmp_path, _two(a=_timed("A")))
+        _repl(adapter, out, "force Cmd true", seq=10)
+        _repl(adapter, out, "step 3", seq=11)
+        assert 0 < _timed_count(adapter, "A") < 100
+        script.write_text(_two(a="Bool('A2')", b=new_b))
+
+        resp = _plan_reload(adapter, out, declared={"A": "B"})
+
+        entry = _carried(resp, "A", "declared")
+        assert (entry["reason"], entry["detail"], entry["to"]) == ("changed kind", detail, None)
+        assert f"Dropped the declared link on A because {detail}." in resp["body"]["result"]
+        # B settles as a fresh coil would, so A's count is not carried.
+        tags = adapter._runner.current_state.tags
+        if "on_delay" in new_b:
+            assert "__tmd_on__B" not in tags
+            assert tags["__cpl_on__B"] == 100
+        else:
+            assert tags["__tmd_on__B"] == 0
+
+
+def _bad_trigger(script: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script.write_text(
+        _carry_script(a_decl="Bool('A', physical=Physical('A', on_delay='0ms'), link='Cmd:foo')")
+    )
+
+
+def _harness_raises(script: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pyrung.core.harness import Harness
+
+    def broken(self: Any) -> None:
+        raise RuntimeError("the harness broke")
+
+    script.write_text(_carry_script(a="B"))
+    monkeypatch.setattr(Harness, "_install", broken)
+
+
+def _tag_map_raises(script: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pyrung.dap.handlers import lifecycle_launch
+
+    def broken(*_args: Any) -> None:
+        raise RuntimeError("the tag map broke")
+
+    script.write_text(_carry_script(a="B"))
+    monkeypatch.setattr(lifecycle_launch, "discover_click_project", broken)
+
+
+def _adapter_view(adapter: DAPAdapter) -> dict[str, Any]:
+    runner = adapter._runner
+    assert runner is not None
+    breakpoints = adapter._breakpoints
+    harness = adapter._harness
+    return {
+        "runner": runner,
+        "harness": harness,
+        "harness overrides": dict(harness.overrides) if harness is not None else None,
+        "forces": dict(runner.forces),
+        "bench links": dict(adapter._bench_links),
+        "mode": runner.mode,
+        "state": runner.current_state,
+        "breakpoints": breakpoints,
+        "breakpoint lines": {
+            path: sorted(lines) for path, lines in breakpoints.source_breakpoints_by_file.items()
+        },
+        "breakpoint rungs": dict(breakpoints.breakpoint_rung_map),
+        "tag map": adapter._tag_map,
+        "click provider": adapter._click_provider,
+        "links revision": adapter._links_revision,
+    }
+
+
+class TestAFailedReloadChangesNothing:
+    @pytest.mark.parametrize("planned", [False, True], ids=["reload", "pyrungReload"])
+    @pytest.mark.parametrize(
+        ("edit", "message"),
+        [
+            (_bad_trigger, "Trigger value 'foo' is not an int literal"),
+            (_harness_raises, "the harness broke"),
+            (_tag_map_raises, "the tag map broke"),
+        ],
+        ids=["bad link trigger", "harness install raises", "tag map bind raises"],
+    )
+    def test_a_reload_that_fails_after_the_program_ran(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        planned: bool,
+        edit: Any,
+        message: str,
+    ):
+        adapter, out, script = _carry(tmp_path)
+        _repl(adapter, out, "link A Cmd timed=100ms", seq=10)
+        _repl(adapter, out, "force Cmd true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        _repl(adapter, out, "mode stop", seq=13)
+        _send_request(
+            adapter,
+            out,
+            seq=14,
+            command="setBreakpoints",
+            arguments={"source": {"path": str(script)}, "lines": [10]},
+        )
+        before = _adapter_view(adapter)
+        assert before["breakpoint lines"] and before["harness"] is not None
+        edit(script, monkeypatch)
+
+        if planned:
+            resp = _plan_reload(
+                adapter, out, forces={"Cmd": None}, links={"A": {"en": "Cmd", "fb": "B"}}
+            )
+        else:
+            resp, _stopped = _repl(adapter, out, "reload", seq=15)
+
+        assert resp["success"] is False
+        assert _adapter_view(adapter) == before
+        assert "Reload failed" in resp["message"] and message in resp["message"]

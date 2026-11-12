@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from pyrung.core import PLC, Bool, Coupling, Harness, Program, Real, Rung, out
-from pyrung.core.harness import link_problem
+from pyrung.core.harness import link_problem, plant_state_tags, rename_coil_state
 from pyrung.core.physical import Physical
 
 AUX = Physical("Aux", on_delay="20ms", off_delay="10ms")
@@ -214,3 +214,78 @@ class TestLinkProblem:
         assert link_problem(plc, Coupling("Spare", "Spare", Physical("Spare", on_delay="1s"))) == (
             "Spare cannot drive itself"
         )
+
+
+class TestRenameCoilState:
+    def test_moves_the_coils_timers_memory_and_feedback(self):
+        tags = {"A": True, "__tmd_on__A": 20, "__tmd_ond__A": False, "Other": 3}
+        memory = {"_timed_rung:plant:fb.A": True, "_frac:__tmd_on__A": 7, "_edge:e1": True}
+
+        new_tags, new_memory = rename_coil_state(tags, memory, {"A": "B"})
+
+        assert new_tags == {
+            "A": True,
+            "B": True,
+            "__tmd_on__B": 20,
+            "__tmd_ond__B": False,
+            "Other": 3,
+        }
+        assert new_memory == {
+            "_timed_rung:plant:fb.B": True,
+            "_frac:__tmd_on__B": 7,
+            "_edge:e1": True,
+        }
+
+    def test_leaves_the_timer_of_a_feedback_whose_name_ends_the_same(self):
+        tags = {"__cpl_on__X__A": 5, "__cpl_on__A": 1}
+
+        new_tags, _memory = rename_coil_state(tags, {}, {"A": "B"})
+
+        assert new_tags == {"__cpl_on__X__A": 5, "__cpl_on__B": 1}
+
+    def test_leaves_the_coil_of_a_feedback_named_with_a_leading_underscore(self):
+        tags = {"__tmd_on___A": 5, "__tmd_ond___A": True, "__tmd_on__A": 1, "_A": True}
+        memory = {"_frac:__tmd_on___A": 3, "_timed_rung:plant:fb._A": True}
+
+        new_tags, new_memory = rename_coil_state(tags, memory, {"A": "B"})
+
+        assert new_tags == {
+            "__tmd_on___A": 5,
+            "__tmd_ond___A": True,
+            "__tmd_on__B": 1,
+            "_A": True,
+        }
+        assert new_memory == memory
+
+    def test_a_feedback_of_another_type_takes_the_new_default(self):
+        tags = {"A": 0.75, "B": 3, "__cpl_armed__A": True}
+
+        new_tags, _memory = rename_coil_state(tags, {}, {"A": "B"}, retyped={"A"})
+
+        assert new_tags == {"A": 0.75, "__cpl_armed__B": True}
+
+
+@pytest.mark.parametrize(
+    ("fb", "keys"),
+    [
+        ("Spare", {"on_delay": "50ms", "off_delay": "30ms"}),
+        ("Spare", {"on_delay": "40s"}),
+        ("Spare", {"flasher_on": "40ms", "flasher_off": "30ms"}),
+        ("Spare", {"flasher_on": "40s", "flasher_off": "30s"}),
+        ("Spare", {"timed": "100ms"}),
+        ("Spare", {"timed": "40s", "maintained": True}),
+        ("Spare", {"toggle": True}),
+        ("Temp", {"ramp_on": 5.0, "ramp_off": 2.0}),
+        ("Temp", {"approach_to": 50.0, "approach_rate": 0.5}),
+    ],
+)
+def test_plant_state_tags_names_every_tag_a_coil_keeps(fb: str, keys: dict[str, Any]):
+    plc = _plc()
+    harness = _installed(plc)
+    harness.set_overrides({fb: Coupling("Cmd", fb, Physical(fb, **keys))})
+
+    # The program's own coil on Aux runs beside it.
+    plant = {name for name in plc._plant_tag_defaults() if name.startswith("__")}
+    plant -= set(plant_state_tags("Aux"))
+
+    assert plant <= set(plant_state_tags(fb))
