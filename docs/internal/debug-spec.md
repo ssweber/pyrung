@@ -244,7 +244,7 @@ These requests drive the [simulator controls](../guides/dap-vscode.md#simulator-
 | `pyrungRestoreLink` | `{feedback}` | `{text}` |
 | `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
 | `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
-| `pyrungReload` | `{forces?: {old: new or null}, links?: {old feedback: {en, fb} or {cut: true, fb} or null}}` | `{result, carried}` (see [Planned reload](#planned-reload)) |
+| `pyrungReload` | `{forces?: {old: new or null}, links?: {old feedback: {en, fb} or {cut: true, fb} or null}, declared?: {old feedback: new feedback}}` | `{result, carried}` (see [Planned reload](#planned-reload)) |
 
 `pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again.
 
@@ -288,20 +288,22 @@ Each `reason` means:
 
 | Reason | Meaning |
 |---|---|
-| `gone` | The new program has no tag of that name (`tag` names it). |
-| `type changed` | The forced tag has another type in the new program. |
+| `gone` | The new program has no tag of that name. The console reload names it in `tag`, and `pyrungReload` names it in `detail`. |
+| `type changed` | The tag the force goes to has another type in the new program than the forced tag had. |
 | `not forceable` | The new program refuses the force. |
-| `unlinked` | A cut's feedback is still in the program, but the program no longer links it. |
-| `in program` | The new program declares the bench link the same way, so the program's link runs. |
+| `unlinked` | The feedback is in the new program, but the program does not link it. This drops a cut, or a `declared` entry. |
+| `in program` | The new program declares the bench link the same way, so the program's link runs. A coil the plan moved there keeps its state. |
 | `invalid` | The bench link does not fit the new program, such as a feedback that is now an `Int`. |
 | `bad plan` | Only from `pyrungReload`. The plan entry is malformed (`detail` says how). |
-| `conflict` | Only from `pyrungReload`. Two or more forces, or two or more bench changes, would end on the same new tag. None of them is applied. |
+| `conflict` | Only from `pyrungReload`. Two or more forces would end on the same new tag, or two or more links would end on the same new feedback. A link here is a bench change or a `declared` entry. None of them is applied. |
+| `in use` | Only from `pyrungReload`. The old program already ran a coil on the new feedback, and that coil stays there. Moving this coil there would overwrite the other coil's state, so the entry is dropped. |
+| `not declared` | Only from `pyrungReload`. A `declared` entry names a feedback the old program does not link, or one whose link a bench change replaced. |
 | `not forced` | Only from `pyrungReload`. The plan names a force that does not exist. |
 | `no bench change` | Only from `pyrungReload`. The plan names a bench change that does not exist. |
 
 ### Planned reload
 
-`pyrungReload` reloads the program as the console `reload` does, and moves each force and bench change where the caller's plan says. A client that has the new program's TagMap (ClickNick) knows where each tag went, so it sends the plan. Both arguments are optional, and each is keyed by the old tag name:
+`pyrungReload` reloads the program as the console `reload` does, and moves each force and bench change where the caller's plan says. A client that has the new program's TagMap (ClickNick) knows where each tag went, so it sends the plan. Each argument is optional, and each is keyed by the old tag name:
 
 ```json
 {
@@ -310,35 +312,38 @@ Each `reason` means:
     "MotorFb": {"en": "MotorCmd", "fb": "Motor_Fb"},
     "DoorFb": {"cut": true, "fb": "Door_Fb"},
     "PumpFb": null
-  }
+  },
+  "declared": {"FanFb": "Fan_Fb"}
 }
 ```
 
 - A force moves to the tag its plan names with the same value. `null` releases it.
-- A bench link moves to the feedback `fb` and reads the enable `en`, with the same response and trigger. `null` removes it.
+- A bench link moves to the feedback `fb` and reads the enable `en`, with the same delays and trigger. `null` removes it.
 - A bench cut is planned as `{"cut": true, "fb": ...}`. The cut is dropped when the new program does not link `fb`.
 - A plan entry without `en` and without `"cut": true` is a `bad plan`. It is never taken as a cut.
 - A force or bench change the plan leaves out follows its tag name, as the console `reload` does.
-- When two forces or two bench changes would end on the same new tag, planned or following their names, neither is applied. Each is reported as a `conflict`.
+- A `declared` entry is for a link the program declares itself. The old program links the old feedback, and the new program links the new one. The coil's state moves to the new feedback, and the entry is reported as kind `declared`. An entry is dropped when either side has no declared link.
+- When two forces or two links would end on the same new tag, planned or following their names, neither is applied. Each is reported as a `conflict`.
+- A coil never moves onto a feedback whose own coil stays there. Such an entry is dropped as `in use`.
 
-A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. The plan is applied when the new program replaces the old one. A reload that fails keeps the old program, mode, forces and bench changes. A plan whose `forces` or `links` is not an object fails the request. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.
+A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. A feedback value moves only into a tag of the same type. Otherwise the new feedback starts from its default. The plan is applied when the new program replaces the old one. A reload that fails changes nothing, so the old program, mode, forces, harness, bench changes and breakpoints stay. A plan whose `forces`, `links` or `declared` is not an object fails the request. So does a plan with a key that is not a tag name. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.
 
-The response body is `{result, carried}`, as for the console `reload`. Here `carried` lists every force and bench change of the session, moved or not, and every plan entry that matched nothing. Each entry has these fields:
+The response body is `{result, carried}`, as for the console `reload`. Here `carried` lists every force and bench change of the session, moved or not. It also lists each `declared` entry, and each plan entry that matched nothing. Each entry has these fields:
 
 | Field | Meaning |
 |---|---|
-| `tag` | The old name of the forced tag, or of the bench change's feedback |
-| `kind` | `force`, `link` or `cut` |
+| `tag` | The old name of the forced tag, or of the link's feedback |
+| `kind` | `force`, `link`, `cut` or `declared` |
 | `to` | The tag it now sits on. `null` when released or dropped. |
 | `old`, `new` | CLICK addresses of `tag` in the old program and of `to` in the new one, or `null` |
 | `planned` | `true` when the plan named it |
-| `released` | `true` when the plan released the force or removed the bench change |
-| `dropped` | `true` when it could not be carried |
+| `released` | `true` when the plan takes the force off, with a `null` or a `conflict`. For a bench change, `true` when the plan removes it with a `null`. |
+| `dropped` | `true` when it could not be carried, and `reason` says why. A dropped force is not in the new program, and neither is a released one. |
 | `reason`, `detail` | Only when dropped. `detail` is a sentence such as `"Motor_Fb is not in the new program"`. |
 | `value` | A force's value |
-| `feedback` | A link's or cut's old feedback (the same as `tag`) |
-| `enable` | The enable a kept link now reads. `null` for a cut or a link that is gone. |
-| `enabled` | A link's or cut's enabled flag |
+| `feedback` | A link's, cut's or declared link's old feedback (the same as `tag`) |
+| `enable` | The enable a kept link or declared link now reads. `null` for a cut, and for a link that was dropped or removed. |
+| `enabled` | A bench link's or cut's enabled flag. Absent for a declared link. |
 
 ---
 

@@ -192,40 +192,64 @@ def rename_coil_wiring(wiring: CoilWiring, new_fb: str, new_en: str) -> CoilWiri
     return (f"{head}{site}{new_fb}", new_en, wiring[2])
 
 
+#: The plant timers, whose accumulator names carry their unit (see ``plant_acc_name``).
+_PLANT_TIMER_STEMS = ("__cpl_on", "__cpl_off", "__pls_on", "__pls_off", "__tmd_on")
+#: The plant coils' done and armed bits.
+_PLANT_BIT_STEMS = (
+    "__cpl_ond",
+    "__cpl_offd",
+    "__cpl_armed",
+    "__tmd_ond",
+    "__pls_ond",
+    "__pls_offd",
+)
+
+
+def _plant_bit_name(stem: str, fb_name: str) -> str:
+    return f"{stem}__{fb_name}"
+
+
+def plant_state_tags(fb_name: str) -> tuple[str, ...]:
+    """Every tag a plant coil on *fb_name* can keep its state in, in a fixed order.
+
+    The names are built, never matched, so the timer of a feedback named ``_A`` or
+    ``X__A`` is never taken for one of ``A``.
+    """
+    timers = [
+        name for stem in _PLANT_TIMER_STEMS for name, _ms in plant_acc_registers(stem, fb_name)
+    ]
+    return (*timers, *(_plant_bit_name(stem, fb_name) for stem in _PLANT_BIT_STEMS))
+
+
 def rename_coil_state(
     tags: Mapping[str, Any],
     memory: Mapping[str, Any],
-    plant_tags: Collection[str],
     renames: Mapping[str, str],
+    retyped: Collection[str] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Move each harness coil's state from its old feedback to the new one in *renames*.
 
     A reload that renames a linked feedback runs the same coil under the new name, so a
-    count in progress carries on.  A coil keeps its timers in tags named after its
-    feedback (*plant_tags* lists the harness tags of the old program).  It keeps its
-    memory of the rung under a key that ends in the feedback's name.  The feedback's own
-    value moves too, since a toggle keeps its state there.  The old feedback tag keeps
-    its value, because the new program may still use it.
+    count in progress carries on.  A coil keeps its timers and bits in the tags
+    :func:`plant_state_tags` names.  It keeps its memory of the rung under a key that
+    ends in the feedback's name.  The feedback's own value moves too, since a toggle
+    keeps its state there.  An old feedback in *retyped* has another type under its new
+    name, so its value does not move and the new name takes the new program's default.
+    The old feedback tag keeps its value, because the new program may still use it.
     """
     from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
 
     tag_moves: dict[str, str] = {}
     for old_fb, new_fb in renames.items():
-        suffix = f"__{old_fb}"
-        for name in plant_tags:
-            if not name.endswith(suffix):
-                continue
-            stem = name[: -len(suffix)]
-            # A stem such as ``__cpl_on_Ts`` has no ``__`` past its start, so the
-            # timer of a feedback named ``X__A`` is not taken for one of ``A``.
-            if stem.startswith("__") and "__" not in stem[2:]:
-                tag_moves[name] = f"{stem}__{new_fb}"
+        tag_moves.update(zip(plant_state_tags(old_fb), plant_state_tags(new_fb), strict=True))
     out_tags = {name: value for name, value in tags.items() if name not in tag_moves}
     for old, new in tag_moves.items():
         if old in tags:
             out_tags[new] = tags[old]
     for old_fb, new_fb in renames.items():
-        if old_fb in tags:
+        if old_fb in retyped:
+            out_tags.pop(new_fb, None)
+        elif old_fb in tags:
             out_tags[new_fb] = tags[old_fb]
 
     names = {**tag_moves, **renames}
@@ -981,9 +1005,9 @@ class Harness:
             rungs = bool_feedback_rungs(
                 enable=enable,
                 fb_tag=fb_tag,
-                on_done=Bool(f"__cpl_ond__{c.fb_name}", retentive=False),
+                on_done=Bool(_plant_bit_name("__cpl_ond", c.fb_name), retentive=False),
                 on_acc=on_acc,
-                off_done=Bool(f"__cpl_offd__{c.fb_name}", retentive=False),
+                off_done=Bool(_plant_bit_name("__cpl_offd", c.fb_name), retentive=False),
                 off_acc=off_acc,
                 on_delay_ms=c.on_delay_ms,
                 off_delay_ms=c.off_delay_ms,
@@ -1006,7 +1030,7 @@ class Harness:
                 enable = BitCondition(en_tag)
                 disable = ~en_tag
             if spec.kind == "ramp":
-                armed = Bool(f"__cpl_armed__{c.fb_name}", retentive=False)
+                armed = Bool(_plant_bit_name("__cpl_armed", c.fb_name), retentive=False)
                 plant.extend(
                     analog_feedback_rungs(
                         enable=enable,
@@ -1027,7 +1051,7 @@ class Harness:
                 rungs = timed_feedback_rungs(
                     enable=enable,
                     fb_tag=fb_tag,
-                    timer_done=Bool(f"__tmd_ond__{c.fb_name}", retentive=False),
+                    timer_done=Bool(_plant_bit_name("__tmd_ond", c.fb_name), retentive=False),
                     timer_acc=timer_acc,
                     on_ms=spec.timed_ms or 0,
                     maintained=bool(spec.maintained),
@@ -1062,9 +1086,9 @@ class Harness:
                     pulse_feedback_rungs(
                         enable=enable,
                         fb_tag=fb_tag,
-                        on_done=Bool(f"__pls_ond__{c.fb_name}", retentive=False),
+                        on_done=Bool(_plant_bit_name("__pls_ond", c.fb_name), retentive=False),
                         on_acc=Int(plant_acc_name("__pls_on", c.fb_name, unit), retentive=False),
-                        off_done=Bool(f"__pls_offd__{c.fb_name}", retentive=False),
+                        off_done=Bool(_plant_bit_name("__pls_offd", c.fb_name), retentive=False),
                         off_acc=Int(plant_acc_name("__pls_off", c.fb_name, unit), retentive=False),
                         on_dwell_ms=on_ms,
                         off_dwell_ms=off_ms,

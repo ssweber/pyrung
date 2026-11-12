@@ -8,7 +8,8 @@ across reloads. Console verbs: ``harness status``, ``harness install``,
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.harness import CoilWiring, Harness
@@ -16,7 +17,7 @@ from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 
 if TYPE_CHECKING:
-    from pyrung.dap.links import BenchDrop
+    from pyrung.dap.links import BenchDrop, BenchLink
 
 
 def install_harness(adapter: Any) -> Harness:
@@ -31,6 +32,68 @@ def install_harness(adapter: Any) -> Harness:
     return harness
 
 
+@dataclass(frozen=True)
+class StagedHarness:
+    """A harness installed and fit on a runner, for the adapter to take or throw away."""
+
+    #: ``None`` when the program and the bench links have no coupling.
+    harness: Harness | None
+    #: The bench links the fit kept.
+    bench_links: dict[str, BenchLink]
+    #: The banner for the debug console, or ``None`` when there is nothing to say.
+    banner: str | None
+
+
+def stage_harness(
+    adapter: Any,
+    runner: Any,
+    bench_links: Mapping[str, BenchLink],
+    carry: Collection[CoilWiring] = (),
+    drops: list[BenchDrop] | None = None,
+) -> StagedHarness:
+    """Install the harness for *runner*'s couplings plus *bench_links*, and settle it.
+
+    Only *runner* changes, so a reload can stage the harness on the new runner and
+    still keep the old one if a later step fails.  :func:`commit_harness` hands the
+    result to the adapter.
+    """
+    from pyrung.dap.links import fit_bench_links
+
+    harness = Harness(runner)
+    harness._install()
+    harness.on_patches_applied = _make_patch_listener(adapter)
+    kept, notes = fit_bench_links(runner, harness, bench_links, adapter._bench_links_on, drops)
+    # The one settle, over the couplings that run with the bench links in.
+    harness._settle(carry)
+
+    summary = harness.coupling_summary()
+    n_bool = len(summary["bool_couplings"])
+    n_profile = len(summary["profile_couplings"])
+    total = n_bool + n_profile
+
+    if total == 0:
+        harness.uninstall()
+        return StagedHarness(None, kept, "\n".join(notes) or None)
+
+    kinds: dict[str, int] = {"delay": n_bool} if n_bool else {}
+    for coupling in summary["profile_couplings"]:
+        kinds[coupling["kind"]] = kinds.get(coupling["kind"], 0) + 1
+    parts = [f"{count} {kind}" for kind, count in kinds.items()]
+    banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
+    if kept:
+        banner += f"\n{len(kept)} bench change(s) to the wiring; `links` for details"
+    return StagedHarness(harness, kept, "\n".join([banner, *notes]))
+
+
+def commit_harness(adapter: Any, staged: StagedHarness) -> None:
+    """Give the adapter a staged harness and the bench links it kept."""
+    from pyrung.dap.links import links_changed
+
+    adapter._harness = staged.harness
+    adapter._bench_links = staged.bench_links
+    links_changed(adapter)
+
+
 def try_auto_install(
     adapter: Any,
     carry: Collection[CoilWiring] = (),
@@ -41,35 +104,11 @@ def try_auto_install(
     Returns a banner string for the debug console, or ``None`` if there are
     no couplings and nothing to report.
     """
-    from pyrung.dap.links import fit_to_harness_locked
-
     if adapter._runner is None:
         return None
-
-    harness = install_harness(adapter)
-    notes = fit_to_harness_locked(adapter, harness, drops)
-    # The one settle, over the couplings that run with the bench links in.
-    harness._settle(carry)
-
-    summary = harness.coupling_summary()
-    n_bool = len(summary["bool_couplings"])
-    n_profile = len(summary["profile_couplings"])
-    total = n_bool + n_profile
-
-    if total == 0:
-        uninstall_harness(adapter)
-        return "\n".join(notes) or None
-
-    kinds: dict[str, int] = {"delay": n_bool} if n_bool else {}
-    for coupling in summary["profile_couplings"]:
-        kinds[coupling["kind"]] = kinds.get(coupling["kind"], 0) + 1
-    parts = [f"{count} {kind}" for kind, count in kinds.items()]
-    banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
-    if adapter._bench_links:
-        banner += (
-            f"\n{len(adapter._bench_links)} bench change(s) to the wiring; `links` for details"
-        )
-    return "\n".join([banner, *notes])
+    staged = stage_harness(adapter, adapter._runner, adapter._bench_links, carry, drops)
+    commit_harness(adapter, staged)
+    return staged.banner
 
 
 def uninstall_harness(adapter: Any) -> None:

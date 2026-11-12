@@ -2,8 +2,8 @@
 
 A plain ``reload`` moves each force and bench change by its tag name.  A client
 that knows the new program's tag map (ClickNick) sends a plan instead.  It says
-where each force and bench change goes, keyed by the old tag name (see
-``pyrung.dap.reload_console.ReloadPlan``).  The response body holds the console
+where each force, bench change and declared link goes, keyed by the old tag name
+(see ``pyrung.dap.reload_console.ReloadPlan``).  The response body holds the console
 reload's ``result`` text and ``carried``.
 """
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pyrung.dap.console import record_command
 from pyrung.dap.handlers.simulation import pause_executor
 from pyrung.dap.reload_console import ReloadPlan, _reload_locked
 
@@ -22,6 +23,7 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 class _ReloadRequestArgs:
     forces: Any = None
     links: Any = None
+    declared: Any = None
 
 
 def _plan_table(adapter: Any, raw: Any, field: str) -> dict[str, Any]:
@@ -41,6 +43,7 @@ def on_pyrung_reload(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     plan = ReloadPlan(
         forces=_plan_table(adapter, parsed.forces, "forces"),
         links=_plan_table(adapter, parsed.links, "links"),
+        declared=_plan_table(adapter, parsed.declared, "declared"),
     )
     with adapter._state_lock:
         adapter._require_runner_locked()
@@ -48,4 +51,6 @@ def on_pyrung_reload(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     pause_executor(adapter)
     with adapter._state_lock:
         summary, events, carried = _reload_locked(adapter, plan)
+        # The history logs this request as a console reload.
+        record_command(adapter, "reload", "reload", provenance="console")
     return {"result": summary, "carried": carried}, events

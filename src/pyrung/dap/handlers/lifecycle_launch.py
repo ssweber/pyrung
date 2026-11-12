@@ -115,8 +115,21 @@ def discover_click_project(
     return source["mapping"], blocks if isinstance(blocks, Iterable) else None
 
 
-def bind_click_project_locked(adapter: Any, namespace: dict[str, Any], project_dir: Path) -> None:
-    """Point address resolution and the Modbus provider at the program's TagMap."""
+@dataclass(frozen=True)
+class ClickBinding:
+    """A program's TagMap and the Modbus provider that serves it, not yet on the adapter."""
+
+    tag_map: TagMap | None
+    modbus_fallback: Any
+    click_provider: Any
+
+
+def stage_click_project(adapter: Any, namespace: dict[str, Any], project_dir: Path) -> ClickBinding:
+    """Find the program's TagMap and build its Modbus provider, leaving the adapter as it is.
+
+    The provider reads the adapter's runner when a client asks, so it serves the
+    new program once :func:`commit_click_project` puts it in place.
+    """
     from pyclickplc.server import MemoryDataProvider
 
     from pyrung.click.data_provider import ClickDataProvider
@@ -124,18 +137,30 @@ def bind_click_project_locked(adapter: Any, namespace: dict[str, Any], project_d
     from pyrung.dap.handlers.simulation import request_stop_locked
 
     mapping, blocks = discover_click_project(namespace, project_dir)
-    adapter._has_tag_map = mapping is not None
-    adapter._tag_map = mapping
-    if adapter._modbus_fallback is None:
-        # Unmapped Modbus values survive reloads.
-        adapter._modbus_fallback = MemoryDataProvider()
-    adapter._click_provider = ClickDataProvider(
+    # Unmapped Modbus values survive reloads.
+    fallback = adapter._modbus_fallback
+    if fallback is None:
+        fallback = MemoryDataProvider()
+    provider = ClickDataProvider(
         lambda: adapter._require_runner_locked(),
         mapping if mapping is not None else TagMap(),
-        fallback=adapter._modbus_fallback,
+        fallback=fallback,
         blocks=blocks,
         on_stop=lambda: request_stop_locked(adapter),
     )
+    return ClickBinding(mapping, fallback, provider)
+
+
+def commit_click_project(adapter: Any, binding: ClickBinding) -> None:
+    adapter._has_tag_map = binding.tag_map is not None
+    adapter._tag_map = binding.tag_map
+    adapter._modbus_fallback = binding.modbus_fallback
+    adapter._click_provider = binding.click_provider
+
+
+def bind_click_project_locked(adapter: Any, namespace: dict[str, Any], project_dir: Path) -> None:
+    """Point address resolution and the Modbus provider at the program's TagMap."""
+    commit_click_project(adapter, stage_click_project(adapter, namespace, project_dir))
 
 
 def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:

@@ -137,7 +137,16 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
     result = entry.handler(adapter, expression)
+    record_command(adapter, verb, expression, provenance=provenance)
+    return result
 
+
+def record_command(adapter: Any, verb: str, expression: str, *, provenance: str) -> None:
+    """Log a command that succeeded, and capture it while recording.
+
+    A request that runs a console command's code (``pyrungReload`` runs ``reload``)
+    calls this too, so the log shows it the same way.
+    """
     from pyrung.dap.capture import capture_hook
 
     capture_hook(adapter, verb, expression, provenance=provenance)
@@ -147,8 +156,6 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
         runner = getattr(adapter, "_runner", None)
         scan_id = runner.current_state.scan_id if runner else None
         action_log.append((scan_id, expression.strip(), provenance))
-
-    return result
 
 
 # ---------------------------------------------------------------------------
