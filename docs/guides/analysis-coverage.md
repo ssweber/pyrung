@@ -48,7 +48,7 @@ The survey assumes a tag that nothing in the program sets stays at its resting v
 
 A config register and a button look the same in a declaration. So the survey reports "nothing sets this" and leaves the reason to you.
 
-The survey never edits the program. The same finding is the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint. It is opt-in, so `logic.check(extend_select={"STEP_NO_ESCAPE"})` reports it.
+The survey never edits the program. The same finding is the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint. It is opt-in. `logic.check(extend_select={"STEP_NO_ESCAPE"})` turns it on.
 
 **Reach.** It recognizes step machines that advance by `math(Step + 1, Step)` or by copying a constant into it (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read, such as a `fall()`-gated advance, an `Or` guard or a drum. It does not guess.
 

@@ -199,14 +199,14 @@
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
   - a comment writes them as `timed=200ms`, a bare `maintained` and a bare `toggle`
   - `how()` plans through both
-- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Rounding can step over the exact value, so compare with a range or a tolerance. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged.
-- The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag that starts at 0 and that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`.
+- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged. Rounding can step over the exact value, so compare with a range or a tolerance. Turn the check on with `Program.check(extend_select={"CMP"})` or `pyrung check --extend-select CMP`.
+- The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag with no default that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`. Turn the check on with `Program.check(extend_select={"CMP"})` or `pyrung check --extend-select CMP`.
 - CLICK validation refuses what CLICK's editor refuses, so ladder export stops where CLICK would. New refusals:
   - a `forloop()` count that isn't a constant or a `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`)
   - a `randint()` bound that is not an integer constant or an `Int` or `Dint` tag (`CLK_RAND_BOUND_TYPE`), and two equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
   - an expression as a `randint()` bound or as an argument of `lsh`, `rsh`, `lro`, `rro`, `<<` or `>>` (`CLK_MATH_ARG_NOT_PLAIN`)
   - a `SUM` over a bank CLICK can't sum (`CLK_MATH_SUM_BANK_NOT_AVAILABLE`)
-  - a bit in a `math()` formula (`math(C1 + 5, DS1)`, `CLK_MATH_BIT_OPERAND`). A `.sum()` over a bit range is allowed, so write one bit as `c.select(1, 1).sum()` (not a `CT` bit, which CLICK can't sum)
+  - a bit in a `math()` formula (`math(C1 + 5, DS1)`, `CLK_MATH_BIT_OPERAND`). A `.sum()` over a bit range is allowed, so write one bit as `c.select(1, 1).sum()`. CLICK can't sum a `CT` bit
   - a `math()` result outside `DS`, `DD`, `DF`, `TD`, `CTD` or `DH` (`CLK_MATH_DEST_BANK`). Store into a register and drive the bit from a compare
   - a constant copied or filled into bits (`copy(2, C1)`, `CLK_COPY_CONSTANT_INTO_BIT`). Set bits with `out()`, `latch()` or `reset()`
   - a `search()` over a range outside `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT` (`CLK_SEARCH_RANGE_BANK`), or with its result outside `DS` (`CLK_SEARCH_RESULT_NOT_DS`)
@@ -232,10 +232,12 @@
   - `case(expect_system={"SC11": 0})` checks system bits the ladder cannot record
   - `case(probe=...)` names the open hardware question a case asks
   - `Group(calls=2)` calls the group's subroutine twice a scan
-  - the soft PLC (`SimServer`) advances its timers by at most 40 ms a scan (`max_scan_dt=`), so a slow host no longer fails timing cases
-  - `build_program(scan_limit_ms=)` sets the longest scan, in ms, the cases assume. On a real CLICK, a run whose longest scan is past that limit raises `ScanTimeError` (exported from `pyrung.conformance`) and judges no case
-  - on pyrung's own targets, a run whose longest scan is past the limit prints a line saying so, and adds that line to each failed case. Pass `run_modbus(local=True)` for such a target served on an endpoint of its own
-  - a case that writes `TIMED_OUT` plus its step to `Fired` fails with the note "timed out at step N", and the report prints each failed case's note under it
+  - the soft PLC (`SimServer`) advances its timers by at most 40 ms a scan (`max_scan_dt=`), so a slow host does not fail timing cases
+  - `build_program(scan_limit_ms=)` sets the longest scan the cases assume, in ms
+  - on a real CLICK, a run whose longest scan is past that limit judges no case and raises `pyrung.conformance.ScanTimeError`
+  - on pyrung's own targets (the soft PLC and generated P1AM-200 code), a run whose longest scan is past the limit prints a line saying so and adds that line to each failed case. When you start such a target yourself, pass `run_modbus(endpoint, local=True)`
+  - a case that writes `TIMED_OUT` plus its step to `Fired` fails with the note "timed out at step N"
+  - `format_report()` prints each failed case's note under it
 - The debugger can act as a simulated CLICK PLC:
   - a `modbus` launch argument serves the session over Modbus TCP, with X inputs read-only as on a real CLICK
   - `speed` paces Continue at that many times real time (0, the default, runs unpaced)
@@ -264,7 +266,7 @@
 - `link=` takes more forms:
   - `link="~Tag"` drives feedback while a Bool enable is off (normally closed), in Python, UDT fields, nickname comments and the `link` console verb. `~` on a non-Bool enable is refused
   - in a CLICK nickname comment, `link=` takes a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`)
-- The opt-in check `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses (the harness skipped it silently).
+- The opt-in check `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses. The harness skips such a link. Turn the check on with `Program.check(extend_select={"PHYS"})` or `pyrung check --extend-select PHYS`.
 - `rng.max()`, `rng.min()`, `rng.median()` and `rng.mean()` on block ranges work inside `math()`, like `rng.sum()`:
   - they export to CLICK as `MAX`, `MIN`, `MDN` and `AVG`, and import back
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython
@@ -274,7 +276,7 @@
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive them
   - they export to CLICK and import back, and CLICK validation checks their timer banks and units
   - their timers' `Done` bits never turn on
-  - a `debounce()`'s off `Acc` counts only while its rung is false and its coil is on. A true rung clears that `Acc`, and otherwise the `Acc` holds
+  - a `debounce()`'s off `Acc` counts only while its rung is false and its coil is on. A true rung clears that `Acc`. Otherwise it holds
   - the verifier models `toggle` exactly and the timed ones as black-box timers
 - `time_event_drum()` is CLICK v4's Time & Event drum. A step ends when its time is up and its event is on, and either half may be `None`:
   - it runs in `PLC`, `CompiledPLC` and generated CircuitPython, and `how()` can drive it
@@ -371,7 +373,7 @@
   - add the offset with `math(idx + 99, Ptr)` and copy through `ds[Ptr]`
 - The `CLK_PTR_EXPR_NOT_ALLOWED` suggestion no longer adds the block offset twice.
 - The ladder export draws each rung the way CLICK's syntax check redraws it, so the check leaves a pasted rung as it is:
-  - what follows an Or (a contact, another Or, the outputs or the `branch()` rows) starts in the column where the Or's rows join (it started one column further right)
+  - a contact, another Or, the outputs or the `branch()` rows after an Or start in the column where the Or's rows join (they started one column further right)
   - an Or inside an Or is drawn as one Or. So is an Or that ends a row of another Or
   - a rung with an Or inside an `And()` row of another Or exports (the export refused some with a round-trip error)
   - a rung with no contact exports one CLICK rung for each output and each `branch()` (they shared one CLICK rung split by a vertical in column A, which CLICK refuses)
@@ -384,7 +386,8 @@
   - forces and bench links still follow the tag name. A `reload` now prints a sentence for each one whose tag moved to another CLICK address, and for each one it dropped
   - a force on a tag the new program no longer has is now removed (it stayed active)
   - the evaluate response lists every moved or dropped force, link and cut in a `carried` field, and autoreload sends the same list in its output event
-  - a client such as ClickNick can send the `pyrungReload` request with a plan that moves each force and bench link to its new tag name, or releases it. A moved link keeps its timer count. The response's `carried` lists every force, bench link and plan entry
+  - a client such as ClickNick can send the `pyrungReload` request with a plan that moves each force and bench link to a new tag name, or releases it. A moved link keeps its timer count
+  - the `pyrungReload` response's `carried` lists every force, bench link and plan entry, not only those that moved or were dropped
   - the `pyrungReload` plan can also move a link the program declares to its new feedback. That link keeps its timer count too
   - a `reload` that fails changes nothing (a new program with a bad `link=` trigger was loaded anyway and ran with no harness)
 - After the debugger's `reload`, breakpoints match each rung to its lines in the edited file (they used the lines from the first load).
@@ -560,10 +563,10 @@
     - SC10 reports the RUN/STOP switch, SD10 the scan time, and SD19..SD26 the real-time clock
   - when a rung writes SC50, the code goes to STOP with SC11 off, with or without a RUN/STOP switch. It stays there until the switch goes to STOP and back to RUN, or until a restart when there is no switch (a program without a switch kept scanning)
   - its Modbus server answers as a CLICK does:
-    - a write to SC50, SC51 or an SC or SD that CLICK's Data View shows as Read Only answers with exception code 2 and changes nothing (it acknowledged the write, and stored one to SC50 or SC51). Only a rung can stop the code
+    - the server refuses a write to SC50 or SC51 with exception code 2 and changes nothing (it stored the write, so a client could stop the code). The server also refuses a write to an SC or SD that CLICK's Data View shows as Read Only (it acknowledged one the program uses)
     - an FC 15 or FC 16 write that reaches one refused address stores nothing (it stored the addresses before that one)
     - a coil write to X, T or CT answers with exception code 2 (it stored the write)
-    - a read of an address in a CLICK bank that no tag or rung uses returns 0 (it answered with exception code 2). A write there still answers with exception code 2.
+    - a read of an address in a CLICK bank that no tag or rung uses returns 0 (it answered with exception code 2). A write there still answers with exception code 2
     - it serves every cell of a bank that a rung reaches by pointer or block instruction, as in `ds[ptr]` (a cell no tag named answered with exception code 2)
     - XD and YD serve CLICK's 17 registers each, built from the X and Y bits the TagMap maps or a rung uses. A write to YD sets those Y bits. A YD register with no Y bits keeps the word written to it
     - a read of units 17..32 of an X or Y slot returns 0 (it answered with exception code 2)

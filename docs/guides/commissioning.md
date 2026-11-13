@@ -41,7 +41,7 @@ with PLC(logic) as plc:
 - **`plc.cause()` / `plc.effect()`** — causal chain analysis. What caused a transition, what it caused downstream, and what-if projections with `assume=`.
 - **`plc.query`** — test coverage surveys. Cold rungs, hot rungs, stranded bits with blocker diagnostics. Merge across a test suite with the pytest plugin.
 
-[Ladder lints](ladder-lints.md) run at build time via `logic.check()`. By default they cover contradictory rungs, conflicting outputs, readonly writes and suspicious comparisons. The stuck-bit and physical realism checks are opt-in (`extend_select=`).
+[Ladder lints](ladder-lints.md) run when you call `logic.check()`. By default they cover contradictory rungs, conflicting outputs, readonly writes and suspicious comparisons. The stuck-coil checks (`COIL_STUCK_*`) and the `PHYS_*` checks are opt-in (`extend_select=`).
 
 See [Analysis](analysis.md) for the full guide — program structure, diagnosis, cause/effect, and test coverage.
 
