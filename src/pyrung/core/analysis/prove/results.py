@@ -179,14 +179,23 @@ class Intractable:
 class ReachableStates(frozenset):
     """The states ``reachable_states()`` found, as a frozenset of projected states.
 
-    ``truncated`` is True when ``depth_budget`` stopped the search with states
-    left to explore.  The set then holds only the states found within the
-    budget, so a state past it may be missing.
+    ``truncated`` is True when ``depth_budget`` stopped the search before it
+    ran out of new states.  The set then holds only the states found within
+    the budget, so a state past it may be missing.  A ``ReachableStates(states)``
+    built directly carries no mark, so its ``truncated`` is False.
     """
 
-    truncated: bool = False
-    depth_budget: int = 0
+    _truncated: bool = False
+    _depth_budget: int = 0
     _debug_context: Any = None
+
+    @property
+    def truncated(self) -> bool:
+        return self._truncated
+
+    @property
+    def depth_budget(self) -> int:
+        return self._depth_budget
 
     @classmethod
     def _mark(
@@ -197,8 +206,8 @@ class ReachableStates(frozenset):
         depth_budget: int,
     ) -> ReachableStates:
         marked = cls(states)
-        marked.truncated = truncated
-        marked.depth_budget = depth_budget
+        marked._truncated = truncated
+        marked._depth_budget = depth_budget
         return marked
 
 

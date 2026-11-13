@@ -271,14 +271,18 @@ def test_lock_warns_when_the_depth_budget_cuts_the_search_short(
     err = capsys.readouterr().err
     assert (
         "Warning: the search stopped at --depth-budget 20."
-        " States past it are not in the lock file.\n"
-        "Raise --depth-budget to search further.\n"
+        " A state more than 20 scans from power-on may be missing from the lock file.\n"
+        "Raise --depth-budget to search further."
+        " See https://pyrung.com/pyrung/guides/verification/#cli-reference\n"
     ) in err
     assert lock_path.exists()
 
     cli._cmd_lock(_lock_args(lock_path, check=True))
     captured = capsys.readouterr()
-    assert "States past it are not compared with the lock file." in captured.err
+    assert (
+        "A state more than 20 scans from power-on may be missing,"
+        " so the check can report it lost or miss a new one.\n"
+    ) in captured.err
     assert "OK: program matches lock file" in captured.out
 
 

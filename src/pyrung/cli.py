@@ -64,15 +64,19 @@ def _exit_intractable(intractable: Any) -> NoReturn:
     raise SystemExit(1)
 
 
-def _warn_truncated(states: Any, what: str) -> None:
+_DEPTH_BUDGET_DOCS = "https://pyrung.com/pyrung/guides/verification/#cli-reference"
+
+
+def _warn_truncated(states: Any, consequence: str) -> None:
     if not states.truncated:
         return
+    budget = states.depth_budget
     print(
-        f"Warning: the search stopped at --depth-budget {states.depth_budget}."
-        f" States past it are not {what}.",
+        f"Warning: the search stopped at --depth-budget {budget}."
+        f" A state more than {budget} scans from power-on {consequence}.",
         file=sys.stderr,
     )
-    print("Raise --depth-budget to search further.", file=sys.stderr)
+    print(f"Raise --depth-budget to search further. See {_DEPTH_BUDGET_DOCS}", file=sys.stderr)
 
 
 def _cmd_lock(args: argparse.Namespace) -> None:
@@ -117,7 +121,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
 
     write_lock(lock_path, states, projection, program_hash(program))
     print(f"Wrote {lock_path} ({len(states)} reachable states)")
-    _warn_truncated(states, "in the lock file")
+    _warn_truncated(states, "may be missing from the lock file")
 
 
 def _cmd_lock_check(args: argparse.Namespace) -> None:
@@ -151,7 +155,7 @@ def _cmd_lock_check(args: argparse.Namespace) -> None:
         )
     except LockIntractable as exc:
         _exit_intractable(exc.intractable)
-    _warn_truncated(states, "compared with the lock file")
+    _warn_truncated(states, "may be missing, so the check can report it lost or miss a new one")
     if diff is None:
         print("OK: program matches lock file")
     else:

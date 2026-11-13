@@ -135,11 +135,7 @@ def _build_trace(
     return trace, caveats
 
 
-_BFSResult = (
-    list[Proven | Counterexample | Intractable]
-    | frozenset[frozenset[tuple[str, Any]]]
-    | Intractable
-)
+_BFSResult = list[Proven | Counterexample | Intractable] | ReachableStates | Intractable
 
 
 def _free_combo_intractable(
@@ -991,7 +987,7 @@ def _bfs_explore_gen(
 
     undecided = _no_scan_found_intractable(context, len(visited))
     if project is not None:
-        # A set cut short by the budget would read as complete, so it says so.
+        # Mark a set the budget cut short, so no caller reads it as complete.
         yield undecided or ReachableStates._mark(
             _projected_states(project, projected_rows),
             truncated=depth_truncated,

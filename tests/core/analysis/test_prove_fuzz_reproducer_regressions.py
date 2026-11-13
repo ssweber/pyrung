@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy as pycopy
 import importlib
+import pickle
 from dataclasses import replace
 
 import pytest
@@ -2044,3 +2046,18 @@ def test_fuzz_reachable_states_a_finished_search_is_not_truncated():
     assert not isinstance(states, Intractable)
     assert not states.truncated
     assert states == {frozenset({("B0", False)}), frozenset({("B0", True)})}
+
+
+def test_fuzz_reachable_states_mark_is_read_only_and_survives_a_copy():
+    logic = _counter_with_a_down_count()
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    with pytest.raises(AttributeError):
+        states.truncated = False  # ty: ignore[invalid-assignment]
+    with pytest.raises(AttributeError):
+        states.depth_budget = 50  # ty: ignore[invalid-assignment]
+    for copied in (pickle.loads(pickle.dumps(states)), pycopy.deepcopy(states)):
+        assert type(copied) is type(states)
+        assert copied == states
+        assert copied.truncated
+        assert copied.depth_budget == 20
