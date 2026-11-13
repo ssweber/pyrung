@@ -29,7 +29,7 @@ with Program() as logic:
 # --- Motor rung with branches ---
 
 with Program() as logic:
-    comment("Start/stop — NC stop resets when pressed or wire broken")
+    comment("Start/stop - NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -37,7 +37,7 @@ with Program() as logic:
     with rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)

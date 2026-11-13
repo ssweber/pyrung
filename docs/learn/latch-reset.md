@@ -82,7 +82,7 @@ with Program() as logic:
     comment("Start the conveyor")
     with rung(StartBtn):
         latch(Running)
-    comment("Stop — NC contact resets when pressed or wire broken")
+    comment("Stop - NC contact resets when pressed or wire broken")
     with rung(~StopCircuitOK):
         reset(Running)
 ```

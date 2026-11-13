@@ -56,7 +56,7 @@ StatusLight = Bool()
 
 with Program() as logic:
     # Start/stop (lesson 8)
-    comment("Start/stop — NC stop resets when pressed or wire broken")
+    comment("Start/stop - NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -89,14 +89,14 @@ with Program() as logic:
         copy(IDLE, State)
 
     # Outputs (lesson 8)
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with rung(
         EstopOK,
         Or(
