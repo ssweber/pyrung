@@ -1,12 +1,8 @@
 """Output-bus drawings: one rung per topology, exported and pinned to a golden CSV.
 
 CLICK's syntax check redraws a pasted rung, so only a project saved after the check shows what
-the CLICK keeps.  The golden holds two kinds of rung:
-
-- Rungs R1 to R35 (out(C1) to out(C79)) are the CSV ClickNick wrote for the CLICK's saved project
-  of 2026-11-13.  They are CLICK evidence.
-- The rungs after them (out(C80) on), marked ``R`` without a number, are pyrung's drawing.  They
-  await the next paste and syntax check.
+the CLICK keeps.  The golden is the CSV ClickNick wrote for the CLICK's saved project of
+2026-11-13, after the syntax check.  Every rung in it is CLICK evidence.
 
 To check a change, paste the export into CLICK and run the syntax check.  Then write it to the
 PLC, save, and compare the CSV ClickNick writes for the saved project (``ckp_check``).  A DIFF
@@ -142,8 +138,7 @@ def build_program() -> tuple[Program, TagMap]:
             outputs(1)
             with branch(rows(2), rows(2, first=4)):
                 outputs(1)
-        # The rungs above were saved by the CLICK on 2026-11-13.  The rungs below await the next
-        # paste.  A branch on an Or on the left rail, and a branch before an output after an Or.
+        # A branch on an Or on the left rail, and a branch before an output after an Or.
         with Rung(rows(2, first=1)):
             outputs(1)
             with branch(x[3]):
