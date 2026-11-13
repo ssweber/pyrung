@@ -217,13 +217,14 @@ def test_simultaneous_rise_cross_product():
 def test_time_drum_one_ms_preset_reachability():
     """time_drum with presets=[1,1,1,1] advances a step a scan.
 
-    The drum is reset by B0 and runs only with N0 == 0, and the BFS projection
-    must hold the state the concrete PLC reaches in a few scans.
+    The drum reaches step 4 on scan 4 and turns B1 on. The reachable states must
+    hold that state. No rung writes N0, so the search explores it as an input.
+    A forloop count needs every value it can hold, so N0 gets a range.
     """
     In0 = Bool("In0", external=True)
     B0 = Bool("B0")
     B1 = Bool("B1")
-    N0 = Int("N0")
+    N0 = Int("N0", min=0, max=3)
     DrumStep = Int("DrumStep")
     DrumAcc = Int("DrumAcc")
     DrumDone = Bool("DrumDone")
@@ -253,10 +254,11 @@ def test_time_drum_one_ms_preset_reachability():
     assert not isinstance(bfs_result, Intractable)
 
     plc = PLC(logic, dt=0.010)
-    for _ in range(3):
+    for _ in range(4):
         plc.patch({"In0": False})
         plc.step()
 
     tags = plc.current_state.tags
+    assert tags["B1"] is True
     state = frozenset((name, tags[name]) for name in projection)
     assert state in bfs_result
