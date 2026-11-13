@@ -199,8 +199,8 @@
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
   - a comment writes them as `timed=200ms`, a bare `maintained` and a bare `toggle`
   - `how()` plans through both
-- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged. Rounding can step over the exact value, so compare with a range or a tolerance. Turn the check on with `Program.check(extend_select={"CMP"})` or `pyrung check --extend-select CMP`.
-- The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag with no default that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`. Turn the check on with `Program.check(extend_select={"CMP"})` or `pyrung check --extend-select CMP`.
+- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged. Rounding can step over the exact value, so compare with a range or a tolerance. Turn it on with `logic.check(extend_select={"CMP_EQ_ON_COMPUTED_REAL"})` or `pyrung check --extend-select CMP_EQ_ON_COMPUTED_REAL`.
+- The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag with no default that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`. Turn it on with `logic.check(extend_select={"CMP_PRESET_STAYS_ZERO"})` or `pyrung check --extend-select CMP_PRESET_STAYS_ZERO`.
 - CLICK validation refuses what CLICK's editor refuses, so ladder export stops where CLICK would. New refusals:
   - a `forloop()` count that isn't a constant or a `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`)
   - a `randint()` bound that is not an integer constant or an `Int` or `Dint` tag (`CLK_RAND_BOUND_TYPE`), and two equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
@@ -235,7 +235,7 @@
   - the soft PLC (`SimServer`) advances its timers by at most 40 ms a scan (`max_scan_dt=`), so a slow host does not fail timing cases
   - `build_program(scan_limit_ms=)` sets the longest scan the cases assume, in ms
   - on a real CLICK, a run whose longest scan is past that limit judges no case and raises `pyrung.conformance.ScanTimeError`
-  - on pyrung's own targets (the soft PLC and generated P1AM-200 code), a run whose longest scan is past the limit prints a line saying so and adds that line to each failed case. When you start such a target yourself, pass `run_modbus(endpoint, local=True)`
+  - on pyrung's own targets (the soft PLC and generated P1AM-200 code), a run whose longest scan is past the limit prints a line saying so and adds that line to each failed case. When you start such a target yourself, pass `run_modbus(program, endpoint, local=True)`
   - a case that writes `TIMED_OUT` plus its step to `Fired` fails with the note "timed out at step N"
   - `format_report()` prints each failed case's note under it
 - The debugger can act as a simulated CLICK PLC:
@@ -266,7 +266,7 @@
 - `link=` takes more forms:
   - `link="~Tag"` drives feedback while a Bool enable is off (normally closed), in Python, UDT fields, nickname comments and the `link` console verb. `~` on a non-Bool enable is refused
   - in a CLICK nickname comment, `link=` takes a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`)
-- The opt-in check `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses. The harness skips such a link. Turn the check on with `Program.check(extend_select={"PHYS"})` or `pyrung check --extend-select PHYS`.
+- The opt-in check `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses. The harness skips such a link. Turn the check on with `logic.check(extend_select={"PHYS"})` or `pyrung check --extend-select PHYS`.
 - `rng.max()`, `rng.min()`, `rng.median()` and `rng.mean()` on block ranges work inside `math()`, like `rng.sum()`:
   - they export to CLICK as `MAX`, `MIN`, `MDN` and `AVG`, and import back
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython
@@ -563,7 +563,7 @@
     - SC10 reports the RUN/STOP switch, SD10 the scan time, and SD19..SD26 the real-time clock
   - when a rung writes SC50, the code goes to STOP with SC11 off, with or without a RUN/STOP switch. It stays there until the switch goes to STOP and back to RUN, or until a restart when there is no switch (a program without a switch kept scanning)
   - its Modbus server answers as a CLICK does:
-    - the server refuses a write to SC50 or SC51 with exception code 2 and changes nothing (it stored the write, so a client could stop the code). The server also refuses a write to an SC or SD that CLICK's Data View shows as Read Only (it acknowledged one the program uses)
+    - the server refuses a write to SC50 or SC51 with exception code 2 and changes nothing (it stored the write, and a write to SC50 stopped the code). The server also refuses a write to an SC or SD that CLICK's Data View shows as Read Only (it acknowledged one the program uses)
     - an FC 15 or FC 16 write that reaches one refused address stores nothing (it stored the addresses before that one)
     - a coil write to X, T or CT answers with exception code 2 (it stored the write)
     - a read of an address in a CLICK bank that no tag or rung uses returns 0 (it answered with exception code 2). A write there still answers with exception code 2
