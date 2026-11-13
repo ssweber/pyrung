@@ -461,7 +461,8 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
     one part holds them all.
 
     Raises:
-        BuildMismatchError: ``DS1`` holds no build of the suite's layout hash.
+        BuildMismatchError: ``DS1`` holds no build of the suite's layout hash, or *names* is not all in the part that matches.
+        ValueError: *names* holds a group no part has.
     """
     if endpoint is None:
         apart = {g.name for g in APART_GROUPS}
@@ -472,6 +473,24 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
                 return build(part)
         return build_apart()
     found = read_program_hash(endpoint)
+    if names:
+        # Only the parts that hold every asked group are built, so a mismatch fails at once.
+        holders = _holding(names)
+        candidates = {part: build(part) for part in holders}
+        for candidate in candidates.values():
+            if candidate.program_hash == found:
+                return candidate
+        asked = f"{', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else names[0]
+        are = "are" if len(names) > 1 else "is"
+        layouts = " or ".join(
+            f"part {part or 'whole'} (layout {c.program_hash})" for part, c in candidates.items()
+        )
+        where = " or ".join(f"part {part or 'whole'}" for part in candidates)
+        raise BuildMismatchError(
+            f"{endpoint} runs program layout {found}; {asked} {are} in {layouts}. "
+            f"Load {where} (make conformance-export PART="
+            f"{'|'.join(part or 'whole' for part in candidates)})."
+        )
     known: list[str] = []
     for part in [*PARTS, *APART_PARTS, None]:
         candidate = build(part)
@@ -483,6 +502,17 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
         f"Export the part again (make conformance-export "
         f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it."
     )
+
+
+def _holding(names: list[str]) -> list[str | None]:
+    """The parts that hold every group of *names*, or the whole suite (``None``) if none does."""
+    wanted = set(names)
+    every = {g.name for g in (*ALL_GROUPS, *APART_GROUPS)}
+    if unknown := sorted(wanted - every):
+        raise ValueError(f"Unknown conformance group(s) {', '.join(unknown)}")
+    found: list[str | None] = [p for p, held in PARTS.items() if wanted <= set(held)]
+    found += [p for p, apart in APART_PARTS.items() if wanted <= set(apart.groups)]
+    return found or [None]
 
 
 def fixed_scan_note(part: str | None) -> str | None:
