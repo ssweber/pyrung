@@ -416,7 +416,7 @@ def sm_copy_or_jump_state():
         math(LoopIndex + 1, LoopIndex)
         copy(0, StateEnableYes)
 
-    comment("Runaway guard — force abort after 10 iterations")
+    comment("Runaway guard - force abort after 10 iterations")
     with rung(LoopIndex > 10):
         copy(S.ABORTED, StateRequested)
 
@@ -447,7 +447,7 @@ def sm_copy_or_jump_state():
     with rung():
         copy(ds[StateJumpIdx], StateJumpTarget)
 
-    comment("Transition enabled — apply and exit")
+    comment("Transition enabled - apply and exit")
     with rung(StateEnableYes == 1):
         copy(StateRequested, StateCurrent)
         copy(0, StateCompleteBool)
@@ -456,7 +456,7 @@ def sm_copy_or_jump_state():
         copy(0, StateTimer.Acc)
         return_early()
 
-    comment("Not enabled — follow jump chain")
+    comment("Not enabled - follow jump chain")
     with rung(StateJumpTarget != 0):
         copy(StateJumpTarget, StateRequested)
 

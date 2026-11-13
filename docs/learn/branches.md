@@ -55,7 +55,7 @@ Here's the conveyor's motor rung. `EstopOK` gates everything. It's a permission 
 
 ```python
 with Program() as logic:
-    comment("Start/stop — NC stop resets when pressed or wire broken")
+    comment("Start/stop - NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -63,7 +63,7 @@ with Program() as logic:
     with rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
@@ -80,7 +80,7 @@ The gate pattern is *the* textbook ladder structure for any permission or interl
 The diverter needs to fire in two cases: auto mode during sorting, or manual mode with the button pressed. That's `Or` with `And`, the same pattern as `any([all([...]), all([...]])` in Python:
 
 ```python
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with rung(
         EstopOK,
         Or(

@@ -172,7 +172,7 @@ mapping = TagMap(
 
 @program
 def logic():
-    comment("Start/stop — NC stop button resets when pressed or wire broken")
+    comment("Start/stop - NC stop button resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -180,14 +180,14 @@ def logic():
     with rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(conv.Motor)
         with branch(Running):
             out(conv.StatusLight)
 
-    comment("Sort state machine — IDLE to DETECTING: box arrives")
+    comment("Sort state machine - IDLE to DETECTING: box arrives")
     with rung(State == SortState.IDLE, rise(EntrySensor)):
         copy(SortState.DETECTING, State)
 
@@ -210,7 +210,7 @@ def logic():
         reset(IsLarge)
         copy(SortState.IDLE, State)
 
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with rung(
         EstopOK,
         Or(
