@@ -199,7 +199,7 @@
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
   - a comment writes them as `timed=200ms`, a bare `maintained` and a bare `toggle`
   - `how()` plans through both
-- `pyrung check` advises against `==` and `!=` on a `Real` the ladder computes with `math()` (`CMP_EQ_ON_COMPUTED_REAL`). Rounding can step over the exact value, so compare with a range or a tolerance. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged.
+- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Rounding can step over the exact value, so compare with a range or a tolerance. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged.
 - The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag that starts at 0 and that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`.
 - CLICK validation refuses what CLICK's editor refuses, so ladder export stops where CLICK would. New refusals:
   - a `forloop()` count that isn't a constant or a `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`)
@@ -264,7 +264,7 @@
 - `link=` takes more forms:
   - `link="~Tag"` drives feedback while a Bool enable is off (normally closed), in Python, UDT fields, nickname comments and the `link` console verb. `~` on a non-Bool enable is refused
   - in a CLICK nickname comment, `link=` takes a CLICK address (`link=Y001`, read as the nickname at that address) and a value trigger (`link=State:SORTING`)
-- `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses (the harness skipped it silently).
+- The opt-in check `PHYS_LINK_UNKNOWN` warns when a `link=` names an enable the program never uses (the harness skipped it silently).
 - `rng.max()`, `rng.min()`, `rng.median()` and `rng.mean()` on block ranges work inside `math()`, like `rng.sum()`:
   - they export to CLICK as `MAX`, `MIN`, `MDN` and `AVG`, and import back
   - they run in `PLC`, `CompiledPLC` and generated CircuitPython
