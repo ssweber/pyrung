@@ -15,7 +15,7 @@ means the CLICK redraws that topology.  Then copy the saved project's ``main.csv
 
 Export the project for Guided Paste (``main.csv`` and ``nicknames.csv``) with::
 
-    uv run python tests/click/test_ladder_topology.py [out_dir]    # default build/ladder-topology
+    uv run python -m tests.click.test_ladder_topology [out_dir]    # default build/ladder-topology
 """
 
 from __future__ import annotations
