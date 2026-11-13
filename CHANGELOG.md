@@ -199,8 +199,8 @@
   - `Physical(name, toggle=True)` flips the feedback at each rise of its enable
   - a comment writes them as `timed=200ms`, a bare `maintained` and a bare `toggle`
   - `how()` plans through both
-- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged. Rounding can step over the exact value, so compare with a range or a tolerance. Turn it on with `logic.check(extend_select={"CMP_EQ_ON_COMPUTED_REAL"})` or `pyrung check --extend-select CMP_EQ_ON_COMPUTED_REAL`.
-- The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag with no default that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`. Turn it on with `logic.check(extend_select={"CMP_PRESET_STAYS_ZERO"})` or `pyrung check --extend-select CMP_PRESET_STAYS_ZERO`.
+- The opt-in check `CMP_EQ_ON_COMPUTED_REAL` advises against `==` and `!=` on a `Real` the ladder computes with `math()`. Analog inputs, setpoints, `== 0` and ordered comparisons are not flagged. Rounding can step over the exact value, so compare with a range or a tolerance. Turn the check on with `logic.check(extend_select={"CMP_EQ_ON_COMPUTED_REAL"})` or `pyrung check --extend-select CMP_EQ_ON_COMPUTED_REAL`.
+- The opt-in check `CMP_PRESET_STAYS_ZERO` also flags a drum step whose preset is a tag with no default that no rung writes. Such a step ends at once. Set the tag to the step's time, or mark it `external=True`. Turn the check on with `logic.check(extend_select={"CMP_PRESET_STAYS_ZERO"})` or `pyrung check --extend-select CMP_PRESET_STAYS_ZERO`.
 - CLICK validation refuses what CLICK's editor refuses, so ladder export stops where CLICK would. New refusals:
   - a `forloop()` count that isn't a constant or a `DS`, `DD`, `TD`, `CTD` or `SD` (`CLK_FORLOOP_COUNT_BANK`)
   - a `randint()` bound that is not an integer constant or an `Int` or `Dint` tag (`CLK_RAND_BOUND_TYPE`), and two equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
