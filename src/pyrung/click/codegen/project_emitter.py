@@ -65,11 +65,16 @@ _TEMPORARY_README_WORKSPACE_LIFECYCLE = """\
 > the entire folder. Copy the whole folder elsewhere before closing CLICK if you
 > want to keep your tests, backup, environment, or other work.
 
-`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
-regeneration replaces a modified `src/plc/`; `rung apply` does not touch it.
-`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
-copies it back to `src/plc/`. This backup is temporary too and disappears when
-CLICK closes.
+`backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
+`backup/older/<time>/src/plc/`, and the last 5 are kept. A CLICK save backs up
+`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
+hand. `rung apply` does not touch the backups.
+
+`clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
+lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
+restore replaces `src/plc/`, it backs up any edits there that no backup holds.
+
+The backups are temporary too and disappear when CLICK closes.
 
 The copied folder is useful offline: `uv run pytest`, `uv run python run.py`,
 VS Code debugging, and `uv run python project_to_csv.py` continue to work.
@@ -90,12 +95,16 @@ in CLICK's temporary project folder: closing the CLICK application deletes the
 entire folder, including those preserved files. Copy the whole folder elsewhere
 before closing CLICK if you want to keep it.
 
-`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
-regeneration replaces a modified `src/plc/`; `rung apply` validates and exports
-the proposed ladder CSVs and opens Preview Changes without touching it.
-`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
-copies it back to `src/plc/`. Keep editing and applying from `src/plc/`, not
-from `backup/`.
+`backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
+`backup/older/<time>/src/plc/`, and the last 5 are kept. A Click save backs up
+`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
+hand. `rung apply` validates and exports the proposed ladder CSVs and opens
+Preview Changes without touching the backups.
+
+`clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
+lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
+restore replaces `src/plc/`, it backs up any edits there that no backup holds.
+Keep editing and applying from `src/plc/`, not from `backup/`.
 
 If regeneration lands after `rung apply` but before the engineer pastes, run
 `clicknick-cli restore`, then rerun `rung apply`. A ClickNick restart alone does
@@ -313,13 +322,18 @@ def _readme_workspace_lifecycle(workspace_kind: WorkspaceKind) -> str:
     return """\
 > **Persistent workspace:** ClickNick stores this folder outside CLICK's
 > temporary project directory. Closing CLICK ends the active connection but
-> does not delete this workspace, its tests, or its recovery snapshot.
+> does not delete this workspace, its tests, or its backups.
 
-`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
-regeneration replaces a modified `src/plc/`; `rung apply` does not touch it.
-`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
-copies it back to `src/plc/`. The snapshot stays in this workspace after CLICK
-closes.
+`backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
+`backup/older/<time>/src/plc/`, and the last 5 are kept. A CLICK save backs up
+`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
+hand. `rung apply` does not touch the backups.
+
+`clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
+lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
+restore replaces `src/plc/`, it backs up any edits there that no backup holds.
+
+The backups stay in this workspace after CLICK closes.
 
 Offline tools such as `uv run pytest`, `uv run python run.py`, VS Code debugging,
 and `uv run python project_to_csv.py` work directly from this folder.
@@ -340,16 +354,20 @@ the engineer saves.
 regeneration and remain on disk after CLICK closes. Closing CLICK ends the live
 connection; it does not delete this configured workspace.
 
-`backup/src/plc/` is a recovery snapshot. ClickNick writes it immediately before
-regeneration replaces a modified `src/plc/`; `rung apply` validates and exports
-the proposed ladder CSVs and opens Preview Changes without touching it.
-`clicknick-cli backup` replaces the snapshot by hand and `clicknick-cli restore`
-copies it back to `src/plc/`. Keep editing and applying from `src/plc/`, not
-from `backup/`.
+`backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
+`backup/older/<time>/src/plc/`, and the last 5 are kept. A Click save backs up
+`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
+hand. `rung apply` validates and exports the proposed ladder CSVs and opens
+Preview Changes without touching the backups.
+
+`clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
+lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
+restore replaces `src/plc/`, it backs up any edits there that no backup holds.
+Keep editing and applying from `src/plc/`, not from `backup/`.
 
 If regeneration lands after `rung apply` but before the engineer pastes, run
 `clicknick-cli restore`, then rerun `rung apply`. A ClickNick restart alone does
-not replace `src/plc/`. If CLICK closes, the workspace and its snapshot remain
+not replace `src/plc/`. If CLICK closes, the workspace and its backups remain
 on disk.
 
 Every `clicknick-cli` command is routed to ClickNick's configured active
@@ -1127,7 +1145,7 @@ Edit `src/plc/main.py` or an existing `src/plc/subroutines/*.py` directly. Then:
 2. `clicknick-cli rung apply <file>` — validate and export proposed ladder CSVs
    to `csv_output/`, then open Preview Changes
 3. Engineer clicks Copy, pastes in Click, and saves
-4. ScrWatcher detects the save and regenerates `pyrung_project/`, snapshotting
+4. ScrWatcher detects the save and regenerates `pyrung_project/`, backing up
    a modified `src/plc/` to `backup/src/plc/` first
 
 Use `--select` for a focused proposal, for example
@@ -1141,8 +1159,8 @@ finds a path, but its failure to find one is not a failed verification.
 ## Reference
 
 - `src/plc/` — importable pyrung model of this machine's logic
-- `backup/src/plc/` — snapshot of `src/plc/` taken before regeneration replaced
-  it, or set by `clicknick-cli backup`
+- `backup/src/plc/` — newest backup of `src/plc/`, from a CLICK save or
+  `clicknick-cli backup`. Older ones are in `backup/older/`
 - `tests/` — smoke test and focused behavioral tests
 - `csv/` — regenerated reference snapshot of the ladder accepted in CLICK
 - `csv_output/` — proposed ladder export produced from edits in `src/plc/`

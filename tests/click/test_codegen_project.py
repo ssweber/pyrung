@@ -188,12 +188,13 @@ class TestProjectBasic:
             "`backup/`, `tests/`, `pyproject.toml`, `uv.lock`, and `.venv/` survive regeneration"
             in normalized_guidance
         )
-        assert "`backup/src/plc/` is a recovery snapshot" in normalized_guidance
-        assert (
-            "writes it immediately before regeneration replaces a modified `src/plc/`"
-            in normalized_guidance
-        )
-        assert "opens Preview Changes without touching it" in normalized_guidance
+        assert "`backup/src/plc/` holds the newest backup" in normalized_guidance
+        assert "the last 5 are kept" in normalized_guidance
+        assert "A Click save backs up `src/plc/` when it holds edits" in normalized_guidance
+        assert "opens Preview Changes without touching the backups" in normalized_guidance
+        assert "`clicknick-cli restore list`" in guidance
+        assert "`clicknick-cli restore <time>`" in guidance
+        assert "it backs up any edits there that no backup holds" in normalized_guidance
         assert "`clicknick-cli backup`" in guidance
         assert "`clicknick-cli restore`" in guidance
         assert (
@@ -210,8 +211,8 @@ class TestProjectBasic:
         assert "Rerun `rung apply`" in normalized_guidance
         assert "If CLICK Programming Software itself was closed" in normalized_guidance
         assert "temporary backup is gone" in normalized_guidance
-        assert "snapshot of `src/plc/` taken before regeneration replaced it" in normalized_guidance
-        assert "or set by `clicknick-cli backup`" in normalized_guidance
+        assert "newest backup of `src/plc/`, from a CLICK save or" in normalized_guidance
+        assert "recovery snapshot" not in normalized_guidance
         assert "automatically snapshots" not in normalized_guidance
         assert "back up `src/plc/`" not in normalized_guidance
         assert "closing the CLICK application deletes the entire folder" in normalized_guidance
@@ -252,16 +253,16 @@ class TestProjectBasic:
         normalized_readme = " ".join(readme.split())
         assert "closing the CLICK application deletes" in normalized_readme
         assert "pyrung-debug-<version>.vsix" in readme
-        assert "`backup/src/plc/` is a recovery snapshot" in normalized_readme
-        assert (
-            "writes it immediately before regeneration replaces a modified `src/plc/`"
-            in normalized_readme
-        )
-        assert "`rung apply` does not touch it" in normalized_readme
+        assert "`backup/src/plc/` holds the newest backup" in normalized_readme
+        assert "the last 5 are kept" in normalized_readme
+        assert "`rung apply` does not touch the backups" in normalized_readme
+        assert "`clicknick-cli restore list`" in readme
+        assert "`clicknick-cli restore <time>`" in readme
+        assert "recovery snapshot" not in normalized_readme
         assert "`clicknick-cli backup`" in readme
         assert "`clicknick-cli restore`" in readme
         assert "most recent `rung apply` source snapshot" not in normalized_readme
-        assert "backup is temporary too and disappears when CLICK closes" in normalized_readme
+        assert "backups are temporary too and disappear when CLICK closes" in normalized_readme
         assert "The copied folder is useful offline" in normalized_readme
         assert "every command targets ClickNick's active temporary workspace" in normalized_readme
         assert "copy those source edits back into the active temporary folder" in normalized_readme
@@ -302,11 +303,9 @@ class TestProjectBasic:
             assert "configured active workspace" in normalized
             assert "closing the CLICK application deletes" not in normalized
             assert "temporary backup is gone" not in normalized
-            assert "`backup/src/plc/` is a recovery snapshot" in normalized
-            assert (
-                "writes it immediately before regeneration replaces a modified `src/plc/`"
-                in normalized
-            )
+            assert "`backup/src/plc/` holds the newest backup" in normalized
+            assert "the last 5 are kept" in normalized
+            assert "recovery snapshot" not in normalized
             assert "`clicknick-cli backup`" in persistent_text
             assert "`clicknick-cli restore`" in persistent_text
             assert "automatically snapshots" not in normalized
