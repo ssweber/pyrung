@@ -66,9 +66,10 @@ _TEMPORARY_README_WORKSPACE_LIFECYCLE = """\
 > want to keep your tests, backup, environment, or other work.
 
 `backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
-`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and up to 4 older). A CLICK save backs up
-`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
-hand. `rung apply` does not touch the backups.
+`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and
+up to 4 older). A CLICK save backs up `src/plc/` when it holds edits, and
+`clicknick-cli backup` does the same by hand. `rung apply` does not touch the
+backups.
 
 `clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
 lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
@@ -96,10 +97,10 @@ entire folder, including those preserved files. Copy the whole folder elsewhere
 before closing CLICK if you want to keep it.
 
 `backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
-`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and up to 4 older). A CLICK save backs up
-`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
-hand. `rung apply` validates and exports the proposed ladder CSVs and opens
-Preview Changes without touching the backups.
+`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and
+up to 4 older). A CLICK save backs up `src/plc/` when it holds edits, and
+`clicknick-cli backup` does the same by hand. `rung apply` validates and exports
+the proposed ladder CSVs and opens Preview Changes without touching the backups.
 
 `clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
 lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
@@ -325,9 +326,10 @@ def _readme_workspace_lifecycle(workspace_kind: WorkspaceKind) -> str:
 > does not delete this workspace, its tests, or its backups.
 
 `backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
-`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and up to 4 older). A CLICK save backs up
-`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
-hand. `rung apply` does not touch the backups.
+`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and
+up to 4 older). A CLICK save backs up `src/plc/` when it holds edits, and
+`clicknick-cli backup` does the same by hand. `rung apply` does not touch the
+backups.
 
 `clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
 lists the older ones, and `clicknick-cli restore <time>` puts one back. Before
@@ -355,10 +357,10 @@ regeneration and remain on disk after CLICK closes. Closing CLICK ends the live
 connection; it does not delete this configured workspace.
 
 `backup/src/plc/` holds the newest backup of `src/plc/`. Older backups go in
-`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and up to 4 older). A CLICK save backs up
-`src/plc/` when it holds edits, and `clicknick-cli backup` does the same by
-hand. `rung apply` validates and exports the proposed ladder CSVs and opens
-Preview Changes without touching the backups.
+`backup/older/<time>/src/plc/`, and 5 backups are kept in all (the newest and
+up to 4 older). A CLICK save backs up `src/plc/` when it holds edits, and
+`clicknick-cli backup` does the same by hand. `rung apply` validates and exports
+the proposed ladder CSVs and opens Preview Changes without touching the backups.
 
 `clicknick-cli restore` puts back the newest backup. `clicknick-cli restore list`
 lists the older ones, and `clicknick-cli restore <time>` puts one back. Before

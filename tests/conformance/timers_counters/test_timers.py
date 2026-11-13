@@ -72,7 +72,7 @@ The six run on a CLICK at the next hardware round.  Which case tells pyrung's mo
   that wraps reads negative; one that stops at the preset never fires; a TON
   that keeps its own count and ignores the write never fires and reads
   Result3 = 0.  Step 0 writes the TD and step 1 ends once Acc reads 32767.
-  Result2 is 1 if Done is on on that scan.  Step 2 runs a 200 ms TON (T98),
+  Result2 is 1 if Done is on during that scan.  Step 2 runs a 200 ms TON (T98),
   then reads Result1 = Acc.  The case times out after 3000 ms on T97 if it has
   not fired (``scans.deadline``).
 
