@@ -62,6 +62,7 @@ nav:
       - Platform:
         - CLICK Quickstart: guides/click-quickstart.md
         - CLICK Cheatsheet: guides/click-cheatsheet.md
+        - CLICK Conformance: guides/conformance.md
         - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tools:
         - VS Code Debugger: guides/dap-vscode.md

@@ -77,6 +77,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "guides/click-quickstart.md",
             "guides/click-cheatsheet.md",
+            "guides/conformance.md",
             "guides/circuitpy-quickstart.md",
         ),
     ),
