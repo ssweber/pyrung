@@ -33,6 +33,7 @@ from .results import PENDING as PENDING
 from .results import Counterexample, Intractable, Proven
 from .results import Decision as Decision
 from .results import Journal as Journal
+from .results import ReachableStates as ReachableStates
 from .results import StateDiff as StateDiff
 from .results import TagEntry as TagEntry
 from .results import TraceStep as TraceStep
@@ -1176,12 +1177,6 @@ def _build_reachable_context(
     )
 
 
-class _DebugFrozenSet(frozenset):
-    """frozenset subclass that can carry a _debug_context attribute."""
-
-    _debug_context: _ExploreContext | None = None
-
-
 def reachable_states(
     program: Program,
     scope: list[str] | None = None,
@@ -1196,7 +1191,7 @@ def reachable_states(
     _opt_config: _OptConfig | None = None,
     _journal: bool = False,
     _debug: bool = False,
-) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
+) -> ReachableStates | Intractable:
     """Compute the full reachable state space.
 
     Parameters
@@ -1209,7 +1204,9 @@ def reachable_states(
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
     depth_budget : int
-        BFS depth budget: the longest scan sequence explored.
+        BFS depth budget: the longest scan sequence explored.  When it stops
+        the search early, the result's ``truncated`` is True and it holds only
+        the states found within the budget.
     max_states : int
         Visited-set cap.
     joint_inputs : tuple of tag-name tuples
@@ -1264,15 +1261,17 @@ def reachable_states(
         if _debug:
             return replace(result, _debug_context=context)
         return result
-    assert isinstance(result, frozenset)
+    assert isinstance(result, ReachableStates)
     choice_labels = _build_choice_labels(project_list, context.graph.tags)
-    result = _resolve_choice_labels(result, choice_labels)
     band_maps = _build_band_maps(project_list, context.graph.tags)
-    result = _resolve_band_labels(result, band_maps)
+    labelled = ReachableStates._mark(
+        _resolve_band_labels(_resolve_choice_labels(result, choice_labels), band_maps),
+        truncated=result.truncated,
+        depth_budget=result.depth_budget,
+    )
     if stderr_reporter is not None:
-        stderr_reporter.info(f"reachable states complete | total={len(result):,}")
+        status = f"stopped at depth_budget={depth_budget}" if labelled.truncated else "complete"
+        stderr_reporter.info(f"reachable states {status} | total={len(labelled):,}")
     if _debug:
-        debug_result = _DebugFrozenSet(result)
-        debug_result._debug_context = context
-        return debug_result
-    return result
+        labelled._debug_context = context
+    return labelled

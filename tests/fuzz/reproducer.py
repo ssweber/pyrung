@@ -543,6 +543,7 @@ def format_reachability_reproducer(
     projection: list[str],
     sim_state: dict[str, Any],
     bfs_size: int,
+    depth_budget: int = 20,
 ) -> str:
     global _REF_MAP  # noqa: PLW0603
     _REF_MAP = _build_ref_map(spec.pool)
@@ -577,7 +578,9 @@ def format_reachability_reproducer(
     lines.append("")
     lines.append(f"    projection = {projection!r}")
     lines.append("    bfs_result = reachable_states(logic, project=projection,")
-    lines.append("                                  max_states=10_000, depth_budget=20)")
+    lines.append(
+        f"                                  max_states=10_000, depth_budget={depth_budget})"
+    )
     lines.append("    assert not isinstance(bfs_result, Intractable)")
     lines.append("")
     lines.append("    plc = PLC(logic, dt=0.010)")

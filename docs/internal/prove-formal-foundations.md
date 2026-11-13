@@ -71,9 +71,10 @@ hide.  The search uses none of it.
 
 ## 4. Plain BFS depth
 
-With no hidden-event acceleration, `depth_budget` is the BFS depth: the
-longest scan sequence explored.  A search cut short by it reports a
-caveat on its `Proven`; it never reports a silent one.
+With no hidden-event acceleration, `depth_budget` is the BFS depth.  It is
+the longest scan sequence explored.  An `always()` or `never()` search cut
+short by it answers `Intractable`, never `Proven`.  A `reachable_states()`
+search cut short by it returns the states it found with `truncated` set.
 
 ---
 

@@ -463,6 +463,11 @@
   - past a stop a rung caused, without restarting
   - over a harness ramp or approach feedback (`ramp_on` or `approach_to`), without skipping scans
 - `pyrung lock --check` on a program the verifier can't finish names the `Intractable` and exits 1, as `pyrung lock` does, instead of ending in a traceback.
+- `reachable_states()` marks the states it returns when `depth_budget` cut its search short (it returned them as if the search were complete):
+  - the result's `truncated` is True, and its `depth_budget` is the budget
+  - `pyrung lock` and `pyrung lock --check` print a warning that names the budget
+
+  Set `depth_budget=` or `--depth-budget` to just over twice the largest counter preset. A counter that counts down too, has a tag preset or has its Acc read warns at any budget.
 - Compiled runs and generated CircuitPython run a `run_function()` as stepping does:
   - a compiled run calls the function itself, not a copy of its source (a seek raised `NameError`, and a `global` store landed in the kernel's module)
   - its `ins` and `outs` go in the order they are declared

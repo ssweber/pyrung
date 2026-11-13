@@ -385,8 +385,11 @@ before = reachable_states(original, project=["Running", "MotorOut"])
 after  = reachable_states(refactored, project=["Running", "MotorOut"])
 diff   = diff_states(before, after)
 
+assert not before.truncated and not after.truncated  # both searches finished
 assert not diff.added and not diff.removed  # behavioral equivalence
 ```
+
+Two sets cut short at the same budget can be equal and still differ past it.
 
 In a PR, the lock file diff tells the story. States omit `false` values, so each entry reads as "what's ON":
 
@@ -407,12 +410,15 @@ from pyrung.core.analysis.prove import check_lock, write_lock, program_hash
 
 # Write
 states = reachable_states(logic, project=["Running"])
+assert not states.truncated  # the search finished
 write_lock(Path("pyrung.lock"), states, ["Running"], program_hash(logic))
 
 # Check.  A program it can't answer for raises LockIntractable, a RuntimeError naming why.
 diff = check_lock(logic, Path("pyrung.lock"))
 assert diff is None  # None means no change
 ```
+
+`check_lock()` does not say whether its search was cut short. `pyrung lock --check` warns when it was.
 
 ### CLI reference
 
@@ -429,7 +435,17 @@ pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
-`--depth-budget` is the BFS depth. It is the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth. A counter or a `math` count advances one step per scan, so a count past the budget is not reached. A search the budget cuts short answers `Intractable`.
+`--depth-budget` is the BFS depth. It is the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth. A counter counts one rising edge every two scans, so a preset of N needs a budget of about 2N. A `math()` count advances once each scan its rung runs.
+
+A search the budget cuts short returns the states it found and sets `truncated` on the result. `pyrung lock` and `pyrung lock --check` then print a warning. Set `--depth-budget` to just over twice the largest counter preset.
+
+The warning is expected at any budget for each of these, because its count keeps changing the state and the search never runs out of new states:
+
+- a counter that also counts down
+- a counter with a tag preset
+- a counter whose Acc another instruction writes
+- a counter whose Acc a rung reads
+- a `math()` count with no reset
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 
