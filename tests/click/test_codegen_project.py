@@ -189,8 +189,8 @@ class TestProjectBasic:
             in normalized_guidance
         )
         assert "`backup/src/plc/` holds the newest backup" in normalized_guidance
-        assert "the last 5 are kept" in normalized_guidance
-        assert "A Click save backs up `src/plc/` when it holds edits" in normalized_guidance
+        assert "5 backups are kept in all (the newest and up to 4 older)" in normalized_guidance
+        assert "A CLICK save backs up `src/plc/` when it holds edits" in normalized_guidance
         assert "opens Preview Changes without touching the backups" in normalized_guidance
         assert "`clicknick-cli restore list`" in guidance
         assert "`clicknick-cli restore <time>`" in guidance
@@ -254,7 +254,7 @@ class TestProjectBasic:
         assert "closing the CLICK application deletes" in normalized_readme
         assert "pyrung-debug-<version>.vsix" in readme
         assert "`backup/src/plc/` holds the newest backup" in normalized_readme
-        assert "the last 5 are kept" in normalized_readme
+        assert "5 backups are kept in all (the newest and up to 4 older)" in normalized_readme
         assert "`rung apply` does not touch the backups" in normalized_readme
         assert "`clicknick-cli restore list`" in readme
         assert "`clicknick-cli restore <time>`" in readme
@@ -304,10 +304,13 @@ class TestProjectBasic:
             assert "closing the CLICK application deletes" not in normalized
             assert "temporary backup is gone" not in normalized
             assert "`backup/src/plc/` holds the newest backup" in normalized
-            assert "the last 5 are kept" in normalized
+            assert "5 backups are kept in all (the newest and up to 4 older)" in normalized
             assert "recovery snapshot" not in normalized
             assert "`clicknick-cli backup`" in persistent_text
             assert "`clicknick-cli restore`" in persistent_text
+            assert "`clicknick-cli restore list`" in persistent_text
+            assert "`clicknick-cli restore <time>`" in persistent_text
+            assert "it backs up any edits there that no backup holds" in normalized
             assert "automatically snapshots" not in normalized
             assert "most recent `rung apply` source snapshot" not in normalized
 
