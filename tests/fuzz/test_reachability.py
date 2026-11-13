@@ -90,9 +90,26 @@ def test_reachability_crosscheck():
                     continue
 
                 state = _project_plc_state(plc, projection)
+                # The simulation is scan + 1 scans in, which may be past the
+                # budget.  Search that deep before calling the state a miss.
+                depth = max(DEPTH_BUDGET, scan + 1)
+                if (
+                    state not in bfs_result
+                    and bfs_result.truncated
+                    and depth > bfs_result.depth_budget
+                ):
+                    deeper = reachable_states(
+                        program,
+                        project=projection,
+                        max_states=MAX_STATES,
+                        depth_budget=depth,
+                    )
+                    if isinstance(deeper, Intractable):
+                        return
+                    bfs_result = deeper
                 if state not in bfs_result:
 
-                    def _check_reach(candidate, _scan=scan, _hist=input_history):
+                    def _check_reach(candidate, _scan=scan, _hist=input_history, _depth=depth):
                         try:
                             p = build_program(candidate)
                             proj = _projection_names(
@@ -104,7 +121,7 @@ def test_reachability_crosscheck():
                                 p,
                                 project=proj,
                                 max_states=MAX_STATES,
-                                depth_budget=DEPTH_BUDGET,
+                                depth_budget=_depth,
                             )
                             if isinstance(bfs, Intractable):
                                 return False
@@ -125,7 +142,7 @@ def test_reachability_crosscheck():
                         min_prog,
                         project=min_proj,
                         max_states=MAX_STATES,
-                        depth_budget=DEPTH_BUDGET,
+                        depth_budget=depth,
                     )
                     min_plc = PLC(min_prog, dt=DT)
                     for step_inputs in input_history[: scan + 1]:
@@ -139,6 +156,7 @@ def test_reachability_crosscheck():
                         min_proj,
                         dict(min_state),
                         len(min_bfs) if not isinstance(min_bfs, Intractable) else -1,
+                        depth_budget=depth,
                     )
                     note(f"\n--- Reproducer ---\n{code}")
                     path = write_reproducer(code, "reachability")

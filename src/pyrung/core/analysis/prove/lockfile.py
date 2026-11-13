@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .results import Intractable, StateDiff
+from .results import Intractable, ReachableStates, StateDiff
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -245,6 +245,31 @@ def check_lock(
     Returns None if the lock matches, or a ``StateDiff`` if changed.  Raises
     ``LockIntractable`` if the program's states can't be computed.
     """
+    diff, _states = _check_lock_states(
+        program,
+        lock_path,
+        depth_budget=depth_budget,
+        max_states=max_states,
+        progress=progress,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
+    )
+    return diff
+
+
+def _check_lock_states(
+    program: Program,
+    lock_path: Path,
+    *,
+    depth_budget: int,
+    max_states: int,
+    progress: bool | Callable[[int, int, float], None],
+    joint_inputs: tuple[tuple[str, ...], ...],
+    exclusive_inputs: tuple[tuple[str, ...], ...],
+    split_at: list[str] | None,
+) -> tuple[StateDiff | None, ReachableStates]:
+    """``check_lock()`` that also returns the recomputed states, so the CLI can see truncation."""
     from . import reachable_states
 
     lock_data = read_lock(lock_path)
@@ -266,5 +291,5 @@ def check_lock(
 
     d = diff_states(old_states, new_states)
     if not d.added and not d.removed:
-        return None
-    return d
+        return None, new_states
+    return d, new_states

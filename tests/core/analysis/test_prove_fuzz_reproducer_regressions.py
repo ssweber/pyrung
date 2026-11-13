@@ -1982,3 +1982,65 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
 
     _assert_soundness(logic, D0 < 43)
     assert isinstance(always(logic, D0 < 43, max_states=10_000, depth_budget=20), Counterexample)
+
+
+def _counter_with_a_down_count():
+    """B0 rises once on scan 2 and takes a count away, so Done needs 11 rising edges of In0."""
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung():
+            out(B0)
+    return logic
+
+
+def test_fuzz_reachable_states_cut_short_by_the_budget_says_so():
+    """Reproducer: reachability_20261112_165128_000.  Done is 21 scans away."""
+    logic = _counter_with_a_down_count()
+    projection = ["B0", "B1", "C0_Done"]
+
+    short = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(short, Intractable)
+    assert short.truncated
+    assert short.depth_budget == 20
+    assert not any(("C0_Done", True) in state for state in short)
+
+    full = reachable_states(logic, project=projection, max_states=10_000, depth_budget=21)
+    assert not isinstance(full, Intractable)
+    # Acc keeps counting past the preset, so the search never runs out of states.
+    assert full.truncated
+    assert full == {
+        frozenset({("B0", False), ("B1", False), ("C0_Done", False)}),
+        frozenset({("B0", True), ("B1", False), ("C0_Done", False)}),
+        frozenset({("B0", True), ("B1", False), ("C0_Done", True)}),
+        frozenset({("B0", True), ("B1", True), ("C0_Done", False)}),
+    }
+
+
+def test_fuzz_reachable_states_debug_set_carries_the_truncation():
+    logic = _counter_with_a_down_count()
+    states = reachable_states(
+        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20, _debug=True
+    )
+    assert not isinstance(states, Intractable)
+    assert states.truncated
+    assert states._debug_context is not None
+
+
+def test_fuzz_reachable_states_a_finished_search_is_not_truncated():
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert not states.truncated
+    assert states == {frozenset({("B0", False)}), frozenset({("B0", True)})}

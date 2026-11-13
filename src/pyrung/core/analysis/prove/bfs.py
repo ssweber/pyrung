@@ -27,7 +27,14 @@ from .kernel import (
     _step_kernel,
 )
 from .passes import _DEFAULT_BFS_CONFIG, _BFSConfig, _for_iterations_intractable
-from .results import Counterexample, Intractable, Proven, TraceStep, _ParentLink
+from .results import (
+    Counterexample,
+    Intractable,
+    Proven,
+    ReachableStates,
+    TraceStep,
+    _ParentLink,
+)
 from .system_points import FIRST_SCAN, FREE_SYSTEM_CAVEAT, UnmodeledRead, UnmodeledSystemRead
 
 
@@ -984,7 +991,12 @@ def _bfs_explore_gen(
 
     undecided = _no_scan_found_intractable(context, len(visited))
     if project is not None:
-        yield undecided or _projected_states(project, projected_rows)
+        # A set cut short by the budget would read as complete, so it says so.
+        yield undecided or ReachableStates._mark(
+            _projected_states(project, projected_rows),
+            truncated=depth_truncated,
+            depth_budget=depth_budget,
+        )
         return
 
     caveats = context.caveats

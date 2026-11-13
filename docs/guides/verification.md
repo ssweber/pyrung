@@ -429,7 +429,9 @@ pyrung lock <module> --check --profile out.prof  # write cProfile stats
 ```
 
 `--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
-`--depth-budget` is the BFS depth. It is the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth. A counter or a `math` count advances one step per scan, so a count past the budget is not reached. A search the budget cuts short answers `Intractable`.
+`--depth-budget` is the BFS depth. It is the longest sequence of scans explored. A timer may finish on any scan, so waiting for one costs no depth. A counter or a `math` count advances one step per scan, so a count past the budget is not reached.
+
+A search the budget cuts short returns the states it found and sets `truncated` on the result. `pyrung lock` and `pyrung lock --check` then print a warning that names the budget. A common cause is a counter that counts both ways, or one whose Acc another rung reads. That Acc keeps counting past the preset, so the search never runs out of states and the warning stays. Raise `--depth-budget` until it covers the longest count the program makes.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 
