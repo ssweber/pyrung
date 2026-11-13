@@ -212,7 +212,7 @@ def test_continued_rung_reads_its_chain():
 
 
 def test_box_leg_below_a_write_is_flagged():
-    # A box with pins ends its rung: the write sits on the wire above it.
+    # A box with pins ends its rung, so the write sits in the rung its rung continues.
     with Program() as program:
         with Rung(Go):
             latch(P)
@@ -223,7 +223,7 @@ def test_box_leg_below_a_write_is_flagged():
     assert finding.tags == ("P",)
     assert finding.target_name == "Main:R2"
     assert ".reset(P)" in finding.message
-    assert "after an instruction on a wire above it in the same CLICK rung" in finding.message
+    assert "after an instruction above it in the chain of continued rungs" in finding.message
 
 
 def test_box_enable_is_the_rung_power_not_a_read():

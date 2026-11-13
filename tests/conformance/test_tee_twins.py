@@ -161,21 +161,17 @@ def control_build():
     return build, rail, _draw_tees(rail, build.groups)
 
 
-def test_the_bare_twin_hangs_its_tee_off_a_wire_in_column_a(control_build):
-    """S5 #3: ``R,-,T`` over ``,,-``: no trunk contact, a wire in column A, the tee in B."""
+def test_the_bare_twin_keeps_its_pins_on_the_rail(control_build):
+    """S5 #3: the CLICK saved on 2026-11-13 holds the rail drawing, so the export draws that."""
     build, rail, drawn = control_build
     sub = build.group("cont_box").subroutine
     before = _case_rows(rail, sub, "cont_box", "box_tee_without_trunk")
     after = _case_rows(drawn, sub, "cont_box", "box_tee_without_trunk")
     box = next(i for i, r in enumerate(after) if r[-1].startswith("count_up("))
-    assert after[box][:3] == ("R", "-", "T:C481")
-    assert after[box + 1][:3] == ("", "", "T:C482")
-    assert after[box + 2][:3] == ("", "", "DS3641==0")
-    # The rail drawing has the same contacts one cell to the left; nothing else moved.
-    assert before[box][:2] == ("R", "C481")
-    assert before[box + 1][:2] == ("", "C482")
-    moved = [i for i, (b, a) in enumerate(zip(before, after, strict=True)) if b != a]
-    assert moved == [box, box + 1, box + 2]
+    assert after[box][:2] == ("R", "C481")
+    assert after[box + 1][:2] == ("", "C482")
+    assert after[box + 2][:2] == ("", "DS3641==0")
+    assert after == before
     assert rail.main_rows == drawn.main_rows
 
 

@@ -72,8 +72,8 @@ class Rung:
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
-        # Set by ``.continued()``: the rung is drawn as a further wire of the
-        # rung above it (CLICK round-trip).  It is solved as a rung of its own.
+        # Set by ``.continued()``, the import form of a CLICK rung saved with
+        # several wires.  The rung is solved and exported as a rung of its own.
         self._use_prior_snapshot = False
         # ``(memory key, tag)`` of the edge sites this rung's own contacts hold
         # (its row), scanned when the solve reaches the row; built on first
@@ -330,17 +330,12 @@ def _dsl_label(instruction: Instruction | None) -> str:
 
 
 def _box_shares_rung(box: Instruction, other: Instruction | None, in_loop_body: bool) -> str:
-    """Why *box*, a box with pins, cannot share its rung with *other*.
-
-    A forloop body rung has no ``.continued()``, so there the fix is a body
-    rung of its own.
-    """
+    """Why *box*, a box with pins, cannot share its rung with *other*."""
     where = (
         "what comes before the box into a body rung above, what follows it into a body "
         "rung of its own."
         if in_loop_body
-        else "what comes before the box into a rung above, what follows it into "
-        "`with Rung(...).continued():` or a rung of its own."
+        else "what comes before the box into a rung above, what follows it into a rung of its own."
     )
     return (
         f"{_dsl_label(box)} has pins, so it ends its rung: CLICK draws its pins from the "

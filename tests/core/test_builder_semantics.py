@@ -185,7 +185,7 @@ def test_box_with_pins_in_a_branch_ends_the_whole_rung() -> None:
                     out(light)
     message = str(info.value)
     assert message.startswith("count_up() (line ")
-    assert "`with Rung(...).continued():`" in message
+    assert "what follows it into a rung of its own." in message
     assert message.isascii()
 
 

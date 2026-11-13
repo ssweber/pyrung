@@ -1,15 +1,19 @@
 """Column A is CLICK's left power rail: no exported row carries a vertical token there.
 
 CLICK refuses ``T``, ``|`` and ``T:`` in column A ("Vertical-down tokens are not
-allowed in Column A").  A rung with no contacts, or a branch with none, starts
-every row from the rail, so its rows need no split marker.
+allowed in Column A").  Items that hang straight from the rail are separate wires.
+CLICK's syntax check makes each of them a rung of its own, so the export draws them
+that way.  The importer still reads a wire in column A that splits in column B as
+one rung.
 """
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
-from pyrung.click import ClickBlocks, LadderExportError, TagMap, pyrung_to_ladder
+from pyrung.click import ClickBlocks, LadderExportError, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.layout import assert_no_column_a_vertical
 from pyrung.core import Counter, Program, Rung, Timer
 from pyrung.core.program import (
@@ -22,7 +26,7 @@ from pyrung.core.program import (
     out,
     subroutine,
 )
-from tests.click.helpers import round_trip_logic
+from tests.click.helpers import join_continued, round_trip_logic, strip_pyrung_boilerplate
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -196,60 +200,71 @@ def test_no_vertical_token_in_column_a_and_round_trip(shape):
     assert before == after
 
 
-ONE_RUNG = [
-    _calc_copy,
-    _branch_after_out,
-    _nested_branch,
-    _branch_with_two_outputs,
-    _two_branches,
-    _branches_only_2,
-    _branches_only_3,
-    _for_body,
-    _subroutine,
+# For each CLICK rung a shape exports to, the first cells and AF of its first row.
+RAIL_ITEMS = [
+    (_multi, [("-", "out(C1)"), ("-", "out(C2)"), ("-", "out(C3)")]),
+    (_calc_copy, [("-", "math(DS1 + 1,DS1,mode=decimal)"), ("-", "copy(1,DS2)")]),
+    (_branch_after_out, [("-", "out(C1)"), ("C2", "out(C3)")]),
+    (_two_branches, [("C2", "out(C3)"), ("C4", "out(C5)"), ("-", "out(C1)")]),
+    (_branch_with_two_outputs, [("C2", "out(C3)"), ("-", "out(C1)")]),
+    (_nested_branch, [("C2", "out(C3)"), ("-", "out(C4)"), ("-", "out(C1)")]),
+    (_branches_only_2, [("C2", "out(C1)"), ("C3", "out(C4)")]),
+    (_branches_only_3, [("C2", "out(C1)"), ("C3", "out(C4)"), ("C5", "out(C6)")]),
 ]
 
 
-@pytest.mark.parametrize("shape", ONE_RUNG, ids=lambda f: f.__name__)
-def test_importer_reads_the_unconditional_shape_as_one_rung(shape):
-    from pyrung.click import ladder_to_pyrung
-
+@pytest.mark.parametrize(("shape", "rungs"), RAIL_ITEMS, ids=lambda v: getattr(v, "__name__", ""))
+def test_each_item_on_the_rail_is_a_click_rung_of_its_own(shape, rungs):
+    rows = pyrung_to_ladder(shape(), _tag_map()).main_rows[1:-1]
+    assert [(row[1], row[-1]) for row in rows if row[0] == "R"] == rungs
     code = ladder_to_pyrung(pyrung_to_ladder(shape(), _tag_map()))
-    assert code.count("with rung(") == 1, code
     assert ".continued()" not in code, code
 
 
-def test_rail_rows_still_read_as_continued():
-    from pyrung.click import ladder_to_pyrung
+def test_each_item_on_the_rail_is_a_rung_of_its_own_in_a_loop_or_subroutine():
+    rows = pyrung_to_ladder(_for_body(), _tag_map()).main_rows[1:-1]
+    assert [(row[0], row[1], row[-1]) for row in rows] == [
+        ("R", "C1", "for(3)"),
+        ("R", "-", "copy(1,DS1)"),
+        ("R", "-", "copy(2,DS2)"),
+        ("R", "-", "next()"),
+    ]
+    rows = dict(pyrung_to_ladder(_subroutine(), _tag_map()).subroutine_rows)["Gate"][1:]
+    assert [(row[0], row[1], row[-1]) for row in rows] == [
+        ("R", "-", "math(DS1 + 1,DS1,mode=decimal)"),
+        ("R", "-", "copy(1,DS2)"),
+        ("R", "-", "return()"),
+    ]
 
+
+def test_importer_reads_the_wires_of_one_click_rung_as_continued_rungs():
     with Program() as p:
         with Rung(c[1]):
             out(c[2])
         with Rung(c[3]).continued():
             out(c[4])
-    code = ladder_to_pyrung(pyrung_to_ladder(p, _tag_map()))
-    assert ".continued()" in code, code
+    bundle = join_continued(pyrung_to_ladder(p, _tag_map()), p)
+    assert [row[0] for row in bundle.main_rows[1:]] == ["R", "", "R"]
+    code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
+    assert code == "with rung(C1):\n    out(C2)\nwith rung(C3).continued():\n    out(C4)"
 
 
-def test_unconditional_outputs_hang_a_wire_trunk_and_split_in_column_b():
-    rows = pyrung_to_ladder(_calc_copy(), _tag_map()).main_rows[1:3]
-    assert [r[0] for r in rows] == ["R", ""]
-    assert [r[1:3] for r in rows] == [("-", "T"), ("", "-")]
-    rows = pyrung_to_ladder(_multi(), _tag_map()).main_rows[1:4]
-    assert [r[1:3] for r in rows] == [("-", "T"), ("", "T"), ("", "-")]
+def _row(marker: str, cells: list[str], af: str) -> tuple[str, ...]:
+    return (marker, *cells, *["-"] * (31 - len(cells)), af)
 
 
-def test_unconditional_branch_splits_in_column_b():
-    rows = pyrung_to_ladder(_branch_after_out(), _tag_map()).main_rows[1:3]
-    assert rows[0][1:3] == ("-", "T")
-    assert rows[1][1] == "" and rows[1][2].upper() == "C2"
-
-
-def test_importer_reads_wire_trunk_back_to_one_rung_in_order():
-    from pyrung.click import ladder_to_pyrung
-
-    code = ladder_to_pyrung(pyrung_to_ladder(_multi(), _tag_map()))
-    assert code.count("with rung()") == 1, code
-    assert code.index("out(C1)") < code.index("out(C2)") < code.index("out(C3)"), code
+def test_importer_reads_a_wire_split_in_column_b_as_one_rung_in_order():
+    """An earlier export, or a program saved before a syntax check, can hold this drawing."""
+    rows = (
+        pyrung_to_ladder(_multi(), _tag_map()).main_rows[0],
+        _row("R", ["-", "T"], "out(C1)"),
+        _row("", ["", "T"], "out(C2)"),
+        _row("", ["", "-"], "out(C3)"),
+        _row("R", [], "end()"),
+    )
+    bundle = dataclasses.replace(pyrung_to_ladder(_multi(), _tag_map()), main_rows=rows)
+    code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
+    assert code == "with rung():\n    out(C1)\n    out(C2)\n    out(C3)", code
 
 
 def test_guard_refuses_a_vertical_token_in_column_a():
@@ -264,8 +279,19 @@ def test_exporter_surfaces_the_guard_as_an_export_error(monkeypatch):
 
     monkeypatch.setattr(
         layout._LayoutMixin,
-        "_render_slots_on_condition_rows",
-        lambda self, **kw: [("R", "T", "-", "out(C1)")],
+        "_render_network",
+        lambda self, *args, **kw: [("R", "T", "-", "out(C1)")],
     )
     with pytest.raises(LadderExportError, match="column A"):
         pyrung_to_ladder(_calc_copy(), _tag_map())
+
+
+def test_the_layout_refuses_two_items_on_the_rail_in_one_click_rung():
+    from pyrung.click.ladder._exporter import _LadderExporter
+    from pyrung.click.ladder.types import _RenderError
+
+    exporter = _LadderExporter(tag_map=_tag_map(), program=_multi())
+    with pytest.raises(_RenderError, match="two items on the rail"):
+        exporter._render_network(
+            [], ["out(C1)", "out(C2)"], path="main.rung[0]", source=None, first_marker="R"
+        )

@@ -67,6 +67,7 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
+from tests.click.drawing_rule import check_scope
 from tests.click.helpers import build_program, exec_with_source, normalize_csv
 
 Counter3 = Counter.clone("Counter3")
@@ -113,6 +114,7 @@ def _assert_export_main_rows(source: str, expected_csv: str) -> None:
     logic, mapping = build_program(source)
     bundle = pyrung_to_ladder(logic, mapping)
     assert normalize_csv(bundle.main_rows) == _literal_csv_rows(expected_csv)
+    check_scope(bundle.main_rows)
 
 
 def test_header_and_width_invariants():
@@ -248,6 +250,7 @@ def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
     logic, mapping = build_program(source)
     bundle = pyrung_to_ladder(logic, mapping)
     assert list(bundle.main_rows[1:-1]) == expected
+    check_scope(bundle.main_rows)
     namespace: dict[str, object] = {}
     exec_with_source(ladder_to_pyrung(bundle), namespace)
     again = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
@@ -301,8 +304,8 @@ def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
         ),
         pytest.param(
             "Or(X1, X2), Or(X3, X4), X5",
-            ["R,X001,T,T:X003,T:X005,out(Y001)", ",X002,,X004,"],
-            id="only-the-last-of-series-ors",
+            ["R,X001,T:X003,T:X005,out(Y001)", ",X002,X004,"],
+            id="series-ors-on-the-rail-share-the-merge-column",
         ),
         pytest.param(
             "X1, Or(X2, X3), Or(X4, X5)",
@@ -375,8 +378,8 @@ def test_a_text_compare_with_a_longer_literal_stays_one_compare_in_an_or(build, 
         ),
         pytest.param(
             "Or(X1, X2), Or(X3, X4)",
-            ["R,X001,T,T:X003,T,out(Y001)", ",X002,,X004,"],
-            id="next-contact-opens-its-own-or",
+            ["R,X001,T:X003,T,out(Y001)", ",X002,X004,"],
+            id="series-ors-on-the-rail",
         ),
     ],
 )
@@ -391,8 +394,9 @@ def test_or_merge_keeps_its_bare_t(conditions: str, rows: list[str]):
     )
 
 
-def test_or_merge_keeps_its_bare_t_before_a_branch_split():
-    # or_topology.csv, CLICK's drawing: the split is a marker of its own.
+def test_or_merge_carries_a_branch_split():
+    # A branch hangs from the Or's merge column, as in R34 of the CLICK's save
+    # (test_ladder_topology.py).
     _assert_export_main_rows(
         """
         with Program() as p:
@@ -402,8 +406,8 @@ def test_or_merge_keeps_its_bare_t_before_a_branch_split():
                     out(Y2)
         """,
         """
-        R,X001,T,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-        ,X002,,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
         """,
     )
 
@@ -732,7 +736,7 @@ def test_subroutine_files_sorted_and_return_tailed(tmp_path: Path):
     assert (out_dir / "subroutines" / "beta-two.csv").exists()
 
 
-def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path: Path):
+def test_bundle_writes_one_rung_source_entry_per_click_rung(tmp_path: Path):
     Enable = Bool("Enable")
     Light1 = Bool("Light1")
     Light2 = Bool("Light2")
@@ -749,12 +753,13 @@ def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path:
     )
     bundle = pyrung_to_ladder(logic, mapping)
 
-    assert len(bundle.main_sources) == 2
-    assert bundle.main_sources[0].rung == 1
-    assert len(bundle.main_sources[0].sources) == 2
-    assert bundle.main_sources[1].rung == 2
-    assert bundle.main_sources[1].sources == ()  # Synthetic end().
-    for source in bundle.main_sources[0].sources:
+    # The continued rung is a CLICK rung of its own, with its own source span.
+    assert [entry.rung for entry in bundle.main_sources] == [1, 2, 3]
+    assert [len(entry.sources) for entry in bundle.main_sources] == [1, 1, 0]  # 3 is end()
+    first, second = bundle.main_sources[0].sources[0], bundle.main_sources[1].sources[0]
+    assert first.source_line is not None and second.source_line is not None
+    assert first.source_line < second.source_line
+    for source in (first, second):
         assert source.source_file is not None
         assert Path(source.source_file).samefile(__file__)
         assert source.source_line is not None
@@ -765,9 +770,24 @@ def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path:
     bundle.write(out_dir)
     manifest = json.loads((out_dir / "rung_sources.json").read_text(encoding="utf-8"))
     assert manifest["version"] == 1
-    assert [entry["rung"] for entry in manifest["main"]] == [1, 2]
-    assert len(manifest["main"][0]["sources"]) == 2
-    assert manifest["main"][1]["sources"] == []
+    assert [entry["rung"] for entry in manifest["main"]] == [1, 2, 3]
+    assert [len(entry["sources"]) for entry in manifest["main"]] == [1, 1, 0]
+
+
+def test_the_click_rungs_of_a_rung_with_no_contact_share_its_source_span():
+    with Program() as logic:
+        with Rung():
+            out(y[1])
+            out(y[2])
+        with Rung(x[1]):
+            out(y[3])
+
+    bundle = pyrung_to_ladder(logic, TagMap(include_system=False))
+    first, second, third, _end = bundle.main_sources
+    assert first.sources == second.sources
+    line, next_line = first.sources[0].source_line, third.sources[0].source_line
+    assert line is not None and next_line is not None
+    assert next_line > line
 
 
 def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
@@ -1494,7 +1514,7 @@ def test_empty_branch_comment_fails_round_trip_validation():
     )
 
 
-# --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
+# --- Hand-drawn Or patterns (tests/fixtures/click_or_topology.csv), importer only ---
 
 
 _NATIVE_OR_TOPOLOGY_FIXTURE = (
@@ -1531,11 +1551,26 @@ def _native_or_topology_rows() -> dict[int, tuple[tuple[str, ...], ...]]:
 def _assert_native_pattern(
     *,
     pattern_id: int,
-    bundle_rows: tuple[tuple[str, ...], ...],
+    logic: Program,
+    mapping: TagMap,
     expected_rows: tuple[tuple[str, ...], ...],
 ) -> None:
-    assert _native_or_topology_rows()[pattern_id] == expected_rows
-    assert bundle_rows == (_header(), *expected_rows, _END_ROW)
+    """The hand-drawn pattern imports as *logic*, and *logic* exports as *expected_rows*.
+
+    The fixture was drawn by hand and never saved by a CLICK, so it pins only what the importer
+    reads.  The export draws the form CLICK's syntax check keeps (test_ladder_topology.py).
+    """
+    from pyrung.click.ladder._exporter import _LadderExporter
+
+    exporter = _LadderExporter(tag_map=mapping, program=logic)
+    exporter._validate_scope_roundtrip(
+        source_rungs=logic.rungs,
+        rendered_rows=list(_native_or_topology_rows()[pattern_id]),
+        scope="main",
+        subroutine_name=None,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert bundle.main_rows == (_header(), *expected_rows, _END_ROW)
 
 
 def test_native_or_topology_fixture_shape():
@@ -1555,12 +1590,11 @@ def test_native_pattern_1_mid_rung_or():
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], Y001: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
         _blank_row("", ["", "C1"]),
     )
-    _assert_native_pattern(pattern_id=1, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=1, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_2_series_ors():
@@ -1575,12 +1609,11 @@ def test_native_pattern_2_series_ors():
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T:C1", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "", "C2"]),
+        _row("R", ["X001", "T:C1", "T"], "out(Y001)"),
+        _blank_row("", ["X002", "C2"]),
     )
-    _assert_native_pattern(pattern_id=2, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=2, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_3_or_plus_branch():
@@ -1600,12 +1633,11 @@ def test_native_pattern_3_or_plus_branch():
         {X001: x[1], X002: x[2], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "", "C1"], "out(Y002)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["X002", "C1"], "out(Y002)"),
     )
-    _assert_native_pattern(pattern_id=3, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=3, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_4_three_way_or_plus_branch():
@@ -1626,13 +1658,12 @@ def test_native_pattern_4_three_way_or_plus_branch():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "|", "C1"], "out(Y002)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["X002", "T:C1"], "out(Y002)"),
         _blank_row("", ["X003"]),
     )
-    _assert_native_pattern(pattern_id=4, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=4, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_5_combined_or_multi_output_branch():
@@ -1665,13 +1696,12 @@ def test_native_pattern_5_combined_or_multi_output_branch():
         },
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T:X002", "T", "T"], "out(Y001)"),
-        _row("", ["", "T:X003", "|", "T:C1"], "out(Y002)"),
-        _row("", ["", "X004", "", "-"], "out(Y003)"),
+        _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
+        _row("", ["", "T:X003", "T:C1"], "out(Y002)"),
+        _row("", ["", "X004"], "out(Y003)"),
     )
-    _assert_native_pattern(pattern_id=5, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=5, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_6_mid_rung_or_with_nested_all_of():
@@ -1691,13 +1721,12 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], C3: c[3], Y001: y[1]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "-", "-", "T"], "out(Y001)"),
         _blank_row("", ["", "T:C1", "C2", "C3", "|"]),
         _blank_row("", ["", "X003", "-", "-"]),
     )
-    _assert_native_pattern(pattern_id=6, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=6, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_7_or_with_two_branches():
@@ -1721,13 +1750,12 @@ def test_native_pattern_7_or_with_two_branches():
         {X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2], Y003: y[3]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "", "T:C1"], "out(Y002)"),
-        _row("", ["", "", "C2"], "out(Y003)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["X002", "T:C1"], "out(Y002)"),
+        _row("", ["", "C2"], "out(Y003)"),
     )
-    _assert_native_pattern(pattern_id=7, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=7, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_8_series_ors_plus_branch():
@@ -1749,12 +1777,11 @@ def test_native_pattern_8_series_ors_plus_branch():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T:C1", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "", "C2", "", "X003"], "out(Y002)"),
+        _row("R", ["X001", "T:C1", "T"], "out(Y001)"),
+        _row("", ["X002", "C2", "X003"], "out(Y002)"),
     )
-    _assert_native_pattern(pattern_id=8, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=8, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_calc_sum_expr_renders_colon_range():
@@ -2441,10 +2468,9 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
 
 
 class TestContinuedExport:
-    """Ladder export for .continued() rungs."""
+    """Each continued rung exports as a CLICK rung of its own, as CLICK's syntax check draws it."""
 
-    def test_continued_rung_blank_marker(self):
-        """Continued rung rows use blank marker instead of R."""
+    def test_continued_rung_is_its_own_click_rung(self):
         _assert_export_main_rows(
             """
             with Program() as p:
@@ -2455,7 +2481,7 @@ class TestContinuedExport:
             """,
             """
             R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            R,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
             """,
         )
 
@@ -2474,7 +2500,7 @@ class TestContinuedExport:
             """
             R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
             ,,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
-            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+            R,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
             """,
         )
 
@@ -2490,7 +2516,7 @@ class TestContinuedExport:
             """,
             """
             R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-            ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            R,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
             """,
         )
 
@@ -2535,7 +2561,7 @@ class TestIndexedMarkers:
         assert markers[1] == "R2"
         assert markers[2] == "R3"  # end()
 
-    def test_index_true_continued_rung_blank_marker(self):
+    def test_index_true_numbers_a_continued_rung(self):
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
@@ -2548,8 +2574,8 @@ class TestIndexedMarkers:
         bundle = pyrung_to_ladder(logic, mapping, index=True)
         markers = _markers(bundle.main_rows)
         assert markers[0] == "R1"
-        assert markers[1] == ""  # continued
-        assert markers[2] == "R2"  # end()
+        assert markers[1] == "R2"  # continued
+        assert markers[2] == "R3"  # end()
 
     def test_index_true_forloop_sequential(self):
         A = Bool("A")

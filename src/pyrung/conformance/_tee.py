@@ -33,10 +33,9 @@ class TeeSpec:
     :func:`draw_tees` raises rather than draw it.
 
     ``bare=True`` (with ``after=0``) is the box rung that has no contact in front
-    of its own: the rail drawing's first cells are the box's and the pins' own
-    contacts, so every one of those rows moves right one cell, a wire stands in
-    the box row's column A (the pin rows' is empty), and the tee sits in column B (``R,-,T`` over ``,,-``, the split
-    CLICK takes for wires).
+    of its own.  Its export keeps the rail drawing.  CLICK's syntax check redraws a
+    tee off a bare wire (``R,-,T`` over ``,,-``) as pins from the rail (save of
+    2026-11-13).
     """
 
     box: str
@@ -78,17 +77,16 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
     if box_index is None:
         raise ValueError(f"Case {marker}: no {spec.box} row")
     if spec.bare:
-        out[box_index] = _shift_right(out[box_index], f"Case {marker}: the box row", "-")
         for n, label in enumerate(spec.pins):
             index = box_index + 1 + n
             if index >= len(out) or out[index][-1] != label or out[index][0] != "":
                 raise ValueError(f"Case {marker}: pin {label} is not under the box row, in order")
-            out[index] = _shift_right(out[index], f"Case {marker}: pin {label}", "")
+        return tuple(out)
     box = list(out[box_index])
     shared = box[1 : 1 + spec.after]
     if len(shared) < spec.after or any(_is_wire(c) for c in shared):
         raise ValueError(f"Case {marker}: the box row does not start with {spec.after} contacts")
-    tee_col = 1 + max(spec.after, 1 if spec.bare else 0)
+    tee_col = 1 + spec.after
     box[tee_col] = _tee_cell(
         box[tee_col], f"Case {marker}: the box row after {spec.after} contacts"
     )
@@ -118,14 +116,6 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
         )
     out[box_index] = tuple(box)
     return tuple(out)
-
-
-def _shift_right(row: Row, where: str, first: str) -> Row:
-    """*row* with *first* in column A and every cell one place right (the last wire dropped)."""
-    cells = list(row)
-    if cells[-2] != "-":
-        raise ValueError(f"{where} has no free wire cell at its right end to shift into")
-    return (cells[0], first, *cells[1:-2], cells[-1])
 
 
 def _is_pin_row(row: Row) -> bool:

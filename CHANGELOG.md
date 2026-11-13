@@ -42,7 +42,7 @@
 
   A branch, continued rung or box pin now sees the new value of a tag written earlier in the same rung (it saw the value from rung entry). `pyrung check` flags these rungs as `RUNG_ORDER_DEPENDENT`.
 - CLICK import brings each wire of a CLICK rung back as a rung of its own, with `.continued()` on every wire after the first. Outputs share one `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact (it put them under one `with rung(...)`, which read the contact before an output above wrote it). The exporter no longer puts outputs under one shared contact when an output between them writes that contact's tag.
-- A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung, because CLICK won't compile it otherwise (error C000A). Building a program raises `RuntimeError` when another output or branch shares the box's rung, as in `with Rung(X1): out(Y1); on_delay(T1, ...).reset(X2)`. Move what comes before the box into a rung above it, and what follows into `with Rung(...).continued():`.
+- A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung, because CLICK won't compile it otherwise (error C000A). Building a program raises `RuntimeError` when another output or branch shares the box's rung, as in `with Rung(X1): out(Y1); on_delay(T1, ...).reset(X2)`. Move what comes before the box into a rung above it, and what follows into a rung of its own.
 - The built-in `Timer` and `Counter` follow CLICK's bank defaults. A timer's `Acc` now resets on STOP->RUN (TD is non-retentive), and a counter's `Done` survives it (CT is retentive). To keep a timer's elapsed time across a restart, use `Timer.clone(..., retentive={"Acc": True})`. `clone(retentive=...)` overrides either field.
 - CLICK import no longer makes up timer and counter nicknames. A T/TD (or CT/CTD) address with no nickname keeps its address as its name (it became `T1_Done`/`TD1_Acc`). A tag named after its own address exports with no nickname, so importing and exporting a project leaves its nickname file unchanged.
 - Timer, counter and Out-coil presets (`on_delay`, `off_delay`, `count_up`, `count_down`, `debounce`, `flasher`, `timed`) must be an int or an `Int`, `Dint` or `Word` tag. Anything else raises `TypeError`. Copy a `Real` into an `Int` first.
@@ -370,10 +370,12 @@
   - validation reports `CLK_PTR_BLOCK_OFFSET`
   - add the offset with `math(idx + 99, Ptr)` and copy through `ds[Ptr]`
 - The `CLK_PTR_EXPR_NOT_ALLOWED` suggestion no longer adds the block offset twice.
-- The ladder export draws rungs with an Or the way CLICK's syntax check redraws them, so the check leaves a pasted rung as it is:
-  - The outputs after an Or go on the Or's own rows from the top, in the column where the Or's rows join (they sat one column further right). Outputs beside a `branch()` keep their column.
-  - An Or inside an Or is drawn as one Or.
-  - When an Or follows another Or that does not start at the left rail, the second Or starts in the column where the first Or's rows join (a column of wire sat between them).
+- The ladder export draws rungs the way CLICK's syntax check redraws them, so the check leaves a pasted rung as it is:
+  - The outputs, the `branch()` rows and an Or after an Or start in the column where the Or's rows join (they started one column further right).
+  - An Or inside an Or is drawn as one Or. So is an Or that ends a row of another Or.
+  - A rung with an Or inside an `And()` row of another Or exports (the export refused some with a round-trip error).
+  - A rung with no contact exports one CLICK rung for each output and each `branch()` (they hung from a wire in column A).
+  - A `.continued()` rung exports as a CLICK rung of its own (it was another wire of the CLICK rung above).
 - `dataview()` now reflects a tag setting changed after the first call (it kept the old answer).
 - `how()`, `cause()` and the other analyses answer from a slot setting or name changed by a later `slot()` call or TagMap (they answered from the old one).
 - The debugger's `reload` keeps the PLC mode, pauses a running `continue` first, and reports each force and bench link whose tag moved, and each one it dropped.
@@ -547,11 +549,7 @@
 - Comparing a block element indexed by an expression with a tag (`Rung(Tbl[Q + 1] == S)`) is now true when the values are equal (`PLC` found them unequal). Comparing such an element with a number or an expression (`Tbl[Q + 1] == 370`, `S + 1 < Tbl[Q + 1]`) now builds a condition (it built a plain `bool` or raised). CLICK ladder export refuses these comparisons as `CLK_PTR_EXPR_NOT_ALLOWED`.
 - A CLICK subroutine whose last rung is a conditional `return_early()` now exports with the unconditional `return()` CLICK requires after it (it exported without one, and CLICK refused the subroutine).
 - Debugger hot reload moves one-shot, toggle, shift and drum memory to the matching instruction in the reloaded program, so inserting or deleting a rung no longer gives one rung's memory to another. Values with no clear match reset, and the reload summary lists them. Editing what an instruction reads (a preset, a copy's source) keeps its memory, so a held input doesn't fire it again. Editing its target or contacts resets the memory. A new or edited `rise()` or `fall()` contact starts from its tag's current value, so a bit that holds its value doesn't fire it.
-- CLICK ladder export refuses two kinds of empty rung, instead of writing a NOP that CLICK rejects or deletes:
-  - an empty rung with conditions (`with Rung(C1): pass`), since CLICK rejects a contact in front of NOP
-  - an empty rung that shares a CLICK rung with a `.continued()` rung, since CLICK deletes a NOP row beside another row
-
-  CLICK import refuses a CSV with a NOP row beside another row.
+- CLICK ladder export refuses an empty rung with conditions (`with Rung(C1): pass`), because CLICK rejects a contact in front of NOP. CLICK import refuses a CSV with a NOP row beside another row, because CLICK deletes that row.
 - CLICK ladder export writes the blank text constant (`""` or NUL, what a blank TXT holds) as `$00`, CLICK's code for NUL, and the importer reads `$00` (and any `$hh`) back as its character (copying the blank on a CLICK left the old character in place, and comparing with it matched any character). A longer text constant that holds a NUL is refused.
 - Generated CircuitPython code runs as the other backends do:
   - a program with `math()`, split into `code.py` and `pyrung_rt.py`, now imports (it failed)

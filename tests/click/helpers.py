@@ -472,6 +472,75 @@ def round_trip_logic(program: Program, tag_map: TagMap) -> tuple[str, dict, dict
     return code, bundle_logic(original), bundle_logic(reproduced)
 
 
+def _join_scope(rows, rungs) -> tuple[tuple[str, ...], ...]:
+    rows = [tuple(row) for row in rows]
+    starts = [index for index, row in enumerate(rows) if row and row[0].startswith("R")]
+    # The closing end() or return() rung is the exporter's, not the program's.
+    if len(starts) == len(rungs) + 1:
+        starts = starts[:-1]
+    if len(starts) != len(rungs):
+        raise AssertionError(f"{len(starts)} CLICK rungs for {len(rungs)} program rungs")
+    for start, rung in zip(starts, rungs, strict=True):
+        if rung._use_prior_snapshot:
+            rows[start] = ("", *rows[start][1:])
+    return tuple(rows)
+
+
+def join_continued(bundle, program: Program):
+    """*bundle* with each continued rung drawn as one more wire of the CLICK rung above it.
+
+    A CLICK program saved before a syntax check can hold such a rung, and the importer reads its
+    wires back as ``.continued()`` rungs.  Each program rung must export as one CLICK rung.
+    """
+    import dataclasses
+
+    subroutines = tuple(
+        (name, _join_scope(rows, program.subroutines[name]))
+        for name, rows in bundle.subroutine_rows
+    )
+    return dataclasses.replace(
+        bundle,
+        main_rows=_join_scope(bundle.main_rows, program.rungs),
+        subroutine_rows=subroutines,
+    )
+
+
+def rung_drawing(rungs, *, as_exported: bool = False) -> list[tuple]:
+    """Each rung as written, as a tuple of (continued, contact count, items).
+
+    With *as_exported*, the rungs are listed as the export draws them.  Each continued rung is a
+    rung of its own, and so is each item of a rung or branch that has no contact, at any depth
+    (``layout._click_rungs``).
+    """
+
+    def items(rung) -> tuple:
+        return tuple(
+            ("branch", len(item._conditions) - item._branch_condition_start, items(item))
+            if isinstance(item, type(rung))
+            else type(item).__name__
+            for item in rung._execution_items
+        )
+
+    def split(contacts: int, parts: tuple) -> list[tuple]:
+        if contacts or len(parts) < 2:
+            return [(False, contacts, parts)]
+        pieces = []
+        for part in parts:
+            if isinstance(part, tuple):
+                pieces.extend(split(part[1], part[2]))
+            else:
+                pieces.append((False, 0, (part,)))
+        return pieces
+
+    drawing = []
+    for rung in rungs:
+        if as_exported:
+            drawing.extend(split(len(rung._conditions), items(rung)))
+        else:
+            drawing.append((rung._use_prior_snapshot, len(rung._conditions), items(rung)))
+    return drawing
+
+
 # ---------------------------------------------------------------------------
 # 2. normalize_csv
 # ---------------------------------------------------------------------------

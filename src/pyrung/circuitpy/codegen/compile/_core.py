@@ -568,8 +568,7 @@ def compile_rungs(
 ) -> list[str]:
     """Compile a sequence of top-level rungs.
 
-    A ``.continued()`` rung is a rung of its own: it is only drawn as a
-    further wire of the rung above it.
+    A ``.continued()`` rung compiles as a rung of its own.
     """
     lines: list[str] = []
     for rung in rungs:

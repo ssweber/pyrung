@@ -27,7 +27,7 @@ from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
 from pyrung.core import PLC, Or, Program, Rung
 from pyrung.core.program import branch, out, reset
-from tests.click.helpers import exec_with_source
+from tests.click.helpers import exec_with_source, join_continued, rung_drawing
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -190,7 +190,7 @@ def test_round_trip_keeps_outputs_teed_off_one_cell_together():
     assert cells == [
         ("R", ("C5", "T"), "reset(C5)"),
         ("", ("", "-"), "out(Y001)"),
-        ("", ("C5", "-"), "out(Y002)"),
+        ("R", ("C5", "-"), "out(Y002)"),
     ]
     ns = exec_with_source(ladder_to_pyrung(bundle), {})
     names = {slot.hardware_address: slot.logical_name for slot in ns["mapping"].mapped_slots()}
@@ -243,29 +243,26 @@ WRITTEN: dict[str, Callable[[], None]] = {
 }
 
 
-def _drawing(rungs: list) -> list[tuple]:
-    """Each rung as written: continued or not, its contacts, and its items."""
-
-    def items(rung) -> tuple:
-        return tuple(
-            ("branch", len(item._conditions) - item._branch_condition_start, items(item))
-            if isinstance(item, type(rung))
-            else type(item).__name__
-            for item in rung._execution_items
-        )
-
-    return [(rung._use_prior_snapshot, len(rung._conditions), items(rung)) for rung in rungs]
-
-
 @pytest.mark.parametrize("name", list(WRITTEN))
 def test_round_trip_gives_back_the_code_written(name: str):
-    """pyrung -> CLICK -> pyrung -> CLICK: the same rungs, and the same rows."""
+    """pyrung -> CLICK -> pyrung -> CLICK: the rungs as the export draws them, and the same rows."""
     with Program() as logic:
         WRITTEN[name]()
     bundle = pyrung_to_ladder(logic, TagMap(include_system=False))
     ns = exec_with_source(ladder_to_pyrung(bundle), {})
-    assert _drawing(ns["logic"].rungs) == _drawing(logic.rungs)
+    assert rung_drawing(ns["logic"].rungs) == rung_drawing(logic.rungs, as_exported=True)
     assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+
+@pytest.mark.parametrize(
+    "name", [name for name in WRITTEN if name != "unconditional_trunk_branches"]
+)
+def test_one_click_rung_of_several_wires_imports_as_the_code_written(name: str):
+    with Program() as logic:
+        WRITTEN[name]()
+    bundle = join_continued(pyrung_to_ladder(logic, TagMap(include_system=False)), logic)
+    ns = exec_with_source(ladder_to_pyrung(bundle), {})
+    assert rung_drawing(ns["logic"].rungs) == rung_drawing(logic.rungs)
 
 
 def _analyzed(rows: list[list[str]]):

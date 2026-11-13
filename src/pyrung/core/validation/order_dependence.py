@@ -1,15 +1,20 @@
 """Intra-rung order dependence: rows that read a tag an earlier row wrote.
 
 On a CLICK and in pyrung, each instruction solves only the path from the rail
-to it (hardware rounds 1 and 2).  The trunk's contacts are read once
-and its power is held for every row below it; each branch reads its own
-contacts when the solve reaches it, after the rows above it have run; a
-``.continued()`` rung is one more row of the same CLICK rung, from the rail;
-and a box reads its legs (reset, jump, ...) at box entry.  Earlier pyrung
-releases read every one of those against a snapshot taken at rung entry, so a
-row that reads a tag written by an earlier row of the same rung (or chain of
-continued rungs) reads a new value now where it read the old one before, and
-its result depends on the order of the rows.
+to it (hardware rounds 1 and 2):
+
+* The contacts at the start of the rung are read once, and their power is held
+  for every row below them.
+* Each branch reads its own contacts when the solve reaches it, after the rows
+  above it have run.
+* A ``.continued()`` rung reads its contacts from the rail after the rung above
+  it has run.
+* A box reads its legs (reset, jump, ...) when the solve reaches the box.
+
+Earlier pyrung releases read all of these against a snapshot taken at rung
+entry.  A row that reads a tag written by an earlier row of the same rung, or of
+the same chain of continued rungs, now reads the new value (it read the old
+one).  Its result depends on the order of the rows.
 
 Two layers:
 
@@ -567,8 +572,8 @@ def _display(
         lead = lead[0].lower() + lead[1:]
     above = _ABOVE_TEXT[reader.kind]
     if reader.kind == _BOX and writer.rung is not reader.rung:
-        # A box with pins ends its rung, so its writer is a wire above it.
-        above = "an instruction on a wire above it in the same CLICK rung"
+        # A box with pins ends its rung, so its writer sits in a rung above it in the chain.
+        above = _ABOVE_TEXT[_CONTINUED]
     problem = (
         f"{where}{lead} {names} after {above} writes {noun}, "
         "so it reads the new value, as on a CLICK."

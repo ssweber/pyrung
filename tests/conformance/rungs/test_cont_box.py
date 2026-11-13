@@ -39,14 +39,11 @@ checks it against each case's ``expect``, which pyrung now reads.
   reads the continued box differently from this control answers question 2 with
   the difference.
 - ``box_tee_without_trunk`` (probe, S5 #3): a box rung with no contact in
-  front of its own, its pins drawn as tees (``R,-,T`` over ``,,-``: a wire in
-  column A and the tee in column B, which CLICK already takes for wires).  The
-  counter (preset 2) counts up on scans 1 and 3, so Acc is 2 on scan 4 (R2)
-  with Done on (R3 = 1), and a down pin on scan 5 takes it to 1 (R1).  The
-  tee redraws only the CLICK export (``tee=``, ``bare=True``);
-  ``test_tee_twins.py`` imports the drawing and compares it with the rail
-  drawing.  A CLICK that refuses the split with a box never fires the case;
-  that refusal is the answer.
+  front of its own.  The counter (preset 2) counts up on scans 1 and 3, so Acc
+  is 2 on scan 4 (R2) with Done on (R3 = 1), and a down pin on scan 5 takes it
+  to 1 (R1).  The case first drew its pins as tees off a bare wire (``R,-,T``
+  over ``,,-``).  CLICK's syntax check redrew them from the rail (save of
+  2026-11-13), so the export now draws them from the rail (``bare=True``).
 
 The cases own C451..C500 and counters CT181..CT190 (``memory.OWNED``), ten C
 bits per case (case N takes C<441+10N>..).
@@ -126,7 +123,7 @@ def prove_box_pin_on_own_rung(slot):
 def prove_box_tee_without_trunk(slot):
     # S5 #3.  Counter CT184, preset 2: up pulses (C481) on scans 1 and 3, a down
     # pulse (C482) on scan 5.  The box rung has no contact before its own and
-    # both pins have only their own, so the tee drawing hangs off a bare wire.
+    # both pins have only their own, so CLICK draws the pins from the rail.
     counter = ClickCounter(184)
     count_scans(slot)
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch == 3)):
@@ -175,8 +172,8 @@ group = Group(
             probe="S5 #2: the box on its own rung, the control for the continued wire",
         ),
         case(
-            "A box rung with no contact in front of its own, its pins drawn as tees off "
-            "a bare wire (R,-,T over ,,-), counts like any other: a counter of preset "
+            "A box rung with no contact in front of its own, its pins drawn from the "
+            "rail, counts like any other: a counter of preset "
             "2 counts up on scans 1 and 3 (Result2 = 2 on scan 4, Done on, Result3 = 1) "
             "and a down pin on scan 5 takes it to 1 (Result1)",
             ladder=prove_box_tee_without_trunk,

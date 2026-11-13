@@ -9,8 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pyrung.core.condition import Condition
-
 # ---- Shared issue payload ----
 Issue = dict[str, str | int | None]
 
@@ -179,33 +177,6 @@ class _RenderError(RuntimeError):
         super().__init__(f"{issue.get('path')}: {issue.get('message')}")
 
 
-@dataclass
-class _ConditionRow:
-    cells: list[str]
-    cursor: int
-    accepts_terms: bool = True
-    # The cell left of the cursor is an Or merge's bare ``T``; a contact placed next
-    # shares that cell as ``T:contact``.
-    merge_open: bool = False
-    # The column where that Or's rows start.
-    merge_start: int = 0
-
-    def clone(self) -> _ConditionRow:
-        return _ConditionRow(
-            cells=self.cells.copy(),
-            cursor=self.cursor,
-            accepts_terms=self.accepts_terms,
-            merge_open=self.merge_open,
-            merge_start=self.merge_start,
-        )
-
-
-@dataclass(frozen=True)
-class _OutputSlot:
-    output_token: str
-    local_conditions: tuple[Condition, ...] = ()
-
-
 __all__ = [
     "ExportSummary",
     "Issue",
@@ -213,7 +184,5 @@ __all__ = [
     "LadderExportError",
     "LadderRungSource",
     "LadderSourceSpan",
-    "_ConditionRow",
-    "_OutputSlot",
     "_RenderError",
 ]

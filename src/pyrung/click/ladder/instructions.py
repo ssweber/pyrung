@@ -34,14 +34,15 @@ class _InstructionMixin:
             allow_immediate: bool = False,
             immediate_context: str = "",
         ) -> str: ...
-        def _single_output_rows(
+        def _render_network(
             self,
-            condition_rows: list[Any],
+            conditions: list[Condition],
+            items: list[Any],
             *,
-            output_token: str,
+            path: str,
+            source: Any,
             first_marker: str,
         ) -> list[tuple[str, ...]]: ...
-        def _expand_conditions(self, conditions: list[Condition], *, path: str) -> list[Any]: ...
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
         def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
         def _hex_constants(
@@ -83,10 +84,8 @@ class _InstructionMixin:
             self._render_operand(instruction.count, path=f"{path}.count", source=instruction),
             **for_kw,
         )
-        rows = self._single_output_rows(
-            self._expand_conditions(conditions, path=f"{path}.condition"),
-            output_token=for_token,
-            first_marker=self._next_marker(),
+        rows = self._render_network(
+            conditions, [for_token], path=path, source=instruction, first_marker=self._next_marker()
         )
 
         for child_index, child_instruction in enumerate(instruction.body):
@@ -97,19 +96,22 @@ class _InstructionMixin:
                     self._render_source_rung(loop_item_rung(child_instruction), path=child_path)
                 )
                 continue
-            child_condition_rows = self._expand_conditions([], path=f"{child_path}.condition")
-            child_rows = self._single_output_rows(
-                child_condition_rows,
-                output_token=self._instruction_token(child_instruction, path=child_path),
+            child_rows = self._render_network(
+                [],
+                [self._instruction_token(child_instruction, path=child_path)],
+                path=child_path,
+                source=child_instruction,
                 first_marker=self._next_marker(),
             )
             child_rows.extend(self._pin_rows(child_instruction, path=child_path))
             rows.extend(child_rows)
 
         rows.extend(
-            self._single_output_rows(
-                self._expand_conditions([], path=f"{path}.next"),
-                output_token=self._fn("next"),
+            self._render_network(
+                [],
+                [self._fn("next")],
+                path=f"{path}.next",
+                source=instruction,
                 first_marker=self._next_marker(),
             )
         )
@@ -119,11 +121,13 @@ class _InstructionMixin:
         pin_specs = self._pin_specs(instruction, path=path)
         rows: list[tuple[str, ...]] = []
         for pin_name, condition, pin_token in pin_specs:
-            condition_rows = self._expand_conditions([condition], path=f"{path}.pin[{pin_name}]")
+            # A pin is a wire of its own, drawn from the rail below the box's rows.
             rows.extend(
-                self._single_output_rows(
-                    condition_rows,
-                    output_token=pin_token,
+                self._render_network(
+                    [condition],
+                    [pin_token],
+                    path=f"{path}.pin[{pin_name}]",
+                    source=instruction,
                     first_marker="",
                 )
             )

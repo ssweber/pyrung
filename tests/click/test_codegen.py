@@ -51,6 +51,7 @@ from pyrung.core.program import (
 from tests.click.helpers import (
     build_program,
     exec_with_source,
+    join_continued,
     normalize_pyrung,
     strip_pyrung_boilerplate,
 )
@@ -146,6 +147,15 @@ def _codegen_program_body(source: str) -> str:
 
 def _assert_codegen_body(source: str, expected: str) -> None:
     assert _codegen_body(source) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_wires_import_as(source: str, expected: str) -> None:
+    """The export of *source*, with its continued rungs joined into one CLICK rung, imports as
+    *expected*."""
+    logic, mapping = build_program(source)
+    bundle = join_continued(pyrung_to_ladder(logic, mapping), logic)
+    code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
+    assert code == normalize_pyrung(textwrap.dedent(expected))
 
 
 def _assert_codegen_program_body(source: str, expected: str) -> None:
@@ -3592,11 +3602,29 @@ class TestCodeGeneration:
 
 
 class TestContinuedRoundTrip:
-    """Round-trip tests for .continued() rungs."""
+    """A CLICK rung of several wires imports as a rung and one continued rung per other wire."""
+
+    def test_a_continued_rung_exports_as_a_rung_of_its_own(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    out(Y1)
+                with rung(X2).continued():
+                    out(Y2)
+            """,
+            """
+            with rung(X001):
+                out(Y001)
+
+            with rung(X002):
+                out(Y002)
+            """,
+        )
 
     def test_simple_continuation(self):
         """Two independent wires: primary rung + continued rung."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3614,7 +3642,7 @@ class TestContinuedRoundTrip:
 
     def test_continued_chain(self):
         """Three consecutive continued rungs round-trip as a chain."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3636,7 +3664,7 @@ class TestContinuedRoundTrip:
 
     def test_continuation_with_branch(self):
         """Continued rung with a branch inside it."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3658,7 +3686,7 @@ class TestContinuedRoundTrip:
 
     def test_continuation_with_branch_local_or(self):
         """continued() stays stable when the continued rung has branch-local OR."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):

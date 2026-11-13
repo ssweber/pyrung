@@ -92,11 +92,11 @@ class Rung:
     def continued(self) -> Rung:
         """Mark this rung as a continuation of the previous rung.
 
-        This models multiple independent wires on the same visual rung in
-        Click's ladder editor. The rung is solved like a rung of its own: its
-        contacts read live, so they see every write above them, including the
-        prior rung's. The prior rung must be in the same execution scope (main
-        or the current subroutine).
+        This is the import form of a CLICK rung saved with several wires.  The
+        export draws a continued rung as a CLICK rung of its own.  The rung is
+        solved like a rung of its own, so its contacts see every write above
+        them, including the prior rung's.  The prior rung must be in the same
+        execution scope (main or the current subroutine).
 
         Returns:
             self, for chaining: ``with Rung(B).continued(): ...``

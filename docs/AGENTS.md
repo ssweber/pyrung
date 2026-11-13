@@ -46,7 +46,7 @@ All PLC methods accept Tag objects as the primary interface. String keys work to
   - A path segment already evaluated (the trunk, or a branch's own contacts) is reused by later instructions that share it.
   - A contact no instruction has read yet is read live when an instruction first needs it.
   - Instructions execute in source order, so rung and branch instructions interleave.
-  - A `.continued()` rung is only a drawing choice. It evaluates like a rung of its own.
+  - `.continued()` is an import form, kept for programs that hold a CLICK rung with more than one wire. A continued rung evaluates like a rung of its own.
 - **Branches** AND their condition with the parent rung's condition.
 - **Each rung starts fresh** — sees state as left by previous rung's instructions.
 - **`out`** de-energizes when rung is false. **`latch`** is sticky until `reset`.

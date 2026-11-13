@@ -8,8 +8,8 @@ round 1, 2026-10-29, two identical passes; CLICK manual ch. 1,
   live, when the solve reaches it; the power at a shared node (a vertical
   wire) is computed once and held for every row below it; each output runs as
   soon as its row is solved, so a row sees the writes of the rows above it.
-- A ``.continued()`` rung is one more row of the same CLICK rung, from the
-  rail; it reads live like any row.
+- A ``.continued()`` rung reads its contacts live from the rail, like any
+  rung.  The export draws it as a CLICK rung of its own.
 - When two rungs drive the same ``out`` coil, the lower one decides how the
   scan leaves it.
 

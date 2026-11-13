@@ -1,4 +1,7 @@
 marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
+#,  These patterns were drawn by hand. No CLICK has saved them.
+#,  Each pattern must import as the program in its comment.
+#,  pyrung's export draws them as a CLICK save does (tests/click/test_ladder_topology.py).
 #,  1. Mid-rung OR (AND prefix not repeated on continuation)
 #,
 #,"  with Rung(X001, Or(X002, C1)):"

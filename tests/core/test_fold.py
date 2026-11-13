@@ -3766,7 +3766,7 @@ class TestTimedDrumCorrectedEveryScan:
                     with Rung(Bool("Stage")):
                         copy(0, Int("Step"))
                 if writer == "wire above":
-                    # The same CLICK rung: the wire above the drum's.
+                    # The rung above the drum's continued rung.
                     with Rung(Bool("En")):
                         copy(0, Int("Step"))
                 drum_rung = Rung(Bool("En"))

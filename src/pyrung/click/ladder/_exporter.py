@@ -170,8 +170,7 @@ class _LadderExporter(
                 if scope == "subroutine"
                 else f"main.rung[{rung_index}]"
             )
-            next_rung = rungs[rung_index + 1] if rung_index + 1 < len(rungs) else None
-            self._check_nop_alone(rung, next_rung, path=base_path)
+            self._check_nop_alone(rung, path=base_path)
             rendered = self._render_source_rung(rung, path=base_path)
             try:
                 assert_no_column_a_vertical(rendered)
@@ -188,6 +187,7 @@ class _LadderExporter(
                 for _ in range(marker_count):
                     sources.append(LadderRungSource(rung=len(sources) + 1, sources=(source,)))
             elif sources:
+                # A rung of empty branches draws nothing, so its lines join the CLICK rung above.
                 prior = sources[-1]
                 sources[-1] = LadderRungSource(
                     rung=prior.rung,
@@ -376,11 +376,11 @@ class _LadderExporter(
             return f"OR({parts})"
         return self._condition_leaf_token(condition, path="normalize.condition")
 
-    def _check_nop_alone(self, rung: Rung, next_rung: Rung | None, *, path: str) -> None:
-        """Refuse the NOP shapes CLICK will not hold.
+    def _check_nop_alone(self, rung: Rung, *, path: str) -> None:
+        """Refuse a contact in front of NOP, which CLICK refuses (C0003, no coil).
 
-        CLICK refuses a contact in front of NOP (C0003, no coil), and deletes a
-        NOP row that shares its rung with another row.
+        CLICK also deletes a NOP row that shares its rung with another row.  The export draws an
+        empty rung as a CLICK rung of its own, so that cannot happen.
         """
         if rung._instructions or rung._branches:
             return
@@ -391,15 +391,6 @@ class _LadderExporter(
                     "CLICK refuses an empty rung with conditions: NOP must sit on a "
                     "bare wire. Drop the conditions (they do nothing without an "
                     "instruction) or give the rung an instruction."
-                ),
-                source=rung,
-            )
-        if rung._use_prior_snapshot or (next_rung is not None and next_rung._use_prior_snapshot):
-            self._raise_issue(
-                path=path,
-                message=(
-                    "CLICK deletes a NOP that shares its rung with a continued() rung. "
-                    "Drop the empty rung, or start the next rung without continued()."
                 ),
                 source=rung,
             )
@@ -453,12 +444,8 @@ class _LadderExporter(
 
         if not rung._instructions and not rung._branches:
             # Empty rung (comment-only or bare pass) → emit NOP in AF column.
-            first_marker = "" if rung._use_prior_snapshot else self._next_marker()
-            condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
-            output_rows = self._single_output_rows(
-                condition_rows,
-                output_token="NOP",
-                first_marker=first_marker,
+            output_rows = self._render_network(
+                rung._conditions, ["NOP"], path=path, source=rung, first_marker=self._next_marker()
             )
             self._assert_rung_height(rows=output_rows, path=path, source=rung)
             return comment_rows + output_rows
@@ -485,44 +472,10 @@ class _LadderExporter(
             self._assert_rung_height(rows=output_rows, path=path, source=rung)
             return comment_rows + output_rows
 
-        first_marker = "" if rung._use_prior_snapshot else self._next_marker()
-        condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
-
-        if rung._branches:
-            branch_rows = self._render_rung_with_branches(
-                rung,
-                path=path,
-                first_marker=first_marker,
-            )
-            pin_rows = self._branch_pin_rows(rung, path=path)
-            if not branch_rows:
-                return []
-            rows = branch_rows + pin_rows
-            self._assert_rung_height(rows=rows, path=path, source=rung)
-            return comment_rows + rows
-
-        output_rows: list[tuple[str, ...]]
-        pin_rows: list[tuple[str, ...]]
-        if rung._instructions:
-            output_rows, pin_rows = self._render_instruction_rows(
-                instructions=rung._instructions,
-                condition_rows=condition_rows,
-                path=path,
-                first_marker=first_marker,
-                source=rung,
-            )
-        else:
-            output_rows = self._single_output_rows(
-                condition_rows,
-                output_token="",
-                first_marker=first_marker,
-            )
-            pin_rows = []
-
-        rows = comment_rows + output_rows
-        rows.extend(pin_rows)
-        self._assert_rung_height(rows=output_rows + pin_rows, path=path, source=rung)
-        return rows
+        rows = self._render_rung_items(rung, path=path)
+        if not rows:
+            return []
+        return comment_rows + rows
 
     def _ensure_subroutine_return_tail(
         self,
@@ -538,9 +491,11 @@ class _LadderExporter(
                 return rows
 
         self._added_return_count += 1
-        return_rows = self._single_output_rows(
-            self._expand_conditions([], path=f"subroutine[{subroutine_name}].return"),
-            output_token=self._fn("return"),
+        return_rows = self._render_network(
+            [],
+            [self._fn("return")],
+            path=f"subroutine[{subroutine_name}].return",
+            source=None,
             first_marker=self._next_marker(),
         )
         rows.extend(return_rows)
@@ -548,10 +503,8 @@ class _LadderExporter(
 
     def _end_rung(self) -> list[tuple[str, ...]]:
         """Emit an unconditional ``end()`` rung for the main program tail."""
-        return self._single_output_rows(
-            self._expand_conditions([], path="main.end"),
-            output_token=self._fn("end"),
-            first_marker=self._next_marker(),
+        return self._render_network(
+            [], [self._fn("end")], path="main.end", source=None, first_marker=self._next_marker()
         )
 
     def _build_summary(self) -> ExportSummary:

@@ -1,11 +1,11 @@
 """NOP shapes CLICK will not hold.
 
 A NOP sits alone on a bare wire in CLICK.  CLICK refuses a contact in front of
-NOP (C0003, "There is no Coil instruction in the rung"), and deletes a NOP row
-that shares its rung with another row, which is what an empty rung next to a
-``.continued()`` rung exports as.  The exporter refuses both rather than write
-a rung CLICK would reject or quietly change, and the importer refuses a
-hand-written CSV with a NOP row beside another row.
+NOP (C0003, "There is no Coil instruction in the rung"), so the exporter refuses
+it too.  CLICK also deletes a NOP row that shares its rung with another row.
+The export draws an empty rung as a CLICK rung of its own, next to a
+``.continued()`` rung too, and the importer refuses a hand-written CSV with a
+NOP row beside another row.
 """
 
 from __future__ import annotations
@@ -20,12 +20,11 @@ from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.types import LadderExportError
 from pyrung.core import Or, Program, Rung, Timer
 from pyrung.core.program import branch, call, copy, on_delay, out, subroutine
-from tests.click.helpers import strip_pyrung_boilerplate
+from tests.click.helpers import join_continued, strip_pyrung_boilerplate
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
 CONDITIONS = "empty rung with conditions"
-SHARED = "deletes a NOP that shares its rung"
 
 
 def _contact_nop() -> None:
@@ -111,10 +110,14 @@ REFUSED: dict[str, tuple[Callable[[], None], str]] = {
     "continued_contact_nop_after_output": (_continued_contact_nop_after_output, CONDITIONS),
     "branch_then_continued_contact_nop": (_branch_then_continued_contact_nop, CONDITIONS),
     "contact_nop_in_subroutine": (_contact_nop_in_subroutine, CONDITIONS),
-    "nop_then_continued": (_nop_then_continued, SHARED),
-    "nop_then_continued_timer": (_nop_then_continued_timer, SHARED),
-    "continued_nop_after_output": (_continued_nop_after_output, SHARED),
-    "nop_then_continued_in_subroutine": (_nop_then_continued_in_subroutine, SHARED),
+}
+
+# An empty rung beside a continued rung exports as a CLICK rung of its own.
+NOP_ALONE: dict[str, Callable[[], None]] = {
+    "nop_then_continued": _nop_then_continued,
+    "nop_then_continued_timer": _nop_then_continued_timer,
+    "continued_nop_after_output": _continued_nop_after_output,
+    "nop_then_continued_in_subroutine": _nop_then_continued_in_subroutine,
 }
 
 
@@ -142,6 +145,18 @@ def test_export_refuses_without_validate(name: str):
         pyrung_to_ladder(_build(shape), _tag_map(), validate=False)
 
 
+@pytest.mark.parametrize("name", list(NOP_ALONE))
+def test_a_nop_beside_a_continued_rung_is_a_click_rung_of_its_own(name: str):
+    bundle = pyrung_to_ladder(_build(NOP_ALONE[name]), _tag_map())
+    scopes = [bundle.main_rows, *(rows for _name, rows in bundle.subroutine_rows)]
+    nops = [(scope, i) for scope in scopes for i, row in enumerate(scope) if row[-1] == "NOP"]
+    assert nops
+    for scope, index in nops:
+        assert scope[index][0] == "R"
+        assert index + 1 == len(scope) or scope[index + 1][0] == "R"
+    ladder_to_pyrung(bundle)
+
+
 def test_bare_nop_between_rungs_exports():
     """A bare NOP with normal rungs on either side is its own CLICK rung."""
     with Program() as logic:
@@ -162,7 +177,8 @@ def test_continued_rows_come_back_as_continued_rungs():
             copy(1, ds[1])
         with Rung(c[1], c[2]).continued():
             copy(2, ds[2])
-    code = strip_pyrung_boilerplate(ladder_to_pyrung(pyrung_to_ladder(logic, TagMap())))
+    bundle = join_continued(pyrung_to_ladder(logic, TagMap()), logic)
+    code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
     assert "with rung(C1, C2).continued():\n    copy(2, DS2)" in code
     assert "branch(" not in code
 

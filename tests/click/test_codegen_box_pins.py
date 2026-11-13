@@ -5,13 +5,13 @@ rail: "All inputs of the box instruction must originate from the same branch."
 A counter, retentive timer, shift register or drum whose input splits off a
 node another output also hangs from can be drawn but does not compile.  So the
 program build refuses a box with pins beside any other output or branch of its
-rung; what comes before it goes in a rung above, what follows it in a
-``.continued()`` rung (a further wire of the CLICK rung) or a rung of its own.
+rung.  What comes before the box goes in a rung above, and what follows it goes
+in a rung of its own.
 
-A pyrung rung and its CLICK rung are then the same drawing, row for row, both
-ways: export writes each rung as it stands, and import gives each wire of a
-CLICK box rung back as a rung of its own.  A box with no pins (a TON) may share
-the wire.
+The export draws each rung as it stands, and each ``.continued()`` rung as a
+CLICK rung of its own, as CLICK's syntax check does.  A CLICK rung of several
+wires (saved before a syntax check) imports as a rung and one continued rung
+per other wire.  A box with no pins (a TON) may share the wire.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from pyrung.core.program import (
     shift,
     subroutine,
 )
-from tests.click.helpers import exec_with_source
+from tests.click.helpers import exec_with_source, join_continued, rung_drawing
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -287,20 +287,6 @@ def _reimport(program: Program, tag_map: TagMap) -> tuple[Program, TagMap]:
     return reimported, mapping
 
 
-def _shape(rungs: list) -> list[tuple]:
-    """Each rung's drawing: continued or not, its contact count, and its items."""
-
-    def items(rung) -> tuple:
-        return tuple(
-            ("branch", len(item._conditions) - item._branch_condition_start, items(item))
-            if isinstance(item, type(rung))
-            else type(item).__name__
-            for item in rung._execution_items
-        )
-
-    return [(rung._use_prior_snapshot, len(rung._conditions), items(rung)) for rung in rungs]
-
-
 _BOXES = ("count_up(", "on_delay(", "shift(", "event_drum(")
 
 
@@ -326,7 +312,7 @@ def test_build_refuses_a_box_that_shares_its_rung(name: str):
     if "forloop" in name:
         assert "a body rung of its own" in message
     else:
-        assert "`with Rung(...).continued():`" in message
+        assert "what follows it into a rung of its own." in message
     assert message.isascii()
 
 
@@ -366,46 +352,56 @@ def test_round_trip_keeps_the_readings(name: str):
 
 @pytest.mark.parametrize("name", list(WRITTEN))
 def test_round_trip_gives_back_the_rungs_written(name: str):
-    """pyrung -> CLICK -> pyrung gives back each rung as written, and the rows
+    """pyrung -> CLICK -> pyrung gives back each rung as the export draws it, and the rows
     it exports to are the rows it came from."""
     program = _build(WRITTEN[name])
     tag_map = _tag_map()
     bundle = pyrung_to_ladder(program, tag_map)
     reimported, mapping = _reimport(program, tag_map)
-    assert _shape(reimported.rungs) == _shape(program.rungs)
+    assert rung_drawing(reimported.rungs) == rung_drawing(program.rungs, as_exported=True)
     for sub, rungs in program.subroutines.items():
-        assert _shape(reimported.subroutines[sub]) == _shape(rungs)
+        assert rung_drawing(reimported.subroutines[sub]) == rung_drawing(rungs, as_exported=True)
     again = pyrung_to_ladder(reimported, mapping)
     assert again.main_rows == bundle.main_rows
     assert again.subroutine_rows == bundle.subroutine_rows
 
 
+@pytest.mark.parametrize("name", list(WRITTEN))
+def test_one_click_rung_of_several_wires_imports_as_the_rungs_written(name: str):
+    program = _build(WRITTEN[name])
+    bundle = join_continued(pyrung_to_ladder(program, _tag_map()), program)
+    ns = exec_with_source(ladder_to_pyrung(bundle), {})
+    assert rung_drawing(ns["logic"].rungs) == rung_drawing(program.rungs)
+    for sub, rungs in program.subroutines.items():
+        assert rung_drawing(ns["logic"].subroutines[sub]) == rung_drawing(rungs)
+
+
 def test_a_box_alone_in_its_branch_reads_back_as_the_plain_rung():
     program = _build(_box_in_its_only_branch)
     reimported, mapping = _reimport(program, _tag_map())
-    ((_continued, contacts, items),) = _shape(reimported.rungs)
+    ((_continued, contacts, items),) = rung_drawing(reimported.rungs)
     assert (contacts, items) == (2, ("CountUpInstruction",))
     again = pyrung_to_ladder(reimported, mapping)
     assert again.main_rows == pyrung_to_ladder(program, _tag_map()).main_rows
 
 
-def test_rton_below_coil_exports_as_one_rung_of_two_wires():
+def test_rton_below_coil_exports_as_two_rungs():
     bundle = pyrung_to_ladder(_build(_rton_below_coil), _tag_map())
     trimmed = [(row[0], row[1], row[-1]) for rung in _rungs(bundle.main_rows) for row in rung]
     assert trimmed == [
         ("R", "X001", "out(Y001)"),
-        ("", "X001", "on_delay(T1,TD1,preset=100,unit=Tms)"),
+        ("R", "X001", "on_delay(T1,TD1,preset=100,unit=Tms)"),
         ("", "X002", ".reset()"),
     ]
 
 
-def test_wires_below_the_box_continue_its_rung():
+def test_the_wire_below_a_box_is_a_rung_of_its_own():
     bundle = pyrung_to_ladder(_build(_wires_below_box), _tag_map())
     markers = [(row[0], row[-1]) for row in bundle.main_rows[1:-1] if row[-1]]
     assert markers == [
         ("R", "count_up(CT1,CTD1,preset=3)"),
         ("", ".reset()"),
-        ("", "out(Y002)"),
+        ("R", "out(Y002)"),
         ("", "out(Y003)"),
     ]
 
@@ -480,4 +476,11 @@ def test_import_gives_each_wire_of_a_box_rung_a_rung_of_its_own():
     assert body.count(".continued()") == 2
     ns = exec_with_source(code, {})
     again = pyrung_to_ladder(ns["logic"], ns["mapping"])
-    assert again.main_rows[1:] == rows[1:]
+    # The export draws each continued rung as a CLICK rung of its own.
+    assert again.main_rows[1:] == (
+        rows[1],
+        ("R", *rows[2][1:]),
+        rows[3],
+        ("R", *rows[4][1:]),
+        rows[5],
+    )
