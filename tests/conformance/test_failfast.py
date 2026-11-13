@@ -49,3 +49,13 @@ def test_an_unknown_group_fails_before_any_build(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(suite, "build", lambda part=None: pytest.fail("built a part"))
     with pytest.raises(ValueError, match="Unknown conformance group.*nope"):
         suite.build_for(Endpoint("127.0.0.1", 1), ["nope"])
+
+
+def test_groups_from_different_parts_name_the_whole_suite() -> None:
+    with SimServer(suite.build("coils")) as sim:
+        assert sim.endpoint is not None
+        with pytest.raises(BuildMismatchError) as caught:
+            suite.build_for(sim.endpoint, ["out", "system"])
+    text = str(caught.value)
+    assert "are in the whole suite (layout " in text
+    assert text.endswith("Load the whole suite (make conformance-export).")

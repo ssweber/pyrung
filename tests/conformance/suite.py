@@ -482,14 +482,17 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
                 return candidate
         asked = f"{', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else names[0]
         are = "are" if len(names) > 1 else "is"
-        layouts = " or ".join(
-            f"part {part or 'whole'} (layout {c.program_hash})" for part, c in candidates.items()
-        )
-        where = " or ".join(f"part {part or 'whole'}" for part in candidates)
+        if None in candidates:
+            whole = candidates[None].program_hash
+            raise BuildMismatchError(
+                f"{endpoint} runs program layout {found}; {asked} {are} in the whole suite "
+                f"(layout {whole}). Load the whole suite (make conformance-export)."
+            )
+        layouts = " or ".join(f"part {p} (layout {c.program_hash})" for p, c in candidates.items())
+        where = " or ".join(f"part {p}" for p in candidates)
         raise BuildMismatchError(
             f"{endpoint} runs program layout {found}; {asked} {are} in {layouts}. "
-            f"Load {where} (make conformance-export PART="
-            f"{'|'.join(part or 'whole' for part in candidates)})."
+            f"Load {where} (make conformance-export PART={'|'.join(map(str, candidates))})."
         )
     known: list[str] = []
     for part in [*PARTS, *APART_PARTS, None]:
