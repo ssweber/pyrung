@@ -188,7 +188,7 @@ Feedback loops like seal-in latches are left as they are, so the seal-in tag app
 
 ## Ladder lints
 
-[`logic.check()`](ladder-lints.md) runs static checks for contradictory rungs, conflicting outputs, stuck coils, suspicious comparisons, invalid tag writes, and other structural problems. See [Ladder Lints](ladder-lints.md) for rule selection, severities, and the complete rule reference.
+[`logic.check()`](ladder-lints.md) runs static checks for contradictory rungs, conflicting outputs, suspicious comparisons, invalid tag writes, and other structural problems. The stuck-coil checks are opt-in. See [Ladder Lints](ladder-lints.md) for rule selection, severities, and the complete rule reference.
 
 
 ## Next steps

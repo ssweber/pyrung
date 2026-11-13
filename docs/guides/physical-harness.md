@@ -273,7 +273,15 @@ pyrung validates UDT and named-array field annotations at construction time:
 - **Unknown choices label** — `link="State:MISSING"` raises `ValueError` when `MISSING` is not in the enable field's choices map.
 - **Non-numeric trigger without choices** — `link="State:SORTING"` on an Int field with no choices map raises `ValueError`. Use `link="State:2"` for literal values.
 
-`Program.check()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `ramp_on` or `approach_to`, and a `link=` whose enable the program never uses (`PHYS_LINK_UNKNOWN`). For that link, the harness has nothing to drive the feedback from.
+```python
+report = logic.check(extend_select={"PHYS"})
+```
+
+`Program.check()` reports a value outside a tag's `min=`/`max=` by default. The physical checks are opt-in. `extend_select={"PHYS"}` turns them on, as `--extend-select PHYS` does for `pyrung check`:
+
+- `PHYS_ANTITOGGLE` — a command changes faster than its feedback's declared timing
+- `PHYS_MISSING_PROFILE` — linked analog feedback declares neither `ramp_on` nor `approach_to`
+- `PHYS_LINK_UNKNOWN` — a `link=` names an enable the program never uses, so the harness has nothing to drive the feedback from
 
 ## Forces override the harness
 
