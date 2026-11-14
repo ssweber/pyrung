@@ -9,7 +9,7 @@ The Console takes typed commands to run the PLC, force tags, ask why something h
 Type `help` to print the list below. All three take these commands, with these differences:
 
 - ClickNick and `pyrung live` chain commands with `;` and stop at the first error. VS Code sends the whole line as one command.
-- ClickNick doesn't support `autoreload` or `record` yet.
+- ClickNick doesn't support `autoreload`, `record` or `replay` yet.
 - In ClickNick, send `reload` on its own. ClickNick writes the program to the Simulator (a RUN Time Edit in RUN) and carries forces and links to the new program.
 - ClickNick refuses commands while it writes a program.
 
@@ -189,7 +189,7 @@ log 50                          # show last 50 scans
 
 ## Session capture
 
-Record a sequence of console commands as a replayable transcript. ClickNick doesn't support `record` yet.
+Record a sequence of console commands as a replayable transcript. ClickNick doesn't support `record` or `replay` yet.
 
 ```text
 record start_machine       # begin recording action "start_machine"
