@@ -3,6 +3,9 @@
 This example is intentionally pointer-heavy. It mirrors the real template's
 state-machine lookup patterns so ``pyrung lock`` profiles spend meaningful time
 in block synchronization for indirect ``dh[]`` / ``ds[]`` access.
+
+Uses X001-X008 (8 inputs, built in or in Slot 0) and X101-X110 (a 16-point
+input module at expansion module 1).
 """
 
 from pyrung import (

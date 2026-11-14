@@ -11,6 +11,9 @@ Demonstrates the full pyrung -> Click workflow:
 
 This is the completed version of the conveyor built across the
 "Know Python? Learn Ladder Logic" tutorial.  See ``devtools/build_release_assets.py``.
+
+Uses X001-X008 (8 inputs, built in or in Slot 0) and X101 (an input module
+at expansion module 1).
 """
 
 import os

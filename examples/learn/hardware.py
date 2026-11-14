@@ -113,6 +113,8 @@ from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
+# Uses X001-X008 (8 inputs, built in or in Slot 0) and X101 (an input module
+# at expansion module 1).
 mapping = TagMap(
     {
         StartBtn: x[1],  # Physical input terminal 1

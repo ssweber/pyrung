@@ -8,6 +8,9 @@ Same conveyor logic as click_conveyor.py, but tags carry physical metadata:
 
 Run under DAP to see autoharness feedback, tag flag badges, and
 runtime bounds checking in action.
+
+Uses X001-X008 (8 inputs, built in or in Slot 0) and X101-X103 (an input
+module at expansion module 1).
 """
 
 import os

@@ -60,6 +60,8 @@ From a real interface talking to your simulated conveyor, you can watch box coun
 
 ## Option B: Map to a CLICK PLC
 
+This map uses X001–X008 (8 inputs, built in or in Slot 0) and X101 (an input module at expansion module 1).
+
 ```python
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
